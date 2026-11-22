@@ -21,6 +21,7 @@ dev/remote-run/run.sh dev/poor-network/run.sh --side both --before-clone "$CLONE
 | `--side both` | Measure the before side, then the after side. If the before side is the reference commit (`CALIBRATION_REFERENCE`) and its calibration does not reproduce, stop with exit 3 and do not run the after side. |
 | `--out-dir DIR` | Where the run's files go, outside the tree. |
 | `--repetitions N` | Repetitions per scenario (default 5). |
+| `--scenario-repetitions NAME=N,...` | Repetitions for the named scenarios, each in `--scenarios`; the others take `--repetitions`. Within `foryou`, a cell runs only in the repetitions its count in `FOR_YOU_CELL_REPS` covers. |
 | `--scenarios LIST` | Any of `background,held,reset,stream,tools,starred,threads,foryou,open,search` (default the first four). `open` and `foryou` run their own cells, see below. `search` runs its own repetitions and variants, see "Search view". |
 | `--open-conditions LIST` | Open cells: any of `link,held,reset,flaps,offline,release,release-offline,replied-offline`; default all. |
 | `--open-cpu-rate RATE` | Run every side's open cells at `RATE` instead of a derived rate (see CPU rate below). |

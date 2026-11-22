@@ -13,6 +13,7 @@
 #                reference (CALIBRATION_REFERENCE in profile.mjs) and does not reproduce the switch-during-refresh
 #                hold, it stops after before, prints its numbers, and exits 3. Any other before side runs ungated.
 # --detach       starts the run as a transient systemd user unit and returns at once; the log is <out-dir>/pn-<id>.log.
+# --scenario-repetitions NAME=N,...  gives the named scenarios their own repetition count; the rest take --repetitions.
 # --foryou-shots  after the after side's measurement, writes the For-you screenshots (switch, retry, offline reopen at
 #                the three CSS sizes) into <run dir>/foryou-shots; needs the foryou scenario.
 # --seed-only    seeds the sized sessions and the For-you targets on each side, writes the turns and untrimmed bootstrap
@@ -65,6 +66,7 @@ assets_dir=
 detach=0
 seed_only=0
 foryou_shots=0
+scenario_repetitions=
 lock_wait=$BENCH_LOCK_WAIT_SECONDS
 open_rate_args=()
 seed_home=
@@ -92,6 +94,7 @@ while (($#)); do
     --out-dir) out_dir=${2:?--out-dir needs a value}; shift 2 ;;
     --before-clone) before_clone=${2:?--before-clone needs a value}; shift 2 ;;
     --before-rev) before_rev=${2:?--before-rev needs a value}; shift 2 ;;
+    --scenario-repetitions) scenario_repetitions=${2:?--scenario-repetitions needs a value}; shift 2 ;;
     --repetitions) repetitions=${2:?--repetitions needs a value}; shift 2 ;;
     --scenarios) scenarios=${2:?--scenarios needs a value}; shift 2 ;;
     --open-conditions) open_conditions=${2:?--open-conditions needs a value}; shift 2 ;;
@@ -174,6 +177,7 @@ if ((detach)); then
   fi
   [[ -n $assets_dir ]] && forwarded+=(--assets-dir "$assets_dir")
   ((foryou_shots)) && forwarded+=(--foryou-shots)
+  [[ -n $scenario_repetitions ]] && forwarded+=(--scenario-repetitions "$scenario_repetitions")
   systemd-run --user --unit="pn-$run_id" --collect --working-directory="$tree" \
     --setenv=PATH="$PATH" --setenv=HOME="$HOME" \
     "${detached_env[@]}" \
@@ -295,7 +299,8 @@ run_side() {
   [[ $(seed_content_hash "$mock_home") == "$seed_hash" ]] \
     || die 1 "the seed copy $mock_home changed since the run recorded $seed_hash; the $name side did not start"
   # The after side of one invocation checks its newest-row targets against the before side's JSON.
-  local expect_args=() shots_args=()
+  local expect_args=() shots_args=() reps_args=()
+  [[ -z $scenario_repetitions ]] || reps_args=(--scenario-repetitions "$scenario_repetitions")
   if [[ $name == after && $side == both && ",$scenarios," == *",open,"* ]]; then
     expect_args=(--expect-targets "$run_dir/before.json")
   fi
@@ -313,7 +318,7 @@ run_side() {
       --assets "$POOR_NETWORK_ASSETS" --commit "$label" \
       --repetitions "$repetitions" --scenarios "$scenarios" --open-conditions "$open_conditions" \
       ${open_rate_args+"${open_rate_args[@]}"} ${expect_args+"${expect_args[@]}"} \
-      ${mode_args+"${mode_args[@]}"} ${shots_args+"${shots_args[@]}"} &
+      ${mode_args+"${mode_args[@]}"} ${shots_args+"${shots_args[@]}"} ${reps_args+"${reps_args[@]}"} &
   trial_pid=$!
   # The side JSON is the bench's last artifact, and a bench that has written it can still sit alive and hold the trial,
   # and so the lock (this line's known defect). Once the JSON is SIDE_EXIT_GRACE_SECONDS old and the trial still runs,

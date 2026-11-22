@@ -61,8 +61,8 @@ const SCENARIOS = Object.freeze({
 });
 const DEFAULT_SCENARIOS = Object.freeze(['background', 'held', 'reset', 'stream']);
 
-// The open scenario runs its own cells, five repetitions each, in cell order, so it is not one of the per-repetition
-// scenarios above. It is selected by name only: the default run keeps the four scenarios of README.md.
+// The open scenario runs its own cells, each for the `--repetitions` count, in cell order, so it is not one of the
+// per-repetition scenarios above. It is selected by name only: the default run keeps the four scenarios of README.md.
 const OPEN_SCENARIO = 'open';
 // The sidebar search view runs its own repetitions and variants (search.mjs). Like open, it is selected by name only.
 const SEARCH_SCENARIO = 'search';
@@ -76,6 +76,25 @@ const STUB_BACKEND_ID = 'charlie-code-release-trial';
 const SEED_TIMEOUT_MS = 120000;
 const FIRST_SIZED_INDEX = 6;
 const MAX_SIZING_TURNS = 30;
+
+// `--scenario-repetitions` gives named scenarios their own repetition count, as `name=N,name=N`; the scenarios it does
+// not name take `--repetitions`. A name the run does not select, or a count below one, fails the parse.
+function parseScenarioRepetitions(text, scenarios) {
+  const counts = new Map();
+  if (text === '') return counts;
+  const selected = scenarios.split(',');
+  for (const pair of text.split(',')) {
+    const [name, count] = pair.split('=');
+    if (!selected.includes(name)) {
+      throw new Error(`--scenario-repetitions names ${name}, which --scenarios does not select`);
+    }
+    if (!Number.isInteger(Number(count)) || Number(count) < 1) {
+      throw new Error(`--scenario-repetitions ${name} needs a count of at least 1, got ${count}`);
+    }
+    counts.set(name, Number(count));
+  }
+  return counts;
+}
 
 function parseArgs(argv) {
   const args = {
@@ -95,6 +114,7 @@ function parseArgs(argv) {
     '--assets': 'assets',
     '--commit': 'commit',
     '--repetitions': 'repetitions',
+    '--scenario-repetitions': 'scenarioRepetitions',
     '--scenarios': 'scenarios',
     '--open-conditions': 'openConditions',
     '--open-cpu-rate': 'openCpuRate',
@@ -121,6 +141,7 @@ function parseArgs(argv) {
     throw new Error(`--mode must be measure or seed, got ${args.mode}`);
   }
   args.repetitions = Number(args.repetitions);
+  args.scenarioRepetitions = parseScenarioRepetitions(args.scenarioRepetitions ?? '', args.scenarios);
   if (args.openCpuRate !== undefined) {
     args.openCpuRate = Number(args.openCpuRate);
     if (!(args.openCpuRate >= 1)) {
@@ -361,6 +382,7 @@ function buildSide({
     taskTreeLoad: TASK_TREE_LOAD,
     statusChurn: STATUS_CHURN,
     repetitions: args.repetitions,
+    scenarioRepetitions: Object.fromEntries(args.scenarioRepetitions),
     reply: {
       sources: REPLY_SOURCES,
       pieces: REPLY_PIECES,
@@ -496,8 +518,9 @@ async function main() {
         searchResult = await searchScenario(ctx);
         continue;
       }
-      for (let repetition = 1; repetition <= args.repetitions; repetition++) {
-        process.stderr.write(`[${args.side}] ${name} repetition ${repetition}/${args.repetitions}\n`);
+      const repetitions = args.scenarioRepetitions.get(name) ?? args.repetitions;
+      for (let repetition = 1; repetition <= repetitions; repetition++) {
+        process.stderr.write(`[${args.side}] ${name} repetition ${repetition}/${repetitions}\n`);
         const from = trials.mark();
         const rep = await SCENARIOS[name](ctx, repetition);
         const otherTrials = trials.since(from);

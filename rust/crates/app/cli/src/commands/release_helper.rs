@@ -55,6 +55,7 @@ const VERBS: &[(&str, &str)] = &[
   ("created-cgroups", "SERVER_LOG"),
   ("credential-key", "CREDENTIALS_PATH SECTION"),
   ("delegation-error", "SESSIONS_DIR MANAGER_ID"),
+  ("disable-cron-tasks", "HOME REPO_ROOT"),
   ("event", "SERVER_LOG EVENT_NAME"),
   ("event-type-count", "EVENTS_PATH EVENT_TYPE"),
   ("free-port", "MIN MAX"),
@@ -121,6 +122,7 @@ fn dispatch(name: &str, args: &[String]) -> Result<i32, String> {
     "created-cgroups" => created_cgroups(args),
     "credential-key" => credential_key(args),
     "delegation-error" => delegation_error(args),
+    "disable-cron-tasks" => disable_cron_tasks(args),
     "event" => event(args),
     "event-type-count" => event_type_count(args),
     "free-port" => free_port(args),
@@ -1039,6 +1041,18 @@ fn stand_in_options(args: &[String]) -> Result<i32, String> {
   let [cron_defaults, config_example] = arguments::<2>(args, "stand-in-options")?;
   let records = stand_in_records(cron_defaults, config_example)?;
   print!("{}", serde_yaml::to_string(&records).map_err(|error| error.to_string())?);
+  Ok(0)
+}
+
+/// `disable-cron-tasks <home> <repo-root>`: seeds the repo's default cron tasks into the home, disables every cron task
+/// file of the home, and prints the disabled names. The trial runs it before its server starts.
+fn disable_cron_tasks(args: &[String]) -> Result<i32, String> {
+  let [home, repo_root] = arguments::<2>(args, "disable-cron-tasks")?;
+  let registry = charliebot_packages::registry().map_err(|error| error.to_string())?;
+  let cfg = registry.load_config(Path::new(home)).map_err(|error| error.to_string())?;
+  for name in charliebot_cron::seed::disable_cron_tasks(&cfg, Path::new(repo_root))? {
+    println!("{name}");
+  }
   Ok(0)
 }
 

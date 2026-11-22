@@ -29,7 +29,9 @@
 # server.enable_session_io_weight, read by `release-helper session-weights`; an absent switch takes the server's
 # default. The trial's model endpoint is the live server's `backends.calls.probe` member, read by
 # `charliebot backend resolve`. The two Claude stand-in options are the step backends of the default memory-curator,
-# and `release-helper stand-in-options` copies each record from the commit's configs/config.example.yaml.
+# and `release-helper stand-in-options` copies each record from the commit's configs/config.example.yaml. The trial
+# fires no scheduled task: before its server starts, `release-helper disable-cron-tasks` seeds the commit's default cron
+# tasks and sets `enabled: false` on every cron task file of the trial home, copied seed tasks included.
 # CHARLIEBOT_TRIAL_CGROUP_ROOT replaces /sys/fs/cgroup, the root the agents slice path is built on, so the tests point
 # it at a sandbox.
 #
@@ -1029,7 +1031,7 @@ run_serve_mode() {
   # One caller command. The exit code is the command's, demoted to 1 by a foreign cgroup removal (sweep-check) or any
   # cleanup failure.
   local cmd_rc=0 sweep_failed=0 cleanup_failed=0
-  local wait_started server_pid server_state state stray_pids
+  local wait_started server_pid server_state state stray_pids disabled_tasks
   SERVE_UNIT="charliebot-release-trial-serve-$(date -u +%Y%m%dT%H%M%SZ)-$$"
   if [[ -n $SEED_HOME ]]; then
     if ! copy_seed_sessions; then
@@ -1038,6 +1040,14 @@ run_serve_mode() {
     fi
     printf 'SERVE seed from=%s into=%s\n' "$SEED_HOME" "$SESSIONS_DIR"
   fi
+  # The trial fires no scheduled task. The server seeds the repo's default tasks at its start, so the trial seeds them
+  # first and disables every cron task of its home before the server starts.
+  if ! disabled_tasks=$("$TRIAL_CLI" release-helper disable-cron-tasks "$TRIAL_CB_HOME" "$REPO_ROOT"); then
+    printf 'FAIL serve CronDisabled: the cron tasks of %s are not all disabled before the server starts\n' \
+      "$TRIAL_CB_HOME"
+    return 1
+  fi
+  printf 'SERVE PASS CronDisabled: %s\n' "$(tr '\n' ' ' <<<"$disabled_tasks")"
   # start_server prints the FAIL and CAUSE lines; a side that did not start runs no command.
   start_server || return 1
   if (( IN_CALLER_SCOPE == 1 )); then

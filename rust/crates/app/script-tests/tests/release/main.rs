@@ -1002,6 +1002,49 @@ fn test_trial_config_carries_the_live_weight_switches_and_an_absent_one_takes_it
   assert!(config.contains("\n  enable_session_io_weight: false\n"), "{config}");
 }
 
+/// A serve trial fires no scheduled task: every cron task of its home reads `enabled: false` while the server serves,
+/// the copied seed tasks and the repo's defaults alike, and the server seeded none of the defaults at its start, so the
+/// disabled files were in place before the server started.
+#[test]
+#[ignore = "integration"]
+fn test_trial_disables_every_cron_task_of_its_home_before_its_server_starts() {
+  let world = ServeWorld::new();
+  let seed = world.seed_home("seed", "2");
+  let tree_root = world.tree_root();
+  let copied = world.sandbox.dir("trial-cron");
+  let copied_text = copied.display().to_string();
+
+  let run = world.serve(
+    tree_root,
+    &seed,
+    &["sh", "-c", "cp \"$CHARLIEBOT_HOME\"/config.d/cron.d/*.yaml \"$1\"", "sh", &copied_text],
+  );
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(run.stdout.contains("SERVE PASS CronDisabled: "), "{}", run.describe());
+  let mut names = Vec::new();
+  for entry in fs::read_dir(&copied).expect("the copied cron tasks") {
+    let path = entry.expect("a copied cron task").path();
+    let text = fs::read_to_string(&path).expect("a cron task file");
+    let flags: Vec<&str> = text.lines().filter(|line| line.starts_with("enabled:")).collect();
+    assert_eq!(flags, ["enabled: false"], "{}:\n{text}", path.display());
+    names.push(path.file_stem().expect("a task name").to_string_lossy().into_owned());
+  }
+  for task in ["memory-curator", "storage-cool", "proactive-agent", "mock-yearly-review"] {
+    assert!(names.iter().any(|name| name == task), "{task} is a cron task of the trial home: {names:?}");
+  }
+  // The server logs each default it seeds at its start. None was seeded, so the trial's files predated the start.
+  let trial_evidence = fs::read_dir(world.sandbox.dir("evidence"))
+    .expect("the evidence directory")
+    .next()
+    .expect("the trial's evidence")
+    .expect("an evidence entry")
+    .path();
+  let log = fs::read_to_string(trial_evidence.join("server-1.log")).expect("the server log");
+  assert!(log.contains("server_ready"), "{log}");
+  assert!(!log.contains("cron_default_task_seeded"), "the server seeded a default at its start: {log}");
+}
+
 #[test]
 #[ignore = "integration"]
 fn test_trial_serve_check_exits_1_and_names_a_session_whose_event_log_is_corrupted() {

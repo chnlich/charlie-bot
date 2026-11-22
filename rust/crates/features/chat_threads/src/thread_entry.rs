@@ -3,18 +3,18 @@
 //! from its constants, implements `ThreadAdapter` over its client, and calls these entries with the adapter.
 //!
 //! Public API:
-//! - `ThreadPlatform`: the per-platform facts; `notice_key`, `backfill_key` and `ack_event_type`
+//! - `ThreadPlatform`: the per-platform facts. `notice_key`, `backfill_key` and `ack_event_type`
 //!   derive the marker keys from `name`, and `platform_line` opens every platform's contract part.
 //! - `IdOrdering` (`ThreadPlatform::id_key`): text order for Slack ts strings, integer order for Discord snowflakes,
 //!   and millisecond-then-id order for Feishu's `<create_time ms>-<message id>` composites.
 //! - `ThreadMessage` and `ThreadAdapter`: the message the round side reads, and the
 //!   platform face of the entries.
-//! - `ThreadReplyError` with `ThreadDetail`: a refusal with its HTTP status and detail; an
+//! - `ThreadReplyError` with `ThreadDetail`: a refusal with its HTTP status and detail. An
 //!   unplanned failure answers 500 "Internal Server Error".
 //! - `MESSAGE_IDS`: the field the ids one thread ack covers sit in, in the ack event and in each platform's ack request.
 //! - `load_prompt_doc`, `thread_reply_contract`, `thread_reply_segment`: the reply contract (`LINKED_PAGES_LINE` joins
 //!   it for every platform). The scope doc is `<charliebot_home>/prompts/<scope_doc>` when the host has that file,
-//!   else the repo's `prompts/<scope_doc>`; the red line and the reply format always come from the repo.
+//!   else the repo's `prompts/<scope_doc>`. The red line and the reply format always come from the repo.
 //! - Pure helpers: `follow_wake_label`, `follow_floor`, `chunk_text`, `event_by_id`, `summon_of`, `newest_thread_input`,
 //!   `replied`, `noticed`, `lost_summons`, `unread_after`.
 //! - Round side: `load_chat_events`, `pending_summon_mention_ids`, `post_with_retry`, `ack_clear`, `unread_messages`,
@@ -80,9 +80,9 @@ pub const MESSAGE_IDS: &str = "message_ids";
 const REDLINE_DOC: &str = "thread_reply_redline.md";
 /// The reply-format doc every platform's contract carries.
 const REPLY_FORMAT_DOC: &str = "thread_reply_format.md";
-/// Waits between the retries of one platform call; exhausting them logs an error, not a raise.
+/// Waits between the retries of one platform call. Exhausting them logs an error, not a raise.
 const RETRY_DELAYS: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(4)];
-/// The retry delays a test installed through `test_support::keyed_post_retry_delays_for_test`; None reads RETRY_DELAYS.
+/// The retry delays a test installed through `test_support::keyed_post_retry_delays_for_test`. None reads RETRY_DELAYS.
 #[cfg(feature = "test-support")]
 static TEST_RETRY_DELAYS: StdMutex<Option<[Duration; 2]>> = StdMutex::new(None);
 /// How much of an unread message's text the 412 refusal carries.
@@ -139,7 +139,7 @@ pub struct ThreadPlatform {
   /// The ordering of the platform's message ids.
   pub id_key: IdOrdering,
   /// Whether a failed post is looked up again before the retry. True where a failed write can land without a key the
-  /// platform enforces (Slack); false where the post carries one (Discord's nonce, Feishu's reply uuid).
+  /// platform enforces (Slack). False where the post carries one (Discord's nonce, Feishu's reply uuid).
   pub recheck_after_failed_post: bool,
   /// The thread origin field in the platform's metadata slot.
   pub origin_field: &'static str,
@@ -147,7 +147,7 @@ pub struct ThreadPlatform {
   pub watermark_field: &'static str,
   /// The key naming a message id in readbacks and refusals (`ts` for Slack, `id` for Discord).
   pub id_label: &'static str,
-  /// The summon-block key of the mention message; a block without it carries no ack to clear.
+  /// The summon-block key of the mention message. A block without it carries no ack to clear.
   pub mention_key: &'static str,
   /// The summon-block keys a failed turn copies to its recovery nudge.
   pub block_keys: &'static [&'static str],
@@ -394,7 +394,7 @@ fn load_scope_doc(
   let host_path = charliebot_home.join("prompts").join(platform.scope_doc);
   match std::fs::read(&host_path) {
     Ok(bytes) => Ok((prompt_doc_text(bytes, &host_path)?, host_path.display().to_string())),
-    // Only an absent host file falls back to the repo default; the same absence `host_supplement` treats as no file.
+    // Only an absent host file falls back to the repo default. The same absence `host_supplement` treats as no file.
     Err(error) if matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::NotADirectory) => {
       let doc = load_prompt_doc(
         repo,
@@ -419,7 +419,7 @@ pub struct ThreadReplyContract {
 
 /// The thread reply contract: `platform_part`, a blank line, then the platform's scope doc, the red line and the
 /// reply format, one per line. The scope doc is the host file `<charliebot_home>/prompts/<scope_doc>` when it exists,
-/// else the repo's; the red line and the reply format always come from the repo. Each doc is read on every call.
+/// else the repo's. The red line and the reply format always come from the repo. Each doc is read on every call.
 pub fn thread_reply_contract(
   repo: &RepoRoot,
   charliebot_home: &Path,
@@ -462,7 +462,7 @@ pub fn follow_floor(label: &str) -> Option<String> {
 
 /// Split `text` into chunks of at most `limit` characters for sequential posting.
 ///
-/// Greedy packing over paragraph units (a paragraph plus its trailing blank-line separator); a unit longer than
+/// Greedy packing over paragraph units (a paragraph plus its trailing blank-line separator). A unit longer than
 /// `limit` falls to line units, and a line longer than `limit` is hard-cut. Lengths count characters, as code
 /// points. A whitespace-only chunk is dropped at return unless every chunk is whitespace.
 pub fn chunk_text(text: &str, limit: usize) -> Vec<String> {
@@ -536,7 +536,7 @@ pub fn summon_of(block: &Value, event_id: &str) -> String {
 }
 
 /// `(event id, summon block)` of the newest summon-bearing input among `event_ids`, or None (`newest_thread_input`).
-/// An input binds only when it carries a block under the platform's key; the newest in log order wins.
+/// An input binds only when it carries a block under the platform's key. The newest in log order wins.
 pub fn newest_thread_input<E: ThreadEventData>(
   platform: &ThreadPlatform,
   events: &[E],
@@ -646,7 +646,7 @@ pub fn pending_summon_mention_ids<E: Borrow<ChatEvent>>(
   Ok(pending)
 }
 
-/// The eligible messages whose id sorts strictly above `watermark` under `id_key`; a None watermark passes every
+/// The eligible messages whose id sorts strictly above `watermark` under `id_key`. A None watermark passes every
 /// eligible message (`unread_after`).
 pub fn unread_after<'a, T>(
   messages: &'a [T],
@@ -662,9 +662,9 @@ pub fn unread_after<'a, T>(
     .collect()
 }
 
-/// Post one keyed thread reply, retrying on failure; true when the platform accepted it (`post_with_retry`). Exhausting
+/// Post one keyed thread reply, retrying on failure. True when the platform accepted it (`post_with_retry`). Exhausting
 /// the retries logs `<name>_post_gave_up` and returns false: the caller decides what a failed post means.
-/// Find one keyed post before sending; Slack checks again after a failed write to recover accepted posts.
+/// Find one keyed post before sending. Slack checks again after a failed write to recover accepted posts.
 pub async fn post_with_retry(
   adapter: &dyn ThreadAdapter,
   address: &Value,
@@ -738,7 +738,7 @@ pub fn ack_clear(adapter: &Arc<dyn ThreadAdapter>, block: &Value, session_id: &s
   spawn_logged(format!("{}-ack-clear-{session_id}", platform.name), async move { adapter.remove_ack(&block).await });
 }
 
-/// The thread's eligible messages above `watermark`; None passes all (`unread_messages`).
+/// The thread's eligible messages above `watermark`. None passes all (`unread_messages`).
 pub async fn unread_messages(
   adapter: &dyn ThreadAdapter,
   origin: &Value,
@@ -872,7 +872,7 @@ pub async fn post_reply_with_caller_context(
   let operator_only_links = application_route_links(text, config.server.port);
 
   let chat_events = load_chat_events(features, session_id).await?;
-  // The running turn's receipts name the inputs it received; the newest one carrying this platform's block binds the
+  // The running turn's receipts name the inputs it received. The newest one carrying this platform's block binds the
   // reply's ack, and a receipt of a nudge resolves to the summon the nudge was posted for.
   let receipt_ids: Vec<String> = reply_order::running_receipts(&features.store, session_id, &chat_events)?
     .into_iter()
@@ -931,7 +931,7 @@ pub async fn post_reply_with_caller_context(
 
   let chars = text.chars().count();
   drop(bound);
-  // The store appends to its cached event list in place; release the Arc before the same write.
+  // The store appends to its cached event list in place. Release the Arc before the same write.
   drop(chat_events);
   let payload = json!({"chars": chars, "chunks": bodies.len()});
   let _event = if let (Some(request_id), Some(event_id)) = (request_id, event_id.as_deref()) {
@@ -1292,7 +1292,7 @@ fn newest_summon(platform: &ThreadPlatform, turn: &[Value]) -> anyhow::Result<Op
 }
 
 /// The `thread-reply` entry for one platform: the turn's newest summon has a reply later than its receipt. The first
-/// miss blocks with the reason; a miss after that passes with the no-reply notice. A round that errored is checked too.
+/// miss blocks with the reason. A miss after that passes with the no-reply notice. A round that errored is checked too.
 pub fn check_thread_reply(platform: &ThreadPlatform, input: &TurnInput) -> anyhow::Result<CheckResult> {
   let Some((receipt, block)) = newest_summon(platform, &input.turn)? else {
     return Ok(CheckResult::Pass);
@@ -1366,7 +1366,7 @@ pub async fn show_turn_notice(
   Ok(true)
 }
 
-/// Boot pass over every thread-bound session; returns how many lost-summon notices it posted (`backfill_lost_summons`).
+/// Boot pass over every thread-bound session. Returns how many lost-summon notices it posted (`backfill_lost_summons`).
 /// A session with a turn running or waiting is left alone: its summons belong to that turn's end. An idle session
 /// reports each summon that no finished turn received. A second pass finds nothing, because the predicate reads the
 /// log.
@@ -1447,7 +1447,7 @@ pub async fn armed_follow_triggers(
   )
 }
 
-/// Cancel every armed thread-follow trigger of the session; returns how many (`cancel_armed_follow_triggers`).
+/// Cancel every armed thread-follow trigger of the session. Returns how many (`cancel_armed_follow_triggers`).
 pub async fn cancel_armed_follow_triggers(
   platform: &ThreadPlatform,
   features: &FeatureContext,
@@ -1461,7 +1461,7 @@ pub async fn cancel_armed_follow_triggers(
   Ok(armed.len())
 }
 
-/// Cancel-then-create the session's one persisted follow trigger; returns the fresh record (`arm_follow_trigger`).
+/// Cancel-then-create the session's one persisted follow trigger. Returns the fresh record (`arm_follow_trigger`).
 ///
 /// The replaced record's `created_at` and floor id are read before the cancel: the new record keeps that `created_at`
 /// as the chain's start, so a steady trickle still flushes at `chain_start + FOLLOW_CHAIN_CAP_SECONDS`. The label keeps
@@ -1644,7 +1644,7 @@ fn unrouted_backend(cfg: &CharlieBotConfig) -> Option<String> {
 }
 
 /// Accept one summon: resolve the session, persist the summon, fire the round, and light the ack (`accept_summon`).
-/// The session is created as a manager root named `<label> <local time>` and born with the origin, or reused; a
+/// The session is created as a manager root named `<label> <local time>` and born with the origin, or reused. A
 /// session archived by the operator is unarchived and its task-tree change broadcast. Returns the session id.
 pub async fn accept_summon(
   adapter: &Arc<dyn ThreadAdapter>,
@@ -1771,7 +1771,7 @@ pub async fn accept_summon(
 }
 
 /// Revive an archived thread session, then arm its follow trigger (`revive_and_arm_follow`). An archived session is
-/// unarchived first, because `create_trigger` rejects an archived session; the unarchive is logged and broadcast.
+/// unarchived first, because `create_trigger` rejects an archived session. The unarchive is logged and broadcast.
 pub async fn revive_and_arm_follow(
   platform: &ThreadPlatform,
   features: &FeatureContext,
@@ -1789,7 +1789,7 @@ pub async fn revive_and_arm_follow(
   arm_follow_trigger(platform, features, session_id, floor, log_fields).await
 }
 
-/// Arm the session's follow trigger for one eligible thread message; the session id when armed (`follow_message`).
+/// Arm the session's follow trigger for one eligible thread message. The session id when armed (`follow_message`).
 /// The session must exist, its origin must pass `origin_matches`, and the message id must sort above the watermark.
 pub async fn follow_message(
   adapter: &Arc<dyn ThreadAdapter>,
@@ -1817,7 +1817,7 @@ pub async fn follow_message(
   Ok(trigger.map(|_| session_id.to_string()))
 }
 
-/// Arm the follow trigger of every followed session holding unread messages; returns the count
+/// Arm the follow trigger of every followed session holding unread messages. Returns the count
 /// (`backfill_followed_threads`). Each armed session arms exactly once. A failing thread is logged and skipped.
 pub async fn backfill_followed_threads(
   adapter: &Arc<dyn ThreadAdapter>,
@@ -1933,7 +1933,7 @@ where
   Ok(joined.map_err(ThreadReplyError::failure)??)
 }
 
-/// Run `future` as its own task; a failure logs `background_task_failed`.
+/// Run `future` as its own task. A failure logs `background_task_failed`.
 pub(crate) fn spawn_logged<E, F>(name: String, future: F) -> JoinHandle<()>
 where
   E: Display,

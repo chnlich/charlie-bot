@@ -1,6 +1,6 @@
 //! The shared service of the chat channels: the `Service` lifecycle over the entrypoint tasks (one gateway listener
 //! task plus the boot backfill task), and the answer a refused thread entry gets on the internal routes. A channel's
-//! crate keeps its configuration gate and route paths; the lifecycle, the task bookkeeping and the answer shape live
+//! crate keeps its configuration gate and route paths. The lifecycle, the task bookkeeping and the answer shape live
 //! here.
 
 use std::future::Future;
@@ -27,7 +27,7 @@ pub trait ChannelListener: Send + Sync + 'static {
   /// The gateway loop. It runs until its task is cancelled.
   fn run_listener(&self, features: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Result<()>>;
 
-  /// The boot backfill over the summons lost across the restart; returns how many notices it posted.
+  /// The boot backfill over the summons lost across the restart. It returns how many notices it posted.
   fn backfill_lost_summons(&self, features: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Result<usize>>;
 }
 
@@ -128,7 +128,7 @@ impl<L: ChannelListener> ChannelService<L> {
 
 /// The answer of an internal channel route: the readback with 200, a refusal with its status and `{"detail": ...}`,
 /// or the unhandled failure's 500. The Discord and Feishu routes both return [`ThreadReplyError`] and answer this
-/// shape, so it lives beside the error's owner; the Slack routes keep their own answer, whose 500 carries the
+/// shape, so it lives beside the error's owner. The Slack routes keep their own answer, whose 500 carries the
 /// refusal's detail as JSON instead of logging it.
 pub fn reply_response(result: Result<Value, ThreadReplyError>) -> Response {
   match result {

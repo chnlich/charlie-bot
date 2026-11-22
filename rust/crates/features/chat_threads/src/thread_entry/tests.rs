@@ -694,7 +694,7 @@ fn fakechat_marker_keys_derive_from_the_name() {
 
 #[test]
 fn newest_thread_input_picks_the_newest_fakechat_block() {
-  // b1 carries no summon block; s3 carries another platform's block.
+  // b1 carries no summon block. s3 carries another platform's block.
   let events = vec![
     json!({"id": "b1", "type": event_types::AGENT_MESSAGE}),
     json!({"id": "s1", "type": event_types::AGENT_MESSAGE, "fakechat": {"thread": "t1"}}),
@@ -738,7 +738,7 @@ fn lost_summons_reports_only_the_unreceived_unmarked() {
   ];
   let ids = |list: &[&str]| list.iter().map(|id| id.to_string()).collect::<HashSet<String>>();
   let ids_of = |lost: Vec<Value>| lost.iter().map(|ev| ev["id"].as_str().unwrap().to_string()).collect::<Vec<_>>();
-  // s1 was received, s2 was marked by a backfill; s3 and s4 were neither.
+  // s1 was received, s2 was marked by a backfill. s3 and s4 were neither.
   assert_eq!(ids_of(lost_summons(&FAKECHAT, &events, &ids(&["s1"]))), ["s3", "s4"]);
   // A summon a finished turn received is not lost.
   assert_eq!(ids_of(lost_summons(&FAKECHAT, &events, &ids(&["s1", "s3"]))), ["s4"]);
@@ -769,7 +769,7 @@ fn unread_after_orders_ids_by_the_platform_key() {
   };
   // Integer order: "100" sorts above the "99" watermark (the string sort would not).
   assert_eq!(ids(Some("99")), ["100"]);
-  // A None watermark passes every eligible message; the ineligible one still drops.
+  // A None watermark passes every eligible message. The ineligible one still drops.
   assert_eq!(ids(None), ["98", "99", "100"]);
   assert!(ids(Some("100")).is_empty());
 }
@@ -866,7 +866,7 @@ fn no_file_server_links_passes_a_published_url_and_names_route_links() {
 async fn ack_messages_orders_ids_by_the_platform_id_key() {
   let home = Home::new();
   home.thread_session("s1", origin()).await;
-  // "100" sorts above "99" only as an integer; the string sort would pick "99".
+  // "100" sorts above "99" only as an integer. The string sort would pick "99".
   let adapter: Arc<dyn ThreadAdapter> = FakeAdapter::with_thread(&[("99", "a"), ("100", "b")]);
   let ids = vec!["100".to_string(), "99".to_string()];
 

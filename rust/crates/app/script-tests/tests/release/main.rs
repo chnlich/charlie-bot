@@ -938,7 +938,8 @@ fn answer_probes(listener: TcpListener) {
   for stream in listener.incoming() {
     let mut stream = stream.expect("a probe connection");
     let mut request = [0u8; 1024];
-    stream.read(&mut request).expect("the probe request");
+    let read = stream.read(&mut request).expect("the probe request");
+    assert!(read > 0, "the probe closed before it sent a request");
     stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").expect("the probe answer");
   }
 }

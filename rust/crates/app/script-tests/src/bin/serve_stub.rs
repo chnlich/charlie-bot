@@ -1,5 +1,5 @@
-//! The stand-in server of the held-port trial test. It logs `server_ready` the way the server does, then waits without
-//! binding a port, so the test can take the port the trial picked once that readiness line is in the trial's log.
+//! The stand-in server of the held-port trial test. It logs `server_ready` and binds no port, so the trial's readiness
+//! check has a readiness line with no listener behind it. The test takes the port the trial picked after that line.
 
 use std::thread;
 use std::time::Duration;

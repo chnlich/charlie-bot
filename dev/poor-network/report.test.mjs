@@ -132,3 +132,10 @@ test('the switch-to-catchup number is reported with a median and p90, and has no
     .find((row) => row.startsWith('| switch-catchup'));
   assert.match(line, /1\.20 s \| 1\.40 s \| 1\.20 s \| 0 of 2 \| - \| - \|$/);
 });
+
+// A repetition that did not run a For-you cell carries null for it; that repetition is left out of the cell's values.
+test('a repetition without a For-you switch-large cell is left out of its values', () => {
+  const metric = METRICS.find((row) => row.id === 'foryou.switch.large');
+  const reps = [{switch: {large: {firstRowMs: 900}}}, {switch: null}, {switch: {large: {firstRowMs: 1100}}}];
+  assert.deepEqual(summarize(reps, metric).values, [900, 1100]);
+});

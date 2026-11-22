@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { seedForYouTargets, seedSparseTarget } from './foryou.mjs';
+import { cellsDue, seedForYouTargets, seedSparseTarget } from './foryou.mjs';
 
 // An api whose session log ends with the marker turn and `above` (the painted rows that turn leaves, one notice by
 // default), followed by the trigger tail's rows (none painted). The bootstrap's first screen carries `firstScreen`
@@ -130,4 +130,13 @@ test('a marker the walk never finds fails the seed', async () => {
 test('a trigger tail that reaches past the For-you scan bound fails the seed', async () => {
   const api = fakeApi({tailLines: 1600});
   await assert.rejects(seedForYouTargets(api, SESSIONS), /trigger tail spans 1600 event lines/);
+});
+
+// Plan 5 v4 section 4.2: the large switch and both first opens take five repetitions, the other cells two. A repetition
+// past a cell's count does not run it.
+test('each For-you cell runs for its own repetitions', () => {
+  const dueAt = (repetition) => Object.entries(cellsDue(repetition)).filter(([, due]) => due).map(([cell]) => cell);
+  assert.equal(dueAt(1).length, 7);
+  assert.deepEqual(dueAt(3), ['switchLarge', 'openLarge', 'openTypical']);
+  assert.deepEqual(dueAt(6), []);
 });

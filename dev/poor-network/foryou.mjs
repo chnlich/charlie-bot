@@ -385,30 +385,50 @@ async function offlineReopenCell(ctx, target, name, repetition) {
   });
 }
 
+// The repetitions each For-you cell takes (plan 5 v4 section 4.2, the after column): five for the two large cells and
+// the typical first open, two for the rest. A repetition past a cell's count does not run it, and its record holds null
+// for it, so the report counts each cell's repetitions as the plan does.
+export const FOR_YOU_CELL_REPS = Object.freeze({
+  switchLarge: 5,
+  switchTypical: 2,
+  switchSparse: 2,
+  failedPage: 2,
+  openLarge: 5,
+  openTypical: 5,
+  offline: 2,
+});
+
+export function cellsDue(repetition) {
+  return Object.fromEntries(Object.entries(FOR_YOU_CELL_REPS).map(([cell, count]) => [cell, repetition <= count]));
+}
+
 // One repetition: the switch cells and the failed-page cell in one background window, then the first-open cells on
-// a fresh profile.
+// a fresh profile, then the offline reopen. The background window is skipped when none of its cells is due.
 export async function forYouRep(ctx, repetition) {
   const { foryou } = ctx.sessions;
-  const cells = await withBackground(
-    ctx, { label: `foryou-${repetition}`, filter: null, renamed: null, churn: null },
-    async ({ tab }) => {
-      const large = await switchCell(ctx, tab, foryou.large, 'fy-switch-large');
-      const typical = await switchCell(ctx, tab, foryou.typical, 'fy-switch-typical');
-      const sparse = await switchCell(ctx, tab, foryou.sparse, 'fy-switch-sparse');
-      const failedPage = await failedPageCell(ctx, tab, foryou.large, 'fy-failed-page');
-      return { large, typical, sparse, failedPage };
-    },
-  );
-  const openLarge = await openCell(ctx, foryou.large, `fy-open-large-${repetition}`);
-  const openTypical = await openCell(ctx, foryou.typical, `fy-open-typical-${repetition}`);
+  const due = cellsDue(repetition);
+  const windowCells = { large: null, typical: null, sparse: null, failedPage: null };
+  if (due.switchLarge || due.switchTypical || due.switchSparse || due.failedPage) {
+    Object.assign(windowCells, await withBackground(
+      ctx, { label: `foryou-${repetition}`, filter: null, renamed: null, churn: null },
+      async ({ tab }) => ({
+        large: due.switchLarge ? await switchCell(ctx, tab, foryou.large, 'fy-switch-large') : null,
+        typical: due.switchTypical ? await switchCell(ctx, tab, foryou.typical, 'fy-switch-typical') : null,
+        sparse: due.switchSparse ? await switchCell(ctx, tab, foryou.sparse, 'fy-switch-sparse') : null,
+        failedPage: due.failedPage ? await failedPageCell(ctx, tab, foryou.large, 'fy-failed-page') : null,
+      }),
+    ));
+  }
+  const openLarge = due.openLarge ? await openCell(ctx, foryou.large, `fy-open-large-${repetition}`) : null;
+  const openTypical = due.openTypical ? await openCell(ctx, foryou.typical, `fy-open-typical-${repetition}`) : null;
   // The offline reopen waits for the copies-refresh report of the offline client, which only the after side emits (the
   // main side has no such client), so the before side records no offline cell (null).
-  const offline = ctx.side === 'after'
+  const offline = ctx.side === 'after' && due.offline
     ? await offlineReopenCell(ctx, foryou.large, `fy-offline-${repetition}`, repetition)
     : null;
   return {
-    switch: { large: cells.large, typical: cells.typical, sparse: cells.sparse },
-    failedPage: cells.failedPage,
+    switch: { large: windowCells.large, typical: windowCells.typical, sparse: windowCells.sparse },
+    failedPage: windowCells.failedPage,
     open: { large: openLarge, typical: openTypical },
     offline,
   };

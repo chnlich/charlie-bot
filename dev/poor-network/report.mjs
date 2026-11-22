@@ -107,9 +107,9 @@ export const METRICS = Object.freeze([
     title: 'For-you switch, large target, click to the first row',
     unit: 'ms',
     target: TARGETS.foryouSwitchLargeMs,
-    value: (rep) => rep.switch.large.firstRowMs,
-    raw: (rep) => rep.switch.large.firstRowMs,
-    capped: (rep) => rep.switch.large.capped,
+    value: (rep) => rep.switch?.large?.firstRowMs,
+    raw: (rep) => rep.switch?.large?.firstRowMs,
+    capped: (rep) => rep.switch?.large?.capped,
   },
   {
     id: 'foryou.switch.large.pages',
@@ -117,7 +117,7 @@ export const METRICS = Object.freeze([
     title: 'For-you switch, large target, older-page requests before the first row',
     unit: 'requests',
     target: TARGETS.foryouPagesBeforeFirstRow,
-    value: (rep) => rep.switch.large.pages,
+    value: (rep) => rep.switch?.large?.pages,
   },
   {
     id: 'foryou.switch.typical',
@@ -125,9 +125,9 @@ export const METRICS = Object.freeze([
     title: 'For-you switch, typical target, click to the first row',
     unit: 'ms',
     target: TARGETS.foryouSwitchTypicalMs,
-    value: (rep) => rep.switch.typical.firstRowMs,
-    raw: (rep) => rep.switch.typical.firstRowMs,
-    capped: (rep) => rep.switch.typical.capped,
+    value: (rep) => rep.switch?.typical?.firstRowMs,
+    raw: (rep) => rep.switch?.typical?.firstRowMs,
+    capped: (rep) => rep.switch?.typical?.capped,
   },
   {
     id: 'foryou.switch.typical.pages',
@@ -135,7 +135,7 @@ export const METRICS = Object.freeze([
     title: 'For-you switch, typical target, older-page requests before the first row',
     unit: 'requests',
     target: TARGETS.foryouPagesBeforeFirstRow,
-    value: (rep) => rep.switch.typical.pages,
+    value: (rep) => rep.switch?.typical?.pages,
   },
   {
     id: 'foryou.switch.sparse',
@@ -143,9 +143,9 @@ export const METRICS = Object.freeze([
     title: 'For-you switch, sparse target (its only For-you row is the marker), click to the first row',
     unit: 'ms',
     target: null,
-    value: (rep) => rep.switch.sparse.firstRowMs,
-    raw: (rep) => rep.switch.sparse.firstRowMs,
-    capped: (rep) => rep.switch.sparse.capped,
+    value: (rep) => rep.switch?.sparse?.firstRowMs,
+    raw: (rep) => rep.switch?.sparse?.firstRowMs,
+    capped: (rep) => rep.switch?.sparse?.capped,
   },
   {
     id: 'foryou.switch.sparse.pages',
@@ -153,7 +153,7 @@ export const METRICS = Object.freeze([
     title: 'For-you switch, sparse target, older-page requests started before the first row',
     unit: 'requests',
     target: TARGETS.foryouPagesBeforeFirstRow,
-    value: (rep) => rep.switch.sparse.pages,
+    value: (rep) => rep.switch?.sparse?.pages,
   },
   {
     id: 'foryou.failed-page',
@@ -161,9 +161,9 @@ export const METRICS = Object.freeze([
     title: 'For-you switch with one injected failed older page, click to the first row',
     unit: 'ms',
     target: TARGETS.foryouFailedPageMs,
-    value: (rep) => rep.failedPage.firstRowMs,
-    raw: (rep) => rep.failedPage.firstRowMs,
-    capped: (rep) => rep.failedPage.capped,
+    value: (rep) => rep.failedPage?.firstRowMs,
+    raw: (rep) => rep.failedPage?.firstRowMs,
+    capped: (rep) => rep.failedPage?.capped,
   },
   {
     id: 'foryou.failed-page.retry',
@@ -171,7 +171,7 @@ export const METRICS = Object.freeze([
     title: 'For-you switch with one injected failed older page, its page requests after the failure',
     unit: 'requests',
     target: null,
-    value: (rep) => rep.failedPage.pageRequestsAfterFailure,
+    value: (rep) => rep.failedPage?.pageRequestsAfterFailure,
   },
   {
     id: 'foryou.open.large',
@@ -179,8 +179,8 @@ export const METRICS = Object.freeze([
     title: 'For-you first open, large target, navigation to the first row',
     unit: 'ms',
     target: TARGETS.foryouOpenLargeMs,
-    value: (rep) => rep.open.large.firstRowMs,
-    raw: (rep) => rep.open.large.firstRowMs,
+    value: (rep) => rep.open?.large?.firstRowMs,
+    raw: (rep) => rep.open?.large?.firstRowMs,
   },
   {
     id: 'foryou.open.large.pages',
@@ -188,7 +188,7 @@ export const METRICS = Object.freeze([
     title: 'For-you first open, large target, older-page requests before the first row',
     unit: 'requests',
     target: TARGETS.foryouPagesBeforeFirstRow,
-    value: (rep) => rep.open.large.pages,
+    value: (rep) => rep.open?.large?.pages,
   },
   {
     id: 'foryou.open.large.document-bytes',
@@ -196,7 +196,7 @@ export const METRICS = Object.freeze([
     title: 'For-you first open, large target, document bytes',
     unit: 'bytes',
     target: null,
-    value: (rep) => rep.open.large.documentBytes,
+    value: (rep) => rep.open?.large?.documentBytes,
   },
   {
     id: 'foryou.open.typical',
@@ -204,8 +204,8 @@ export const METRICS = Object.freeze([
     title: 'For-you first open, typical target, navigation to the first row',
     unit: 'ms',
     target: TARGETS.foryouOpenTypicalMs,
-    value: (rep) => rep.open.typical.firstRowMs,
-    raw: (rep) => rep.open.typical.firstRowMs,
+    value: (rep) => rep.open?.typical?.firstRowMs,
+    raw: (rep) => rep.open?.typical?.firstRowMs,
   },
   {
     id: 'foryou.open.typical.pages',
@@ -213,7 +213,7 @@ export const METRICS = Object.freeze([
     title: 'For-you first open, typical target, older-page requests before the first row',
     unit: 'requests',
     target: TARGETS.foryouPagesBeforeFirstRow,
-    value: (rep) => rep.open.typical.pages,
+    value: (rep) => rep.open?.typical?.pages,
   },
   {
     id: 'foryou.offline.reopen',
@@ -222,9 +222,9 @@ export const METRICS = Object.freeze([
     unit: 'ms',
     target: TARGETS.foryouOfflineReopenMs,
     afterOnly: true,
-    value: (rep) => rep.offline.firstRowMs,
-    raw: (rep) => rep.offline.firstRowMs,
-    capped: (rep) => rep.offline.capped,
+    value: (rep) => rep.offline?.firstRowMs,
+    raw: (rep) => rep.offline?.firstRowMs,
+    capped: (rep) => rep.offline?.capped,
   },
   {
     id: 'foryou.offline.document-bytes',
@@ -233,7 +233,7 @@ export const METRICS = Object.freeze([
     unit: 'bytes',
     target: TARGETS.foryouOfflineDocumentBytes,
     afterOnly: true,
-    value: (rep) => rep.offline.documentBytes,
+    value: (rep) => rep.offline?.documentBytes,
   },
 ]);
 
@@ -244,7 +244,10 @@ export function percentile(values, fraction) {
   return sorted[Math.max(0, rank - 1)];
 }
 
-export function summarize(reps, metric) {
+export function summarize(allReps, metric) {
+  // A repetition that did not run the metric's cell has no value for it (its cell is null, plan 5 v4 section 4.2 counts
+  // each cell's own repetitions), so it is left out of the metric's values.
+  const reps = allReps.filter((rep) => metric.value(rep) !== undefined);
   const values = reps.map(metric.value);
   const median = percentile(values, 0.5);
   return {

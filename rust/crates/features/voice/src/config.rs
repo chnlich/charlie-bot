@@ -1,6 +1,7 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use charliebot_core::config::{CharlieBotConfig, ConfigSection, SectionValue};
+use charliebot_core::config::{ConfigSection, SectionValue};
 use charliebot_core::credentials::Credentials;
 use charliebot_core::text_repr;
 use charliebot_registry::FeatureContext;
@@ -8,46 +9,109 @@ use minijinja::Value;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::transcription;
+use crate::transcription::{self, BackendEntry, CredentialRef};
 
+/// The `voice` section. Each `voice.backends` entry in it is complete and names a transcription protocol.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "RawVoiceSettings")]
 pub(crate) struct VoiceSettings {
-  #[serde(default = "default_backend")]
-  pub(crate) default_backend: String,
-  #[serde(default)]
+  /// The id a request names none of; unset, such a request fails with the key named.
+  pub(crate) default_backend: Option<String>,
   pub(crate) vocabulary: Vec<String>,
-  #[serde(default)]
   pub(crate) languages: Vec<String>,
+  pub(crate) backends: BTreeMap<String, BackendEntry>,
 }
 
-impl Default for VoiceSettings {
-  fn default() -> Self {
-    Self { default_backend: default_backend(), vocabulary: Vec::new(), languages: Vec::new() }
+/// The section as the file writes it. `try_from` checks it into `VoiceSettings`, so a loaded section is whole.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawVoiceSettings {
+  default_backend: Option<String>,
+  #[serde(default)]
+  vocabulary: Vec<String>,
+  #[serde(default)]
+  languages: Vec<String>,
+  #[serde(default)]
+  backends: BTreeMap<String, RawBackendEntry>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawBackendEntry {
+  label: Option<String>,
+  model: Option<String>,
+  endpoint: Option<String>,
+  credential: Option<String>,
+}
+
+impl TryFrom<RawVoiceSettings> for VoiceSettings {
+  type Error = String;
+
+  fn try_from(raw: RawVoiceSettings) -> Result<Self, String> {
+    if let Some(id) = raw.default_backend.as_deref().filter(|id| transcription::protocol_spec(id).is_none()) {
+      return Err(format!(
+        "voice.default_backend {} is not a transcription backend; known: {}",
+        text_repr::str_repr(id),
+        transcription::known_ids()
+      ));
+    }
+    let backends = raw
+      .backends
+      .into_iter()
+      .map(|(id, entry)| backend_entry(&id, entry).map(|entry| (id, entry)))
+      .collect::<Result<_, _>>()?;
+    Ok(Self { default_backend: raw.default_backend, vocabulary: raw.vocabulary, languages: raw.languages, backends })
   }
 }
 
-fn default_backend() -> String {
-  "gemini".to_string()
+/// The entry a `voice.backends` key holds, once the key names a protocol and every field is set.
+fn backend_entry(id: &str, raw: RawBackendEntry) -> Result<BackendEntry, String> {
+  let protocol = transcription::protocol_spec(id).ok_or_else(|| {
+    format!("voice.backends.{id} is not a transcription backend; known: {}", transcription::known_ids())
+  })?;
+  let required = |field: &str, value: Option<String>| {
+    value.ok_or_else(|| format!("voice.backends.{id}.{field} is not set in config.yaml"))
+  };
+  let label = required("label", raw.label)?;
+  let model = required("model", raw.model)?;
+  let endpoint = required("endpoint", raw.endpoint)?;
+  let credential = required("credential", raw.credential)?;
+  let credential = CredentialRef::parse(&credential).ok_or_else(|| {
+    format!("voice.backends.{id}.credential must be section.field, got {}", text_repr::str_repr(&credential))
+  })?;
+  Ok(BackendEntry { label, protocol, model, endpoint, credential })
 }
 
 impl VoiceSettings {
-  fn backends(&self, credentials: &Credentials) -> serde_json::Value {
+  /// The entry a backend id names. An id the config does not list fails with its key named.
+  pub(crate) fn backend(&self, id: &str) -> Result<&BackendEntry, String> {
+    self.backends.get(id).ok_or_else(|| format!("voice.backends.{id} is not configured in config.yaml"))
+  }
+
+  /// The id a request names none of. Unset, the request fails with the key named.
+  pub(crate) fn default_backend_id(&self) -> Result<&str, String> {
+    self.default_backend.as_deref().ok_or_else(|| "voice.default_backend is not set in config.yaml".to_string())
+  }
+
+  /// One row per protocol in catalog order, the rows the chat page's voice menu reads. A protocol with no entry is
+  /// listed unavailable, and its reason names the key the host must set.
+  fn backend_rows(&self, credentials: &Credentials) -> serde_json::Value {
     serde_json::Value::Array(
       transcription::BACKENDS
         .iter()
-        .map(|spec| {
-          let configured = credentials.get(spec.credential.0, spec.credential.1).is_some_and(|value| value.is_truthy());
-          json!({
+        .map(|spec| match self.backends.get(spec.id) {
+          Some(entry) => json!({
             "id": spec.id,
-            "label": spec.label,
+            "label": entry.label,
             "live_partials": spec.live_partials,
-            "unavailable_reason": if configured {
-              serde_json::Value::Null
-            } else {
-              json!(transcription::needed_credential(spec))
-            },
-          })
+            "unavailable_reason": transcription::unavailable_reason(entry, credentials),
+          }),
+          None => json!({
+            "id": spec.id,
+            "label": "",
+            "live_partials": spec.live_partials,
+            "unavailable_reason": format!("voice.backends.{} is not configured in config.yaml", spec.id),
+          }),
         })
         .collect(),
     )
@@ -65,88 +129,91 @@ fn dump_settings(value: &SectionValue) -> Result<serde_json::Value, String> {
 }
 
 fn parse_settings(raw: &serde_yaml::Value) -> Result<SectionValue, String> {
-  let settings = match raw {
-    serde_yaml::Value::Null => VoiceSettings::default(),
-    _ => serde_yaml::from_value(raw.clone()).map_err(|error| format!("voice: {error}"))?,
-  };
+  let settings: VoiceSettings = serde_yaml::from_value(raw.clone()).map_err(|error| format!("voice: {error}"))?;
   Ok(Arc::new(settings))
-}
-
-pub(crate) fn check_default_backend(cfg: &CharlieBotConfig) -> Result<(), String> {
-  let value = &cfg.section::<VoiceSettings>("voice").default_backend;
-  if transcription::BACKENDS.iter().any(|spec| spec.id == value.as_str()) {
-    return Ok(());
-  }
-  Err(format!(
-    "voice.default_backend {} is not a transcription backend; known: {}",
-    text_repr::str_repr(value),
-    transcription::known_ids()
-  ))
 }
 
 pub(crate) fn voice_backends(features: &FeatureContext) -> Result<Value, String> {
   let cfg = features.config.get().map_err(|error| error.to_string())?;
   let credentials = features.credentials.get().map_err(|error| error.to_string())?;
-  let settings = cfg.section::<VoiceSettings>("voice");
-  Ok(Value::from_serialize(settings.backends(&credentials)))
+  Ok(Value::from_serialize(cfg.section::<VoiceSettings>("voice").backend_rows(&credentials)))
 }
 
 pub(crate) fn voice_default_backend(features: &FeatureContext) -> Result<Value, String> {
   let cfg = features.config.get().map_err(|error| error.to_string())?;
-  Ok(Value::from(cfg.section::<VoiceSettings>("voice").default_backend.clone()))
+  Ok(Value::from_serialize(&cfg.section::<VoiceSettings>("voice").default_backend))
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
 
-  #[test]
-  fn config_defaults_and_custom_values_cover_the_three_voice_fields() {
-    let default = VoiceSettings::default();
-    assert_eq!(default.default_backend, "gemini");
-    assert!(default.vocabulary.is_empty());
-    assert!(default.languages.is_empty());
+  const GEMINI_ENTRY: &str = "    label: Synthetic Gemini
+    model: models/synthetic-live
+    endpoint: wss://synthetic.invalid/gemini
+    credential: gemini.api_key
+";
 
-    let custom: VoiceSettings = serde_yaml::from_str("default_backend: muse\nvocabulary: [Ada]\nlanguages: [en]\n")
-      .expect("all voice fields parse");
-    assert_eq!(custom.default_backend, "muse");
-    assert_eq!(custom.vocabulary, ["Ada"]);
-    assert_eq!(custom.languages, ["en"]);
-    assert!(serde_yaml::from_str::<VoiceSettings>("unexpected: true").is_err());
+  const MUSE_ENTRY: &str = "    label: Synthetic Muse
+    model: synthetic-muse
+    endpoint: wss://synthetic.invalid/muse
+    credential: meta.model_api_key
+";
+
+  #[test]
+  fn an_unset_backend_key_fails_the_load_and_names_the_key() {
+    let without_model = GEMINI_ENTRY.replace("    model: models/synthetic-live\n", "");
+    let error =
+      serde_yaml::from_str::<VoiceSettings>(&format!("default_backend: gemini\nbackends:\n  gemini:\n{without_model}"))
+        .expect_err("an entry without its model must fail the load");
+    assert!(error.to_string().contains("voice.backends.gemini.model is not set"), "{error}");
   }
 
   #[test]
-  fn backend_dropdown_reports_credentials_in_registry_order() {
+  fn a_backend_with_no_entry_fails_at_use_and_names_its_key() {
+    let settings: VoiceSettings = serde_yaml::from_str("default_backend: muse\n").expect("the section parses");
+    assert_eq!(settings.backend("muse").unwrap_err(), "voice.backends.muse is not configured in config.yaml");
+    assert_eq!(settings.default_backend_id(), Ok("muse"));
+    let unset: VoiceSettings = serde_yaml::from_str("vocabulary: [Ada]\n").expect("the section parses");
+    assert_eq!(unset.default_backend_id().unwrap_err(), "voice.default_backend is not set in config.yaml");
+  }
+
+  #[test]
+  fn default_backend_and_backend_keys_must_name_a_protocol() {
+    let error = serde_yaml::from_str::<VoiceSettings>("default_backend: \"unknown\\\\backend\"\n")
+      .expect_err("an unknown default must fail the load");
+    assert!(
+      error
+        .to_string()
+        .contains("voice.default_backend 'unknown\\\\backend' is not a transcription backend; known: gemini, muse"),
+      "{error}"
+    );
+    let error = serde_yaml::from_str::<VoiceSettings>(&format!("backends:\n  whisper:\n{GEMINI_ENTRY}"))
+      .expect_err("an entry under an unknown key must fail the load");
+    assert!(error.to_string().contains("voice.backends.whisper is not a transcription backend"), "{error}");
+  }
+
+  #[test]
+  fn backend_rows_list_every_protocol_with_its_credential_or_key() {
     let home = tempfile::tempdir().expect("create a synthetic credentials home");
     std::fs::write(home.path().join("credentials.yaml"), "gemini:\n  api_key: synthetic-key\n")
       .expect("write synthetic credentials");
     let credentials = charliebot_core::credentials::load_credentials(home.path()).expect("load credentials");
-    let backends = VoiceSettings::default().backends(&credentials);
-    assert_eq!(backends[0]["id"], "gemini");
-    assert_eq!(backends[0]["unavailable_reason"], serde_json::Value::Null);
-    assert_eq!(backends[1]["id"], "muse");
-    assert_eq!(backends[1]["unavailable_reason"], "needs meta.model_api_key");
-  }
 
-  #[test]
-  fn default_backend_check_matches_backend_ids() {
-    let home = tempfile::tempdir().expect("make an isolated config home");
-    std::fs::write(
-      home.path().join("config.yaml"),
-      r#"voice:
-  default_backend: "unknown\\backend"
-"#,
-    )
-    .expect("write a synthetic config");
-    let mut registry = charliebot_registry::Registry::new();
-    registry.register_package("features.voice", crate::register).expect("register voice config");
-    assert!(registry.config_schema().legacy_keys.is_empty());
-    let cfg = charliebot_core::config::load_config(home.path(), &registry.config_schema())
-      .expect("parse config before its registered check");
-    assert_eq!(
-      check_default_backend(&cfg),
-      Err("voice.default_backend 'unknown\\\\backend' is not a transcription backend; known: gemini, muse".to_string())
-    );
+    let both = format!("backends:\n  gemini:\n{GEMINI_ENTRY}  muse:\n{MUSE_ENTRY}");
+    let settings: VoiceSettings = serde_yaml::from_str(&both).expect("both entries parse");
+    let rows = settings.backend_rows(&credentials);
+    assert_eq!(rows[0]["id"], "gemini");
+    assert_eq!(rows[0]["label"], "Synthetic Gemini");
+    assert_eq!(rows[0]["unavailable_reason"], serde_json::Value::Null);
+    assert_eq!(rows[1]["id"], "muse");
+    assert_eq!(rows[1]["unavailable_reason"], "needs meta.model_api_key");
+
+    let gemini_only: VoiceSettings =
+      serde_yaml::from_str(&format!("backends:\n  gemini:\n{GEMINI_ENTRY}")).expect("one entry parses");
+    let rows = gemini_only.backend_rows(&credentials);
+    assert_eq!(rows[1]["label"], "");
+    assert_eq!(rows[1]["unavailable_reason"], "voice.backends.muse is not configured in config.yaml");
   }
 
   #[test]

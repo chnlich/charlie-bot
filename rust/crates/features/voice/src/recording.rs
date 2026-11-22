@@ -3,7 +3,8 @@ use futures_util::future::BoxFuture;
 use tokio::sync::{mpsc, watch};
 
 use crate::audio::AudioQueue;
-use crate::transcription::{self, Backend, BackendSpec, TranscriptKind, TranscriptionError};
+use crate::config::VoiceSettings;
+use crate::transcription::{Backend, BackendEntry, TranscriptKind, TranscriptionError};
 
 pub(crate) const VOICE_CHUNK_SAMPLES: usize = 2048;
 
@@ -29,19 +30,14 @@ pub(crate) trait RecordingBackend: Send + Sync {
 }
 
 pub(crate) trait RecordingBackendFactory: Send + Sync {
-  fn backends(&self) -> &'static [BackendSpec];
-  fn build(&self, backend_id: &str, credentials: &Credentials) -> Result<Box<dyn RecordingBackend>, String>;
+  fn build(&self, entry: &BackendEntry, credentials: &Credentials) -> Box<dyn RecordingBackend>;
 }
 
 pub(crate) struct OnlineBackendFactory;
 
 impl RecordingBackendFactory for OnlineBackendFactory {
-  fn backends(&self) -> &'static [BackendSpec] {
-    transcription::BACKENDS
-  }
-
-  fn build(&self, backend_id: &str, credentials: &Credentials) -> Result<Box<dyn RecordingBackend>, String> {
-    Ok(Box::new(OnlineBackend(Backend::build(backend_id, credentials)?)))
+  fn build(&self, entry: &BackendEntry, credentials: &Credentials) -> Box<dyn RecordingBackend> {
+    Box::new(OnlineBackend(Backend::build(entry, credentials)))
   }
 }
 
@@ -100,12 +96,12 @@ pub(crate) async fn transcribe_recording(
   factory: &dyn RecordingBackendFactory,
   pcm_bytes: &[u8],
   backend_id: Option<&str>,
-  default_backend: &str,
+  settings: &VoiceSettings,
   credentials: &Credentials,
   vocabulary: &[String],
   languages: &[String],
 ) -> Result<RecordingTranscript, RecordingError> {
-  let backend = select_backend(factory, backend_id, default_backend, credentials)?;
+  let backend = select_backend(factory, backend_id, settings, credentials)?;
   let transcript = backend
     .transcribe(recording_chunks(pcm_bytes), vocabulary, languages)
     .await
@@ -116,14 +112,15 @@ pub(crate) async fn transcribe_recording(
 fn select_backend(
   factory: &dyn RecordingBackendFactory,
   backend_id: Option<&str>,
-  default_backend: &str,
+  settings: &VoiceSettings,
   credentials: &Credentials,
 ) -> Result<Box<dyn RecordingBackend>, RecordingError> {
-  let backend_id = backend_id.unwrap_or(default_backend);
-  if !factory.backends().iter().any(|spec| spec.id == backend_id) {
-    return Err(RecordingError::BackendSelection(transcription::unknown_backend(backend_id)));
-  }
-  let backend = factory.build(backend_id, credentials).map_err(RecordingError::BackendSelection)?;
+  let backend_id = match backend_id {
+    Some(id) => id,
+    None => settings.default_backend_id().map_err(RecordingError::BackendSelection)?,
+  };
+  let entry = settings.backend(backend_id).map_err(RecordingError::BackendSelection)?;
+  let backend = factory.build(entry, credentials);
   if let Some(reason) = backend.unavailable_reason() {
     return Err(RecordingError::BackendSelection(format!("{backend_id} is unavailable: {reason}")));
   }

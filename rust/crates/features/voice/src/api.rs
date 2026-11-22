@@ -435,8 +435,8 @@ async fn upload_recording(
     Err(error) => return error_response(error),
   };
   let voice = cfg.section::<VoiceSettings>("voice");
-  // The backend the upload transcribes with: the browser's choice, or the configured default.
-  let backend = upload.backend.clone().unwrap_or_else(|| voice.default_backend.clone());
+  // The backend the upload is filed under: the browser's choice, or the configured default.
+  let backend = upload.backend.clone().or_else(|| voice.default_backend.clone());
   let persist_cfg = Arc::clone(&cfg);
   let persist_session_id = session_id.clone();
   let persist_run_id = upload.run_id.clone();
@@ -449,7 +449,7 @@ async fn upload_recording(
       &persist_session_id,
       &persist_run_id,
       &persist_pcm,
-      Some(&persist_backend),
+      persist_backend.as_deref(),
       persist_devices.as_ref(),
     )
   })
@@ -463,7 +463,7 @@ async fn upload_recording(
     factory,
     &pcm,
     upload.backend.as_deref(),
-    &voice.default_backend,
+    voice,
     &credentials,
     &voice.vocabulary,
     &voice.languages,
@@ -673,6 +673,7 @@ mod tests {
   use futures_util::future::BoxFuture;
 
   use super::*;
+  use crate::transcription::BackendEntry;
 
   const SESSION_ID: &str = "session-a";
   const BACKEND_ID: &str = "gemini";
@@ -702,20 +703,12 @@ mod tests {
   }
 
   impl RecordingBackendFactory for FakeFactory {
-    fn backends(&self) -> &'static [crate::transcription::BackendSpec] {
-      crate::transcription::BACKENDS
-    }
-
-    fn build(
-      &self,
-      backend_id: &str,
-      _credentials: &Credentials,
-    ) -> Result<Box<dyn recording::RecordingBackend>, String> {
-      Ok(Box::new(FakeBackend {
-        id: backend_id.to_string(),
+    fn build(&self, entry: &BackendEntry, _credentials: &Credentials) -> Box<dyn recording::RecordingBackend> {
+      Box::new(FakeBackend {
+        id: entry.protocol.id.to_string(),
         state: Arc::clone(&self.state),
         sessions_dir: self.sessions_dir.clone(),
-      }))
+      })
     }
   }
 
@@ -760,8 +753,24 @@ mod tests {
     }
   }
 
+  /// Both protocols configured, the default on gemini: the backends the upload tests select.
+  const SYNTHETIC_VOICE_CONFIG: &str = "voice:
+  default_backend: gemini
+  backends:
+    gemini:
+      label: Synthetic Gemini
+      model: synthetic-gemini-model
+      endpoint: wss://synthetic.invalid/gemini
+      credential: gemini.api_key
+    muse:
+      label: Synthetic Muse
+      model: synthetic-muse-model
+      endpoint: wss://synthetic.invalid/muse
+      credential: meta.model_api_key
+";
+
   fn synthetic_config(home: &tempfile::TempDir) -> (Arc<CharlieBotConfig>, Arc<Credentials>) {
-    std::fs::write(home.path().join("config.yaml"), "").expect("write the synthetic config");
+    std::fs::write(home.path().join("config.yaml"), SYNTHETIC_VOICE_CONFIG).expect("write the synthetic config");
     let mut registry = charliebot_registry::Registry::new();
     registry.register_package("features.voice", crate::register).expect("register the voice config section");
     let cfg = Arc::new(registry.load_config(home.path()).expect("load the synthetic config"));

@@ -3,31 +3,23 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use base64::Engine;
-use charliebot_compat::providers;
 use charliebot_compat::ws_client::{self, Message, Options, Sender, WEBSOCKETS_16_DEFAULTS};
-use charliebot_core::credentials::{API_KEY_FIELD, Credentials, REDACTED};
+use charliebot_core::credentials::{Credentials, REDACTED};
 use charliebot_core::str_methods;
 use charliebot_core::text_repr::{self, DEFAULT_JSON};
 use charliebot_registry::wiring::cancel_and_wait;
 use futures_util::future::BoxFuture;
+use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
 use crate::audio::{AudioQueue, SAMPLE_RATE};
 
-const GEMINI_MODEL: &str = "models/gemini-3.5-transcribe-live";
-const MUSE_MODEL: &str = "muse-voice-transcribe-1.0";
-const MUSE_ENDPOINT: &str = "wss://api.meta.ai/v1/asr/realtime";
 const WS_CLIENT_CLOSE_TIMEOUT: Duration = Duration::from_millis(1_000);
 const GEMINI_OPEN_TIMEOUT: Duration = Duration::from_secs(15);
 const AUDIO_LEAD_CAP_SECONDS: f64 = 4.0;
 const AUDIO_BYTES_PER_SECOND: f64 = SAMPLE_RATE as f64 * 2.0;
-
-/// The Muse live-transcription WebSocket endpoint.
-fn muse_live_websocket() -> String {
-  MUSE_ENDPOINT.to_string()
-}
 
 #[derive(Debug)]
 pub(crate) enum TranscriptionError {
@@ -58,44 +50,93 @@ pub(crate) struct TranscriptEvent {
   pub(crate) acknowledged: oneshot::Sender<()>,
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BackendKind {
   Gemini,
   Muse,
 }
 
-/// One transcription backend the feature offers.
+/// One transcription protocol the feature speaks, with its capability bits.
 ///
-/// The catalog below is the one home for a backend's id, label, credential, endpoint and preview support.
-/// Config, selection and relay read it instead of restating a fact.
+/// The catalog holds protocol kinds only. A `voice.backends.<id>` entry names a kind by its id and supplies the
+/// label, model, endpoint and credential, so no model, endpoint or credential name is written in code.
+#[derive(Debug)]
 pub(crate) struct BackendSpec {
+  /// The kind's name: the `voice.backends` key that selects it.
   pub(crate) id: &'static str,
-  pub(crate) label: &'static str,
-  pub(crate) credential: (&'static str, &'static str),
   pub(crate) live_partials: bool,
   kind: BackendKind,
-  /// The WebSocket endpoint the backend connects to.
-  endpoint: fn() -> String,
 }
 
 pub(crate) const BACKENDS: &[BackendSpec] = &[
-  BackendSpec {
-    id: "gemini",
-    label: "Gemini 3.5 Transcribe Live",
-    credential: ("gemini", API_KEY_FIELD),
-    live_partials: true,
-    kind: BackendKind::Gemini,
-    endpoint: providers::gemini_live_transcription_websocket,
-  },
-  BackendSpec {
-    id: "muse",
-    label: "Muse Voice Transcribe",
-    credential: ("meta", "model_api_key"),
-    live_partials: true,
-    kind: BackendKind::Muse,
-    endpoint: muse_live_websocket,
-  },
+  BackendSpec { id: "gemini", live_partials: true, kind: BackendKind::Gemini },
+  BackendSpec { id: "muse", live_partials: true, kind: BackendKind::Muse },
 ];
+
+/// The protocol a `voice.backends` key names, or `None` when no protocol has that name.
+pub(crate) fn protocol_spec(id: &str) -> Option<&'static BackendSpec> {
+  BACKENDS.iter().find(|spec| spec.id == id)
+}
+
+/// The protocol names in catalog order, as the refusal messages list them.
+pub(crate) fn known_ids() -> String {
+  BACKENDS.iter().map(|spec| spec.id).collect::<Vec<_>>().join(", ")
+}
+
+/// A credentials.yaml value a backend reads, written `section.field` in the config.
+#[derive(Clone, Debug)]
+pub(crate) struct CredentialRef {
+  pub(crate) section: String,
+  pub(crate) field: String,
+}
+
+impl CredentialRef {
+  /// The reference a config value names, or `None` when the value is not `section.field`.
+  pub(crate) fn parse(text: &str) -> Option<Self> {
+    let (section, field) = text.split_once('.')?;
+    (!section.is_empty() && !field.is_empty()).then(|| Self { section: section.to_string(), field: field.to_string() })
+  }
+}
+
+impl Serialize for CredentialRef {
+  fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.collect_str(&format_args!("{}.{}", self.section, self.field))
+  }
+}
+
+/// One complete `voice.backends.<id>` entry: the protocol its id names and every value the config gives it.
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct BackendEntry {
+  pub(crate) label: String,
+  #[serde(skip)]
+  pub(crate) protocol: &'static BackendSpec,
+  pub(crate) model: String,
+  pub(crate) endpoint: String,
+  pub(crate) credential: CredentialRef,
+}
+
+/// The message for a credential that is unset, as the config surface names it.
+fn needed_credential(credential: &CredentialRef) -> String {
+  format!("needs {}.{}", credential.section, credential.field)
+}
+
+/// The refusal for a credential that is unset when a session starts.
+fn missing_credential(credential: &CredentialRef) -> String {
+  format!("{}.{} is not set in credentials.yaml", credential.section, credential.field)
+}
+
+/// The credential's value when it is set: a numeric zero or boolean false counts as unset.
+fn credential_token(credentials: &Credentials, credential: &CredentialRef) -> Option<String> {
+  credentials
+    .get(&credential.section, &credential.field)
+    .filter(|value| value.is_truthy())
+    .map(|value| value.value_str())
+}
+
+/// Why an entry cannot run yet, or `None` when its credential is set.
+pub(crate) fn unavailable_reason(entry: &BackendEntry, credentials: &Credentials) -> Option<String> {
+  credential_token(credentials, &entry.credential).is_none().then(|| needed_credential(&entry.credential))
+}
 
 /// One transcript language the feature offers.
 ///
@@ -122,65 +163,52 @@ fn spec_of(kind: BackendKind) -> &'static BackendSpec {
   BACKENDS.iter().find(|spec| spec.kind == kind).expect("the catalog holds every backend kind")
 }
 
-/// The catalog's ids in order, as the refusal messages list them.
-pub(crate) fn known_ids() -> String {
-  BACKENDS.iter().map(|spec| spec.id).collect::<Vec<_>>().join(", ")
-}
-
-/// The refusal for an id outside the catalog.
-pub(crate) fn unknown_backend(id: &str) -> String {
-  format!("unknown transcription backend {}; known: {}", text_repr::str_repr(id), known_ids())
-}
-
-/// The credential an entry needs, as the config surface and the refusals name it.
-pub(crate) fn needed_credential(spec: &BackendSpec) -> String {
-  format!("needs {}.{}", spec.credential.0, spec.credential.1)
-}
-
-fn missing_credential(spec: &BackendSpec) -> String {
-  format!("{}.{} is not set in credentials.yaml", spec.credential.0, spec.credential.1)
-}
-
-/// The entry's credential, when the profile's value is truthy: a numeric zero or boolean false counts as unset.
-fn credential_token(credentials: &Credentials, spec: &BackendSpec) -> Option<String> {
-  credentials.get(spec.credential.0, spec.credential.1).filter(|value| value.is_truthy()).map(|value| value.value_str())
-}
-
 pub(crate) struct Backend {
   spec: &'static BackendSpec,
-  token: Option<String>,
+  model: String,
   endpoint: String,
+  credential: CredentialRef,
+  token: Option<String>,
   clock: Arc<dyn Clock>,
   #[cfg(test)]
   muse_audio_bytes_per_second: f64,
 }
 
 impl Backend {
-  pub(crate) fn build(id: &str, credentials: &Credentials) -> Result<Self, String> {
-    let spec = BACKENDS.iter().find(|spec| spec.id == id).ok_or_else(|| unknown_backend(id))?;
-    Ok(Self {
-      spec,
-      token: credential_token(credentials, spec),
-      endpoint: (spec.endpoint)(),
+  pub(crate) fn build(entry: &BackendEntry, credentials: &Credentials) -> Self {
+    Self {
+      spec: entry.protocol,
+      model: entry.model.clone(),
+      endpoint: entry.endpoint.clone(),
+      credential: entry.credential.clone(),
+      token: credential_token(credentials, &entry.credential),
       clock: Arc::new(EventLoopClock),
       #[cfg(test)]
       muse_audio_bytes_per_second: AUDIO_BYTES_PER_SECOND,
-    })
+    }
   }
 
   #[cfg(test)]
   pub(crate) fn gemini_for_test(token: &str, endpoint_url: &str) -> Self {
-    Self::for_test(BackendKind::Gemini, token, endpoint_url, Arc::new(EventLoopClock), AUDIO_BYTES_PER_SECOND)
+    Self::for_test(
+      BackendKind::Gemini,
+      "models/gemini-3.5-transcribe-live",
+      token,
+      endpoint_url,
+      Arc::new(EventLoopClock),
+      AUDIO_BYTES_PER_SECOND,
+    )
   }
 
   #[cfg(test)]
   fn muse_for_test(token: &str, endpoint_url: &str, clock: Arc<dyn Clock>, audio_bytes_per_second: f64) -> Self {
-    Self::for_test(BackendKind::Muse, token, endpoint_url, clock, audio_bytes_per_second)
+    Self::for_test(BackendKind::Muse, "muse-voice-transcribe-1.0", token, endpoint_url, clock, audio_bytes_per_second)
   }
 
   #[cfg(test)]
   fn for_test(
     kind: BackendKind,
+    model: &str,
     token: &str,
     endpoint_url: &str,
     clock: Arc<dyn Clock>,
@@ -188,8 +216,10 @@ impl Backend {
   ) -> Self {
     Self {
       spec: spec_of(kind),
-      token: Some(token.to_string()),
+      model: model.to_string(),
       endpoint: endpoint_url.to_string(),
+      credential: CredentialRef { section: "synthetic".to_string(), field: "api_key".to_string() },
+      token: Some(token.to_string()),
       clock,
       muse_audio_bytes_per_second,
     }
@@ -200,7 +230,7 @@ impl Backend {
   }
 
   pub(crate) fn unavailable_reason(&self) -> Option<String> {
-    self.token.is_none().then(|| needed_credential(self.spec))
+    self.token.is_none().then(|| needed_credential(&self.credential))
   }
 
   #[cfg(test)]
@@ -223,7 +253,8 @@ impl Backend {
   ) -> Result<(), TranscriptionError> {
     match self.spec.kind {
       BackendKind::Gemini => {
-        let token = self.token.as_deref().ok_or_else(|| TranscriptionError::Rejected(missing_credential(self.spec)))?;
+        let token =
+          self.token.as_deref().ok_or_else(|| TranscriptionError::Rejected(missing_credential(&self.credential)))?;
         let url = format!("{}?key={token}", self.endpoint);
         let options = Options {
           open_timeout: Some(GEMINI_OPEN_TIMEOUT),
@@ -246,6 +277,7 @@ impl Backend {
           &mut cancelled,
           events,
           GeminiSessionConfig {
+            model: self.model.clone(),
             vocabulary,
             languages,
             pacing: AudioPacerConfig { clock: Arc::clone(&self.clock), bytes_per_second: AUDIO_BYTES_PER_SECOND },
@@ -254,7 +286,8 @@ impl Backend {
         .await
       }
       BackendKind::Muse => {
-        let token = self.token.as_deref().ok_or_else(|| TranscriptionError::Rejected(missing_credential(self.spec)))?;
+        let token =
+          self.token.as_deref().ok_or_else(|| TranscriptionError::Rejected(missing_credential(&self.credential)))?;
         let options = Options {
           open_timeout: WEBSOCKETS_16_DEFAULTS.open_timeout,
           close_timeout: Some(WS_CLIENT_CLOSE_TIMEOUT),
@@ -274,6 +307,7 @@ impl Backend {
           &mut cancelled,
           MuseSession {
             token: token.to_string(),
+            model: self.model.clone(),
             audio,
             events,
             vocabulary,
@@ -328,7 +362,7 @@ async fn run_gemini_session<S: VoiceSocket + 'static>(
   config: GeminiSessionConfig,
 ) -> Result<(), TranscriptionError> {
   let setup_send = tokio::select! {
-    result = socket.send(Message::Text(dumps_default(&gemini_setup(&config.vocabulary, &config.languages)))) => result,
+    result = socket.send(Message::Text(dumps_default(&gemini_setup(&config.model, &config.vocabulary, &config.languages)))) => result,
     _ = wait_cancelled(cancelled) => return Ok(()),
   };
   setup_send.map_err(|error| TranscriptionError::Failure(error.to_string()))?;
@@ -438,12 +472,12 @@ async fn gemini_send_audio<S: VoiceSocket + 'static>(
   Ok(())
 }
 
-fn gemini_setup(vocabulary: &[String], languages: &[String]) -> Value {
+fn gemini_setup(model: &str, vocabulary: &[String], languages: &[String]) -> Value {
   let language_codes: Vec<&str> =
     languages.iter().filter_map(|code| language_spec(code).map(|spec| spec.gemini_code)).collect();
   json!({
     "setup": {
-      "model": GEMINI_MODEL,
+      "model": model,
       "generationConfig": { "responseModalities": ["TEXT"] },
       "inputAudioTranscription": {
         "languageCodes": language_codes,
@@ -459,6 +493,7 @@ fn gemini_setup(vocabulary: &[String], languages: &[String]) -> Value {
 
 struct MuseSession {
   token: String,
+  model: String,
   audio: Arc<AudioQueue>,
   events: mpsc::UnboundedSender<TranscriptEvent>,
   vocabulary: Vec<String>,
@@ -504,7 +539,7 @@ async fn run_muse_session<S: VoiceSocket + 'static>(
   cancelled: &mut watch::Receiver<bool>,
   session: MuseSession,
 ) -> Result<(), TranscriptionError> {
-  let handshake = muse_handshake(&session.token, &session.vocabulary, &session.languages);
+  let handshake = muse_handshake(&session.token, &session.model, &session.vocabulary, &session.languages);
   let handshake_send = tokio::select! {
     result = socket.send(Message::Text(dumps_default(&handshake))) => result,
     _ = wait_cancelled(cancelled) => return Ok(()),
@@ -670,12 +705,12 @@ async fn muse_send_audio<S: VoiceSocket + 'static>(
   Ok(())
 }
 
-fn muse_handshake(token: &str, vocabulary: &[String], languages: &[String]) -> Value {
+fn muse_handshake(token: &str, model: &str, vocabulary: &[String], languages: &[String]) -> Value {
   let mut handshake = json!({
     "mode": "PUSH_TO_TALK",
     "authorization": { "accessToken": token },
     "audioEncoding": "PCM_16KHZ",
-    "model": MUSE_MODEL,
+    "model": model,
     "partialMode": "CUMULATIVE",
     "emitAudioProgress": false
   });
@@ -775,6 +810,7 @@ struct AudioPacerConfig {
 }
 
 struct GeminiSessionConfig {
+  model: String,
   vocabulary: Vec<String>,
   languages: Vec<String>,
   pacing: AudioPacerConfig,
@@ -1137,6 +1173,7 @@ mod tests {
         &mut cancelled,
         events,
         GeminiSessionConfig {
+          model: "models/gemini-3.5-transcribe-live".to_string(),
           vocabulary: vec!["Ada".to_string()],
           languages: vec!["zh".to_string(), "fr".to_string()],
           pacing: AudioPacerConfig { clock: session_clock, bytes_per_second: 2.0 },
@@ -1254,6 +1291,7 @@ mod tests {
         &mut cancelled,
         MuseSession {
           token: "synthetic-token".to_string(),
+          model: "muse-voice-transcribe-1.0".to_string(),
           audio,
           events,
           vocabulary: vec!["Ada".to_string()],

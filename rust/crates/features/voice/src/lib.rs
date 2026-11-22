@@ -35,7 +35,6 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.template_global_stable("voice_backends", config::voice_backends)?;
   registry.template_global_stable("voice_default_backend", config::voice_default_backend)?;
   registry.config_section(config::section())?;
-  registry.config_check("check_default_backend", config::check_default_backend)?;
   registry.home_card(HomeCard {
     name: "Recent recordings",
     url: api::RECORDINGS_PAGE_PATH,

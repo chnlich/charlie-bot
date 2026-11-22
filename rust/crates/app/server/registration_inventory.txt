@@ -82,7 +82,6 @@ service	features.usage	ext_usage
 file view	features.artifacts	artifacts
 startup check	features.cron	cron_backend_refs
 startup check	features.usage	backend_ids
-config check	features.voice	check_default_backend
 config check	backends.claude_code	check_claude_pools
 config check	backends.claude_code	check_ui_labels
 config section	features.user_text_checks	user_text_checks

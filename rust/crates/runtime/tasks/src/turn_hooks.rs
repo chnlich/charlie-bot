@@ -815,10 +815,13 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn a_child_turn_notice_reaches_the_parent_once_and_starts_no_child_turn() {
+  async fn a_turn_notice_propagates_up_three_levels_without_waking_its_source() {
     let home = tempfile::tempdir().unwrap();
-    let (features, parent) =
+    let (features, grandparent) =
       checkpoint_session(home.path(), &hooks(&["notice-after-continuation"]), "turn-hooks-parent").await;
+    let parent =
+      crate::test_fixtures::child_manager_session(&features, &grandparent.id, "turn-hooks-parent-child", "cc-parent")
+        .await;
     let child =
       crate::test_fixtures::child_manager_session(&features, &parent.id, "turn-hooks-child", "cc-child").await;
     let session_id = &child.id;
@@ -838,6 +841,30 @@ mod tests {
       .collect();
     assert_eq!(from_child.len(), 1, "the parent holds the notice once");
     assert!(from_child[0]["content"].as_str().unwrap().contains("needs a look"), "{}", from_child[0]);
+
+    // Run the parent's checkpoint against the child's input; its own second miss sends one notice to its parent.
+    let parent_pending = pending_ids(&features, &parent.id);
+    assert!(matches!(checkpoint(&features, &parent.id, &parent, 0, true).await.unwrap(), Checkpoint::Continue(_)));
+    append(&features, &parent.id, json!({"type": "continuation_ran", "id": "parent-c1"})).await;
+    assert_eq!(checkpoint(&features, &parent.id, &parent, 0, true).await.unwrap(), Checkpoint::Finish);
+    assert_eq!(checkpoint(&features, &parent.id, &parent, 0, true).await.unwrap(), Checkpoint::Finish);
+
+    let parent_turn = turn_events(&features, &parent.id);
+    let parent_notices: Vec<&Value> = parent_turn
+      .iter()
+      .filter(|event| event["type"] == WEB_REPLY_NOTICE && event["content"] == "needs a look")
+      .collect();
+    assert_eq!(parent_notices.len(), 1, "the parent records its own notice once");
+    assert!(parent_notices[0][WEB_REPLY_NOTICE][INPUT_EVENT_ID].is_null(), "the notice does not link an input");
+    assert_eq!(pending_ids(&features, &parent.id), parent_pending, "the parent's notice starts no parent turn");
+    assert_eq!(pending_ids(&features, session_id), child_pending, "the child's notice starts no child turn");
+
+    let from_parent: Vec<Value> = pending_events(&features, &grandparent.id)
+      .into_iter()
+      .filter(|event| event["type"] == AGENT_MESSAGE && event[FROM_SESSION] == parent.id)
+      .collect();
+    assert_eq!(from_parent.len(), 1, "the grandparent holds the parent's notice once");
+    assert!(from_parent[0]["content"].as_str().unwrap().contains("needs a look"), "{}", from_parent[0]);
   }
 
   #[tokio::test]

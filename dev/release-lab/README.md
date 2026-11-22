@@ -19,19 +19,18 @@ root or tmux server, and it opens no port another host's server uses.
 
 ## Host values
 
-No value in this directory names a host, a user or one machine's path. The lab takes them as environment:
+No value in this directory names a host, a user or one machine's path. The lab takes them as environment. The stand-in's
+model, endpoint and credential name are not environment: they are the member the host's live server selects for
+`backends.calls.probe`, read with `charliebot backend resolve --call probe` at the start of each run.
 
 | Variable | Meaning |
 |---|---|
 | `RELEASE_LAB_DIR` | the lab's state directory, absolute |
 | `RELEASE_LAB_REPO_URL` | the charlie-bot clone URL `--prepare` clones the lab's git origin from |
-| `RELEASE_LAB_API_BASE` | the model endpoint the stand-in home's backend names |
-| `RELEASE_LAB_CREDENTIAL` | the `credentials.yaml` section that holds that endpoint's key |
-| `RELEASE_LAB_KEY_FILE` | a mode-600 file holding that key; `--teardown` deletes it |
+| `RELEASE_LAB_KEY_FILE` | a mode-600 file holding the key of the probe member's credential; `--teardown` deletes it |
 | `RELEASE_LAB_PORT` | the stand-in server's port (default 18900) |
 | `RELEASE_LAB_TMUX_SOCKET` | the lab's tmux socket name (default `release-lab`) |
 | `RELEASE_LAB_SCOPE_MEMORY` | the lab's systemd user scope memory cap (default 24G) |
-| `RELEASE_LAB_MODEL` | the stand-in backend's model (default `openai/glm-5.3-flash`) |
 | `RELEASE_LAB_READER_SECONDS` | the cap on how long the flow's readers run from the gate's start (default 1800); they stop at the gate's first waiting sample |
 | `RELEASE_LAB_READER_SLEEP_MS` | the pause between one reader's 1 MiB reads (default 12) |
 | `RELEASE_LAB_KEEP` | keep a run's stand-in home and logs for inspection (default 0) |
@@ -80,6 +79,9 @@ Each flow attempt prints one JSON line with the stages' seconds (`download_s`, `
 checks are no part of it), `live_runs`, `reattached`, `switch_exit`, `verdict` (`live`, `switched_back`,
 `kept_reported`, `flow_stopped`, `start_failed` or `switch_failed`), the host's one-minute load at the start and the
 host's `/proc` entry count at the start (`proc_entries`, which the gate's read-table walks cost scales with).
+
+The stand-in's model is the probe member's, so `probe_s` and `delegation_s` from a run before the lab resolved that
+member are not comparable with later ones. The first run after it sets the new baseline.
 `kept_reported` is the switch's exits 3 to 6, where the new release keeps serving: a switch back that failed, a
 recorded run that died, an old release that refused the home, and a model-side check that failed twice. `reattached` is
 the switch's readback verdict, so a `switched_back` run records it as the switch back read them. `flow_stopped` and

@@ -26,20 +26,19 @@
 # to the last start reaching ready; a switch back serves the port again at its own start. release_to_live_s runs from
 # the release's start to that same ready.
 #
-# The lab never reads or writes a live CharlieBot home, release root or tmux server, and it copies no real session
-# directory: every home under it is generated or a copy of the generated seed. The model key reaches only the lab's
-# stand-in home and its startup-lab live home, both mode 600; --teardown deletes the lab's copy.
+# The lab never writes a live CharlieBot home, release root or tmux server, and it copies no real session directory:
+# every home under it is generated or a copy of the generated seed. Its one read of the live home is the stand-in's
+# model, endpoint and credential name, the member that the live server selects for backends.calls.probe (`charliebot
+# backend resolve --call probe`). The model key reaches only the lab's stand-in home and its startup-lab live home, both
+# mode 600; --teardown deletes the lab's copy.
 #
 # Host-specific values arrive as environment, never from this file:
 #   RELEASE_LAB_DIR             the lab's state directory (required)
 #   RELEASE_LAB_REPO_URL        the charlie-bot clone URL the lab's git origin comes from (required for --prepare)
-#   RELEASE_LAB_API_BASE        the model endpoint the stand-in home's backend names (required)
-#   RELEASE_LAB_CREDENTIAL      the credentials.yaml section that holds that endpoint's key (required)
-#   RELEASE_LAB_KEY_FILE        a mode-600 file holding the endpoint's key (required)
+#   RELEASE_LAB_KEY_FILE        a mode-600 file holding the probe member's key (required)
 #   RELEASE_LAB_PORT            the stand-in server's port (default 18900)
 #   RELEASE_LAB_TMUX_SOCKET     the lab's tmux socket name (default release-lab)
 #   RELEASE_LAB_SCOPE_MEMORY    the lab's systemd user scope memory cap (default 24G)
-#   RELEASE_LAB_MODEL           the stand-in backend's model (default openai/glm-5.3-flash)
 #   RELEASE_LAB_READER_SECONDS  the cap on how long the flow's readers run from the gate's start (default 1800); they
 #                               stop at the gate's first waiting sample
 #   RELEASE_LAB_READER_SLEEP_MS the pause between one reader's 1 MiB reads (default 12)
@@ -115,7 +114,7 @@ done
 # require_env: the values only the host knows. Nothing here names a host or a path of one.
 require_env() {
   local name
-  for name in RELEASE_LAB_DIR RELEASE_LAB_API_BASE RELEASE_LAB_CREDENTIAL RELEASE_LAB_KEY_FILE; do
+  for name in RELEASE_LAB_DIR RELEASE_LAB_KEY_FILE; do
     [ -n "${!name:-}" ] || fail "$name is unset; the host supplies it"
   done
   LAB=${RELEASE_LAB_DIR}
@@ -126,7 +125,6 @@ require_env() {
   PORT=${RELEASE_LAB_PORT:-18900}
   SOCK=${RELEASE_LAB_TMUX_SOCKET:-release-lab}
   SCOPE_MEMORY=${RELEASE_LAB_SCOPE_MEMORY:-24G}
-  MODEL=${RELEASE_LAB_MODEL:-openai/glm-5.3-flash}
   READER_SECONDS=${RELEASE_LAB_READER_SECONDS:-1800}
   READER_SLEEP_MS=${RELEASE_LAB_READER_SLEEP_MS:-12}
   KEEP=${RELEASE_LAB_KEEP:-0}
@@ -134,6 +132,21 @@ require_env() {
   [[ $PORT =~ ^[0-9]+$ ]] || fail "RELEASE_LAB_PORT is a number: $PORT"
   [[ $READER_SECONDS =~ ^[0-9]+$ && $READER_SLEEP_MS =~ ^[0-9]+$ ]] \
     || fail 'RELEASE_LAB_READER_SECONDS and RELEASE_LAB_READER_SLEEP_MS are whole numbers'
+}
+
+# lab_probe_member: the stand-in's model, endpoint and credential name, from the member that the host's live server
+# selects for backends.calls.probe. The one read is `charliebot backend resolve`, which writes nothing; KEY_FILE holds
+# that credential's key.
+lab_probe_member() {
+  local answer
+  answer=$(charliebot backend resolve --call probe) \
+    || fail 'the live server resolves backends.calls.probe (the reason is above)'
+  MODEL=$(jq -r '.option.model // empty' <<< "$answer")
+  API_BASE=$(jq -r '.option.api_base // empty' <<< "$answer")
+  CREDENTIAL=$(jq -r '.option.credential // empty' <<< "$answer")
+  [[ -n $MODEL ]] || fail 'the probe member names no model'
+  [[ -n $API_BASE ]] || fail 'the probe member names no api_base; the stand-in is a charlie-code endpoint and needs one'
+  [[ -n $CREDENTIAL ]] || fail 'the probe member names no credential; the key file is filed under one'
 }
 
 lab_paths() {
@@ -206,12 +219,12 @@ backends:
       label: Release lab
       type: charlie-code
       model: $MODEL
-      api_base: $RELEASE_LAB_API_BASE
-      credential: $RELEASE_LAB_CREDENTIAL
+      api_base: $API_BASE
+      credential: $CREDENTIAL
 EOF
   chmod 600 "$home/config.yaml" || fail "the config is user-only: $home/config.yaml"
   {
-    printf '%s:\n  api_key: %s\n' "$RELEASE_LAB_CREDENTIAL" "$(cat "$KEY_FILE")"
+    printf '%s:\n  api_key: %s\n' "$CREDENTIAL" "$(cat "$KEY_FILE")"
     printf 'charliebot:\n  access_key: %s\n' "$access_key"
   } > "$home/credentials.yaml" || fail "the credentials write: $home/credentials.yaml"
   chmod 600 "$home/credentials.yaml"
@@ -939,6 +952,7 @@ FLOW_REF=${FLOW_REF:-$TO}
 FLOW_REF=${FLOW_REF,,}
 lab_paths
 enter_scope
+[ "$ACTION" = teardown ] || lab_probe_member
 case $ACTION in
   teardown)
     teardown

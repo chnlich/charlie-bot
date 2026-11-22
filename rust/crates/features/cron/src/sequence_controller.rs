@@ -640,6 +640,11 @@ async fn redrive_firing(
   leaf_id: &str,
   tree: &dyn SequenceTree,
 ) -> anyhow::Result<BoundaryState> {
+  // A leaf that is not open has no firing left to drive, so its run records are not read and its task file is not
+  // looked up.
+  if tree.task_state(leaf_id)? != "open" {
+    return Ok(BoundaryState::Finished);
+  }
   let records = tree.list_run_records_sync(leaf_id)?;
   let Some(sequence) =
     records.iter().filter_map(|run| run.sequence_ref.as_ref()).find(|sequence| sequence.kind == "cron_steps")
@@ -1020,11 +1025,14 @@ fn write_task_key(home: &Path, name: &str, key: &str, value: Value) -> anyhow::R
 
 #[cfg(test)]
 mod tests {
+  use std::collections::BTreeMap;
   use std::sync::Arc;
 
   use charliebot_core::config::{PoolConfig, PoolMember, PoolRule};
   use charliebot_core::event_types;
-  use charliebot_registry::sequence::{QuotaFailure, SequenceBinding, SequenceController};
+  use charliebot_core::test_support::RecordedEvents;
+  use charliebot_registry::sequence::{QuotaFailure, SequenceBinding, SequenceController, SequenceTree};
+  use charliebot_store::control_events::{ACTOR_USER, archived_close_event};
   use charliebot_store::metadata::{SCHEDULE_TASK, TaskApprover, TaskProfile, TaskSpec, UtcDateTime};
   use charliebot_store::{CreateTask, TaskCaller};
   use serde_json::Map;
@@ -1032,7 +1040,7 @@ mod tests {
   use tokio::sync::watch;
 
   use super::{
-    CronBinding, CronSequenceController, last_saturday_1am_utc, register_step_run, row_schedule_fields,
+    CronBinding, CronSequenceController, last_saturday_1am_utc, redrive_firing, register_step_run, row_schedule_fields,
     switch_failed_step,
   };
   use crate::boundary::BoundaryState;
@@ -1564,5 +1572,129 @@ mod tests {
       assert_eq!(task["session_id"].as_str(), Some(node.id.as_str()));
       assert_eq!(task["project"].as_str(), Some("synthetic-project"));
     }
+  }
+
+  /// The task name the test leaf's step run names. No task file of this name is written to the cron directory.
+  const MISSING_TASK: &str = "synthetic-missing-task";
+
+  /// Redrives a step leaf whose one run names [`MISSING_TASK`], after a `task_closed` fact when `closed` is set. Returns
+  /// the state the redrive returns and the events it logged on this thread.
+  async fn redrive_step_leaf_with_missing_task(
+    request_id: &str,
+    closed: bool,
+  ) -> (BoundaryState, Vec<BTreeMap<String, String>>) {
+    let (_home, features) = feature_context();
+    let parent = manager(&features, &format!("{request_id}-parent")).await.unwrap();
+    let leaf = features
+      .store
+      .create_task(
+        CreateTask {
+          request_id: request_id.to_string(),
+          task_parent_id: Some(parent.id.clone()),
+          profile: TaskProfile::Worker,
+          task: Some(TaskSpec {
+            goal: "synthetic scheduled steps".to_string(),
+            repo_path: None,
+            base_branch: None,
+            task_type: None,
+            keep_worktree: false,
+            cold_read: None,
+            approver: TaskApprover::User,
+            improve_host: None,
+          }),
+          name: Some("Synthetic scheduled steps".to_string()),
+          backend: Some("synthetic".to_string()),
+          group: None,
+          session_id: None,
+        },
+        TaskCaller::System,
+        Map::new(),
+      )
+      .await
+      .unwrap();
+    let task = ScheduledTaskConfig {
+      name: MISSING_TASK.to_string(),
+      cron: "0 3 * * *".to_string(),
+      prompt_file: None,
+      repo: None,
+      timezone: "America/Los_Angeles".to_string(),
+      enabled: true,
+      allow_failure: false,
+      session_id: Some(parent.id.clone()),
+      mode: Some(TaskMode::Worker),
+      prompt: None,
+      handler: None,
+      steps: Some(vec![StepConfig {
+        name: "select".to_string(),
+        prompt_file: None,
+        prompt: Some("Select candidates.".to_string()),
+        backend: None,
+        distinct_backend_from: None,
+      }]),
+      improve_host: None,
+    };
+    charliebot_tasks::execution::pre_recovery_step(Arc::clone(&features)).await.unwrap();
+    let adapter = features.startup.require::<charliebot_tasks::execution::TaskExecutionAdapter>().unwrap();
+    let tree = charliebot_tasks::recovery::sequence_tree(&features, &adapter).unwrap();
+    register_step_run(
+      &tree,
+      &leaf.id,
+      &task,
+      "2026-10-21T03:00:00-07:00",
+      0,
+      "synthetic",
+      "synthetic",
+      Some("synthetic-model"),
+      None,
+    )
+    .await
+    .unwrap();
+    if closed {
+      let guard = features.store.control_lock().await;
+      let close = archived_close_event(
+        &leaf.id,
+        "synthetic-leaf-close",
+        "synthetic close",
+        None,
+        None,
+        None,
+        ACTOR_USER,
+        &[],
+        &[],
+      );
+      features.store.append_control_fact(&guard, &leaf.id, close).await.unwrap();
+      drop(guard);
+      features.store.invalidate_tree_index();
+    }
+    let expected = if closed { "archived" } else { "open" };
+    assert_eq!(tree.task_state(&leaf.id).unwrap(), expected, "the leaf's task state before the redrive");
+
+    let recorded = RecordedEvents::default();
+    let _capture = charliebot_core::test_support::install_events(Arc::new(recorded.clone()));
+    let state = redrive_firing(&features, &leaf.id, &tree).await.unwrap();
+    (state, recorded.events())
+  }
+
+  fn missing_task_warnings(events: &[BTreeMap<String, String>]) -> Vec<&BTreeMap<String, String>> {
+    events
+      .iter()
+      .filter(|fields| fields.get("message").is_some_and(|text| text == "cron_firing_task_missing"))
+      .collect()
+  }
+
+  #[tokio::test]
+  async fn a_closed_step_leaf_whose_task_file_is_gone_finishes_without_a_warning() {
+    let (state, events) = redrive_step_leaf_with_missing_task("synthetic-closed-step-leaf", true).await;
+    assert_eq!(state, BoundaryState::Finished);
+    assert!(missing_task_warnings(&events).is_empty(), "a closed leaf logs no missing-task warning: {events:?}");
+  }
+
+  #[tokio::test]
+  async fn an_open_step_leaf_whose_task_file_is_gone_warns_and_finishes() {
+    let (state, events) = redrive_step_leaf_with_missing_task("synthetic-open-step-leaf", false).await;
+    assert_eq!(state, BoundaryState::Finished);
+    let warnings = missing_task_warnings(&events);
+    assert_eq!(warnings.len(), 1, "an open leaf logs one missing-task warning: {events:?}");
+    assert!(warnings[0]["task"].contains(MISSING_TASK), "the warning names the missing task: {events:?}");
   }
 }

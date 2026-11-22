@@ -28,6 +28,7 @@ uuid.workspace = true
 
 [dev-dependencies]
 charliebot-agents = { workspace = true, features = ["test-support"] }
+charliebot-core = { workspace = true, features = ["test-support"] }
 charliebot-tasks = { workspace = true, features = ["test-hooks", "test-fixtures"] }
 nix.workspace = true
 tempfile.workspace = true

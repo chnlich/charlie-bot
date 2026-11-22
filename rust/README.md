@@ -52,13 +52,13 @@ failure. Any other argument prints the usage line and exits 2.
 Startup loads `config.yaml` and checks it, then requires a backend option and loads `credentials.yaml`.
 Any error exits 1 with a message naming the key. Startup then takes the home writer fence. When
 another process holds the fence, the binary logs `server_startup_refused_home_writer_fence` and exits 3.
-Next it initializes the home, logs `server_ready`, and binds. SIGTERM and SIGINT stop accepting and give
+Next it initializes the home, binds, and logs `server_ready`. SIGTERM and SIGINT stop accepting and give
 in-flight requests up to 5 s. Rust stops services, closes the HTTP client and WebSockets, releases the fence,
 and logs `charliebot_shutdown`. SIGTERM then restores and raises its default signal action;
 it skips let-go steps.
 
 SIGINT runs the `task_execution` and `headless_renderer` let-go steps after the shutdown line, then exits 0.
-A failed bind runs those steps after its shutdown line and exits 1.
+A failed bind logs `bind_failed` with no `server_ready`, runs those steps after its shutdown line, and exits 1.
 
 Logs are text lines on stdout that open with the UTC time, the level, the file and line of the tracing call, and the
 event name, then `key=value` fields in call order (the `logline` grammar;

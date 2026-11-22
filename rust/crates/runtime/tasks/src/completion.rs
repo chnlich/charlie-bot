@@ -120,7 +120,8 @@ pub enum SequenceCloseOutcome {
 }
 
 impl SequenceCloseOutcome {
-  fn as_str(self) -> &'static str {
+  /// The wire spelling of the outcome: the close fact's `outcome` and the text the sequence trait carries.
+  pub fn as_str(self) -> &'static str {
     match self {
       Self::Completed => "completed",
       Self::Blocked => "blocked",
@@ -2240,13 +2241,8 @@ impl SequenceCompletion for TaskCompletion {
     evidence: &'a Value,
   ) -> BoxFuture<'a, StoreResult<(usize, Value)>> {
     Box::pin(async move {
-      let outcome = match outcome {
-        "completed" => SequenceCloseOutcome::Completed,
-        "blocked" => SequenceCloseOutcome::Blocked,
-        "failed" => SequenceCloseOutcome::Failed,
-        "cancelled" => SequenceCloseOutcome::Cancelled,
-        _ => return Err(StoreError::invalid(format!("unknown sequence close outcome {outcome:?}"))),
-      };
+      let outcome: SequenceCloseOutcome = serde_json::from_value(Value::String(outcome.to_owned()))
+        .map_err(|_| StoreError::invalid(format!("unknown sequence close outcome {outcome:?}")))?;
       let evidence: CompletionEvidence = serde_json::from_value(evidence.clone())
         .map_err(|error| StoreError::invalid(format!("invalid sequence close evidence: {error}")))?;
       TaskCompletion::close_sequence_child(self, session_id, request_id, outcome, &evidence).await

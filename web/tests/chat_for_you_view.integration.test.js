@@ -936,6 +936,53 @@ test('a mid-turn input stays above the later web reply when a later turn closes 
   assert.deepEqual(shownIds(rig.root), MID_TURN_ROWS);
 });
 
+// A first screen cut inside its turn: the cursor is the turn's reply, so the turn's question sits on the older page.
+// The older page is the server's events before that cursor, so the two pages join with no gap and no duplicate.
+function midCursorFirstScreen() {
+  return [
+    eMsg('assistant', 'a4', 'the reply begins', {event_index: 4}),
+    eMsg('web_reply', 'r5', 'Found the cause.', {event_index: 5}),
+    eMsg('assistant', 'a6', 'writing the fix', {event_index: 6}),
+    eMsg('separator', 's7', '', {thinking_seconds: 30, event_index: 7}),
+  ];
+}
+
+function midCursorOlderPage() {
+  return [
+    eMsg('user', 'u0', 'first question', {event_index: 0}),
+    eMsg('assistant', 'a1', 'first answer', {event_index: 1}),
+    eMsg('separator', 's2', '', {thinking_seconds: 5, event_index: 2}),
+    eMsg('user', 'u3', 'the turn question', {event_index: 3}),
+  ];
+}
+
+// Opens every turn of Everything, so each message the engine holds reaches the DOM.
+function expandEverything(rig) {
+  rig.engine.segments.forEach((seg) => {
+    if (seg.kind === 'turn') rig.engine.setOverride(seg.key, true);
+  });
+  settle(rig.timers);
+}
+
+test('an older page from a mid-turn cursor joins the cut turn in For you without a gap or a duplicate', () => {
+  const rig = forYouRig(midCursorFirstScreen());
+  rig.engine.prependMessages(midCursorOlderPage());
+  settle(rig.timers);
+  assert.deepEqual(shownIds(rig.root), ['u0', 'u3', 'r5'], 'For you shows each row it shows once, in server order');
+});
+
+test('an older page from a mid-turn cursor joins the cut turn in Everything without a gap or a duplicate', () => {
+  const rig = forYouRig(midCursorFirstScreen(), {view: 'everything'});
+  rig.engine.prependMessages(midCursorOlderPage());
+  settle(rig.timers);
+  expandEverything(rig);
+  assert.deepEqual(
+    shownIds(rig.root),
+    ['u0', 'a1', 's2', 'u3', 'a4', 'r5', 'a6', 's7'],
+    'Everything shows every message once, in server order',
+  );
+});
+
 // The subtree's tags, classes, data attributes, text and spacer heights in order:
 // two equal snapshots mean two equal DOMs for the cases above.
 function domSnapshot(el) {

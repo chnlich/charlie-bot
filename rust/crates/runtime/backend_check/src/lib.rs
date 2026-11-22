@@ -40,6 +40,16 @@ pub struct Hit {
 /// The directories the walk never enters: version control, build output, environments, and test trees.
 const SKIPPED_DIRS: [&str; 7] = [".git", "target", "node_modules", ".venv", "__pycache__", "tests", "fixtures"];
 
+/// The profile-home directories a default scan reads: the machinery that a profile's runs read and execute.
+pub const PROFILE_SCAN_DIRS: [&str; 4] = ["improve", "prompts", "scripts", "skills"];
+
+/// The paths a scan reads when none is named: the repository, when there is one, and each directory of
+/// [`PROFILE_SCAN_DIRS`] that the profile home under `home` holds.
+pub fn default_paths(repo: Option<&Path>, home: &Path) -> Vec<PathBuf> {
+  let profile = PROFILE_SCAN_DIRS.iter().map(|dir| home.join(dir)).filter(|dir| dir.is_dir());
+  repo.map(Path::to_path_buf).into_iter().chain(profile).collect()
+}
+
 /// Scan each path: a file as itself, and a directory by the text files under it. The hits come sorted by place, with
 /// one line per site: a site that two classes match is reported once, as its default-value class when it has one.
 pub fn scan(vocab: &Vocabulary, roots: &Roots, paths: &[PathBuf]) -> anyhow::Result<Vec<Hit>> {
@@ -269,5 +279,16 @@ mod tests {
     assert_eq!(hits.len(), 1, "{hits:?}");
     assert_eq!(hits[0].class, Class::DefaultValue);
     assert_eq!(hits[0].line, 1);
+  }
+
+  /// A default scan reads the repository and the profile's machinery directories that exist, in the fixed order.
+  #[test]
+  fn default_paths_are_the_repo_and_the_profile_machinery_that_exists() {
+    let repo = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    fs::create_dir(home.path().join("skills")).unwrap();
+    fs::create_dir(home.path().join("improve")).unwrap();
+    let paths = default_paths(Some(repo.path()), home.path());
+    assert_eq!(paths, vec![repo.path().to_path_buf(), home.path().join("improve"), home.path().join("skills")]);
   }
 }

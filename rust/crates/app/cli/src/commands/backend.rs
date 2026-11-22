@@ -43,13 +43,15 @@ enum BackendCommand {
   /// session with `--resume`, or, with `--one-shot`, answer the prompt once instead, for the backend types whose
   /// one-shot runs without tools.
   Run(RunArgs),
-  /// Scan the repository, or the given paths, for a hardcoded backend choice. Each unexempt site prints on one line.
+  /// Scan the repository and the profile's improve, prompts, scripts and skills directories, or the given paths, for a
+  /// hardcoded backend choice. Each unexempt site prints on one line.
   Check(CheckArgs),
 }
 
 #[derive(Args)]
 struct CheckArgs {
-  /// The files or directories to scan. With none, the git repository the working directory is in.
+  /// The files or directories to scan. With none, the git repository the working directory is in and the profile's
+  /// machinery directories.
   #[arg(value_name = "PATH")]
   paths: Vec<PathBuf>,
 }
@@ -119,10 +121,14 @@ fn check_command(args: CheckArgs) -> Result<(), CliExit> {
   let registry = charliebot_packages::registry().map_err(|error| CliExit::error(format!("{error:#}")))?;
   let home = home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
   let repo = git_toplevel()?;
-  let paths = match (args.paths.is_empty(), &repo) {
-    (true, Some(repo)) => vec![repo.clone()],
-    (true, None) => return Err(CliExit::usage("not in a git repository; name the paths to scan")),
-    (false, _) => args.paths,
+  let paths = if args.paths.is_empty() {
+    let paths = charliebot_backend_check::default_paths(repo.as_deref(), &home);
+    if paths.is_empty() {
+      return Err(CliExit::usage("no repository and no profile machinery to scan; name the paths to scan"));
+    }
+    paths
+  } else {
+    args.paths
   };
   let vocab =
     Vocabulary::load(&registry, &home, repo.as_deref()).map_err(|error| CliExit::error(format!("{error:#}")))?;

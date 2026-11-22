@@ -31,10 +31,6 @@ The parent node or the root line approves the plan after both. Contract: the pla
 /// The next step `amend` prints: a later version takes only the checks.
 const AMEND_REMINDER: &str = "A verify round and the cold read check this version before approval. \
 Contract: the plan-approval skill.";
-/// The revision triggers `--trigger` accepts.
-const AMEND_TRIGGERS: [&str; 2] = ["auto_amend", "feedback"];
-/// The close modes `--as` accepts.
-const CLOSE_MODES: [&str; 3] = ["superseded", "abandoned", "completed"];
 
 #[derive(Parser)]
 #[command(name = "plan", about = "Plan registry verbs")]
@@ -103,7 +99,7 @@ struct AmendArgs {
   #[arg(long)]
   plan: Option<i64>,
   /// Revision trigger (default feedback)
-  #[arg(long, value_parser = AMEND_TRIGGERS, default_value = "feedback")]
+  #[arg(long, value_parser = plans::PLAN_AMEND_TRIGGERS, default_value = plans::PLAN_AMEND_TRIGGER_DEFAULT)]
   trigger: String,
   #[command(flatten)]
   base: BaseArgs,
@@ -128,7 +124,7 @@ struct CloseArgs {
   #[arg(long)]
   plan: i64,
   /// How the lineage ends
-  #[arg(long = "as", value_parser = CLOSE_MODES)]
+  #[arg(long = "as", value_parser = plans::PLAN_CLOSE_MODES)]
   close_as: String,
 }
 

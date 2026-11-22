@@ -97,12 +97,34 @@ pub async fn manager_session(
   account: Option<&str>,
   cc_session_id: &str,
 ) -> SessionMetadata {
+  create_manager(features, request_id, None, backend, account, cc_session_id).await
+}
+
+/// A manager session under the task `parent_id` on the `fable` option, holding the Claude session `cc_session_id`. Its
+/// parent receives its child reports and its notices, as a session that a manager forked or created does.
+pub async fn child_manager_session(
+  features: &FeatureContext,
+  parent_id: &str,
+  request_id: &str,
+  cc_session_id: &str,
+) -> SessionMetadata {
+  create_manager(features, request_id, Some(parent_id), "fable", None, cc_session_id).await
+}
+
+async fn create_manager(
+  features: &FeatureContext,
+  request_id: &str,
+  task_parent_id: Option<&str>,
+  backend: &str,
+  account: Option<&str>,
+  cc_session_id: &str,
+) -> SessionMetadata {
   let created = features
     .store
     .create_task(
       CreateTask {
         request_id: request_id.to_string(),
-        task_parent_id: None,
+        task_parent_id: task_parent_id.map(str::to_string),
         profile: TaskProfile::Manager,
         task: None,
         name: Some("Synthetic idle session".to_string()),

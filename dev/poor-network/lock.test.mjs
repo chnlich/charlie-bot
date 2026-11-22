@@ -1,5 +1,6 @@
 // Tests of the bench lock: every side attempt takes the one file lock.sh names, so two side attempts on a host run one
-// after the other, and no caller option picks another file or skips it. The improve trial side waits on the same lock.
+// after the other, and no caller option picks another file. The one option that skips the lock is an improve-ux
+// trial side's IMPROVE_TRIAL_USE_LOCK=0, which runs the side beside the lock and records the lock's holder instead.
 
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
@@ -49,18 +50,42 @@ function devSources(dir) {
   });
 }
 
-// Runs an improve trial side under a scratch home with a short wait. Its command touches `ran` and exits with `code`.
-function improveSide(home, ran, waitSeconds, code) {
-  return spawnSync('bash', [IMPROVE_SIDE, 'bash', '-c', 'touch "$1"; exit "$2"', 'bash', ran, String(code)], {
-    env: {
-      ...process.env,
-      HOME: home,
-      IMPROVE_DIRECTION: DIRECTION,
-      IMPROVE_TRIAL_LOCK_WAIT_SECONDS: String(waitSeconds),
-    },
+// Runs an improve trial side under a scratch home with a short wait. Its command touches `ran`, writes the serve port
+// range it saw to `ran.ports` and exits with `code`.
+function improveSide(home, ran, waitSeconds, code, extraEnv = {}) {
+  const command = [
+    'touch "$1"',
+    'printf "%s %s\\n" "${TRIAL_PORT_MIN:-unset}" "${TRIAL_PORT_MAX:-unset}" >"$1.ports"',
+    'exit "$2"',
+  ].join('; ');
+  const env = {
+    ...process.env,
+    HOME: home,
+    IMPROVE_DIRECTION: DIRECTION,
+    IMPROVE_TRIAL_LOCK_WAIT_SECONDS: String(waitSeconds),
+  };
+  delete env.IMPROVE_TRIAL_USE_LOCK;
+  Object.assign(env, extraEnv);
+  return spawnSync('bash', [IMPROVE_SIDE, 'bash', '-c', command, 'bash', ran, String(code)], {
+    env,
     encoding: 'utf8',
     timeout: 30000,
   });
+}
+
+// Whether /proc/locks lists the process as a waiter for a file lock, a line whose lock is `-> FLOCK`.
+function listedAsWaiter(pid) {
+  return fs
+    .readFileSync('/proc/locks', 'utf8')
+    .split('\n')
+    .some((line) => line.includes('-> FLOCK') && line.split(/\s+/).includes(String(pid)));
+}
+
+// The bench-lock record that a side with the lock off writes to its evidence directory: a line at start and at end.
+function benchLockRecord(evidence) {
+  const records = fs.readdirSync(evidence).filter((name) => name.startsWith('bench-lock-'));
+  assert.equal(records.length, 1, `expected one bench-lock record in ${evidence}, found ${records.length}`);
+  return fs.readFileSync(path.join(evidence, records[0]), 'utf8').trim().split('\n');
 }
 
 // Starts one side attempt: the side script runs under the bench lock and records its start and end times in `log`.
@@ -215,12 +240,98 @@ test('an improve trial side runs its command on a free lock and passes the exit 
     assert.equal(side.status, 3, side.stderr);
     assert.equal(fs.existsSync(ran), true, 'the trial command did not run with the bench lock free');
     assert.equal(side.stderr, '');
+    // The switch is unset, so the side holds the lock and serves on trial.sh's own port range.
+    assert.equal(fs.readFileSync(`${ran}.ports`, 'utf8'), 'unset unset\n');
 
     const ran75 = path.join(dir, 'ran-75');
     const side75 = improveSide(home, ran75, 5, 75);
     assert.equal(side75.status, 75, side75.stderr);
     assert.equal(fs.existsSync(ran75), true, 'the trial command did not run with the bench lock free');
     assert.equal(side75.stderr, '', 'a command exit of 75 was reported as a lock timeout');
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a lock-off improve side runs beside a held lock and records the holder', { timeout: 60000 }, async () => {
+  const home = scratch('pn-lock-home-');
+  const dir = scratch('pn-lock-run-');
+  const held = path.join(dir, 'held');
+  const ran = path.join(dir, 'ran');
+  const evidence = path.join(dir, 'evidence');
+  const body = path.join(dir, 'hold.sh');
+  fs.writeFileSync(body, '#!/usr/bin/env bash\ntouch "$1"\nwhile [[ ! -e "$1.release" ]]; do sleep 0.1; done\n');
+  const holder = sideAttempt(home, body, held);
+  let waiter = null;
+  try {
+    await waitFor(() => fs.existsSync(held));
+    // A second side queues behind the holder and /proc/locks lists it as a waiter; the record still names the holder.
+    waiter = sideAttempt(home, body, path.join(dir, 'waiter'));
+    await waitFor(() => listedAsWaiter(waiter.child.pid));
+    // The wait is 1 s: a side that queued behind the held lock would stop with the lock timeout instead of running.
+    const side = improveSide(home, ran, 1, 3, {
+      IMPROVE_DIRECTION: 'ux',
+      IMPROVE_TRIAL_USE_LOCK: '0',
+      CHARLIEBOT_RELEASE_RUN_DIR: evidence,
+    });
+    assert.equal(side.status, 3, side.stderr);
+    assert.equal(fs.existsSync(ran), true, 'the trial command did not run beside the held lock');
+    assert.equal(fs.readFileSync(`${ran}.ports`, 'utf8'), '18670 18689\n', 'the side kept the bench port range');
+
+    const [start, end] = benchLockRecord(evidence);
+    const pid = holder.child.pid;
+    assert.ok(start.includes(` side start: bench lock holder ${pid} `) && start.includes(body), start);
+    assert.ok(end.includes(` side end: bench lock holder ${pid} `) && end.includes(body), end);
+  } finally {
+    waiter?.child.kill('SIGKILL');
+    await waiter?.exited;
+    fs.writeFileSync(`${held}.release`, '');
+    await holder.exited;
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an improve side with the bench lock off records none when the lock file is free', () => {
+  const home = scratch('pn-lock-home-');
+  const dir = scratch('pn-lock-run-');
+  const evidence = path.join(dir, 'evidence');
+  try {
+    // A side with the lock on creates the lock file and releases it, so the lock file exists with no holder.
+    const warm = improveSide(home, path.join(dir, 'warm'), 5, 0);
+    assert.equal(warm.status, 0, warm.stderr);
+    const ran = path.join(dir, 'ran');
+    const side = improveSide(home, ran, 1, 0, {
+      IMPROVE_DIRECTION: 'ux',
+      IMPROVE_TRIAL_USE_LOCK: '0',
+      CHARLIEBOT_RELEASE_RUN_DIR: evidence,
+    });
+    assert.equal(side.status, 0, side.stderr);
+    assert.equal(fs.existsSync(ran), true, 'the trial command did not run with the lock off');
+    const [start, end] = benchLockRecord(evidence);
+    assert.match(start, / side start: bench lock holder none$/);
+    assert.match(end, / side end: bench lock holder none$/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a lock-off improve side refuses a direction other than ux', () => {
+  const home = scratch('pn-lock-home-');
+  const dir = scratch('pn-lock-run-');
+  const ran = path.join(dir, 'ran');
+  const evidence = path.join(dir, 'evidence');
+  try {
+    const side = improveSide(home, ran, 1, 0, {
+      IMPROVE_TRIAL_USE_LOCK: '0',
+      CHARLIEBOT_RELEASE_RUN_DIR: evidence,
+    });
+    assert.equal(side.status, 2, side.stderr);
+    assert.match(side.stderr, /IMPROVE_TRIAL_USE_LOCK=0 requires IMPROVE_DIRECTION=ux/);
+    assert.equal(fs.existsSync(ran), false, 'the trial command ran for a non-UX direction');
+    assert.equal(fs.existsSync(evidence), false, 'the side created evidence for a non-UX direction');
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(dir, { recursive: true, force: true });

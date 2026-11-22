@@ -33,11 +33,14 @@ Exit codes: 0 both sides measured; 1 a measurement or build failed (the side's J
 precondition failed and nothing started; 3 the baseline calibration did not reproduce; 4 a scenario the bench passed
 on the before side fails on the after side; 75 a side's wait for the lock ran out. Every side takes the bench's own
 advisory lock that `lock.sh` names, around its trial (not the builds), waiting up to 2 h for it, or the `--lock-wait`
-seconds a caller names; no option chooses another lock file or skips it. The remote-wake bench takes the same lock for
-its container's whole run, because each start and stop of that container adds or removes a veth interface, which Chrome
-reports as a network change and drops the page in transfer. Each improve-ux and improve-perf trial side
-(`dev/improve/trial-side.sh`) takes the same lock from its trial's start to its stop, waiting at most 15 minutes; when
-the wait runs out, the side runs nothing and exits 75. One lock hold covers one side attempt: a caller that retries a
+seconds a caller names; no option chooses another lock file, and `IMPROVE_TRIAL_USE_LOCK=0` skips it only for
+improve-ux sides that report screenshots and clicks. The remote-wake bench takes the same lock for its container's
+whole run, because each start and stop of that container adds or removes a veth interface, which Chrome reports as a
+network change and drops the page in transfer. Each improve trial side that keeps the lock
+(`dev/improve/trial-side.sh`: every improve-perf side and each improve-ux side that reports a timing) takes it from its
+trial's start to its stop, waiting at most 15 minutes;
+when the wait runs out, the side runs nothing and exits 75. A side with the switch at 0 runs beside the bench and
+records the lock's holder in its evidence instead. One lock hold covers one side attempt: a caller that retries a
 timed-out side runs the command again, which takes the lock again at the back of the queue. The side JSON is the
 bench's final artifact. If the bench is still running 120 s later, the runner ends its trial tree to release the lock
 and reprints the summary from that JSON.

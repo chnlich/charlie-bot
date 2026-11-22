@@ -1821,8 +1821,8 @@ mod tests {
     assert!(message.contains(&wrapper_dir.join("gh").display().to_string()), "{message}");
   }
 
-  /// A backend that puts a directory with the personal gh first in `prepare_env` must not bypass the wrapper: the
-  /// spawn goes ahead with the wrapper directory first in the final PATH.
+  /// A backend that puts a directory with the personal gh first in `prepare_env` must not bypass the wrapper. The spawn
+  /// goes ahead with the wrapper directory first in the final PATH.
   #[tokio::test]
   #[ignore = "integration"]
   async fn a_backend_that_prepends_a_gh_directory_keeps_the_wrapper_first() {

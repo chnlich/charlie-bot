@@ -2,7 +2,7 @@
 //!
 //! A served file carries the content type the MIME table guesses, `accept-ranges`, `content-length`, `last-modified`
 //! and an `etag`. A directory of bundled assets (`StaticDirectory::bundled`) tags each file with the md5 of the bytes
-//! it carries, so a release that rewrites a file with the same bytes keeps the tag. Any other directory tags a file
+//! it carries. A release that rewrites a file with the same bytes keeps the tag. Any other directory tags a file
 //! with the md5 of its mtime and size, which reads no body. A matching `If-None-Match` or a newer `If-Modified-Since`
 //! answers 304, and a `Range` header answers 206, 400 or 416. The directory is checked per request until the check
 //! first passes, so a directory that appears later serves without a restart. A missing one answers 500.
@@ -264,7 +264,7 @@ impl FileHeaders {
 }
 
 /// The file a request serves and how: a request that accepts brotli serves a file's `.br` sibling when
-/// one sits beside it, so the wire bytes match what the CDN the file replaced served; the sibling's own
+/// one sits beside it. The wire bytes match what the CDN the file replaced served. The sibling's own
 /// validators name the encoding. A ranged request reads the plain file: a byte range names the decoded
 /// form. `vary` is true when the sibling exists, so every encoding of the file names `Vary`.
 fn precompressed(
@@ -772,8 +772,8 @@ mod tests {
     assert_eq!(&body_of(ranged)[..], b"a body lon");
   }
 
-  /// The tag names the bytes, not the mtime: a release that rewrites a file with the same bytes keeps its ETag, so a
-  /// revalidation answers 304, and a file with changed bytes gets a new tag.
+  /// The tag names the bytes, not the mtime. A release that rewrites a file with the same bytes keeps its ETag, so a
+  /// revalidation answers 304. A file with changed bytes gets a new tag.
   #[test]
   fn an_unchanged_file_keeps_its_etag_when_its_mtime_moves() {
     let home = tempfile::tempdir().unwrap();

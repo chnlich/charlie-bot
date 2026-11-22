@@ -325,9 +325,9 @@ fn row_json(row: &Row, now: OffsetDateTime) -> anyhow::Result<Value> {
   let live_text = live.map_or_else(String::new, |attempt| {
     format!("In progress: {}. User code: {}.", attempt.phase.label(), code_or_none(attempt.user_code()))
   });
+  // A check shows on its row's button, so the busy line names only a login.
   let busy_text = match busy {
     "login" => "A login is in progress.",
-    "check" => "Checking.",
     _ => "",
   };
   let kind = if row.login.is_some() { "login" } else { "host" };

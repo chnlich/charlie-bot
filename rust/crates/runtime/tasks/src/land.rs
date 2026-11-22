@@ -2289,6 +2289,22 @@ mod synthetic_repo_tests {
     credential_check(&home, &repo, "origin/main", Some(&text)).await.expect("the check passes");
   }
 
+  #[tokio::test]
+  async fn a_pr_body_with_a_session_view_line_passes_the_landing_check() {
+    // A fake session id: the landing's check reads only credential values, so the View line of a session page passes.
+    const SESSION_ID: &str = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    let home = planted_home(root.path(), "fake-landing-view-value-0006");
+    let repo = synthetic_repo(root.path(), "feature");
+    commit(&repo, "notes.txt", "clean\n");
+    fetch_main(&repo).await;
+    let text = ResolvedPrText {
+      title: "Clean title".to_string(),
+      body: format!("## Evidence\nbefore and after.\n\nView: /?session={SESSION_ID}\n"),
+    };
+    credential_check(&home, &repo, "origin/main", Some(&text)).await.expect("the check passes");
+  }
+
   /// A profile home whose credentials file holds both a non-secret leaf and a secret leaf, so each side of the skip
   /// runs against the same file.
   fn home_with_leaves(root: &Path, model: &str, secret: &str) -> PathBuf {

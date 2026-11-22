@@ -2,8 +2,8 @@
 //! The recorded reference (`fixtures/cli_backends_golden.json`) holds every section's recorded answer over the
 //! synthetic inputs built here. The test fails with every section that differs. Gemini sends the prompt on stdin, so
 //! its recorded argv and stdin are the Rust launch, not the Python package's prompt argv. Antigravity's recorded
-//! entries are the Rust launch too: the installed `agy` takes the prompt only as the value of `--print`
-//! (`--print=<prompt>`), so the Python package's `--input-format text` argv does not reach the answer.
+//! entries are the Rust launch too. The installed `agy` takes the prompt only as the value of `--print`
+//! (`--print=<prompt>`). The Python package's `--input-format text` argv therefore does not reach the answer.
 //!
 //! Sections: the argv/env/stdin/instructions matrix, built through each type's factory (19 cases). The translator
 //! streams of gemini and charlie-code come next (2). The antigravity finish cases follow, each run through the
@@ -542,7 +542,7 @@ fn replace_fixture_paths(value: &mut Value, replacements: &[(&str, &str)]) {
     }
     Value::Array(values) => values.iter_mut().for_each(|value| replace_fixture_paths(value, replacements)),
     Value::Object(fields) => fields.values_mut().for_each(|value| replace_fixture_paths(value, replacements)),
-    _ => {}
+    Value::Null | Value::Bool(_) | Value::Number(_) => {}
   }
 }
 

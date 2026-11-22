@@ -67,13 +67,24 @@ after server represents the branch. The intended change is the only source diffe
 
 ## Serving
 
-Each side runs one serve trial against the shared mock home. The `dev/improve/trial-side.sh` entry holds the host's
-bench lock from trial startup through screenshots or measurements and trial shutdown. Builds stay outside the lock.
-The trial exports `CHARLIEBOT_SERVE_URL`, `CHARLIEBOT_SERVE_AUTH_HEADER` and `CHARLIEBOT_SERVE_PID` to its measurement
-command; all requests and process reads use that trial's server.
+Each side runs one serve trial against the shared mock home, through the `dev/improve/trial-side.sh` entry. Builds stay
+outside the bench lock. The trial exports `CHARLIEBOT_SERVE_URL`, `CHARLIEBOT_SERVE_AUTH_HEADER` and
+`CHARLIEBOT_SERVE_PID` to its measurement command. All requests and process reads use that trial's server.
 
-Each side waits at most 15 minutes for the bench lock. If the wait expires, that side takes no screenshot or
-measurement. The round reports no result from an incomplete pair, stops without opening a pull request and names the
+The side's report decides whether the side holds the bench lock:
+
+- A side whose evidence is screenshots and clicks runs with the bench lock off. The entry runs with
+  `IMPROVE_TRIAL_USE_LOCK=0`.
+  - Screenshots and clicks do not depend on a quiet host.
+  - The bench's scopes keep CPU priority over the improve scopes, so the side does not take the bench's CPU.
+  - The side's evidence records the bench-lock holder (the process that holds the lock, or `none`) at the side's start
+    and at its end.
+- A side that reports any timing or byte-over-time measurement holds the bench lock from trial startup through its
+  measurements and trial shutdown. It keeps the default of `IMPROVE_TRIAL_USE_LOCK`.
+  - A timing taken beside a bench measures that bench's CPU contention.
+
+A side that holds the bench lock waits at most 15 minutes for it. If the wait expires, that side takes no screenshot or
+measurement. The round reports no result from an incomplete pair. It stops without opening a pull request and names the
 held bench lock in its stop reason. The next scheduled fire tries again.
 
 Each side's server passes `mock-home check` before that side takes any screenshot or measurement. Exit 1 means the

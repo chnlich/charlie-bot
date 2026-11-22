@@ -11,6 +11,7 @@ use charliebot_agents::backend_types;
 use charliebot_core::config::{BackendOption, CallClass, CharlieBotConfig};
 use charliebot_core::event_types;
 use charliebot_core::str_methods::take_chars;
+use charliebot_core::text_repr::type_name;
 use charliebot_registry::backend::LaunchArgs;
 use charliebot_registry::context::FeatureContext;
 use charliebot_store::compact::CompactValue;
@@ -250,7 +251,7 @@ pub fn parse_name_and_group(raw: &str) -> (Option<String>, Option<String>) {
     }
   };
   let Some(object) = value.as_object() else {
-    tracing::warn!(target: "charliebot_tasks", response_type = %json_type_name(&value), "autonamer_unexpected_json_type");
+    tracing::warn!(target: "charliebot_tasks", response_type = %type_name(&value), "autonamer_unexpected_json_type");
     return (None, None);
   };
   let name = nonempty_string(object.get("name"));
@@ -287,18 +288,6 @@ fn extract_text_from_message(event: &CompactValue) -> String {
 
 fn nonempty_string(value: Option<&Value>) -> Option<String> {
   value.and_then(Value::as_str).map(str::trim).filter(|text| !text.is_empty()).map(str::to_string)
-}
-
-fn json_type_name(value: &Value) -> &'static str {
-  match value {
-    Value::Null => "NoneType",
-    Value::Bool(_) => "bool",
-    Value::Number(number) if number.is_i64() || number.is_u64() => "int",
-    Value::Number(_) => "float",
-    Value::String(_) => "str",
-    Value::Array(_) => "list",
-    Value::Object(_) => "dict",
-  }
 }
 
 #[cfg(test)]

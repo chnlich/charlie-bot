@@ -128,8 +128,9 @@ pub struct BackendPool {
 }
 
 impl BackendPool {
-  /// Build the pool on top of the availability owner every caller reads "out until" from, the registry whose member
-  /// readings the rotate rule consults, and the rotation positions every caller of a pool shares.
+  /// Build the pool on top of the availability owner, the registry and the rotation positions. Every caller reads "out
+  /// until" from the availability owner, and the rotate rule consults the registry's member readings. Every caller of a
+  /// pool shares the rotation positions.
   pub fn new(
     availability: Arc<BackendAvailability>,
     registry: Arc<Registry>,

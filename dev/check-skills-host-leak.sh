@@ -21,6 +21,15 @@ source "$script_dir/leak-patterns.sh"
 
 built_in_regex='[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}|/data/(checkpoints|datasets|home)/|/home/[^/[:space:]]+/|\.ts\.net\b|\bhost3\b|[a-z][a-z0-9-]{2,}\.slack\.com'
 
+# The built-in rule refuses every UUID except one: the session value of a View line, `View: /?session=<id>`, or the same
+# path with other query parameters before or after it. The landing rule requires that line for a session-page change
+# (prompts/task_base.md), and both readers take it as written: github-post.sh pr-merge reads the lines that start with
+# `View:`, and land.rs reads the query's `session=` pair. session_view_mask replaces that one value with a placeholder
+# before the rule runs, so the same UUID on the line's other parameters, or on any other line, still matches.
+session_view_mask='s/^(View:[[:space:]]*\/\?([^[:space:]]*&)?session=)'
+session_view_mask+='[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
+session_view_mask+='([&[:space:]]|$)/\1admitted-session-id\3/'
+
 # A credential value shorter than this is left out of the check. The shortest credential this profile home holds is 25
 # characters; values of 11 characters and fewer are region names, booleans, ports and short user names, which ordinary
 # text carries, so an exact match on them would refuse text that holds no credential.
@@ -211,6 +220,13 @@ credential_check_list() {  # <values file> <list file>
   return 0
 }
 
+# The built-in rules over one text: the admitted session values are masked, then the rule runs on the result. <text> is
+# the file to scan and <matches> receives the matching lines. Exit 0 is no match, 1 a match, 2 a masking failure.
+built_in_matches() {  # <text> <matches>
+  sed -E "$session_view_mask" "$1" > "$1.masked" || return 2
+  grep -aiEn "$built_in_regex" "$1.masked" > "$2"
+}
+
 case "${1:-}" in
   --credential-values)
     [[ $# -eq 1 ]] || { printf 'usage: --credential-values takes no argument\n' >&2; exit 2; }
@@ -236,7 +252,7 @@ if [[ "${1:-}" == '--stdin' ]]; then
   load_host_patterns
   cat > "$tmp_dir/content"
   matches=0
-  if grep -aiEn "$built_in_regex" "$tmp_dir/content" > "$tmp_dir/matches"; then
+  if built_in_matches "$tmp_dir/content" "$tmp_dir/matches"; then
     printf 'Built-in pattern matches in stdin:\n'
     cat "$tmp_dir/matches"
     matches=$((matches + 1))
@@ -328,7 +344,7 @@ read_file() {
 matches=0
 for file in "${builtin_files[@]}"; do
   read_file "$file" > "$tmp_dir/content"
-  if grep -aiEn "$built_in_regex" "$tmp_dir/content" > "$tmp_dir/matches"; then
+  if built_in_matches "$tmp_dir/content" "$tmp_dir/matches"; then
     printf 'Built-in pattern matches in %s:\n' "$file"
     cat "$tmp_dir/matches"
     matches=$((matches + 1))

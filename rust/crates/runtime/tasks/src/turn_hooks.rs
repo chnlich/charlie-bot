@@ -15,7 +15,8 @@ use std::time::Duration;
 use anyhow::Context;
 use charliebot_core::RepoRoot;
 use charliebot_core::event_types::{
-  AGENT_MESSAGE, CHILD_REPORT, CHILD_SESSION_ID, FROM_SESSION_NAME, MASTER_DONE, TURN_HOOKS, TURN_HOOKS_ID, WEB_STATUS,
+  AGENT_MESSAGE, CHILD_REPORT, CHILD_SESSION_ID, INPUT_EVENT_ID, MASTER_DONE, TURN_HOOKS, TURN_HOOKS_ID,
+  WEB_REPLY_NOTICE, WEB_STATUS,
 };
 use charliebot_core::text_repr::field_text;
 use charliebot_registry::FeatureContext;
@@ -24,6 +25,8 @@ use charliebot_store::MessageProvenance;
 use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
 use charliebot_store::reply_order::{self, Receipt};
 use serde_json::{Value, json};
+
+use crate::completion::TaskCompletion;
 
 /// The file that holds the turn-end check list, relative to the served repo.
 pub const HOOKS_FILE: &str = "hooks/turn_end.json";
@@ -221,9 +224,11 @@ async fn show_message(
   Ok(persisted.to_value())
 }
 
-/// Delivers a passed check's notice. The session's turn contribution attaches it to a message of the turn when the turn
-/// has one, and a session no contribution owns has none. Otherwise the runner posts it from the entry's name and marks
-/// the session unread. A turn that already holds the notice gets no second one, so a replayed checkpoint adds nothing.
+/// Delivers a passed check's notice. The session's turn contribution attaches it to an unanswered user message of the
+/// turn when there is one. Otherwise the runner records it as a `web_reply_notice` event of the session: that event
+/// admits no input, so the notice starts no turn. A session with a parent also sends the notice to the parent, which
+/// reads it in its own turn. A turn that already holds the runner's notice records no second one, and the parent's
+/// input is keyed by the recorded notice's id, so a replayed checkpoint adds nothing.
 async fn deliver_notice(
   features: &Arc<FeatureContext>,
   session_id: &str,
@@ -237,23 +242,31 @@ async fn deliver_notice(
   {
     return Ok(());
   }
-  if notice_posted(turn, name, message) {
-    return Ok(());
-  }
-  show_message(features, session_id, name, message, None).await?;
+  let notice_id = match recorded_notice_id(turn, message) {
+    Some(id) => id.to_string(),
+    None => {
+      let event = json!({"type": WEB_REPLY_NOTICE, "content": message});
+      let persisted = features.store.persist_and_broadcast(session_id, event).await?;
+      persisted["id"].as_str().context("the persisted notice carries its id")?.to_string()
+    }
+  };
   features.store.mark_unread(session_id).await?;
+  let completion = features.startup.require::<TaskCompletion>()?;
+  completion.notify_initiator_of_turn_notice(session_id, &notice_id, name, message).await?;
   Ok(())
 }
 
-/// Whether the turn already holds the runner's notice `message` from the entry `name`. A block's reason carries its
-/// record's id and the notice carries none, so a block never counts as the notice.
-fn notice_posted(turn: &[Value], name: &str, message: &str) -> bool {
-  turn.iter().any(|event| {
-    event["type"] == AGENT_MESSAGE
-      && event[FROM_SESSION_NAME] == name
-      && event["content"] == message
-      && event[TURN_HOOKS_ID].is_null()
-  })
+/// The id of the turn's runner notice `message`: a `web_reply_notice` that links no user message. A notice attached to
+/// a user message links its input and is not this one.
+fn recorded_notice_id<'a>(turn: &'a [Value], message: &str) -> Option<&'a str> {
+  turn
+    .iter()
+    .find(|event| {
+      event["type"] == WEB_REPLY_NOTICE
+        && event["content"] == message
+        && event[WEB_REPLY_NOTICE][INPUT_EVENT_ID].is_null()
+    })
+    .and_then(|event| event["id"].as_str())
 }
 
 /// The turn-end checkpoint of the running turn of `session_id`. `has_conversation` says whether the turn's conversation
@@ -388,13 +401,16 @@ fn result_json(run: &Ran) -> Value {
 
 #[cfg(test)]
 mod tests {
-  use charliebot_core::event_types::{ERROR, SCHEDULED_TRIGGER, USER};
+  use charliebot_core::event_types::{ERROR, FROM_SESSION, SCHEDULED_TRIGGER, USER};
   use std::path::Path;
 
+  use charliebot_registry::sequence::SequenceCompletion;
   use charliebot_registry::{Registry, RegistryError};
+  use charliebot_store::ChatEvent;
   use futures_util::future::BoxFuture;
 
   use super::*;
+  use crate::dispatch::{Dispatcher, RunFinishedCompletion};
 
   fn input(turn: Vec<Value>) -> TurnInput {
     TurnInput {
@@ -514,9 +530,29 @@ mod tests {
       &[("backends.claude_code", charliebot_claude_code::register), ("test.attaching_turns", register_attaching_turns)],
     );
     crate::test_fixtures::insert_checkout(&features.startup, home);
+    install_dispatch(&features);
     std::fs::write(home.join(HOOKS_FILE), hooks).unwrap();
     let meta = crate::test_fixtures::manager_session(&features, request_id, "fable", None, "cc-synthetic").await;
     (features, meta)
+  }
+
+  /// The completion and the dispatcher that a notice reaches a parent through, installed as recovery installs them.
+  fn install_dispatch(features: &Arc<FeatureContext>) {
+    features.startup.insert(TaskCompletion::new(Arc::clone(features))).unwrap();
+    let completion = features.startup.require::<TaskCompletion>().unwrap();
+    let sequence: Arc<dyn SequenceCompletion> = completion.clone();
+    let run: Arc<dyn RunFinishedCompletion> = completion;
+    features.startup.insert(Dispatcher::new(Arc::clone(&features.store), Arc::clone(features), sequence, run)).unwrap();
+  }
+
+  /// The session's pending inputs as the dispatcher reads them.
+  fn pending_events(features: &FeatureContext, session_id: &str) -> Vec<Value> {
+    let inputs: Vec<ChatEvent> = crate::dispatch::dispatcher(features).unwrap().pending_inputs(session_id).unwrap();
+    inputs.into_iter().map(|event| event.to_value()).collect()
+  }
+
+  fn pending_ids(features: &FeatureContext, session_id: &str) -> Vec<String> {
+    pending_events(features, session_id).iter().map(|event| event["id"].as_str().unwrap().to_string()).collect()
   }
 
   async fn append(features: &FeatureContext, session_id: &str, event: Value) {
@@ -754,25 +790,81 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn a_trigger_turn_notice_is_posted_once_under_the_entry_name() {
+  async fn a_trigger_turn_notice_is_recorded_once_and_admits_no_input() {
     let home = tempfile::tempdir().unwrap();
     let (features, meta) =
       checkpoint_session(home.path(), &hooks(&["notice-after-continuation"]), "turn-hooks-trigger-notice").await;
     let session_id = &meta.id;
     append(&features, session_id, json!({"type": SCHEDULED_TRIGGER, "id": "t1", "content": "wake"})).await;
+    let pending_before = pending_ids(&features, session_id);
 
     assert!(matches!(checkpoint(&features, session_id, &meta, 0, true).await.unwrap(), Checkpoint::Continue(_)));
     append(&features, session_id, json!({"type": "continuation_ran", "id": "c1"})).await;
     assert_eq!(checkpoint(&features, session_id, &meta, 0, true).await.unwrap(), Checkpoint::Finish);
-    // A restart before the turn ends replays the check: the turn already holds its notice, so none is posted again.
+    // A restart before the turn ends replays the check: the turn already holds its notice, so none is recorded again.
     assert_eq!(checkpoint(&features, session_id, &meta, 0, true).await.unwrap(), Checkpoint::Finish);
 
     let turn = turn_events(&features, session_id);
     assert_eq!(count_of(&turn, ATTACHED_NOTICE), 0);
-    let notices: Vec<&Value> =
-      turn.iter().filter(|event| event["type"] == AGENT_MESSAGE && event["content"] == "needs a look").collect();
+    let notices: Vec<&Value> = turn.iter().filter(|event| event["content"] == "needs a look").collect();
     assert_eq!(notices.len(), 1);
-    assert_eq!(notices[0]["from_session_name"], "notice-after-continuation");
+    assert_eq!(notices[0]["type"], WEB_REPLY_NOTICE);
+    assert!(notices[0][WEB_REPLY_NOTICE][INPUT_EVENT_ID].is_null(), "no user message is linked");
+    // The notice admits no input, so the session holds the inputs it held before, and no further turn starts.
+    assert_eq!(pending_ids(&features, session_id), pending_before);
+  }
+
+  #[tokio::test]
+  async fn a_turn_notice_propagates_up_three_levels_without_waking_its_source() {
+    let home = tempfile::tempdir().unwrap();
+    let (features, grandparent) =
+      checkpoint_session(home.path(), &hooks(&["notice-after-continuation"]), "turn-hooks-parent").await;
+    let parent =
+      crate::test_fixtures::child_manager_session(&features, &grandparent.id, "turn-hooks-parent-child", "cc-parent")
+        .await;
+    let child =
+      crate::test_fixtures::child_manager_session(&features, &parent.id, "turn-hooks-child", "cc-child").await;
+    let session_id = &child.id;
+    append(&features, session_id, json!({"type": SCHEDULED_TRIGGER, "id": "t1", "content": "wake"})).await;
+    let child_pending = pending_ids(&features, session_id);
+
+    assert!(matches!(checkpoint(&features, session_id, &child, 0, true).await.unwrap(), Checkpoint::Continue(_)));
+    append(&features, session_id, json!({"type": "continuation_ran", "id": "c1"})).await;
+    assert_eq!(checkpoint(&features, session_id, &child, 0, true).await.unwrap(), Checkpoint::Finish);
+    // A restart before the turn ends replays the check: the child keeps one notice and the parent one input.
+    assert_eq!(checkpoint(&features, session_id, &child, 0, true).await.unwrap(), Checkpoint::Finish);
+
+    assert_eq!(pending_ids(&features, session_id), child_pending, "the child's notice starts no child turn");
+    let from_child: Vec<Value> = pending_events(&features, &parent.id)
+      .into_iter()
+      .filter(|event| event["type"] == AGENT_MESSAGE && event[FROM_SESSION] == child.id)
+      .collect();
+    assert_eq!(from_child.len(), 1, "the parent holds the notice once");
+    assert!(from_child[0]["content"].as_str().unwrap().contains("needs a look"), "{}", from_child[0]);
+
+    // Run the parent's checkpoint against the child's input; its own second miss sends one notice to its parent.
+    let parent_pending = pending_ids(&features, &parent.id);
+    assert!(matches!(checkpoint(&features, &parent.id, &parent, 0, true).await.unwrap(), Checkpoint::Continue(_)));
+    append(&features, &parent.id, json!({"type": "continuation_ran", "id": "parent-c1"})).await;
+    assert_eq!(checkpoint(&features, &parent.id, &parent, 0, true).await.unwrap(), Checkpoint::Finish);
+    assert_eq!(checkpoint(&features, &parent.id, &parent, 0, true).await.unwrap(), Checkpoint::Finish);
+
+    let parent_turn = turn_events(&features, &parent.id);
+    let parent_notices: Vec<&Value> = parent_turn
+      .iter()
+      .filter(|event| event["type"] == WEB_REPLY_NOTICE && event["content"] == "needs a look")
+      .collect();
+    assert_eq!(parent_notices.len(), 1, "the parent records its own notice once");
+    assert!(parent_notices[0][WEB_REPLY_NOTICE][INPUT_EVENT_ID].is_null(), "the notice does not link an input");
+    assert_eq!(pending_ids(&features, &parent.id), parent_pending, "the parent's notice starts no parent turn");
+    assert_eq!(pending_ids(&features, session_id), child_pending, "the child's notice starts no child turn");
+
+    let from_parent: Vec<Value> = pending_events(&features, &grandparent.id)
+      .into_iter()
+      .filter(|event| event["type"] == AGENT_MESSAGE && event[FROM_SESSION] == parent.id)
+      .collect();
+    assert_eq!(from_parent.len(), 1, "the grandparent holds the parent's notice once");
+    assert!(from_parent[0]["content"].as_str().unwrap().contains("needs a look"), "{}", from_parent[0]);
   }
 
   #[tokio::test]
@@ -791,6 +883,6 @@ mod tests {
     assert_eq!(count_of(&turn, ATTACHED_NOTICE), 1);
     let attached = turn.iter().find(|event| event["type"] == ATTACHED_NOTICE).unwrap();
     assert_eq!(attached["content"], "needs a look");
-    assert!(turn.iter().all(|event| event["type"] != AGENT_MESSAGE || event["content"] != "needs a look"));
+    assert!(turn.iter().all(|event| event["content"] != "needs a look" || event["type"] == ATTACHED_NOTICE));
   }
 }

@@ -3,7 +3,7 @@
 //! A fake is a symlink named for its role (for example `claude` or `chrome`) beside a `probe.json` data file that maps
 //! each role to its steps. The helper reads its role from `argv[0]`, resolves a bare name on `PATH` as the caller's
 //! own `exec` resolved it, and runs the role's steps in order. The steps record argv, the child environment or stdin
-//! into a file, append text to a file, write text into a file inside the directory that an argument names, sleep,
+//! into a file. They append text to a file, write text into a file inside the directory that an argument names, sleep,
 //! write stdout or stderr, and exit. A step list that ends without `exit` is an error.
 //!
 //! The two step-based helpers run this one vocabulary: `charliebot-agents`'s `fake_program` binary and

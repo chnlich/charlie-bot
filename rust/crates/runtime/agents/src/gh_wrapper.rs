@@ -1,12 +1,12 @@
 //! The agent `gh` wrapper: text-carrying GitHub writes use the App token when configured, otherwise the host login.
 //!
 //! The wrapper script is `rust/crates/runtime/agents/gh_wrapper/gh`, in the directory this module owns.
-//! `agent_environment` puts its directory first on the PATH of every agent process and records the script path in
-//! the environment. The spawn path
-//! (`AgentRunner.run`) calls [`require_gh_wrapper`] once after the backend's own environment edits, moves the wrapper
-//! directory back to the front and refuses a process whose PATH resolves `gh` anywhere else. The script sends each
-//! text-carrying GitHub write to the App through the token command named by [`TOKEN_COMMAND_VAR`] (the host config's
-//! `github.app_token_command`) when configured. Otherwise every call passes through as the host's personal login.
+//! `agent_environment` puts its directory first on the PATH of every agent process and records the script path in the
+//! environment. The spawn path (`AgentRunner.run`) calls [`require_gh_wrapper`] once after the backend's own
+//! environment edits. It then moves the wrapper directory back to the front and refuses a process whose PATH resolves
+//! `gh` anywhere else. The script sends each text-carrying GitHub write to the App through the token command named by
+//! [`TOKEN_COMMAND_VAR`] (the host config's `github.app_token_command`) when configured. Otherwise every call passes
+//! through as the host's personal login.
 
 use std::ffi::OsStr;
 use std::fs;
@@ -32,14 +32,14 @@ pub fn dir_under(repo_root: &Path) -> PathBuf {
 
 /// Set or clear the App token command in an agent environment.
 ///
-/// The host config owns the value: `Some(command)` inserts [`TOKEN_COMMAND_VAR`], and `None` or an empty value
-/// removes it, so the wrapper uses the host gh login when no App token command is configured.
+/// The host config owns the value. `Some(command)` inserts [`TOKEN_COMMAND_VAR`], and `None` or an empty value
+/// removes it. Without the variable, the wrapper uses the host gh login.
 pub fn apply_token_command(values: &mut Env, command: Option<&str>) {
   match command {
     Some(command) if !command.is_empty() => {
       values.insert(TOKEN_COMMAND_VAR.to_string(), command.to_string());
     }
-    _ => {
+    Some(_) | None => {
       values.remove(TOKEN_COMMAND_VAR);
     }
   }
@@ -63,7 +63,7 @@ pub fn require_installed(dir: &Path) -> anyhow::Result<()> {
 /// `gh` resolving to the wrapper without changing the other entries. A PATH that does not carry the wrapper
 /// directory at all is left alone, so the resolution check below reports the `gh` it does resolve.
 ///
-/// An environment without [`WRAPPER_PATH_VAR`] was not built by an agent environment builder: it carries no wrapper
+/// An environment without [`WRAPPER_PATH_VAR`] was not built by an agent environment builder. It carries no wrapper
 /// contract, so the spawn fails rather than letting `gh` resolve to the operator's personal login.
 pub fn require_gh_wrapper(env: &mut Env) -> anyhow::Result<()> {
   let Some(wrapper) = env.get(WRAPPER_PATH_VAR).cloned() else {
@@ -166,8 +166,8 @@ mod tests {
     require_gh_wrapper(&mut env).unwrap();
   }
 
-  /// A backend that prepends a directory holding another `gh` (the personal `~/.local/bin`) must not win: the
-  /// wrapper directory goes back to the front and the other entries keep their order.
+  /// A backend that prepends a directory holding another `gh` (the personal `~/.local/bin`) must not win. The wrapper
+  /// directory goes back to the front, and the other entries keep their order.
   #[test]
   fn spawn_check_moves_the_wrapper_directory_back_to_the_front() {
     let root = tempfile::tempdir().unwrap();
@@ -673,8 +673,8 @@ esac
     assert!(stubs.record().contains(&format!("argv:{argument}\n")), "{}", stubs.record());
   }
 
-  /// A PATH entry that reaches the wrapper's own directory through a symlink must not make the wrapper exec itself:
-  /// the search skips that directory and takes the next real gh.
+  /// A PATH entry that reaches the wrapper's own directory through a symlink must not make the wrapper exec itself. The
+  /// search skips that directory and takes the next real gh.
   #[test]
   #[ignore = "integration"]
   fn an_aliased_wrapper_directory_is_skipped_rather_than_executed() {

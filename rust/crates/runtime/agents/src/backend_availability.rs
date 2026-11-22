@@ -74,6 +74,7 @@ pub fn switch_after_reason(reason: &str) -> &'static str {
     REASON_ACCESS_REFUSED => "refused access",
     REASON_TIMEOUT => "timed out",
     REASON_ITERATION_FAILURE => "failed its iteration",
+    REASON_TOKEN_SHORT => "became unavailable",
     _ => "became unavailable",
   }
 }
@@ -108,19 +109,17 @@ impl BackendAvailability {
     Ok(Self { path })
   }
 
-  /// Record that `backend_id` is out, and return the instant it becomes selectable again. This is the one write entry
-  /// for every member failure.
+  /// Record `backend_id` out and return the instant it is selectable again. Every member failure is recorded only here.
   ///
   /// A quota failure of a login-pooled option asks the pool first. While a login can still run the option's model, no
   /// row is written, the kept record is logged, and `None` is returned. Otherwise the row runs until the pool's
   /// earliest reset for the model, then the failure's stated reset, then [`DEFAULT_COOLDOWN`]. Every other failure runs
   /// until its stated reset, or for [`DEFAULT_COOLDOWN`] when it states none.
   ///
-  /// A write that states a reset replaces the stored row, whether the stated reset is earlier or later. The stated
-  /// reset is the caller's `resets_at`, or the pool's earliest reset when the pool states one. A write that states no
-  /// reset keeps an unexpired stored row whose `out_until` is later than the new one: nothing is written, the stored
-  /// instant is returned, and `backend_availability_later_kept` is logged. So a stated reset earlier than a stored
-  /// default row ends that row at the stated reset.
+  /// A write that states a reset replaces the stored row, whether earlier or later. The stated reset is the caller's
+  /// `resets_at`, or the pool's earliest reset when the pool states one. A write that states no reset keeps an
+  /// unexpired stored row whose `out_until` is later than the new one, writes nothing, returns the stored instant, and
+  /// logs `backend_availability_later_kept`.
   ///
   /// The comparison and the write run under one exclusive file lock, on the rows read under that lock. A row another
   /// process recorded since this one last read the file therefore survives, and is compared rather than overwritten.
@@ -143,7 +142,7 @@ impl BackendAvailability {
       {
         registry.lifecycle_for(&option.backend_type)?.quota_outlook(option, cfg)?.map(|outlook| (option, outlook))
       }
-      _ => None,
+      Some(_) | None => None,
     };
     let stated = match pooled {
       Some((option, QuotaOutlook { can_run: true, .. })) => {

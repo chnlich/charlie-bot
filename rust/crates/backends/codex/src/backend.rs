@@ -525,15 +525,38 @@ mod tests {
       .unwrap()
     };
 
-    let manager_argv = backend(LaunchArgs { manager_turn: true, ..LaunchArgs::default() }).build_command().unwrap();
+    let manager_argv = backend(LaunchArgs {
+      extra_flags: Vec::new(),
+      buffer_limit: None,
+      instructions_content: None,
+      instructions_file: None,
+      resume_session_id: None,
+      log_dir: None,
+      cgroup_session_id: None,
+      remote_launch: None,
+      backend_kwargs: serde_json::Map::new(),
+      manager_turn: true,
+    })
+    .build_command()
+    .unwrap();
     let hooks: Vec<&String> =
       manager_argv.iter().filter(|argument| argument.starts_with("hooks.SessionStart=")).collect();
     assert_eq!(hooks.len(), 1, "{manager_argv:?}");
     assert!(hooks[0].contains(r#"matcher="compact""#), "{}", hooks[0]);
     assert!(hooks[0].contains(r#"command="charliebot compaction-context --memo-only""#), "{}", hooks[0]);
 
-    let worker_launch =
-      LaunchArgs { instructions_file: Some(PathBuf::from("/synthetic/instructions.md")), ..LaunchArgs::default() };
+    let worker_launch = LaunchArgs {
+      extra_flags: Vec::new(),
+      buffer_limit: None,
+      instructions_content: None,
+      instructions_file: Some(PathBuf::from("/synthetic/instructions.md")),
+      resume_session_id: None,
+      log_dir: None,
+      cgroup_session_id: None,
+      remote_launch: None,
+      backend_kwargs: serde_json::Map::new(),
+      manager_turn: false,
+    };
     let worker_argv = backend(worker_launch).build_command().unwrap();
     assert!(!worker_argv.iter().any(|argument| argument.contains("SessionStart")), "{worker_argv:?}");
   }
@@ -543,8 +566,18 @@ mod tests {
     let root = tempfile::tempdir().unwrap();
     let codex_home = root.path().join(".codex");
     fs::create_dir(&codex_home).unwrap();
-    let launch =
-      LaunchArgs { instructions_file: Some(PathBuf::from("/synthetic/instructions.md")), ..LaunchArgs::default() };
+    let launch = LaunchArgs {
+      extra_flags: Vec::new(),
+      buffer_limit: None,
+      instructions_content: None,
+      instructions_file: Some(PathBuf::from("/synthetic/instructions.md")),
+      resume_session_id: None,
+      log_dir: None,
+      cgroup_session_id: None,
+      remote_launch: None,
+      backend_kwargs: serde_json::Map::new(),
+      manager_turn: false,
+    };
     let backend = CodexBackend::from_launch(
       PathBuf::from("/synthetic/bin/codex"),
       Path::new("/synthetic/home/.local/bin"),
@@ -584,9 +617,16 @@ mod tests {
       "gpt-5.5",
       &CodexOptions::default(),
       LaunchArgs {
+        extra_flags: Vec::new(),
+        buffer_limit: None,
         instructions_content: Some(instructions.clone()),
         instructions_file: Some(PathBuf::from("/synthetic/instructions.md")),
-        ..LaunchArgs::default()
+        resume_session_id: None,
+        log_dir: None,
+        cgroup_session_id: None,
+        remote_launch: None,
+        backend_kwargs: serde_json::Map::new(),
+        manager_turn: false,
       },
       SessionCgroupConfig::disabled(),
     )
@@ -622,10 +662,16 @@ mod tests {
       "gpt-5.5",
       &CodexOptions::default(),
       LaunchArgs {
+        extra_flags: Vec::new(),
+        buffer_limit: None,
         instructions_content: Some("Worker rules.".to_string()),
         instructions_file: Some(PathBuf::from("/synthetic/instructions.md")),
         resume_session_id: Some(session_id.to_string()),
-        ..LaunchArgs::default()
+        log_dir: None,
+        cgroup_session_id: None,
+        remote_launch: None,
+        backend_kwargs: serde_json::Map::new(),
+        manager_turn: false,
       },
       SessionCgroupConfig::disabled(),
     )
@@ -650,8 +696,16 @@ mod tests {
     let prompt = "\u{fc}".repeat(100 * 1024);
     assert_eq!(prompt.len(), 200 * 1024);
     let resume = LaunchArgs {
+      extra_flags: Vec::new(),
+      buffer_limit: None,
+      instructions_content: None,
+      instructions_file: None,
       resume_session_id: Some("0195c4f2-3c1a-7b0e-9d2e-1a2b3c4d5e6f".to_string()),
-      ..LaunchArgs::default()
+      log_dir: None,
+      cgroup_session_id: None,
+      remote_launch: None,
+      backend_kwargs: serde_json::Map::new(),
+      manager_turn: false,
     };
     for launch in [LaunchArgs::default(), resume] {
       let backend = CodexBackend::from_launch(

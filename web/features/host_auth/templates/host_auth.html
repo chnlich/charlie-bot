@@ -57,8 +57,6 @@
     margin:6px 0 0 }
   /* A field the row does not carry is an empty element, and an empty element takes no room. */
   [data-f]:empty, pre:empty { display:none }
-  /* A row with a check or a login in progress shows only what that work can answer to. */
-  tr[data-busy]:not([data-busy=""]) [data-when-idle] { display:none }
   form { margin:8px 0 0 }
   form.input { display:flex; flex-wrap:wrap; gap:8px; align-items:center }
   form.input input { font:inherit; font-size:13px; padding:6px 8px; min-width:16ch; background:var(--panel2);
@@ -168,6 +166,7 @@
 <script>
   const POLL_MS = 1500;
   const START_WINDOW_MS = 35000;
+  const CHECK_LABEL = "Check now";
   const followers = new Map();
   const stateRank = { needs_user: 0, broken: 1, unreachable: 2, unchecked: 3, ok: 4 };
 
@@ -188,12 +187,13 @@
   }
 
   // Fills one row from its JSON. data-f takes the text, data-href the link target, data-show sets the visibility from a
-  // truthy field, and data-amber sets the amber class from one. The state and busy word sit on the row for the CSS.
+  // truthy field, and data-amber sets the amber class from one. The state word sits on the row for the CSS. A poll
+  // writes only what changed, so a node, and any selection in its text, stays as it was when nothing changed.
   function apply(tr, row) {
     tr.dataset.state = row.state;
-    tr.dataset.busy = row.busy;
+    setBusy(tr, row.busy);
     for (const el of tr.querySelectorAll("[data-f]")) {
-      el.textContent = row[el.dataset.f] ?? "";
+      setText(el, row[el.dataset.f] ?? "");
     }
     for (const el of tr.querySelectorAll("[data-href]")) {
       el.href = row[el.dataset.href] ?? "";
@@ -208,11 +208,32 @@
     refreshHeader();
   }
 
+  function setText(el, text) {
+    if (el.textContent !== text) {
+      el.textContent = text;
+    }
+  }
+
+  // A busy row keeps its controls in place: its idle controls are disabled rather than removed, so no control moves
+  // while a check or a login runs. A check reads "Checking." on its own button, as the probe button does.
+  function setBusy(tr, busy) {
+    tr.dataset.busy = busy;
+    for (const button of tr.querySelectorAll("[data-when-idle] button")) {
+      button.disabled = busy !== "";
+    }
+    setText(tr.querySelector("form[data-check] button"), busy === "check" ? "Checking." : CHECK_LABEL);
+  }
+
+  // A row moves only when the row in its place is another row, so a poll that keeps the order moves no row.
   function reorderRows() {
     const body = document.querySelector("tbody");
-    [...body.querySelectorAll("tr[data-row]")]
-      .sort((left, right) => stateRank[left.dataset.state] - stateRank[right.dataset.state])
-      .forEach((tr) => body.append(tr));
+    const sorted = [...body.querySelectorAll("tr[data-row]")]
+      .sort((left, right) => stateRank[left.dataset.state] - stateRank[right.dataset.state]);
+    sorted.forEach((tr, index) => {
+      if (body.children[index] !== tr) {
+        body.insertBefore(tr, body.children[index]);
+      }
+    });
   }
 
   // The header names the rows that need the user and the broken rows, from the state each row carries.
@@ -222,7 +243,7 @@
     const needs = named("needs_user");
     const broken = named("broken");
     const list = (label, names) => `${label} (${names.length}): ${names.length ? names.join(", ") : "none"}.`;
-    document.getElementById("header-line").textContent = `${list("Needs you", needs)} ${list("Broken", broken)}`;
+    setText(document.getElementById("header-line"), `${list("Needs you", needs)} ${list("Broken", broken)}`);
   }
 
   // Refreshes one row from its URL every POLL_MS while the row is busy or the time `until` (a Date.now() value) is ahead.
@@ -253,8 +274,7 @@
 
   function checkRow(tr) {
     const form = tr.querySelector("form[data-check]");
-    tr.dataset.busy = "check";
-    tr.querySelector('[data-f="busy_text"]').textContent = "Checking.";
+    setBusy(tr, "check");
     const checking = request(form.action, { method: "POST" });
     follow(tr, 0);
     return checking.then((row) => apply(tr, row));
@@ -339,6 +359,7 @@
 
   const refresh = [];
   for (const tr of document.querySelectorAll("tr[data-row]")) {
+    setBusy(tr, tr.dataset.busy);
     if (tr.dataset.busy) {
       follow(tr, 0);
     } else if (tr.dataset.kind === "login") {

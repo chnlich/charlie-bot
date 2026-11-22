@@ -359,10 +359,12 @@ function buildSide({
       switchTarget: sessions.switchTarget.id,
       held: sessions.held.map((session) => session.id),
       churn: sessions.churn.id,
+      // The sparse target is created in the measurement stage, so the seed-only check's record leaves it null.
       foryou: sessions.foryou && {
         large: sessions.foryou.large.id,
         typical: sessions.foryou.typical.id,
-        sparse: sessions.foryou.sparse.id,
+        sparse: sessions.foryou.sparse ? sessions.foryou.sparse.id : null,
+        largeSizing: sessions.foryou.large.sizing,
       },
       sizedTargets: [sessions.switchTarget, ...sessions.held].map(({ id, turns, bootstrapWireBytes }) => ({
         id,

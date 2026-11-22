@@ -78,8 +78,9 @@ The link is in `LINK` and the targets are in `TARGETS` of `profile.mjs`. No othe
 | 7 tool stream | stream frames' tool-row bytes, per final row byte; the turn's socket bytes per minute | <= 2.0; <= 75 KB/min |
 | 8 foryou switch, large target | click to the first For-you row, when the first screen holds none | <= 2000 ms |
 | 8 foryou switch, typical target | click to the first For-you row, when the first screen holds none | <= 1200 ms |
+| 8 foryou switch, sparse target | click to the first For-you row; the target's only For-you row is its marker | reported, not scored |
 | 8 foryou failed page | the same switch with one injected failed older page, click to the first row | <= 2000 ms |
-| 8 foryou, pages before the first row | the target's older-event-page requests before the first row, switch and first open | 0 |
+| 8 foryou, pages before the first row | the target's older-event-page requests before the first row, switch (large, typical, sparse) and first open | 0 |
 | 8 foryou first open | navigation to the first For-you row | reported, not scored |
 | 8 foryou offline reopen, large target | navigation to the first For-you row, network off, after an online open | <= 1000 ms |
 | 8 foryou offline reopen, document bytes | the reopen's document bytes (the stored shell answers) | 0 |

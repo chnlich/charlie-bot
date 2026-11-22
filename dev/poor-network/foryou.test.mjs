@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { seedForYouTargets } from './foryou.mjs';
+import { seedForYouTargets, seedSparseTarget } from './foryou.mjs';
 
 // An api whose session log ends with the marker turn and `above` (the painted rows that turn leaves, one notice by
 // default), followed by the trigger tail's rows (none painted). The bootstrap's first screen carries `firstScreen`
@@ -29,8 +29,14 @@ function fakeApi({
       messages: firstScreen,
     };
   };
+  let created = 0;
   return {
     calls,
+    async createSession(name, backendId) {
+      calls.push(['create', name, backendId]);
+      created++;
+      return {id: `created-${created}`, group: 'g'};
+    },
     async sendMessage(id, content) {
       calls.push(['send', id, content]);
       logOf(id).push({role: 'user', content: recordMarker ? content : 'another message'}, ...above);
@@ -87,6 +93,17 @@ test('the seed gives both targets the marker turn and the trigger tail, and retu
     assert.equal(cancels.length, 1);
     assert.match(cancels[0][2], /^trigger:pn-foryou keeper /);
   }
+});
+
+test('the sparse target is a session the seed creates on the backend, seeded with its marker and the tail', async () => {
+  const api = fakeApi();
+  const sparse = await seedSparseTarget(api, 'backend-id');
+  assert.equal(sparse.id, 'created-1');
+  assert.equal(sparse.role, 'sparse');
+  assert.match(sparse.marker, /^pn-foryou marker .* sparse$/);
+  assert.deepEqual(api.calls.find((call) => call[0] === 'create').slice(2), ['backend-id']);
+  assert.equal(api.calls.filter((call) => call[0] === 'send' && call[1] === sparse.id).length, 1);
+  assert.equal(api.calls.filter((call) => call[0] === 'trigger' && call[1] === sparse.id).length, 24);
 });
 
 test('a first screen that holds a For-you row by the page rule fails the seed', async () => {

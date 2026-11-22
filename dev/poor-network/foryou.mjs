@@ -1,7 +1,8 @@
 // The For-you scenario: a switch and a first open whose target session's first screen holds no For-you row, so the
 // page must reach the session's newest For-you row from behind the first screen — from the bootstrap's
-// `older_for_you` rows, or, before that field exists, by walking older-event pages. A third cell injects one failed
-// older page into a switch. The cells and their caps are the acceptance table of the For-you plan (4.2).
+// `older_for_you` rows, or, before that field exists, by walking older-event pages. A sparse cell switches to a target
+// whose only For-you row is its marker. A failed-page cell injects one failed older page into a switch. The cells and
+// their caps are the acceptance table of the For-you plan (4.2).
 //
 // The targets are seeded once per side (`seedForYouTargets`): the large target also carries a bootstrap sized to the
 // live view's, and both targets end in a tail of scheduled-trigger turns. A trigger turn carries no For-you row (its
@@ -136,58 +137,71 @@ async function forYouRowsAbove(api, sessionId, oldest, marker) {
   return {found: false, newer};
 }
 
+// Seeds one For-you target: its marker turn (the newest human turn, the newest For-you row), then the trigger tail.
+// Asserts the target's shape from its bootstrap, so a stub change or a scan-bound change fails the seed.
+async function seedTarget(api, target) {
+  // The marker names its target: a cell times its marker's first paint, so a page that still shows another target's
+  // marker would time nothing.
+  const marker = `pn-foryou marker ${target.tag} ${target.role}`;
+  target.marker = marker;
+  await api.sendMessage(target.id, marker);
+  await api.waitForIdle(target.id, TAIL_TURN_TIMEOUT_MS);
+  const markerBootstrap = await bootstrapOf(api, target.id);
+  await addTriggerTail(api, target);
+  const bootstrap = await bootstrapOf(api, target.id);
+  const forYouRows = bootstrap.messages.filter(paintsInForYou);
+  if (forYouRows.length > 0) {
+    throw new Error(
+      `the For-you target ${target.id}'s first screen holds ${forYouRows.length} For-you rows, ` +
+        `so its switch has no older row to reach`,
+    );
+  }
+  // The marker is the newest For-you row before the first screen, so the view paints it with its first rows: the
+  // bootstrap's head carries the newest ten painted rows, and the marker must be one of them.
+  const above = await forYouRowsAbove(api, target.id, bootstrap.oldest_message_ordinal, marker);
+  if (!above.found) {
+    throw new Error(
+      `the For-you target ${target.id}'s marker is not among the painted rows behind its first screen`,
+    );
+  }
+  if (above.newer >= FOR_YOU_HEAD_ROWS) {
+    throw new Error(
+      `the For-you target ${target.id}'s marker sits behind ${above.newer} painted rows, past the newest ` +
+        `${FOR_YOU_HEAD_ROWS} a bootstrap carries`,
+    );
+  }
+  // The marker turn's own events stand between the count its turn reported and the tail's first event, so the
+  // tail's span bounds the marker's distance to the first screen from above.
+  const tailLines = bootstrap.event_count - markerBootstrap.event_count;
+  if (tailLines > TAIL_MAX_EVENT_LINES) {
+    throw new Error(
+      `the For-you target ${target.id}'s trigger tail spans ${tailLines} event lines, past the ` +
+        `${TAIL_MAX_EVENT_LINES} a marker must stay inside to reach the bootstrap's 2,000-line scan`,
+    );
+  }
+}
+
 // Seeds the two For-you targets once per side, after the bench's own sessions exist. The large target is sized
-// first, both targets get the marker turn (the newest human turn, the newest For-you row), then the trigger tail.
-// Returns the two targets with their marker text, and asserts each one's shape from its bootstrap.
+// first, then both targets are seeded. Returns the two targets with their marker text.
 export async function seedForYouTargets(api, sessions) {
   const tag = randomTag();
   const large = { ...sessions.foryouLarge, tag, role: 'large' };
   const typical = { ...sessions.foryouTypical, tag, role: 'typical' };
-  for (const target of [large, typical]) {
-    if (target === large) {
-      target.sizing = await sizeTarget(api, target);
-    }
-    // The marker names its target: a cell times its marker's first paint, so a page that still shows another target's
-    // marker would time nothing.
-    const marker = `pn-foryou marker ${tag} ${target.role}`;
-    target.marker = marker;
-    await api.sendMessage(target.id, marker);
-    await api.waitForIdle(target.id, TAIL_TURN_TIMEOUT_MS);
-    const markerBootstrap = await bootstrapOf(api, target.id);
-    await addTriggerTail(api, target);
-    const bootstrap = await bootstrapOf(api, target.id);
-    const forYouRows = bootstrap.messages.filter(paintsInForYou);
-    if (forYouRows.length > 0) {
-      throw new Error(
-        `the For-you target ${target.id}'s first screen holds ${forYouRows.length} For-you rows, ` +
-          `so its switch has no older row to reach`,
-      );
-    }
-    // The marker is the newest For-you row before the first screen, so the view paints it with its first rows: the
-    // bootstrap's head carries the newest ten painted rows, and the marker must be one of them.
-    const above = await forYouRowsAbove(api, target.id, bootstrap.oldest_message_ordinal, marker);
-    if (!above.found) {
-      throw new Error(
-        `the For-you target ${target.id}'s marker is not among the painted rows behind its first screen`,
-      );
-    }
-    if (above.newer >= FOR_YOU_HEAD_ROWS) {
-      throw new Error(
-        `the For-you target ${target.id}'s marker sits behind ${above.newer} painted rows, past the newest ` +
-          `${FOR_YOU_HEAD_ROWS} a bootstrap carries`,
-      );
-    }
-    // The marker turn's own events stand between the count its turn reported and the tail's first event, so the
-    // tail's span bounds the marker's distance to the first screen from above.
-    const tailLines = bootstrap.event_count - markerBootstrap.event_count;
-    if (tailLines > TAIL_MAX_EVENT_LINES) {
-      throw new Error(
-        `the For-you target ${target.id}'s trigger tail spans ${tailLines} event lines, past the ` +
-          `${TAIL_MAX_EVENT_LINES} a marker must stay inside to reach the bootstrap's 2,000-line scan`,
-      );
-    }
-  }
+  large.sizing = await sizeTarget(api, large);
+  await seedTarget(api, large);
+  await seedTarget(api, typical);
   return { large, typical };
+}
+
+// Creates and seeds the sparse target: a session of its own whose only For-you row is its marker, the 8dcbbccc shape
+// (a few For-you rows in a long log). The bench creates it after it counts its view, since the view counts the bench's
+// sessions and this one is not among them.
+export async function seedSparseTarget(api, backendId) {
+  const tag = randomTag();
+  const session = await api.createSession(`pn-${tag}-sparse`, backendId);
+  const sparse = { ...session, tag, role: 'sparse' };
+  await seedTarget(api, sparse);
+  return sparse;
 }
 
 // The init script of a first-open tab. It runs in every document of the tab and reports when the target's marker
@@ -380,8 +394,9 @@ export async function forYouRep(ctx, repetition) {
     async ({ tab }) => {
       const large = await switchCell(ctx, tab, foryou.large, 'fy-switch-large');
       const typical = await switchCell(ctx, tab, foryou.typical, 'fy-switch-typical');
+      const sparse = await switchCell(ctx, tab, foryou.sparse, 'fy-switch-sparse');
       const failedPage = await failedPageCell(ctx, tab, foryou.large, 'fy-failed-page');
-      return { large, typical, failedPage };
+      return { large, typical, sparse, failedPage };
     },
   );
   const openLarge = await openCell(ctx, foryou.large, `fy-open-large-${repetition}`);
@@ -392,7 +407,7 @@ export async function forYouRep(ctx, repetition) {
     ? await offlineReopenCell(ctx, foryou.large, `fy-offline-${repetition}`, repetition)
     : null;
   return {
-    switch: { large: cells.large, typical: cells.typical },
+    switch: { large: cells.large, typical: cells.typical, sparse: cells.sparse },
     failedPage: cells.failedPage,
     open: { large: openLarge, typical: openTypical },
     offline,

@@ -41,7 +41,7 @@ import {
 import { expectedTargetsFrom } from './newest-row.mjs';
 import { OPEN_CONDITIONS, formatOpen, openScenario } from './open.mjs';
 import { formatSearch, searchScenario } from './search.mjs';
-import { FOR_YOU_SCENARIO, forYouRep, seedForYouTargets } from './foryou.mjs';
+import { FOR_YOU_SCENARIO, forYouRep, seedForYouTargets, seedSparseTarget } from './foryou.mjs';
 import { METRICS, calibrate, formatSide, percentile, summarize } from './report.mjs';
 import { TrialWatch } from './trials.mjs';
 import { sleep } from './tabs.mjs';
@@ -376,7 +376,11 @@ function buildSide({
       switchTarget: sessions.switchTarget.id,
       held: sessions.held.map((session) => session.id),
       churn: sessions.churn.id,
-      foryou: sessions.foryou && { large: sessions.foryou.large.id, typical: sessions.foryou.typical.id },
+      foryou: sessions.foryou && {
+        large: sessions.foryou.large.id,
+        typical: sessions.foryou.typical.id,
+        sparse: sessions.foryou.sparse.id,
+      },
       sizedTargets: [sessions.switchTarget, ...sessions.held].map(({ id, turns, bootstrapWireBytes }) => ({
         id,
         turns,
@@ -462,6 +466,10 @@ async function main() {
       process.exit(0);
     }
     ctx.view = await measureView(api);
+    // The sparse target is created after the view is counted: the count holds the bench's own sessions only.
+    if (args.scenarios.includes(FOR_YOU_SCENARIO)) {
+      ctx.sessions.foryou.sparse = await seedSparseTarget(api, STUB_BACKEND_ID);
+    }
     const serve = new URL(api.base);
     const tls = makeCertificate(path.join(ctx.runDir, `tls-${args.side}`));
     const target = { host: serve.hostname, port: Number(serve.port) };

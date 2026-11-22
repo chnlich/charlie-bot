@@ -323,6 +323,12 @@ impl ClaudeCodeBackend {
     let headless = claude_launch::headless_claude_env(self.run_kind, &env);
     let mut env = without_gateway_env(&env);
     env.extend(headless);
+    self.insert_config_dir(&mut env)?;
+    Ok(env)
+  }
+
+  /// Point `CLAUDE_CONFIG_DIR` at the entry's account directory, when the entry names one.
+  fn insert_config_dir(&self, env: &mut Env) -> anyhow::Result<()> {
     if let Some(config_dir) = &self.claude_config_dir {
       let home = env.get("HOME").map(String::as_str);
       env.insert(
@@ -330,11 +336,15 @@ impl ClaudeCodeBackend {
         login_dirs::config_dir_path(config_dir, home)?.to_string_lossy().into_owned(),
       );
     }
-    Ok(env)
+    Ok(())
   }
 
-  fn one_shot_env(&self, base_env: &Env) -> Env {
-    without_gateway_env(base_env)
+  /// The one-shot environment: the base environment without the gateway variables, on the entry's account directory,
+  /// so a one-shot answers from the account its runs use.
+  fn one_shot_env(&self, base_env: &Env) -> anyhow::Result<Env> {
+    let mut env = without_gateway_env(base_env);
+    self.insert_config_dir(&mut env)?;
+    Ok(env)
   }
 
   /// The model-selection flags of this backend's one-shot: a cc-claude entry names its model with `--model`.
@@ -358,7 +368,7 @@ impl ClaudeCodeBackend {
   ) -> anyhow::Result<String> {
     let system_file = SystemPromptFile::write(system)?;
     let command = self.one_shot_command(&system_file.path);
-    let env = self.one_shot_env(base_env);
+    let env = self.one_shot_env(base_env)?;
     run_one_shot_process(&command, &env, prompt, timeout, self.cgroup_session_id.as_deref(), &self.cgroup_config).await
   }
 }
@@ -1193,6 +1203,28 @@ mod tests {
     }
     assert!(!env.contains_key("CLAUDE_CODE_EXTRA_BODY"));
     assert_eq!(env["UNRELATED_INHERITED_VAR"], "kept");
+  }
+
+  /// The one-shot spawns on the entry's account directory, the one its runs use, so a resolved account is not dropped.
+  #[ignore = "integration"]
+  #[tokio::test]
+  async fn one_shot_text_runs_on_the_entry_account_dir() {
+    let root = tempfile::tempdir().unwrap();
+    let (bin, _argv, env_file) = stage_fake_claude(root.path());
+    let base_env = inherited_env(&bin);
+    let mut backend = ClaudeCodeBackend::from_launch(
+      Some("claude-haiku-5-5".to_string()),
+      None,
+      false,
+      false,
+      Some("/synthetic/account-dir".to_string()),
+      LaunchArgs::default(),
+      zero_limits(),
+    )
+    .unwrap();
+
+    assert_eq!(backend.one_shot_text(&base_env, "prompt", "system", None).unwrap().await.unwrap(), "ok");
+    assert_eq!(recorded_env(&env_file)["CLAUDE_CONFIG_DIR"], "/synthetic/account-dir");
   }
 
   /// A 200 KiB prompt reaches claude on stdin, and a 200 KiB system prompt is named by a file. No argv element is over

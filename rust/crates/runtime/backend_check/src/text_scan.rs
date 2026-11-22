@@ -63,8 +63,11 @@ pub fn scan_block(vocab: &Vocabulary, text: &str, first_line: usize) -> Vec<Foun
 fn scan_line(vocab: &Vocabulary, line: &str, number: usize, mode: Mode, found: &mut Vec<Found>) {
   let words = words(line);
   for (index, word) in words.iter().enumerate() {
-    if let Some(class) = rules::value_class(vocab, word.text) {
-      found.push(site(number, class, word.text));
+    // A shell default glues its operator's dash to the value, as `:-openai/glm` in `${MODEL:-openai/glm}`: the word
+    // carries the dash, the value it names does not. A flag keeps its dashes for the positions below.
+    let value = word.text.trim_start_matches('-');
+    if let Some(class) = rules::value_class(vocab, value) {
+      found.push(site(number, class, value));
     }
     let Some(next) = words.get(index + 1) else { continue };
     let gap = &line[word.end..next.start];
@@ -266,6 +269,16 @@ mod tests {
   fn a_gateway_url_is_a_site_when_its_host_is_known() {
     let found = classes("api https://aigw.example.team/v1 and https://elsewhere.example/v1\n", "doc.md");
     assert_eq!(found, vec![(1, Class::Gateway, "https://aigw.example.team/v1".to_string())]);
+  }
+
+  /// A shell default's operand is the value without the `:-` operator's dash, and a flag keeps its dashes.
+  #[test]
+  fn an_operator_dash_stays_off_the_reported_value() {
+    let found = classes("MODEL=${RELEASE_LAB_MODEL:-openai/glm-5.3-flash}\n", "run.sh");
+    assert!(found.contains(&(1, Class::DefaultValue, "openai/glm-5.3-flash".to_string())), "{found:?}");
+    assert!(found.iter().all(|(_, _, value)| !value.starts_with('-')), "{found:?}");
+    let flags = classes("charlie --backend cheap\n", "run.sh");
+    assert_eq!(flags, vec![(1, Class::PoolId, "cheap".to_string())]);
   }
 
   /// A code line that reads `config.yaml` and names `backends` reads the configuration itself. A line that writes a

@@ -3,7 +3,7 @@
 # measure side by side. This file is the only place that names the file and calls flock on it.
 #
 # The holders are the poor-network bench's sides (run.sh), the remote-wake bench's container run
-# (dev/remote-wake/lock.sh) and each improve-ux and improve-perf trial side (dev/improve/trial-side.sh).
+# (dev/remote-wake/lock.sh) and each improve trial side that holds the lock (dev/improve/trial-side.sh).
 #
 # A side attempt is one trial's start, measurement and stop, not the run's builds: a run builds before it queues, and a
 # run with two sides takes the lock once per side. A side that cannot take the lock within its wait exits with
@@ -38,4 +38,32 @@ bench_lock_hold() {
   mkdir -p "$(dirname "$BENCH_LOCK_FILE")" || return $?
   exec 9>"$BENCH_LOCK_FILE"
   flock -w "$1" -E "$BENCH_LOCK_TIMEOUT_EXIT" 9
+}
+
+# bench_lock_holder: print the holder of the bench lock as `<pid> <command line>`, or print nothing when no process
+# holds it. The holder is the process that took the lock, so its command line names the work that holds it. A
+# waiting process is listed with `->` in /proc/locks and is not the holder. The lock file is read for its device and
+# inode only, and the lock is never taken or released here.
+bench_lock_holder() {
+  [[ -e $BENCH_LOCK_FILE ]] || return 0
+  local device inode major minor _id kind rest pid device_inode dev_major dev_minor dev_inode cmdline
+  device=$(stat -c '%D' -- "$BENCH_LOCK_FILE") || return $?
+  inode=$(stat -c '%i' -- "$BENCH_LOCK_FILE") || return $?
+  # st_dev packs the major and minor the way glibc's makedev does; /proc/locks prints them in hex.
+  device=$((16#$device))
+  major=$(( ((device >> 8) & 0xfff) | ((device >> 32) & ~0xfff) ))
+  minor=$(( (device & 0xff) | ((device >> 12) & ~0xff) ))
+  while read -r _id kind rest; do
+    [[ $kind == FLOCK ]] || continue
+    read -r _advisory _mode pid device_inode _ <<<"$rest"
+    IFS=: read -r dev_major dev_minor dev_inode <<<"$device_inode"
+    if (( 16#$dev_major == major && 16#$dev_minor == minor )) && [[ $dev_inode == "$inode" ]]; then
+      if ! cmdline=$(exec 2>/dev/null; tr '\0' ' ' <"/proc/$pid/cmdline"); then
+        cmdline='(exited before its command line was read)'
+      fi
+      printf '%s %s\n' "$pid" "${cmdline% }"
+      return 0
+    fi
+  done </proc/locks || return $?
+  return 0
 }

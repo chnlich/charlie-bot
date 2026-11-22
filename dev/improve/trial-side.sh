@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
-# One improve trial side: a serve trial (scripts/release/trial.sh --serve ... -- <command>) run under the host's bench
-# lock from the trial's start to its stop. The round builds its server binaries before it calls this script, so the
-# builds stay outside the lock.
+# One improve trial side: a serve trial (scripts/release/trial.sh --serve ... -- <command>) run from the trial's
+# start to its stop. The round builds its server binaries before it calls this script, so the builds stay outside
+# the side.
 #
 #   dev/improve/trial-side.sh <command> [args...]
 #
-# The side waits at most IMPROVE_TRIAL_LOCK_WAIT_SECONDS (default 900, the round's 15 minutes) for the bench lock. When
-# the wait runs out, the command does not run: the side prints its stop reason on stderr and exits with
-# BENCH_LOCK_TIMEOUT_EXIT. Otherwise the side exits with the command's exit code. The lock and its flock call belong to
-# dev/poor-network/lock.sh; the poor-network bench's own sides take the same lock with their own wait.
+# IMPROVE_TRIAL_USE_LOCK chooses whether the side holds the host's bench lock around its command. 1, the default,
+# holds the lock: the side waits at most IMPROVE_TRIAL_LOCK_WAIT_SECONDS (default 900, the round's 15 minutes) for
+# it. When the wait runs out, the command does not run: the side prints its stop reason on stderr and exits with
+# BENCH_LOCK_TIMEOUT_EXIT. 0 runs the command beside any bench, with no wait. Such a side writes the lock's holder,
+# or none, at its start and at its end to a bench-lock record under $CHARLIEBOT_RELEASE_RUN_DIR, and it serves on a
+# port range the bench's default does not use. Either way the side exits with the command's exit code. The lock and
+# its flock call belong to dev/poor-network/lock.sh; the poor-network bench's own sides take the same lock with their
+# own wait.
 #
 # The side's marker lives in /tmp/improve-<IMPROVE_DIRECTION>, the round's own scratch directory, which the round runner
 # exports as IMPROVE_DIRECTION. The marker is not under TMPDIR: the round's TMPDIR lost a side's marker while the side
@@ -17,18 +21,55 @@ set -uo pipefail
 
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../poor-network/lock.sh"
-# The variable lets the lock test shorten the wait; a round leaves it unset.
+# The variables let the lock test shorten the wait and switch the lock; a round leaves them unset.
 readonly IMPROVE_TRIAL_LOCK_WAIT_SECONDS=${IMPROVE_TRIAL_LOCK_WAIT_SECONDS:-900}
+readonly IMPROVE_TRIAL_USE_LOCK=${IMPROVE_TRIAL_USE_LOCK-1}
+# trial.sh's default port range is the bench's. A side that runs beside the bench serves on this range instead, unless
+# its caller names a range of its own.
+readonly BESIDE_BENCH_PORT_MIN=18670
+readonly BESIDE_BENCH_PORT_MAX=18689
 
 if [[ ! $IMPROVE_TRIAL_LOCK_WAIT_SECONDS =~ ^[1-9][0-9]*$ ]]; then
   printf 'improve trial side: IMPROVE_TRIAL_LOCK_WAIT_SECONDS must be a positive number of seconds, got %s\n' \
     "$IMPROVE_TRIAL_LOCK_WAIT_SECONDS" >&2
   exit 2
 fi
+if [[ ! $IMPROVE_TRIAL_USE_LOCK =~ ^[01]$ ]]; then
+  printf 'improve trial side: IMPROVE_TRIAL_USE_LOCK must be 1 (hold the bench lock) or 0 (run beside it), got %s\n' \
+    "$IMPROVE_TRIAL_USE_LOCK" >&2
+  exit 2
+fi
 if (( $# == 0 )); then
   printf 'improve trial side: name the trial command to run under the bench lock\n' >&2
   exit 2
 fi
+
+# bench_lock_record <record file> <point>: append the bench lock's holder at one point of the side, start or end.
+bench_lock_record() {
+  local holder
+  if ! holder=$(bench_lock_holder); then
+    printf 'improve trial side: cannot read the bench lock holder at the side %s\n' "$2" >&2
+    return 1
+  fi
+  printf '%s side %s: bench lock holder %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$2" "${holder:-none}" >>"$1"
+}
+
+if (( IMPROVE_TRIAL_USE_LOCK == 0 )); then
+  if [[ -z ${CHARLIEBOT_RELEASE_RUN_DIR:-} ]]; then
+    printf 'improve trial side: IMPROVE_TRIAL_USE_LOCK=0 needs CHARLIEBOT_RELEASE_RUN_DIR for its record\n' >&2
+    exit 2
+  fi
+  export TRIAL_PORT_MIN=${TRIAL_PORT_MIN:-$BESIDE_BENCH_PORT_MIN}
+  export TRIAL_PORT_MAX=${TRIAL_PORT_MAX:-$BESIDE_BENCH_PORT_MAX}
+  mkdir -p -- "$CHARLIEBOT_RELEASE_RUN_DIR" || exit 1
+  record=$(mktemp "$CHARLIEBOT_RELEASE_RUN_DIR/bench-lock-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX") || exit 1
+  bench_lock_record "$record" start || exit 1
+  "$@"
+  status=$?
+  bench_lock_record "$record" end || exit 1
+  exit "$status"
+fi
+
 if [[ ! ${IMPROVE_DIRECTION:-} =~ ^[a-z][a-z0-9_]*$ ]]; then
   printf 'improve trial side: IMPROVE_DIRECTION names the round direction, got %s\n' "${IMPROVE_DIRECTION:-}" >&2
   exit 2

@@ -367,8 +367,10 @@ run_side() {
   local side_scenarios=$5 side_conditions=${6:-$open_conditions}
   # Each invocation and side owns its trial tree: the tree outlives a yield of the lock, so a second invocation on the
   # same commit must not find it.
-  trial_root="${TMPDIR:-/tmp}/pn-$run_id-$name"
-  mkdir -p "$trial_root"
+  # trial.sh puts Chrome's singleton socket 68 bytes below the tree root, and its preflight refuses a socket path of 108
+  # bytes or more. The root is a short mktemp name, unique to this side and invocation, which keeps the path under 108
+  # for a TMPDIR of up to 25 bytes. A root named for the run id and the side gave 119 bytes on host3.
+  trial_root=$(mktemp -d "${TMPDIR:-/tmp}/pn-XXXXXX")
   local label=$commit
   [[ $name == after ]] && label=$after_label
   export CHARLIEBOT_HOME=$live_home
@@ -437,6 +439,8 @@ run_side() {
   if ((trial_status == RATE_GATE_EXIT)); then
     die "$RATE_GATE_EXIT" "the $name side's CPU probe failed the rate gate twice; see $run_dir/$name.json"
   fi
+  # trial.sh removes its tree and temp root; the empty root from mktemp goes with them.
+  rmdir "$trial_root"
   return "$trial_status"
 }
 

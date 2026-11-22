@@ -2,7 +2,7 @@
 //!
 //! `charliebot backend check` runs this scan, and the CI `rust-lint` job runs that command. The match definition is in
 //! `rules`, the vocabulary it matches against in `vocabulary`, the reviewed exceptions in `exemptions`. The Rust files
-//! are read by `rust_scan` through their syntax trees; every other text file is read by `text_scan`.
+//! are read by `rust_scan` through their syntax trees and their comments; every other text file is read by `text_scan`.
 
 pub mod exemptions;
 pub mod rules;
@@ -15,7 +15,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
-use charliebot_core::config;
+use charliebot_core::{config, repo_root};
 
 pub use exemptions::Exemption;
 pub use rules::Class;
@@ -37,8 +37,8 @@ pub struct Hit {
   pub exempt: Option<&'static Exemption>,
 }
 
-/// The directories the walk never enters: version control, build output, environments, and test trees.
-const SKIPPED_DIRS: [&str; 7] = [".git", "target", "node_modules", ".venv", "__pycache__", "tests", "fixtures"];
+/// The directories the walk never enters: version control, build output and environments.
+const SKIPPED_DIRS: [&str; 5] = [".git", "target", "node_modules", ".venv", "__pycache__"];
 
 /// The profile-home directories a default scan reads: the machinery that a profile's runs read and execute.
 pub const PROFILE_SCAN_DIRS: [&str; 4] = ["improve", "prompts", "scripts", "skills"];
@@ -62,6 +62,7 @@ pub fn scan(vocab: &Vocabulary, roots: &Roots, paths: &[PathBuf]) -> anyhow::Res
       files.push(path);
     }
   }
+  files.retain(|file| !is_configuration(roots, file));
   let test_only = test_only_files(&files)?;
   let mut hits = Vec::new();
   for file in files.iter().filter(|file| !test_only.contains(*file)) {
@@ -99,15 +100,35 @@ fn walk(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
   Ok(files)
 }
 
+/// Whether the walk skips a directory: a build or environment directory, a `tests` tree, or a mock or fixture tree.
 fn is_skipped_dir(path: &Path) -> bool {
-  path.file_name().and_then(|name| name.to_str()).is_some_and(|name| SKIPPED_DIRS.contains(&name))
+  path
+    .file_name()
+    .and_then(|name| name.to_str())
+    .is_some_and(|name| SKIPPED_DIRS.contains(&name) || name == "tests" || is_mock_or_fixture(name))
 }
 
-/// The files that carry values by design and are no source: the profile's `config.yaml`, the configuration examples,
-/// bytecode, and fixtures, which carry their own values for a test to read.
+/// Whether a name marks mock or fixture code, which is test code: the `mock-home` crate, and the fixture files that
+/// tests read. Such code carries its own values for a test to read.
+fn is_mock_or_fixture(name: &str) -> bool {
+  name.contains("mock") || name.contains("fixture")
+}
+
+/// The files that carry values by design and are no source: the profile's `config.yaml`, bytecode, and mock or fixture
+/// files.
 fn is_skipped_file(path: &Path) -> bool {
   let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
-  name == config::CONFIG_FILENAME || name.contains(".example.") || name.ends_with(".pyc") || name.contains("fixture")
+  name == config::CONFIG_FILENAME || name.ends_with(".pyc") || is_mock_or_fixture(name)
+}
+
+/// Whether a file lies in the repository's `configs/` directory: the example and default configuration that a host copies
+/// or overrides. Its values are the host's to choose, so it is no site.
+fn is_configuration(roots: &Roots, path: &Path) -> bool {
+  roots
+    .repo
+    .as_deref()
+    .and_then(|repo| path.strip_prefix(repo).ok())
+    .is_some_and(|relative| relative.starts_with(repo_root::CONFIGS_DIR_NAME))
 }
 
 /// The text of a file, or `None` for a binary file: one with a NUL byte or invalid UTF-8 has no text to scan.
@@ -290,5 +311,43 @@ mod tests {
     fs::create_dir(home.path().join("improve")).unwrap();
     let paths = default_paths(Some(repo.path()), home.path());
     assert_eq!(paths, vec![repo.path().to_path_buf(), home.path().join("improve"), home.path().join("skills")]);
+  }
+
+  /// A file under the repository's `configs/` directory is the example or default configuration that a host copies or
+  /// overrides, so it is no site. The same file outside `configs/` is one.
+  #[test]
+  fn configs_directory_files_are_no_site() {
+    let repo = tempfile::tempdir().unwrap();
+    let repo_root = fs::canonicalize(repo.path()).unwrap();
+    for dir in ["configs", "scripts"] {
+      fs::create_dir(repo_root.join(dir)).unwrap();
+      fs::write(repo_root.join(dir).join("cron.default.yaml"), "task: claude-opus\n").unwrap();
+    }
+    let roots = Roots { repo: Some(repo_root.clone()), home: repo_root.join("home") };
+    let hits = scan(&vocab(), &roots, std::slice::from_ref(&repo_root)).unwrap();
+    let files: Vec<PathBuf> = hits.iter().map(|hit| hit.path.strip_prefix(&repo_root).unwrap().to_path_buf()).collect();
+    assert_eq!(files, vec![PathBuf::from("scripts/cron.default.yaml")], "{hits:?}");
+  }
+
+  /// Mock and fixture code is test code: a `mock-home` crate, a `mock` name and a `tests` tree carry their own values.
+  /// The production file beside them is scanned.
+  #[test]
+  fn mock_and_fixture_code_is_test_code() {
+    let repo = tempfile::tempdir().unwrap();
+    let repo_root = fs::canonicalize(repo.path()).unwrap();
+    for (file, body) in [
+      ("app/mock-home/src/lib.rs", "fn f() { let _ = \"claude-opus\"; }\n"),
+      ("app/cli/src/mock_client.rs", "fn g() { let _ = \"claude-opus\"; }\n"),
+      ("app/cli/tests/cli.rs", "fn h() { let _ = \"claude-opus\"; }\n"),
+      ("app/cli/src/lib.rs", "fn k() { let _ = \"claude-opus\"; }\n"),
+    ] {
+      let path = repo_root.join(file);
+      fs::create_dir_all(path.parent().unwrap()).unwrap();
+      fs::write(path, body).unwrap();
+    }
+    let roots = Roots { repo: Some(repo_root.clone()), home: repo_root.join("home") };
+    let hits = scan(&vocab(), &roots, std::slice::from_ref(&repo_root)).unwrap();
+    let files: Vec<PathBuf> = hits.iter().map(|hit| hit.path.strip_prefix(&repo_root).unwrap().to_path_buf()).collect();
+    assert_eq!(files, vec![PathBuf::from("app/cli/src/lib.rs")], "{hits:?}");
   }
 }

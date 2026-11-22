@@ -26,14 +26,22 @@ const SHOT_SHOW_TIMEOUT_MS = 180000;
 const RETRY_STATE_TIMEOUT_MS = 60000;
 
 const SENTINEL_FAILED = `document.getElementById('load-more-sentinel')?.dataset.state === 'failed' ? true : null`;
+// The page's phone breakpoint (platform.js): at or below it the session list is a drawer, closed until its hamburger
+// opens it, and a row inside a closed drawer is not painted.
+const PHONE_MAX_WIDTH = 768;
 
 async function setViewport(tab, size) {
   await tab.page.send('Emulation.setDeviceMetricsOverride', {
     width: size.width,
     height: size.height,
     deviceScaleFactor: 1,
-    mobile: size.width < 600,
+    mobile: size.width <= PHONE_MAX_WIDTH,
   });
+}
+
+async function openPhoneDrawer(tab, size) {
+  if (size.width > PHONE_MAX_WIDTH) return;
+  await tab.evaluate(`document.querySelector('.hamburger-btn')?.click()`);
 }
 
 async function capture(tab, file) {
@@ -65,6 +73,7 @@ async function switchShot(ctx, size, target, file) {
     await tab.ready();
     await tabs.show(tab);
     await tabs.waitIdle(SHOT_SETTLE_MS);
+    await openPhoneDrawer(tab, size);
     await tab.showRow(target);
     await tab.watchChat(name, target.marker);
     const clickedAt = await tab.clickSession(target.id);
@@ -86,6 +95,7 @@ async function retryShot(ctx, size, target, file) {
     await tab.ready();
     await tabs.show(tab);
     await tabs.waitIdle(SHOT_SETTLE_MS);
+    await openPhoneDrawer(tab, size);
     await tab.showRow(target);
     await tab.evaluate(failEveryOlderPage(target.id));
     await tab.clickSession(target.id);

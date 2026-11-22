@@ -1,7 +1,9 @@
 #!/bin/sh
 # The bench's scripted backend: a stand-in for the charlie-code CLI, which the server runs once per turn. It prints the
-# NDJSON that the backend reads: session_attached, the next reply piece of POOR_NETWORK_REPLY_DIR, then result. It
-# calls no model and reads no credential. A prompt carrying the marker bench-hold keeps its turn open, so the session
+# NDJSON that the backend reads: a session event (the conversation id the backend stores, which a turn-end check
+# continues with), the next reply piece of POOR_NETWORK_REPLY_DIR, then result. The real CLI names this event `session`
+# (backends/charlie_code/src/translate.rs); the backend translates it to its `session_attached` event.
+# It calls no model and reads no credential. A prompt carrying the marker bench-hold keeps its turn open, so the session
 # stays running for the background load until the bench cancels it. A prompt carrying the marker bench-tools prints the
 # tool piece instead of a reply piece. A sizing turn (a prompt carrying pn-seed-sized or pn-foryou size) prints the
 # sized seed piece of the same rotation. Each line is replayed after the delay it states in bench_delay_s; a line that
@@ -24,7 +26,7 @@ if [ -n "$resume" ]; then
 else
   session_id=$(cat /proc/sys/kernel/random/uuid)
 fi
-printf '{"type":"session_attached","session_id":"%s"}\n' "$session_id"
+printf '{"type":"session","session_id":"%s"}\n' "$session_id"
 
 # The reply pieces are printed in turn, so consecutive turns carry different text. The tool piece is selected, not
 # rotated: it never advances the rotation.

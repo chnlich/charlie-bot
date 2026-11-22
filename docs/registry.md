@@ -86,7 +86,7 @@ receiver is `Registry`, and every method returns `Result<(), RegistryError>` unl
 
 - Rust: `config_check(name: &'static str, check: CheckFn)`. The checks run after every config load, including a hot
   reload, which then keeps the previous config.
-- Example: `registry.config_check("check_default_backend", check_default_backend)?;`
+- Example: `registry.config_check("check_claude_pools", claude_config::check_claude_pools)?;`
 
 ### Diff roots
 

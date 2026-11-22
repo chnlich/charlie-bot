@@ -2,12 +2,10 @@
 //! then one redirect resolution per grounding chunk.
 
 use charliebot_compat::mimetypes_table::APPLICATION_JSON;
+use charliebot_core::config::{API_BASE_KEY, BackendOption, CREDENTIAL_KEY};
 use charliebot_core::credentials::{API_KEY_FIELD, Credentials};
 use futures_util::future::join_all;
 use serde_json::{Value, json};
-
-/// The model that serves `google_search`. It is the model this path was measured on.
-pub const SEARCH_MODEL: &str = "gemini-4-hydrogen";
 
 /// How many characters of an upstream body an error text carries.
 const BODY_EXCERPT_CHARS: usize = 500;
@@ -51,22 +49,25 @@ impl Search {
   }
 }
 
-/// One web search for `query`, with each source's redirect URL resolved or its resolution failure kept.
+/// One web search for `query` on the model of `option`, at its `api_base`, with each source's redirect URL resolved or
+/// its resolution failure kept.
 ///
-/// Every failure is the tool result text: a missing `gemini.api_key`, a non-200 answer, a body without a candidate,
-/// or a request that did not complete.
+/// Every failure is the tool result text: an option without its `api_base` or `credential` string, a credential the
+/// profile lacks, a non-200 answer, a body without a candidate, or a request that did not complete.
 pub async fn search(
   credentials: &Credentials,
   client: &reqwest::Client,
-  endpoint: &str,
+  option: &BackendOption,
   query: &str,
 ) -> Result<Search, String> {
+  let endpoint = option_str(option, API_BASE_KEY)?;
+  let credential = option_str(option, CREDENTIAL_KEY)?;
   let key = credentials
-    .get("gemini", API_KEY_FIELD)
+    .get(credential, API_KEY_FIELD)
     .filter(|value| value.is_truthy())
     .map(|value| value.value_str())
-    .ok_or_else(|| "web search is not configured: credentials.yaml has no gemini.api_key".to_string())?;
-  let url = format!("{}/models/{SEARCH_MODEL}:generateContent", endpoint.trim_end_matches('/'));
+    .ok_or_else(|| format!("web search is not configured: credentials.yaml has no {credential}.api_key"))?;
+  let url = format!("{}/models/{}:generateContent", endpoint.trim_end_matches('/'), option.model);
   let payload = json!({
     "contents": [{"role": "user", "parts": [{"text": query}]}],
     "tools": [{"google_search": {}}],
@@ -108,6 +109,15 @@ pub async fn search(
     .map(|values| values.iter().filter_map(chunk).collect())
     .unwrap_or_default();
   Ok(Search { answer, queries, sources: resolve_sources(client, chunks).await })
+}
+
+/// The string value of one type key of the search option.
+fn option_str<'a>(option: &'a BackendOption, key: &str) -> Result<&'a str, String> {
+  option
+    .type_fields
+    .get(key)
+    .and_then(|value| value.as_str())
+    .ok_or_else(|| format!("backends.options {} has no string {key}", option.id))
 }
 
 /// One grounding chunk's redirect URL and title. A chunk without a `web.uri` names no source.

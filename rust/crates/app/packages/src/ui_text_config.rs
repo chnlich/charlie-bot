@@ -1,6 +1,5 @@
-use charliebot_claude_code::claude_config::AccountsConfig;
-use charliebot_core::config::{CharlieBotConfig, HostAuthConfig};
-use charliebot_core::ui_text::is_ui_text;
+use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::ui_text::check_label;
 use charliebot_registry::{Registry, RegistryError};
 
 pub(super) fn register_claude_code(registry: &mut Registry) -> Result<(), RegistryError> {
@@ -8,6 +7,8 @@ pub(super) fn register_claude_code(registry: &mut Registry) -> Result<(), Regist
   registry.config_check("check_ui_labels", check_ui_labels)
 }
 
+/// The labels of the backend options and pools, then the labels each feature owns: the browser logins and the
+/// Claude accounts. Each feature's rule lives beside its section.
 fn check_ui_labels(cfg: &CharlieBotConfig) -> Result<(), String> {
   for option in &cfg.backends.options {
     check_label(&format!("backends.options[{}].label", option.id), &option.label)?;
@@ -15,23 +16,8 @@ fn check_ui_labels(cfg: &CharlieBotConfig) -> Result<(), String> {
   for pool in &cfg.backends.pools {
     check_label(&format!("backends.pools[{}].label", pool.id), &pool.label)?;
   }
-  for login in &cfg.section::<HostAuthConfig>("host_auth").browser_logins {
-    check_label(&format!("host_auth.browser_logins[{}].label", login.name), &login.label)?;
-    if let Some(input_prompt) = &login.input_prompt {
-      check_label(&format!("host_auth.browser_logins[{}].input_prompt", login.name), input_prompt)?;
-    }
-  }
-  for account in &cfg.section::<AccountsConfig>("accounts").claude {
-    check_label(&format!("accounts.claude[{}].label", account.label), &account.label)?;
-  }
-  Ok(())
-}
-
-fn check_label(path: &str, value: &str) -> Result<(), String> {
-  if let Some(character) = value.chars().find(|&character| is_ui_text(character)) {
-    return Err(format!("{path} contains a disallowed UI text character {character:?}"));
-  }
-  Ok(())
+  charliebot_host_auth::check_labels(cfg)?;
+  charliebot_claude_code::account_labels::check_labels(cfg)
 }
 
 #[cfg(test)]

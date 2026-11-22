@@ -703,8 +703,9 @@ pub type UsageResolverConstructor = Arc<dyn Fn(&UsageResolverHost) -> Arc<dyn Us
 pub const EXTRA_FLAGS_BACKEND_KWARG: &str = "extra_flags";
 
 /// The least access-token life, in seconds, that a keyed round's login must have to start. The server selects the
-/// Claude login with it, and the launcher reads it from `IMPROVE_TOKEN_MIN_SECONDS` for its own check. Four hours
-/// covers the longest round seen, with an hour's margin for the build before the round starts.
+/// Claude login with it, and the launcher reads it from `IMPROVE_TOKEN_MIN_SECONDS` for its own check. A round that
+/// outlives its token, or whose token the login loses mid-round, ends as a token shortage: the pool's next member runs
+/// the round, and no member is recorded out.
 pub const IMPROVE_TOKEN_MIN_SECONDS: u64 = 14_400;
 
 /// The exit code of the improve launcher when the round's login has less access-token life than
@@ -1070,6 +1071,16 @@ pub trait BackendLifecycle: Send + Sync {
   /// earliest login recovers. `None` for a backend type with no login pool.
   fn quota_outlook(&self, _option: &BackendOption, _cfg: &CharlieBotConfig) -> anyhow::Result<Option<QuotaOutlook>> {
     Ok(None)
+  }
+
+  /// The account directory for one resolved run of `option`, when the backend type picks among configured logins.
+  /// `Ok(Ok(None))` when the option needs none; `Ok(Err(reason))` when no login is usable.
+  fn resolve_account_dir(
+    &self,
+    _option: &BackendOption,
+    _cfg: &CharlieBotConfig,
+  ) -> anyhow::Result<Result<Option<String>, String>> {
+    Ok(Ok(None))
   }
 
   /// The hold the login that a recovered run's process already uses takes for that run, read from the process's

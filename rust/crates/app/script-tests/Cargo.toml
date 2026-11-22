@@ -25,6 +25,11 @@ path = "src/bin/fake_charliebot.rs"
 name = "serve-stub"
 path = "src/bin/serve_stub.rs"
 
+# The stand-in holder of a serve trial's port that `ss -p` cannot name: non-dumpable, so its fd table is unreadable.
+[[bin]]
+name = "port-holder"
+path = "src/bin/port_holder.rs"
+
 [dependencies]
 charliebot-cli-common.workspace = true
 charliebot-core.workspace = true
@@ -45,4 +50,5 @@ chrono.workspace = true
 nix.workspace = true
 sha1.workspace = true
 sha2.workspace = true
+tempfile.workspace = true
 uuid.workspace = true

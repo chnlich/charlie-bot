@@ -388,6 +388,8 @@ pub fn rotation_pools(members: Vec<String>) -> (Vec<PoolConfig>, CallsConfig) {
   if members.is_empty() {
     return (Vec::new(), CallsConfig::default());
   }
+  // A new session takes the first member, which `backends.calls.new_session` names here.
+  let first = members[0].clone();
   let pools = vec![PoolConfig {
     id: ROTATION_POOL_ID.to_string(),
     label: "Pool".to_string(),
@@ -395,7 +397,7 @@ pub fn rotation_pools(members: Vec<String>) -> (Vec<PoolConfig>, CallsConfig) {
     members: members.into_iter().map(|backend| PoolMember { backend }).collect(),
     visible: true,
   }];
-  let calls = [
+  let mut calls: Vec<(CallClass, CallTarget)> = [
     CallClass::Worker,
     CallClass::Improve,
     CallClass::Verify,
@@ -408,7 +410,8 @@ pub fn rotation_pools(members: Vec<String>) -> (Vec<PoolConfig>, CallsConfig) {
   .map(|class| (class, CallTarget::Backend(ROTATION_POOL_ID.to_string())))
   .into_iter()
   .collect();
-  (pools, calls)
+  calls.push((CallClass::NewSession, CallTarget::Backend(first)));
+  (pools, calls.into_iter().collect())
 }
 
 fn config(home: &Path, options: Vec<BackendOption>, pool: Vec<String>, min_free_disk_gib: i64) -> CharlieBotConfig {

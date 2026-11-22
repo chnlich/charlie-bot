@@ -17,8 +17,9 @@ use charliebot_cli_common::json_out;
 
 /// The subcommand vocabulary, sorted: every registered command with a
 /// caller. A caller-less name is an unknown name here.
-const COMMANDS: [&str; 34] = [
+const COMMANDS: [&str; 35] = [
   "artifact",
+  "backend",
   "backup",
   "compaction-context",
   "config",
@@ -103,6 +104,7 @@ fn run_subcommand(
 ) -> Result<(), charliebot_cli_common::exit::CliExit> {
   match subcommand {
     "artifact" => charliebot_artifacts::cli::artifact::main(args, host),
+    "backend" => commands::backend::main(args, host),
     "backup" => commands::backup::main(args, host),
     "compaction-context" => commands::compaction_context::main(args),
     "config" => commands::config::main(args),

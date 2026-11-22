@@ -638,3 +638,37 @@ async fn a_keyed_round_refuses_a_member_kind_the_launcher_refuses() {
 
   assert!(crate::rounds::parse_member_kinds("  \n\n").is_err(), "an empty kind list is an error");
 }
+
+/// A round's review runs on the `improve_review` call's backend on the improve host, so a member of that call with no
+/// launcher kind refuses a round that the task's own backend would take.
+#[test]
+fn an_improve_review_member_without_a_launcher_kind_refuses_an_improve_host_round() {
+  use charliebot_core::config::{ConfigSchema, load_config};
+
+  let home = tempfile::tempdir().unwrap();
+  std::fs::write(
+    home.path().join("config.yaml"),
+    concat!(
+      "backends:\n",
+      "  options:\n",
+      "    - {id: claude, label: C, type: cc-claude, model: m}\n",
+      "    - {id: gem, label: G, type: gemini, model: m}\n",
+      "  calls:\n",
+      "    improve_review: gem\n",
+    ),
+  )
+  .unwrap();
+  let schema =
+    ConfigSchema { sections: Vec::new(), legacy_keys: Vec::new(), backend_types: vec!["cc-claude", "gemini"] };
+  let cfg = load_config(home.path(), &schema).unwrap();
+
+  assert_eq!(
+    crate::rounds::session_backend_refusal(&cfg, "claude", false).unwrap(),
+    None,
+    "an unkeyed task is not checked"
+  );
+  for backend in ["claude", "gem"] {
+    let refusal = crate::rounds::session_backend_refusal(&cfg, backend, true).unwrap().expect("refused");
+    assert!(refusal.contains("backend 'gem' (type 'gemini')"), "{backend}: {refusal}");
+  }
+}

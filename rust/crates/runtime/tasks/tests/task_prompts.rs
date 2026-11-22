@@ -15,7 +15,9 @@ use charliebot_core::config::{
   BackendOption, BackendsConfig, CharlieBotConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig,
 };
 use charliebot_registry::Registry;
-use charliebot_store::metadata::{ColdReadSpec, SessionMetadata, TaskProfile, TaskSpec, TaskType, UtcDateTime};
+use charliebot_store::metadata::{
+  ColdReadSpec, SessionMetadata, TaskApprover, TaskProfile, TaskSpec, TaskType, UtcDateTime,
+};
 use charliebot_store::{
   AccountLabelKeeper, AnchorFieldReconciler, CreateTask, EmptyRuntimeEventHooks, PatchTask, RunRecord,
   SequenceArchiveHook, SequenceBindingMover, SequenceListingFields, Store, StoreHookFuture, StoreHooks, StoreResult,
@@ -263,7 +265,16 @@ impl Harness {
 }
 
 fn worker_task(goal: &str, repo_path: Option<&str>) -> TaskSpec {
-  TaskSpec { goal: goal.to_string(), repo_path: repo_path.map(String::from), ..TaskSpec::default() }
+  TaskSpec {
+    goal: goal.to_string(),
+    repo_path: repo_path.map(String::from),
+    base_branch: None,
+    task_type: None,
+    keep_worktree: false,
+    cold_read: None,
+    approver: TaskApprover::User,
+    improve_host: None,
+  }
 }
 
 fn sources_of(snapshot: &PromptSnapshot) -> Vec<(String, String, Option<String>)> {
@@ -387,7 +398,16 @@ async fn verify_task_gets_the_verify_contract() {
       "verify-leaf",
       Some(&tree.low),
       TaskProfile::Worker,
-      Some(TaskSpec { goal: "verify goal".to_string(), task_type: Some(TaskType::Verify), ..TaskSpec::default() }),
+      Some(TaskSpec {
+        goal: "verify goal".to_string(),
+        repo_path: None,
+        base_branch: None,
+        task_type: Some(TaskType::Verify),
+        keep_worktree: false,
+        cold_read: None,
+        approver: TaskApprover::User,
+        improve_host: None,
+      }),
       "V",
     )
     .await;
@@ -400,7 +420,16 @@ async fn verify_task_gets_the_verify_contract() {
 fn type_less_task_renders_the_implement_contract() {
   assert_eq!(prompt_task_type(None), TaskType::Implement);
   assert_eq!(prompt_task_type(Some(&worker_task("sweep", None))), TaskType::Implement);
-  let quick = TaskSpec { goal: "bump".to_string(), task_type: Some(TaskType::QuickEdit), ..TaskSpec::default() };
+  let quick = TaskSpec {
+    goal: "bump".to_string(),
+    repo_path: None,
+    base_branch: None,
+    task_type: Some(TaskType::QuickEdit),
+    keep_worktree: false,
+    cold_read: None,
+    approver: TaskApprover::User,
+    improve_host: None,
+  };
   assert_eq!(prompt_task_type(Some(&quick)), TaskType::QuickEdit);
 }
 
@@ -411,8 +440,12 @@ fn harness_sections_and_after_run_branch_agree_on_reviewer_presence() {
   let typed = |task_type: Option<TaskType>| TaskSpec {
     goal: "goal".to_string(),
     repo_path: Some("/tmp/repo".to_string()),
+    base_branch: None,
     task_type,
-    ..TaskSpec::default()
+    keep_worktree: false,
+    cold_read: None,
+    approver: TaskApprover::User,
+    improve_host: None,
   };
   let cases: [(&str, Option<TaskSpec>, bool); 6] = [
     ("no task record", None, true),
@@ -450,8 +483,12 @@ async fn implement_work_harness_keeps_the_reviewer_stop_line() {
   let implement = TaskSpec {
     goal: "implement goal".to_string(),
     repo_path: Some("/tmp/repo-w".to_string()),
+    base_branch: None,
     task_type: Some(TaskType::Implement),
-    ..TaskSpec::default()
+    keep_worktree: false,
+    cold_read: None,
+    approver: TaskApprover::User,
+    improve_host: None,
   };
   let leaf = harness.node("w-implement", Some(&tree.low), TaskProfile::Worker, Some(implement), "WI").await;
   let snapshot = harness.snapshot_for(&leaf.id, "work").await;
@@ -551,8 +588,15 @@ async fn an_agent_reparent_keeps_each_moved_prompt_word_for_word() {
   harness.set_refs(&holder.id, Some("holder subtree rule"), None).await;
   harness.set_refs(&leaf.id, Some("leaf subtree rule"), Some("leaf node rule")).await;
   let agent = || TaskCaller::Agent { session_id: caller.id.clone() };
-  let move_under =
-    |parent: &SessionMetadata| PatchTask { task_parent_id: Some(Some(parent.id.clone())), ..PatchTask::default() };
+  let move_under = |parent: &SessionMetadata| PatchTask {
+    name: None,
+    task_parent_id: Some(Some(parent.id.clone())),
+    profile: None,
+    task: None,
+    subtree_prompt: None,
+    node_prompt: None,
+    approver: None,
+  };
 
   let moved_before = harness.snapshot_for(&moved.id, "manager_turn").await;
   let leaf_before = harness.snapshot_for(&leaf.id, "work").await;
@@ -699,13 +743,17 @@ fn goal_block_text(snapshot: &PromptSnapshot) -> Option<String> {
 fn cold_read_task() -> TaskSpec {
   TaskSpec {
     goal: "read the synthetic page".to_string(),
+    repo_path: None,
+    base_branch: None,
     task_type: Some(TaskType::ColdRead),
+    keep_worktree: false,
     cold_read: Some(ColdReadSpec {
       page_path: "/synthetic/page.html".to_string(),
       genre: "synthetic".to_string(),
       trigger: "synthetic trigger".to_string(),
     }),
-    ..TaskSpec::default()
+    approver: TaskApprover::User,
+    improve_host: None,
   }
 }
 

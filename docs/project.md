@@ -200,7 +200,7 @@ A local git repo at `$CHARLIEBOT_HOME/memory/` holds one durable fact or rule se
 1. User presses/clicks button to start recording
 2. Presses/clicks again to stop and send
 3. Audio uploaded to backend
-4. **Online transcription** sends the complete recording through the selected backend (`gemini` or `muse`; `voice.default_backend` when the request names none). No speech model runs on the server.
+4. **Online transcription** sends the complete recording through the selected backend (`gemini` or `muse`; `voice.default_backend` when the request names none). Each protocol's model, endpoint and credential come from its `voice.backends.<id>` entry. No speech model runs on the server.
 5. Transcription displayed in UI first
 6. Passed to Master with a note: the displayed message stays verbatim, the web client sends the message with `input_mode: "voice"`, and the voice package's turn contribution (`rust/crates/features/voice/src/lib.rs`) opens the prompt's copy of the message with the fixed voice note (`VOICE_NOTE`)
 
@@ -232,7 +232,7 @@ A raw log that stops growing while the process is still alive is what the server
 
 ### 9.1 Model Fallback
 - Multiple backends configured via `backends.options` in `config.yaml` (see that file for the current list)
-- `backends.calls` names the option or pool that each internal call class runs on (worker, improve, verify, review, cold_read, probe, autoname, triage, thread, new_session); a pool id takes the next selectable member under the pool's rule, and a member whose quota runs out cools until its reset, or 30 minutes when none is named, and a worker interrupted by quota continues on the next member (`rust/crates/runtime/agents/src/backend_pool.rs`)
+- `backends.calls` names the option or pool that each internal call class runs on (worker, improve, verify, review, cold_read, probe, autoname, triage, thread, new_session, improve_review, compaction, web_search, judge); a pool id takes the next selectable member under the pool's rule, and a member whose quota runs out cools until its reset, or 30 minutes when none is named, and a worker interrupted by quota continues on the next member (`rust/crates/runtime/agents/src/backend_pool.rs`). The four call classes added last take a fixed shape, checked at load: `improve_review` takes an option or a pool, `compaction` one cc-claude option, `web_search` and `judge` one option with an `api_base` and a `credential`, and `judge` never a pool. An unset key is not a fallback: each caller refuses and names the key. `charliebot backend resolve --call <class>|--backend <id>` prints the option the server picks, without its key, and `charliebot backend run` runs that option once in the current directory (`rust/crates/runtime/agents/src/call_resolve.rs`, `rust/crates/runtime/agents/src/backend_run.rs`)
 - Failed reviewers stay excluded from retries for the same work run; review is blocked only when no candidate backend is selectable
 
 ### 9.2 Rebase Conflict Handling

@@ -21,7 +21,7 @@ use charliebot_core::config::BackendOption;
 use charliebot_core::event_types;
 use charliebot_registry::context::{FeatureContext, StartupState};
 use charliebot_store::metadata::{
-  ColdReadSpec, SessionMetadata, SessionStatus, TaskProfile, TaskSpec, TaskType, UtcDateTime,
+  ColdReadSpec, SessionMetadata, SessionStatus, TaskApprover, TaskProfile, TaskSpec, TaskType, UtcDateTime,
 };
 use charliebot_store::run_records::{self, RunKind, RunOutcome, RunOutcomeKind, RunRecord, SequenceRef};
 use charliebot_store::{ChatEvent, CreateTask, StoreError, StoreResult, TaskCaller};
@@ -192,7 +192,16 @@ async fn typed_child(harness: &Harness, parent: &str, task_type: TaskType) -> Se
     genre: "plan".to_string(),
     trigger: "t".to_string(),
   });
-  let task = TaskSpec { goal: "check it".to_string(), task_type: Some(task_type), cold_read, ..TaskSpec::default() };
+  let task = TaskSpec {
+    goal: "check it".to_string(),
+    repo_path: None,
+    base_branch: None,
+    task_type: Some(task_type),
+    keep_worktree: false,
+    cold_read,
+    approver: TaskApprover::User,
+    improve_host: None,
+  };
   harness
     .store
     .create_task(

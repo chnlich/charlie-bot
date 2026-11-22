@@ -563,11 +563,13 @@ impl RunProcess for TurnProcess<'_> {
           extra_flags,
           buffer_limit: Some(subprocess_buffer_bytes(&self.item.cfg)?),
           instructions_content: self.item.task_instructions.clone(),
+          instructions_file: None,
           resume_session_id,
           log_dir: Some(self.log_dir.clone()),
           cgroup_session_id: Some(metadata.id.clone()),
+          remote_launch: None,
+          backend_kwargs: Map::new(),
           manager_turn: true,
-          ..LaunchArgs::default()
         };
         launch_args.backend_kwargs = launch
           .backend_kwargs
@@ -1490,16 +1492,18 @@ mod tests {
       extra_flags,
       buffer_limit: Some(subprocess_buffer_bytes(&cfg).unwrap()),
       instructions_content: item.task_instructions.clone(),
+      instructions_file: None,
       resume_session_id,
       log_dir: Some(root.path().join("run")),
       cgroup_session_id: Some(meta.id.clone()),
+      remote_launch: None,
       backend_kwargs: launch
         .backend_kwargs
         .iter()
         .filter(|(key, _)| key.as_str() != "extra_flags")
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect(),
-      ..LaunchArgs::default()
+      manager_turn: false,
     };
     let turn = backend_types::build_backend(Arc::clone(&features.registry), &option, &cfg, launch_args).unwrap();
     let expected = turn.backend.build_command(&item.user_content).unwrap();

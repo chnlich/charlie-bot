@@ -162,7 +162,8 @@ fn evidence(summary: &str, result_refs: &[&str], run_ids: &[&str]) -> Completion
     summary: summary.to_string(),
     result_refs: result_refs.iter().map(|value| (*value).to_string()).collect(),
     run_ids: run_ids.iter().map(|value| (*value).to_string()).collect(),
-    ..CompletionEvidence::default()
+    review_run_ids: Vec::new(),
+    landing: None,
   }
 }
 
@@ -472,7 +473,10 @@ async fn implement_completion_requires_review_and_landing_evidence() {
         repo_path: Some(repo.to_string_lossy().into_owned()),
         base_branch: Some("main".into()),
         task_type: Some(TaskType::Implement),
-        ..TaskSpec::default()
+        keep_worktree: false,
+        cold_read: None,
+        approver: TaskApprover::User,
+        improve_host: None,
       },
     )
     .await;
@@ -537,7 +541,10 @@ async fn worker_automatic_close_with_forged_landing_ref_stays_open() {
         repo_path: Some(repo.to_string_lossy().into_owned()),
         base_branch: Some("main".into()),
         task_type: Some(TaskType::Implement),
-        ..TaskSpec::default()
+        keep_worktree: false,
+        cold_read: None,
+        approver: TaskApprover::User,
+        improve_host: None,
       },
     )
     .await;
@@ -1049,8 +1056,13 @@ async fn open_manager_chain_creates_workers_without_user_input_at_any_depth() {
     TaskProfile::Worker,
     Some(TaskSpec {
       goal: "synthetic implementation".into(),
+      repo_path: None,
+      base_branch: None,
       task_type: Some(TaskType::Implement),
-      ..TaskSpec::default()
+      keep_worktree: false,
+      cold_read: None,
+      approver: TaskApprover::User,
+      improve_host: None,
     }),
   );
   let worker = h
@@ -1079,8 +1091,13 @@ async fn queued_retry_launch_skips_parent_reauthorization_when_root_closes() {
         TaskProfile::Worker,
         Some(TaskSpec {
           goal: "synthetic implementation".into(),
+          repo_path: None,
+          base_branch: None,
           task_type: Some(TaskType::Implement),
-          ..TaskSpec::default()
+          keep_worktree: false,
+          cold_read: None,
+          approver: TaskApprover::User,
+          improve_host: None,
         }),
       ),
       TaskCaller::Agent { session_id: root.id.clone() },
@@ -1159,8 +1176,13 @@ async fn queued_retry_launch_skips_parent_reauthorization_when_root_closes() {
         TaskProfile::Worker,
         Some(TaskSpec {
           goal: "synthetic verification".into(),
+          repo_path: None,
+          base_branch: None,
           task_type: Some(TaskType::Verify),
-          ..TaskSpec::default()
+          keep_worktree: false,
+          cold_read: None,
+          approver: TaskApprover::User,
+          improve_host: None,
         }),
       ),
       TaskCaller::Agent { session_id: verify_root.id.clone() },
@@ -2232,7 +2254,16 @@ async fn parent_approved_and_thread_sessions_close_at_run_end_without_a_view() {
       Some(&root.id),
       TaskProfile::Manager,
       "Parent approved",
-      TaskSpec { approver: TaskApprover::Parent, ..TaskSpec::default() },
+      TaskSpec {
+        goal: String::new(),
+        repo_path: None,
+        base_branch: None,
+        task_type: None,
+        keep_worktree: false,
+        cold_read: None,
+        approver: TaskApprover::Parent,
+        improve_host: None,
+      },
     )
     .await;
   let slack_thread = h
@@ -2296,7 +2327,16 @@ async fn automatic_completion_of_a_closed_task_refuses_without_building_the_task
       None,
       TaskProfile::Worker,
       "Closed worker",
-      TaskSpec { task_type: Some(TaskType::QuickEdit), ..TaskSpec::default() },
+      TaskSpec {
+        goal: String::new(),
+        repo_path: None,
+        base_branch: None,
+        task_type: Some(TaskType::QuickEdit),
+        keep_worktree: false,
+        cold_read: None,
+        approver: TaskApprover::User,
+        improve_host: None,
+      },
     )
     .await;
   h.register_record(new_run(&task.id, "work-run")).await;

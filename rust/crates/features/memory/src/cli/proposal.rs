@@ -114,7 +114,11 @@ fn run_proposal(memory_dir: &Path, command: ProposalCommand) -> ProposalResult<O
     ProposalCommand::Status => status(memory_dir).map(Output::from_fields),
     ProposalCommand::Commit(args) => {
       let committed = commit(memory_dir, &args.path, &args.message_file, args.replace_pr_lines)?;
-      Ok(Output { warnings: committed.warnings, fields: vec![("committed".to_string(), committed.sha)] })
+      let mut fields = vec![("committed".to_string(), committed.sha)];
+      if let Some(body_lines) = committed.body_lines {
+        fields.push(("body_lines".to_string(), body_lines.to_string()));
+      }
+      Ok(Output { warnings: committed.warnings, fields })
     }
     ProposalCommand::Land(args) => land(memory_dir, &args.sha).map(Output::from_fields),
   }
@@ -302,10 +306,11 @@ fn status(memory_dir: &Path) -> ProposalResult<Vec<(String, String)>> {
 /// A multiset of lines: each distinct line with its occurrence count.
 type LineCounts = BTreeMap<String, usize>;
 
-/// The result of one commit: the new head SHA and the negation warnings the committed text drew.
+/// The new head SHA, negation warnings, and body line count of a committed entry.
 struct Committed {
   sha: String,
   warnings: Vec<String>,
+  body_lines: Option<usize>,
 }
 
 /// The store path `path` names, as components. An absolute path, an empty one, or one that escapes the store is a
@@ -364,10 +369,6 @@ fn non_blank_counts(text: &str) -> LineCounts {
   line_counts(text.split('\n').filter(|line| !str_methods::strip(line).is_empty()))
 }
 
-fn body_counts(text: &str) -> LineCounts {
-  line_counts(store::entry_body(text))
-}
-
 /// The multiset difference `left - right`: each line keeps the occurrences that `right` does not cover.
 fn counts_minus(left: &LineCounts, right: &LineCounts) -> LineCounts {
   left
@@ -377,11 +378,6 @@ fn counts_minus(left: &LineCounts, right: &LineCounts) -> LineCounts {
       (remaining > 0).then(|| (line.clone(), remaining))
     })
     .collect()
-}
-
-/// Whether every line occurs in `right` at least as often as in `left`.
-fn counts_within(left: &LineCounts, right: &LineCounts) -> bool {
-  left.iter().all(|(line, count)| right.get(line).copied().unwrap_or_default() >= *count)
 }
 
 /// Each line repeated by its count, in sorted line order.
@@ -422,20 +418,23 @@ fn commit(memory_dir: &Path, path: &str, message_file: &Path, replace_pr_lines: 
     )));
   }
   let mut warnings = Vec::new();
+  let mut body_lines = None;
   if let Some(text) = current_text.as_deref()
     && relative.as_path() != Path::new(TOPICS_FILENAME)
   {
     let base_text = rev_text(memory_dir, &base, path)?;
-    let head_body = rev_text(memory_dir, PROPOSAL_BRANCH, path)?.as_deref().map(body_counts).unwrap_or_default();
-    // A pure deletion skips the body line limit: the worktree's body lines sit inside the proposal head's, so the
-    // commit adds no body line. A new file has no head version, so it never skips.
-    let pure_deletion = counts_within(&body_counts(text), &head_body);
-    let violations = proposal_check::prose_violations(text, base_text.as_deref(), pure_deletion);
+    let violations = proposal_check::prose_violations(text, base_text.as_deref());
     if !violations.is_empty() {
       let listed: Vec<String> = violations.iter().map(|violation| format!("  {violation}")).collect();
       return Err(ProposalError::Refusal(format!("{path}: prose check failed:\n{}", listed.join("\n"))));
     }
     warnings = proposal_check::negation_warnings(text, base_text.as_deref());
+    if relative.starts_with("entries")
+      && relative.components().count() == 3
+      && relative.extension().is_some_and(|extension| extension == "md")
+    {
+      body_lines = Some(store::entry_body(text).len());
+    }
   }
   let scratch = tempfile::tempdir()
     .map_err(|error| ProposalError::Cli(CliExit::error(format!("create the commit message directory: {error}"))))?;
@@ -473,7 +472,7 @@ fn commit(memory_dir: &Path, path: &str, message_file: &Path, replace_pr_lines: 
     return Err(ProposalError::Refusal(format!("committing {path} failed: {}", committing.stderr.trim())));
   }
   let sha = git(&worktree, &["rev-parse", "HEAD"])?;
-  Ok(Committed { sha: sha.trim().to_string(), warnings })
+  Ok(Committed { sha: sha.trim().to_string(), warnings, body_lines })
 }
 
 fn land(memory_dir: &Path, sha: &str) -> ProposalResult<Vec<(String, String)>> {

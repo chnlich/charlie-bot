@@ -241,7 +241,7 @@ impl GatedHome {
 
 pub(crate) fn feature_context() -> (GatedHome, Arc<FeatureContext>) {
   feature_context_with_config(
-    "backends:\n  options:\n    - {id: synthetic-a, label: Synthetic A, type: synthetic, model: model-a}\n    - {id: synthetic-b, label: Synthetic B, type: synthetic, model: model-b}\n",
+    "backends:\n  options:\n    - {id: synthetic-a, label: Synthetic A, type: synthetic, model: model-a}\n    - {id: synthetic-b, label: Synthetic B, type: synthetic, model: model-b}\n  calls:\n    new_session: synthetic-a\n",
   )
 }
 

@@ -11,6 +11,7 @@ use axum::body::Body;
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
+use charliebot_agents::model_pool::MISSING_BACKEND_OPTION;
 use charliebot_agents::pool_display::{session_detail_shown, session_metadata_shown};
 use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, RequestBody};
 use charliebot_compat::{responses, validation};
@@ -239,8 +240,7 @@ async fn create(
       return Err(store_error(StoreError::invalid(TASK_CREATE_REQUEST_ID_REQUIRED)));
     };
     if let Some(requested) = fields.backend.as_deref() {
-      resolve_requested_backend(Some(requested), &cfg, &features.registry, &default_backend_id(&cfg))
-        .map_err(store_error)?;
+      resolve_requested_backend(Some(requested), &cfg, &features.registry, None).map_err(store_error)?;
     }
     let profile = match fields.profile {
       Some(profile) => profile,
@@ -277,9 +277,13 @@ async fn create(
   if !caller.is_operator() {
     return Err(store_error(StoreError::forbidden(AGENT_CREATE_SCOPE_REFUSAL)));
   }
-  let backend =
-    resolve_requested_backend(fields.backend.as_deref(), &cfg, &features.registry, &default_backend_id(&cfg))
-      .map_err(store_error)?;
+  let backend = resolve_requested_backend(
+    fields.backend.as_deref(),
+    &cfg,
+    &features.registry,
+    cfg.backends.new_session_backend().as_deref(),
+  )
+  .map_err(store_error)?;
   tracing::info!(target: LOG_TARGET, backend = %backend, name = ?fields.name, "creating_session");
   let request = CreateTask {
     request_id: format!("operator-create-{}", uuid::Uuid::new_v4()),
@@ -372,7 +376,11 @@ async fn switch(
   {
     return Err(store_error(StoreError::invalid(reason)));
   }
-  let effective = if parent.backend.is_empty() { default_backend_id(&cfg) } else { parent.backend.clone() };
+  let effective = if parent.backend.is_empty() {
+    cfg.backends.new_session_backend().ok_or_else(|| store_error(StoreError::invalid(MISSING_BACKEND_OPTION)))?
+  } else {
+    parent.backend.clone()
+  };
   if target == effective {
     return Ok(parent);
   }
@@ -492,18 +500,14 @@ pub(crate) fn config(features: &FeatureContext) -> Result<Arc<CharlieBotConfig>,
   features.config.get().map_err(|error| responses::internal_error("RuntimeError", error.to_string()))
 }
 
-/// The backend a session takes when its request names none (`BackendsConfig::new_session_backend`), else `claude`.
-pub(crate) fn default_backend_id(cfg: &CharlieBotConfig) -> String {
-  cfg.backends.new_session_backend().unwrap_or_else(|| "claude".to_string())
-}
-
 /// `_resolve_requested_backend`: a configured id, a family-prefix alias (the first option of that type), or, when no
-/// id was given, the fallback backend. Check the normalized id through `BackendsConfig`.
+/// id was given, the fallback backend. A request that names no id and gives no fallback is refused with
+/// `MISSING_BACKEND_OPTION`. Check the normalized id through `BackendsConfig`.
 pub(crate) fn resolve_requested_backend(
   requested: Option<&str>,
   cfg: &CharlieBotConfig,
   registry: &Registry,
-  fallback_backend: &str,
+  fallback_backend: Option<&str>,
 ) -> StoreResult<String> {
   if let Some(requested) = requested {
     let backend_id = match cfg.backends.check_backend_id(requested) {
@@ -524,6 +528,7 @@ pub(crate) fn resolve_requested_backend(
     tracing::info!(target: LOG_TARGET, backend = %backend_id, "using_requested_backend");
     return Ok(backend_id);
   }
+  let fallback_backend = fallback_backend.ok_or_else(|| StoreError::invalid(MISSING_BACKEND_OPTION))?;
   cfg.backends.check_backend_id(fallback_backend).map_err(StoreError::invalid)?;
   tracing::info!(target: LOG_TARGET, fallback = fallback_backend, "using_fallback_backend");
   Ok(fallback_backend.to_string())
@@ -1189,6 +1194,19 @@ backends:
 
     assert_eq!(status, StatusCode::OK, "{created}");
     assert_eq!(created["backend"], "synthetic-b");
+  }
+
+  #[tokio::test]
+  async fn create_without_a_new_session_target_is_refused_with_missing_backend_option() {
+    let (_home, features) = feature_context_with_config(
+      "backends:\n  options:\n    - {id: synthetic-a, label: Synthetic A, type: synthetic, model: model-a}\n",
+    );
+    let (headers, body) = json_request(json!({"name": "Synthetic root"}));
+
+    let (status, refused) = answer(create_session(State(features.clone()), headers, body).await).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["detail"], MISSING_BACKEND_OPTION);
   }
 
   #[tokio::test]

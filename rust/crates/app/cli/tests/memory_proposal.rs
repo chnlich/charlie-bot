@@ -855,7 +855,7 @@ fn test_commit_keeps_the_lead_apart_from_the_first_bullet() {
 
 #[test]
 #[ignore = "integration"]
-fn test_commit_refuses_a_body_grown_past_12_lines() {
+fn test_commit_reports_a_grown_body() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
   let relative = "entries/profile/grown.md";
@@ -866,14 +866,63 @@ fn test_commit_refuses_a_body_grown_past_12_lines() {
   let worktree = Sandbox::proposal_worktree(&store);
   write_file(&worktree.join(relative), &format!("{base_text}- New line one stands.\n- New line two stands.\n"));
   let result = sandbox.commit(relative, "grow", &[]);
-  assert_eq!(result.code, 1);
-  assert!(result.stderr.contains("body has 13 lines (limit 12)"), "{}", result.stderr);
-  assert_eq!(sandbox.pr_commit_count(&store), 0);
+  assert_eq!(result.code, 0, "{}", result.stderr);
+  assert!(!result.stderr.contains("prose check failed:"), "{}", result.stderr);
+  assert_eq!(field(&fields(&result.stdout), "body_lines"), "13");
+  assert_eq!(field(&fields(&result.stdout), "committed"), sandbox.git(&store, &["rev-parse", "proposal"]));
+  assert_eq!(sandbox.pr_commit_count(&store), 1);
 }
 
 #[test]
 #[ignore = "integration"]
-fn test_commit_refuses_a_15_line_body_that_stays_at_15_lines() {
+fn test_commit_and_lint_report_a_new_long_body() {
+  let sandbox = Sandbox::new();
+  let store = sandbox.build_store();
+  sandbox.run_cli(&["proposal", "open"]);
+  let relative = "entries/profile/long-body.md";
+  let worktree = Sandbox::proposal_worktree(&store);
+  write_file(&worktree.join(relative), &Sandbox::entry_text("long-body", &format!("\n{}\n", body_lines(20))));
+  let result = sandbox.commit(relative, "admit", &[]);
+  assert_eq!(result.code, 0, "{}", result.stderr);
+  assert!(!result.stderr.contains("prose check failed:"), "{}", result.stderr);
+  assert_eq!(field(&fields(&result.stdout), "body_lines"), "20");
+  assert_eq!(field(&fields(&result.stdout), "committed"), sandbox.git(&store, &["rev-parse", "proposal"]));
+  assert_eq!(sandbox.pr_commit_count(&store), 1);
+
+  let result = sandbox.run_cli(&["lint", "--dir", worktree.to_str().unwrap()]);
+  assert_eq!(result.code, 0, "{}", result.stderr);
+  assert_eq!(result.stdout, "clean\n");
+  assert!(result.stderr.contains("body_lines: 2 entries, max 20 (entries/profile/long-body.md)"), "{}", result.stderr);
+
+  let head = sandbox.git(&store, &["rev-parse", "proposal"]);
+  let result = sandbox.run_cli(&["proposal", "land", &head]);
+  assert_eq!(result.code, 0, "{}", result.stderr);
+  assert_eq!(sandbox.git(&store, &["rev-parse", "HEAD"]), head);
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_commit_omits_body_lines_for_topics_and_deleted_entries() {
+  let sandbox = Sandbox::new();
+  let store = sandbox.build_store();
+  sandbox.run_cli(&["proposal", "open"]);
+  let worktree = Sandbox::proposal_worktree(&store);
+  write_file(&worktree.join("topics"), &format!("{MEMORY_TOPICS}extra\n"));
+  let result = sandbox.commit("topics", "add topic", &[]);
+  assert_eq!(result.code, 0, "{}", result.stderr);
+  assert!(!fields(&result.stdout).iter().any(|(name, _)| name == "body_lines"));
+
+  let relative = "entries/profile/dark-mode.md";
+  fs::remove_file(worktree.join(relative)).expect("the entry is removed from the worktree");
+  let result = sandbox.commit(relative, "delete", &[]);
+  assert_eq!(result.code, 0, "{}", result.stderr);
+  assert!(!fields(&result.stdout).iter().any(|(name, _)| name == "body_lines"));
+  assert_eq!(sandbox.pr_commit_count(&store), 2);
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_commit_reports_a_rewritten_long_body() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
   let relative = "entries/profile/rewritten-long.md";
@@ -887,10 +936,11 @@ fn test_commit_refuses_a_15_line_body_that_stays_at_15_lines() {
     &base_text.replace("- Legacy line 7 stands.\n", "- Line seven stands rewritten.\n"),
   );
   let result = sandbox.commit(relative, "rewrite", &[]);
-  assert_eq!(result.code, 1);
-  assert!(result.stderr.contains("body has 15 lines (limit 12)"), "{}", result.stderr);
-  assert!(!result.stderr.contains("Line seven stands rewritten"), "{}", result.stderr);
-  assert_eq!(sandbox.pr_commit_count(&store), 0);
+  assert_eq!(result.code, 0, "{}", result.stderr);
+  assert!(!result.stderr.contains("prose check failed:"), "{}", result.stderr);
+  assert_eq!(field(&fields(&result.stdout), "body_lines"), "15");
+  assert_eq!(field(&fields(&result.stdout), "committed"), sandbox.git(&store, &["rev-parse", "proposal"]));
+  assert_eq!(sandbox.pr_commit_count(&store), 1);
 }
 
 #[test]
@@ -1002,12 +1052,13 @@ fn test_commit_allows_a_pure_deletion_from_a_50_line_body() {
   let result = sandbox.commit(relative, "trim", &[]);
   assert_eq!(result.code, 0, "{}", result.stderr);
   assert!(!result.stderr.contains("prose check"), "{}", result.stderr);
+  assert_eq!(field(&fields(&result.stdout), "body_lines"), "49");
   assert_eq!(sandbox.pr_commit_count(&store), 1);
 }
 
 #[test]
 #[ignore = "integration"]
-fn test_commit_refuses_a_deletion_that_also_adds_a_line() {
+fn test_commit_reports_a_deletion_that_also_adds_a_line() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
   let relative = "entries/profile/swapped-line.md";
@@ -1018,9 +1069,11 @@ fn test_commit_refuses_a_deletion_that_also_adds_a_line() {
   let edited = base_text.replace("- Body line 25 stands.\n", "- The replacement line stands.\n");
   write_file(&worktree.join(relative), &edited);
   let result = sandbox.commit(relative, "swap", &[]);
-  assert_eq!(result.code, 1);
-  assert!(result.stderr.contains("body has 50 lines (limit 12)"), "{}", result.stderr);
-  assert_eq!(sandbox.pr_commit_count(&store), 0);
+  assert_eq!(result.code, 0, "{}", result.stderr);
+  assert!(!result.stderr.contains("prose check failed:"), "{}", result.stderr);
+  assert_eq!(field(&fields(&result.stdout), "body_lines"), "50");
+  assert_eq!(field(&fields(&result.stdout), "committed"), sandbox.git(&store, &["rev-parse", "proposal"]));
+  assert_eq!(sandbox.pr_commit_count(&store), 1);
 }
 
 #[test]
@@ -1037,6 +1090,7 @@ fn test_commit_allows_trimming_a_13_line_body_to_12() {
   let result = sandbox.commit(relative, "trim", &[]);
   assert_eq!(result.code, 0, "{}", result.stderr);
   assert!(!result.stderr.contains("prose check"), "{}", result.stderr);
+  assert_eq!(field(&fields(&result.stdout), "body_lines"), "12");
   assert_eq!(sandbox.pr_commit_count(&store), 1);
 }
 

@@ -11,6 +11,11 @@ set -uo pipefail
 
 REPO=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 TRIAL="$REPO/scripts/release/trial.sh"
+SOCKET_LIMIT=$(sed -n 's/^readonly SUN_PATH_LIMIT=//p' "$TRIAL")
+if [[ ! $SOCKET_LIMIT =~ ^[0-9]+$ ]]; then
+  printf 'trial.sh does not declare its socket-path limit\n' >&2
+  exit 2
+fi
 ROUND_TMPDIR=/tmp/improve-ux-tmp
 USER_ID=$(id -u)
 COMMIT=$(git -C "$REPO" rev-parse --verify --quiet 'origin/main^{commit}') \
@@ -81,9 +86,9 @@ refused_with_socket() {
   grep -F 'preflight failed' "$1" | grep -qF "$2 ($3 bytes)"
 }
 
-# under_socket_limit BYTES: a byte count was read and it is under the 108-byte sun_path size.
+# under_socket_limit BYTES: a byte count was read and it is under trial.sh's socket-path limit.
 under_socket_limit() {
-  [[ -n $1 ]] && (( $1 < 108 ))
+  [[ -n $1 ]] && (( $1 < SOCKET_LIMIT ))
 }
 
 # reached_server_start OUTPUT: the trial got past the preflight and failed at its server start, not at a refusal.
@@ -119,7 +124,7 @@ check "the default tree's Chrome singleton socket passes" passed_socket "$defaul
 chrome_line=$(grep -F "PREFLIGHT PASS socket: $chrome_socket (" "$default_out")
 chrome_bytes=${chrome_line##* (}
 chrome_bytes=${chrome_bytes%% bytes)}
-check "the Chrome singleton socket path under the trial's TMPDIR is under 108 bytes" \
+check "the Chrome singleton socket path under the trial's TMPDIR is under the socket-path limit" \
   under_socket_limit "$chrome_bytes"
 printf '      Chrome singleton socket under the trial TMPDIR: %s (%s bytes)\n' "$chrome_socket" "$chrome_bytes"
 check "the default tree and its temp root are removed when the run ends" path_is_absent "$tree"

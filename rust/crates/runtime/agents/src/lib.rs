@@ -3,7 +3,9 @@
 pub mod agent_environment;
 pub mod backend_availability;
 pub mod backend_pool;
+pub mod backend_run;
 pub mod backend_types;
+pub mod call_resolve;
 pub mod cli_base;
 pub mod cli_host;
 pub mod event_builders;

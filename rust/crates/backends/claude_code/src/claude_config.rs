@@ -36,6 +36,10 @@ pub struct ClaudeCompactionConfig {
   /// last turn.
   #[serde(default = "default_idle_tokens", deserialize_with = "positive_tokens")]
   pub idle_tokens: u64,
+  /// The model families the relay and cold-cache compactions apply to, such as `fable`. No default: an unset list
+  /// with `backends.calls.compaction` set fails the compaction and names this key.
+  #[serde(default)]
+  pub families: Option<Vec<String>>,
 }
 
 impl Default for ClaudeCompactionConfig {
@@ -44,6 +48,7 @@ impl Default for ClaudeCompactionConfig {
       relay_tokens: default_relay_tokens(),
       expired_cache_tokens: default_expired_cache_tokens(),
       idle_tokens: default_idle_tokens(),
+      families: None,
     }
   }
 }

@@ -11,7 +11,7 @@
   },
   "expect": {
     "stdout": "clean\n",
-    "stderr": "warning: entries/profile/wide-body.md: body line over 120 columns (121): - aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+    "stderr": "warning: entries/profile/wide-body.md: body line over 120 columns (121): - aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nwarning: body_lines: 1 entries, max 1 (entries/profile/wide-body.md)\n",
     "exit": 0,
     "requests": []
   }

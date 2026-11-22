@@ -5,8 +5,8 @@
 # the CPython version the local project pins, and the command. On the build host it prepares the
 # command's world and then runs it. Preparation, in order:
 #
-# - a short TMPDIR on the /dev/shm tmpfs, so tmux socket paths stay under the 108-byte sun_path
-#   limit and a test's fsync does not wait on the build host's disk;
+# - a short TMPDIR on the /dev/shm tmpfs, so release trial socket paths fit the trial's sun_path
+#   preflight and a test's fsync does not wait on the build host's disk;
 # - node_modules, when the tree has a package lockfile and no node_modules;
 # - a rust-toolchain.toml's channel with its components and targets, and its targets otherwise;
 # - the environment: the runner's cargo, uv, and node, then ~/.local/go/bin and ~/.pixi/bin;
@@ -35,8 +35,9 @@ my $CARGO_BUILD_JOBS = '4';
 # TMPDIR lives on a tmpfs, where fsync returns at once. On a disk each fsync waits for the drive's flush, and a
 # test that commits a SQLite database dozens of times then runs past the 0.1 s unit-test limit.
 # The name is <prefix><pid>-<start ticks> in hex: at most 16 bytes for pid_max 327680 and a start below 2^36
-# ticks. The path then stays within the 25 bytes that the release trial's tmux socket path leaves for TMPDIR
-# under a 6-digit uid.
+# ticks, so TMPDIR is at most 25 bytes. Under a 6-digit uid, the release trial's default tree's Chrome socket path is
+# TMPDIR + 75 bytes, and a serve test's tree root gives TMPDIR + 77 bytes. The test asserts these against trial.sh's
+# socket-path limit at a 25-byte TMPDIR.
 my $TEMP_ROOT = '/dev/shm/';
 my $TEMP_PREFIX = 'r';
 

@@ -18,6 +18,8 @@ mod ssh_config;
 mod state_file;
 mod timestamps;
 
+pub use config::check_labels;
+
 use std::sync::Arc;
 
 use charliebot_registry::pages::HomeCard;

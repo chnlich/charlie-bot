@@ -366,7 +366,7 @@ fn a_codex_member_runs_under_its_round_codex_home_with_the_forwarded_login() {
 }
 
 /// The stub improve-sandbox of the focused export checks: it records the digest of the member's gateway token and
-/// whether the review key is set, so the assertion holds no token value.
+/// whether the review key is set, so the assertion holds no token value. It also records the TMPDIR the scope exports.
 const SCOPE_ENV_STUB: &str = r#"# Fake improve-sandbox: record the digest of the gateway token, whether the review key is set, the CODEX_HOME it runs
 # with and the login file under it with that file's mode, then exit.
 {
@@ -377,6 +377,7 @@ const SCOPE_ENV_STUB: &str = r#"# Fake improve-sandbox: record the digest of the
     printf 'CHARLIE_CODE_API_KEY=unset\n'
   fi
   printf 'CODEX_HOME=%s\n' "${CODEX_HOME-unset}"
+  printf 'TMPDIR=%s\n' "${TMPDIR-unset}"
 } >"$FAKE_SCOPE_ENV"
 if [[ -n ${CODEX_HOME-} && -f $CODEX_HOME/auth.json ]]; then
   cp -- "$CODEX_HOME/auth.json" "$FAKE_SCOPE_AUTH"
@@ -396,6 +397,7 @@ exit 0
 /// The direction of the focused export checks. Its TMPDIR name no real direction's round shares.
 const FOCUS_DIRECTION: &str = "focused";
 const SYMLINK_DIRECTION: &str = "symlink_review";
+const SCOPE_TMPDIR_DIRECTION: &str = "scope_tmpdir";
 
 /// The run of the runner's `--in-scope` form alone, with the stub improve-sandbox that records the gateway
 /// variables and the Codex home. The first form exports the launch environment before it starts the scope, so the
@@ -408,10 +410,22 @@ fn run_in_scope(world: &World, launch_id: &str, kind: &str) -> harness::Run {
 
 /// [`run_in_scope`] with `extra` variables set over its environment, such as a `PATH` that names a stub.
 fn run_in_scope_with(world: &World, launch_id: &str, kind: &str, extra: &[(&str, String)]) -> harness::Run {
+  run_in_scope_for(world, launch_id, FOCUS_DIRECTION, kind, extra)
+}
+
+/// [`run_in_scope_with`] for an explicit direction, so a test that asserts on `/tmp/improve-<direction>-tmp` does not
+/// race with the `FOCUS_DIRECTION` tests.
+fn run_in_scope_for(
+  world: &World,
+  launch_id: &str,
+  direction: &str,
+  kind: &str,
+  extra: &[(&str, String)],
+) -> harness::Run {
   let launch = world.stage_launch(launch_id);
   fs::write(launch.join("args"), "").expect("the launch arguments file");
-  fs::create_dir_all(format!("/tmp/improve-{FOCUS_DIRECTION}-tmp")).expect("the round's TMPDIR");
-  fs::create_dir_all(world.remote_home.join("improve").join(FOCUS_DIRECTION)).expect("the round root");
+  fs::create_dir_all(format!("/tmp/improve-{direction}-tmp")).expect("the round's TMPDIR");
+  fs::create_dir_all(world.remote_home.join("improve").join(direction)).expect("the round root");
   let bin = world.remote_home.join("improve/runner/bin");
   fs::create_dir_all(&bin).expect("the runner bin directory");
   harness::write_executable(&bin.join("improve-sandbox"), format!("#!/usr/bin/env bash\n{SCOPE_ENV_STUB}"));
@@ -431,7 +445,7 @@ fn run_in_scope_with(world: &World, launch_id: &str, kind: &str, extra: &[(&str,
   command.arg(harness::repo_root().join("dev/improve/remote-runner.sh")).args([
     "--in-scope",
     launch_id,
-    FOCUS_DIRECTION,
+    direction,
     kind,
   ]);
   harness::run(&mut command)
@@ -459,6 +473,46 @@ fn the_in_scope_runner_exports_the_member_token_and_no_review_key() {
     .expect("the stub improve-sandbox recorded its environment");
   assert!(text.contains(&format!("ANTHROPIC_AUTH_TOKEN_SHA256={}\n", digest(FOCUSED_MEMBER_TOKEN))), "{text}");
   assert!(text.contains("CHARLIE_CODE_API_KEY=unset\n"), "the round's environment holds the review key:\n{text}");
+}
+
+/// The TMPDIR that the stub improve-sandbox of the last [`run_in_scope`] call recorded.
+fn scope_tmpdir(world: &World) -> PathBuf {
+  let text = fs::read_to_string(world.sandbox.root().join("scope-env.txt")).expect("the stub recorded its environment");
+  let tmpdir = text.lines().find_map(|line| line.strip_prefix("TMPDIR=")).expect("the stub recorded TMPDIR");
+  PathBuf::from(tmpdir)
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_scope_removes_the_directories_earlier_scopes_made_and_keeps_the_session_tmpdir() {
+  let world = World::new();
+  let session_tmpdir = PathBuf::from(format!("/tmp/improve-{SCOPE_TMPDIR_DIRECTION}-tmp"));
+  let _ = fs::remove_dir_all(&session_tmpdir);
+  fs::create_dir_all(session_tmpdir.join("session-copy")).expect("a directory that no runner made");
+  fs::write(session_tmpdir.join("session-copy/data.txt"), "session data").expect("the session copy");
+  fs::write(session_tmpdir.join("loose.txt"), "loose").expect("a loose file in the session TMPDIR");
+
+  let first = run_in_scope_for(&world, "20261101T090000Z-1-310", SCOPE_TMPDIR_DIRECTION, "claude", &[]);
+  assert_eq!(first.code, 0, "{}", first.describe());
+  let first_tmpdir = scope_tmpdir(&world);
+  assert_eq!(first_tmpdir.parent(), Some(session_tmpdir.as_path()), "{}", first_tmpdir.display());
+  fs::write(first_tmpdir.join("killed-copy.bin"), "copy").expect("the first scope's copy");
+
+  let second = run_in_scope_for(&world, "20261101T090000Z-1-311", SCOPE_TMPDIR_DIRECTION, "claude", &[]);
+  let second_tmpdir = scope_tmpdir(&world);
+  let first_exists = first_tmpdir.exists();
+  let second_is_dir = second_tmpdir.is_dir();
+  let session_copy =
+    fs::read_to_string(session_tmpdir.join("session-copy/data.txt")).expect("the session copy survived");
+  let loose = fs::read_to_string(session_tmpdir.join("loose.txt")).expect("the loose file survived");
+  let _ = fs::remove_dir_all(&session_tmpdir);
+
+  assert_eq!(second.code, 0, "{}", second.describe());
+  assert!(!first_exists, "the earlier scope's directory survived: {}", first_tmpdir.display());
+  assert!(second_is_dir, "the second scope made no TMPDIR: {}", second_tmpdir.display());
+  assert_eq!(second_tmpdir.parent(), Some(session_tmpdir.as_path()), "{}", second_tmpdir.display());
+  assert_eq!(session_copy, "session data");
+  assert_eq!(loose, "loose");
 }
 
 /// Fake charlie-code for a review that outlives its agent: it records its process id, reports its start, and stays
@@ -1356,7 +1410,8 @@ fn the_forwarded_variables_reach_the_round_and_the_run_token_and_this_hosts_conf
   assert_eq!(value("CHARLIEBOT_HOME"), Some(round_home.as_str()));
   let config_dir = format!("{remote_home}/.claude-improve");
   assert_eq!(value("CLAUDE_CONFIG_DIR"), Some(config_dir.as_str()));
-  assert_eq!(value("TMPDIR"), Some("/tmp/improve-perf-tmp"));
+  let tmpdir = value("TMPDIR").expect("the round's TMPDIR");
+  assert!(tmpdir.starts_with("/tmp/improve-perf-tmp/"), "the round's TMPDIR is not under the session TMPDIR: {tmpdir}");
   assert!(!text.contains("CHARLIEBOT_RUN_TOKEN"), "the run token reached the round:\n{text}");
   assert!(!text.contains(world::REMOTE_HOST), "a launcher setting reached the round:\n{text}");
 }

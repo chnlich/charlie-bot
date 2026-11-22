@@ -5,7 +5,7 @@
 //! trigger input that a fire queued there. Both are read from persisted state, so a restart keeps a round in flight.
 
 use charliebot_core::backend_types;
-use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::config::{CallClass, CallTarget, CharlieBotConfig};
 use charliebot_core::event_types;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::registry::{
@@ -69,8 +69,8 @@ fn member_refusal(member: &str, backend_type: &str) -> String {
 }
 
 /// Why a session on `backend` cannot take a fire or a round of a task: the id names no current option or pool id, or,
-/// for a task bound with `improve_host`, a member of the backend has no member kind the improve launcher accepts.
-/// `None` when the session can take it.
+/// for a task bound with `improve_host`, a member of the backend, or of the `improve_review` call, has no member kind
+/// the improve launcher accepts. `None` when the session can take it.
 pub(crate) fn session_backend_refusal(
   cfg: &CharlieBotConfig,
   backend: &str,
@@ -83,6 +83,19 @@ pub(crate) fn session_backend_refusal(
     return Ok(None);
   }
   let kinds = member_kinds()?;
+  if let Some(reason) = keyed_members_refusal(cfg, &kinds, backend)? {
+    return Ok(Some(reason));
+  }
+  // A round's review runs on the `improve_review` call's backend, so its members must run on the improve host too.
+  match cfg.backends.calls.get(CallClass::ImproveReview) {
+    Some(CallTarget::Backend(review)) => keyed_members_refusal(cfg, &kinds, review),
+    _ => Ok(None),
+  }
+}
+
+/// The refusal for the first member of `backend` (its pool's members, or the option itself) that has no member kind
+/// the improve launcher accepts.
+fn keyed_members_refusal(cfg: &CharlieBotConfig, kinds: &[&str], backend: &str) -> anyhow::Result<Option<String>> {
   let members = match cfg.backends.pool(backend) {
     Some(pool) => pool.members.iter().map(|member| member.backend.as_str()).collect(),
     None => vec![backend],

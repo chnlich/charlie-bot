@@ -67,5 +67,8 @@ function tabAfterSessionSwitch() {
 // ---------------------------------------------------------------------------
 function autoResize(el) {
   el.style.height = 'auto';
-  el.style.height = Math.min(Math.max(el.scrollHeight, 38), 200) + 'px';
+  // Border-box sizing counts the borders in the height, and scrollHeight leaves them out. A height of scrollHeight
+  // alone leaves the content box short by the borders, so the field shows a scrollbar even at one line.
+  const borders = el.offsetHeight - el.clientHeight;
+  el.style.height = Math.min(Math.max(el.scrollHeight + borders, 38), 200) + 'px';
 }

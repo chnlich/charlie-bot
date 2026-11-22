@@ -17,7 +17,7 @@ use charliebot_agents::backend_pool::{BackendPool, BackendRoute};
 use charliebot_core::config::{CallClass, CallTarget, CharlieBotConfig};
 use charliebot_core::event_types;
 use charliebot_registry::Registry;
-use charliebot_store::metadata::{TaskProfile, TaskSpec, TaskType, UtcDateTime};
+use charliebot_store::metadata::{TaskApprover, TaskProfile, TaskSpec, TaskType, UtcDateTime};
 use charliebot_store::run_records::{self, RunKind, RunOutcomeKind, RunRecord};
 use charliebot_store::{PatchTask, TaskCaller, control_events};
 use charliebot_tasks::completion::pause_reason;
@@ -156,7 +156,10 @@ fn edit_task(goal: &str, repo: &Path) -> TaskSpec {
     repo_path: Some(repo.to_string_lossy().into_owned()),
     base_branch: Some("main".to_string()),
     task_type: Some(TaskType::QuickEdit),
-    ..TaskSpec::default()
+    keep_worktree: false,
+    cold_read: None,
+    approver: TaskApprover::User,
+    improve_host: None,
   }
 }
 
@@ -171,7 +174,10 @@ fn implement_task(goal: &str, repo: Option<&Path>) -> TaskSpec {
     repo_path: repo.map(|path| path.to_string_lossy().into_owned()),
     base_branch: repo.map(|_| "main".to_string()),
     task_type: Some(TaskType::Implement),
-    ..TaskSpec::default()
+    keep_worktree: false,
+    cold_read: None,
+    approver: TaskApprover::User,
+    improve_host: None,
   }
 }
 
@@ -713,7 +719,10 @@ async fn repo_review_context_carries_the_delegated_spec() -> anyhow::Result<()> 
     repo_path: Some(repo.repo.to_string_lossy().into_owned()),
     base_branch: Some("main".to_string()),
     task_type: Some(TaskType::Implement),
-    ..TaskSpec::default()
+    keep_worktree: false,
+    cold_read: None,
+    approver: TaskApprover::User,
+    improve_host: None,
   };
   let worker = stack.node("worker", None, TaskProfile::Worker, Some(spec)).await?;
   let guard = ProcessGroupGuard::new();
@@ -1371,7 +1380,15 @@ async fn changed_prompt_hash_at_work_continuation_starts_a_fresh_context() -> an
     .store()
     .patch_task(
       &worker.id,
-      PatchTask { node_prompt: Some(Some("changed rule".to_string())), ..PatchTask::default() },
+      PatchTask {
+        name: None,
+        task_parent_id: None,
+        profile: None,
+        task: None,
+        subtree_prompt: None,
+        node_prompt: Some(Some("changed rule".to_string())),
+        approver: None,
+      },
       TaskCaller::Operator,
       &*stack.dispatch,
     )

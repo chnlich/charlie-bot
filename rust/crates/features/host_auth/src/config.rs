@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 pub use charliebot_core::config::{BrowserLoginConfig, HostAuthConfig};
 use charliebot_core::config::{ConfigSection, SectionValue};
+use charliebot_core::ui_text::check_label;
 use regex::Regex;
 
 /// The names a start route accepts, one URL segment without separators.
@@ -16,6 +17,18 @@ const NAME_PATTERN: &str = r"^[a-z0-9-]+$";
 /// The browser logins of the config, in config order.
 pub fn browser_logins(cfg: &charliebot_core::config::CharlieBotConfig) -> Vec<BrowserLoginConfig> {
   cfg.section::<HostAuthConfig>("host_auth").browser_logins.clone()
+}
+
+/// Refuse a browser login whose label or input prompt holds a character that product UI text rejects. The config
+/// load runs this check, so a rejected label keeps the previous config.
+pub fn check_labels(cfg: &charliebot_core::config::CharlieBotConfig) -> Result<(), String> {
+  for login in browser_logins(cfg) {
+    check_label(&format!("host_auth.browser_logins[{}].label", login.name), &login.label)?;
+    if let Some(input_prompt) = &login.input_prompt {
+      check_label(&format!("host_auth.browser_logins[{}].input_prompt", login.name), input_prompt)?;
+    }
+  }
+  Ok(())
 }
 
 /// The name of the login that renews `alias`, if one does. Validation keeps one login per host.

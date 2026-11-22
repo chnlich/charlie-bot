@@ -375,6 +375,33 @@ impl BackendOption {
     }
     Ok(self.model.clone())
   }
+
+  /// The entry as `backends.options` writes it: the shared keys, then the type's own keys. The type's keys hold a
+  /// credential's name, never its key, so the record can be printed. [`parse_backend_record`] reads it back.
+  pub fn record(&self) -> Mapping {
+    let mut record = Mapping::new();
+    record.insert("id".into(), self.id.clone().into());
+    record.insert("label".into(), self.label.clone().into());
+    record.insert("type".into(), self.backend_type.clone().into());
+    record.insert("model".into(), self.model.clone().into());
+    if let Some(overlay) = &self.prompt_overlay {
+      record.insert("prompt_overlay".into(), overlay.clone().into());
+    }
+    if let Some(billing) = self.billing {
+      record.insert("billing".into(), billing.key().into());
+    }
+    record.insert("visible".into(), self.visible.into());
+    for (key, value) in &self.type_fields {
+      record.insert(key.clone(), value.clone());
+    }
+    record
+  }
+}
+
+/// One backend entry given as a record, such as `charliebot backend resolve` prints. It is the loader's own option
+/// parse, so a record refuses for the reasons a `backends.options` entry does.
+pub fn parse_backend_record(record: &Value, backend_types: &[&str]) -> Result<BackendOption, ConfigError> {
+  parse_option("backend record", 0, record, backend_types)
 }
 
 /// `backends.routing:` section: the host command that orders unpinned backend candidates.
@@ -452,11 +479,19 @@ pub enum CallClass {
   Triage,
   Thread,
   NewSession,
+  /// The improve round's review of its pull request.
+  ImproveReview,
+  /// Session compaction; one Claude Code option.
+  Compaction,
+  /// The web search tool; one option with an endpoint and a credential.
+  WebSearch,
+  /// Week labelling and week review; one option with an endpoint and a credential, never a pool.
+  Judge,
 }
 
 impl CallClass {
   /// Every call class, in the order the `backends.calls` table lists them.
-  pub const ALL: [CallClass; 10] = [
+  pub const ALL: [CallClass; 14] = [
     CallClass::Worker,
     CallClass::Improve,
     CallClass::Verify,
@@ -467,6 +502,10 @@ impl CallClass {
     CallClass::Triage,
     CallClass::Thread,
     CallClass::NewSession,
+    CallClass::ImproveReview,
+    CallClass::Compaction,
+    CallClass::WebSearch,
+    CallClass::Judge,
   ];
 
   /// The `backends.calls` key that configures this class.
@@ -482,7 +521,16 @@ impl CallClass {
       CallClass::Triage => "triage",
       CallClass::Thread => "thread",
       CallClass::NewSession => "new_session",
+      CallClass::ImproveReview => "improve_review",
+      CallClass::Compaction => "compaction",
+      CallClass::WebSearch => "web_search",
+      CallClass::Judge => "judge",
     }
+  }
+
+  /// The class a `backends.calls` key names, or `None` when no class has that key.
+  pub fn from_key(name: &str) -> Option<CallClass> {
+    CallClass::ALL.into_iter().find(|class| class.key() == name)
   }
 
   /// Whether the key accepts `session`: the five classes a session starts and that therefore have one to name.
@@ -579,14 +627,25 @@ impl BackendsConfig {
   }
 
   /// The backend a new session takes when its request names none, the session the scheduler creates for a task
-  /// included: the `backends.calls.new_session` target, else the first `backends.options` id, else `None` when neither
-  /// is configured.
+  /// included: the `backends.calls.new_session` target, or `None` when that key is unset.
   pub fn new_session_backend(&self) -> Option<String> {
-    match self.calls.get(CallClass::NewSession) {
-      Some(CallTarget::Backend(backend_id)) => Some(backend_id.clone()),
-      Some(CallTarget::Session) => unreachable!("the config loader refuses session on backends.calls.new_session"),
-      None => self.options.first().map(|option| option.id.clone()),
-    }
+    self.calls.get(CallClass::NewSession).map(|target| match target {
+      CallTarget::Backend(backend_id) => backend_id.clone(),
+      CallTarget::Session => unreachable!("the config loader refuses session on backends.calls.new_session"),
+    })
+  }
+
+  /// The option a single-option call class names (`web_search`, `compaction`), or `None` when its key is unset. The
+  /// loader has refused a pool for these classes, so the target is always a `backends.options` id.
+  pub fn call_option(&self, class: CallClass) -> Option<&BackendOption> {
+    self.calls.get(class).map(|target| match target {
+      CallTarget::Backend(option_id) => self
+        .options
+        .iter()
+        .find(|option| &option.id == option_id)
+        .unwrap_or_else(|| unreachable!("the config loader names an option for backends.calls.{}", class.key())),
+      CallTarget::Session => unreachable!("the config loader refuses session on backends.calls.{}", class.key()),
+    })
   }
 }
 
@@ -1149,7 +1208,7 @@ fn parse_calls(
   let mut targets = HashMap::new();
   for (key, entry) in mapping {
     let name = key.as_str().map_or_else(|| yaml_key_repr(key), str::to_string);
-    let class = CallClass::ALL.into_iter().find(|class| class.key() == name).ok_or_else(|| {
+    let class = CallClass::from_key(&name).ok_or_else(|| {
       let keys = CallClass::ALL.map(CallClass::key).join(", ");
       ConfigError(format!(
         "{config_path}: invalid config key backends.calls.{name}: unknown call class; the keys are {keys}"
@@ -1171,11 +1230,45 @@ fn parse_calls(
       CallTarget::Session
     } else {
       backends.check_backend_id(text).map_err(ConfigError)?;
+      check_call_shape(config_path, class, text, backends)?;
       CallTarget::Backend(text.to_string())
     };
     targets.insert(class, target);
   }
   Ok(targets.into_iter().collect())
+}
+
+/// The shape each call class takes, checked where the key is read. `improve_review` takes an option or a pool. The
+/// other new classes take one option of the shape their call reads, so a pool id or another option type refuses the
+/// file and names the key. `id` names a configured option or pool: the caller has checked it.
+fn check_call_shape(
+  config_path: &str,
+  class: CallClass,
+  id: &str,
+  backends: &BackendsConfig,
+) -> Result<(), ConfigError> {
+  let refuse =
+    |reason: String| ConfigError(format!("{config_path}: invalid config key backends.calls.{}: {reason}", class.key()));
+  let option = backends.options.iter().find(|option| option.id == id);
+  match class {
+    CallClass::Compaction => match option {
+      Some(option) if option.backend_type == crate::backend_types::CC_CLAUDE => Ok(()),
+      Some(option) => Err(refuse(format!(
+        "'{id}' has type '{}'; compaction takes one {} option",
+        option.backend_type,
+        crate::backend_types::CC_CLAUDE
+      ))),
+      None => Err(refuse(format!("'{id}' is a pool; compaction takes one {} option", crate::backend_types::CC_CLAUDE))),
+    },
+    CallClass::WebSearch | CallClass::Judge => match option {
+      Some(option) if option.type_fields.contains_key("api_base") && option.type_fields.contains_key("credential") => {
+        Ok(())
+      }
+      Some(_) => Err(refuse(format!("'{id}' has no api_base and credential; this call takes one option with both"))),
+      None => Err(refuse(format!("'{id}' is a pool; this call takes one option, not a pool"))),
+    },
+    _ => Ok(()),
+  }
 }
 
 /// One backend entry, validated as the option model its `type` names would (`parse_option`).
@@ -1702,6 +1795,61 @@ voice: {}
       let error = load(&home_with(&format!("{TWO_OPTIONS}{fragment}"))).unwrap_err().to_string();
       assert!(error.contains(expected), "{expected}: {error}");
     }
+  }
+
+  const CALL_SHAPES: &str = concat!(
+    "backends:\n  options:\n",
+    "    - {id: claude, label: C, type: cc-claude, model: claude-sonnet-5-5}\n",
+    "    - {id: plain, label: P, type: codex, model: m}\n",
+    "    - {id: gateway, label: G, type: codex, model: m, api_base: 'https://gateway.test', credential: gw}\n",
+    "  pools:\n    - {id: pool, label: Pool, rule: rotate, members: [plain, gateway]}\n",
+  );
+
+  fn call_shape_refusal(class: &str, target: &str) -> Option<String> {
+    let home = home_with(&format!("{CALL_SHAPES}  calls:\n    {class}: {target}\n"));
+    load(&home).err().map(|error| error.to_string())
+  }
+
+  #[test]
+  fn each_new_call_class_accepts_its_shape_and_refuses_the_others_naming_its_key() {
+    for target in ["plain", "pool", "gateway"] {
+      assert_eq!(call_shape_refusal("improve_review", target), None, "improve_review takes an option or a pool");
+    }
+    assert_eq!(call_shape_refusal("compaction", "claude"), None);
+    for target in ["plain", "pool"] {
+      let error =
+        call_shape_refusal("compaction", target).expect("compaction refuses a non-cc-claude option or a pool");
+      assert!(error.contains("backends.calls.compaction"), "{error}");
+    }
+    for class in ["web_search", "judge"] {
+      assert_eq!(call_shape_refusal(class, "gateway"), None, "{class} takes an option with api_base and credential");
+      for target in ["plain", "pool"] {
+        let error = call_shape_refusal(class, target).expect("refused");
+        assert!(error.contains(&format!("backends.calls.{class}")), "{error}");
+      }
+    }
+  }
+
+  #[test]
+  fn a_call_class_key_is_read_from_its_name_and_an_unset_one_stays_unset() {
+    assert_eq!(CallClass::from_key("improve_review"), Some(CallClass::ImproveReview));
+    assert_eq!(CallClass::from_key("judge"), Some(CallClass::Judge));
+    assert_eq!(CallClass::from_key("speculate"), None);
+    let cfg = load(&home_with(&format!("{CALL_SHAPES}  calls:\n    judge: gateway\n"))).unwrap();
+    assert_eq!(cfg.backends.calls.get(CallClass::Judge), Some(&CallTarget::Backend("gateway".to_string())));
+    assert_eq!(cfg.backends.calls.get(CallClass::Compaction), None, "an unset key stays unset");
+  }
+
+  #[test]
+  fn an_option_record_parses_back_to_the_same_option_and_holds_no_key() {
+    let cfg = load(&home_with(CALL_SHAPES)).unwrap();
+    for option in &cfg.backends.options {
+      let record = Value::Mapping(option.record());
+      let parsed = parse_backend_record(&record, &["cc-claude", "codex"]).unwrap();
+      assert_eq!(&parsed, option, "{} round-trips through its record", option.id);
+    }
+    let gateway = cfg.get_backend_option("gateway").unwrap().record();
+    assert_eq!(gateway.get("credential").and_then(Value::as_str), Some("gw"), "the record names the credential");
   }
 
   #[test]

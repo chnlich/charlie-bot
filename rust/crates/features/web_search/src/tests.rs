@@ -10,6 +10,7 @@ use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use charliebot_compat::routing::post_only;
+use charliebot_core::config::{CharlieBotConfig, ConfigSchema, load_config};
 use charliebot_core::credentials::{Credentials, load_credentials};
 use charliebot_core::hot_reload::HotReload;
 use charliebot_core::web_search::MCP_PATH;
@@ -19,11 +20,12 @@ use tokio::net::TcpListener;
 use tower::ServiceExt;
 
 use super::endpoint::WebSearch;
-use super::search::SEARCH_MODEL;
 use super::{matches, mcp};
 
 const API_KEY_HEADER: &str = "x-goog-api-key";
 const CREDENTIALS: &str = "gemini:\n  api_key: synthetic-gemini-key\n";
+const SEARCH_MODEL: &str = "gemini-4-hydrogen";
+const SEARCH_OPTION: &str = "claude-code-gemini-search";
 
 /// The path Google serves `generateContent` on. The model name carries a colon, which axum's router cannot spell.
 fn generate_path() -> String {
@@ -117,8 +119,18 @@ fn credentials(yaml: &str) -> (TempDir, Arc<HotReload<Credentials>>) {
   (home, reload)
 }
 
-/// The endpoint over `fake`, answering with `credentials`.
+/// The endpoint over `fake`, answering with `credentials`, with the search option pointed at `fake`.
 fn app(credentials: Arc<HotReload<Credentials>>, fake: &FakeGoogle) -> Router {
+  let yaml = format!(
+    "backends:\n  options:\n  - {{id: {SEARCH_OPTION}, label: Search, type: cc-openai-compatible, \
+     model: {SEARCH_MODEL}, api_base: \"{}/v1beta\", credential: gemini}}\n  calls:\n    web_search: {SEARCH_OPTION}\n",
+    fake.base
+  );
+  router(config(&yaml), credentials)
+}
+
+/// The endpoint over `config` and `credentials`, with the test client.
+fn router(config: Arc<HotReload<CharlieBotConfig>>, credentials: Arc<HotReload<Credentials>>) -> Router {
   // reqwest is built with `rustls-no-provider`, and the production client supplies its provider through
   // `charliebot_compat::http_client`. This bare client installs the process provider instead.
   let _ = rustls::crypto::ring::default_provider().install_default();
@@ -129,7 +141,22 @@ fn app(credentials: Arc<HotReload<Credentials>>, fake: &FakeGoogle) -> Router {
     .expect("build the test client");
   Router::new()
     .route(MCP_PATH, post_only(mcp::post))
-    .with_state(WebSearch::new(credentials).against(&format!("{}/v1beta", fake.base), client))
+    .with_state(WebSearch::new(config, credentials).with_client(client))
+}
+
+/// A config loaded from `yaml`, served from memory: the reload reads the loaded value, not the file, which the helper
+/// has removed by the time the endpoint reads it.
+fn config(yaml: &str) -> Arc<HotReload<CharlieBotConfig>> {
+  let home = tempfile::tempdir().expect("a temporary home");
+  std::fs::write(home.path().join("config.yaml"), yaml).expect("the config file");
+  let schema =
+    ConfigSchema { sections: Vec::new(), legacy_keys: Vec::new(), backend_types: vec!["cc-openai-compatible"] };
+  let loaded = load_config(home.path(), &schema).expect("the test config loads");
+  Arc::new(HotReload::new(
+    home.path().join("config.yaml"),
+    "test_config_reload_failed",
+    Box::new(move || Ok(loaded.clone())),
+  ))
 }
 
 /// One JSON-RPC request to the endpoint.
@@ -267,6 +294,23 @@ async fn a_missing_gemini_api_key_is_a_tool_error() {
   assert_eq!(body["result"]["isError"], true);
   let text = body["result"]["content"][0]["text"].as_str().expect("the error carries text");
   assert!(text.contains("gemini.api_key"), "{text}");
+  assert!(fake.requests.lock().expect("the request list is not poisoned").is_empty());
+}
+
+#[tokio::test]
+async fn an_unset_web_search_key_is_a_tool_error_that_names_the_key() {
+  let (_home, credentials) = credentials(CREDENTIALS);
+  let fake = start_fake_google().await;
+  let (_status, body) = rpc(
+    router(config("backends:\n  options: []\n"), credentials),
+    json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
+           "params": {"name": "web_search", "arguments": {"query": "prefix-dev pixi latest release"}}}),
+  )
+  .await;
+  assert_eq!(body["result"]["isError"], true);
+  let text = body["result"]["content"][0]["text"].as_str().expect("the error carries text");
+  assert!(text.starts_with("web search is not configured"), "{text}");
+  assert!(text.contains("backends.calls.web_search"), "{text}");
   assert!(fake.requests.lock().expect("the request list is not poisoned").is_empty());
 }
 

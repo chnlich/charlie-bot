@@ -137,6 +137,11 @@ backends:
   #   triage: fast
   #   thread: human-communication
   #   new_session: claude-opus
+  #   # The four below are unset by default and each caller refuses until one is set.
+  #   improve_review: <option or pool id>   # the improve round's review, avoiding the author's member
+  #   compaction: <cc-claude option id>
+  #   web_search: <option id with api_base and credential>
+  #   judge: <option id with api_base and credential, not a pool>
   # Backends available for model switching. Editing the list REPLACES it — to
   # add a codex backend, append an entry such as:
   #   - id: codex-luna
@@ -202,6 +207,9 @@ accounts:
   claude_compaction:
     relay_tokens: 100000
     expired_cache_tokens: 50000
+    # The model families the relay and cold-cache compactions apply to. Unset with backends.calls.compaction set, the
+    # compaction fails and names this key.
+    families: [fable]
 
 # Claude Code: the backend package's own switches.
 claude_code:
@@ -211,16 +219,29 @@ claude_code:
 
 # Voice: online transcription backend selection.
 voice:
-  # Transcription backend used before a choice is made in the page's dropdown,
-  # and by the upload when a request names none: one of the transcription
-  # registry's ids (gemini, muse). The backends need credentials.yaml keys
-  # (gemini.api_key, meta.model_api_key).
+  # Backend used before a choice is made in the page's dropdown, and by the upload and the file transcription when a
+  # request names none. It is one of the protocol names below (gemini, muse); a name that is not a protocol fails the
+  # config load.
   default_backend: gemini
   # Proper-noun vocabulary passed to the backends that support it (Gemini,
   # Muse).
   vocabulary: []
   # Language hints as BCP-47 base codes (zh, en); empty = auto-detect.
   languages: []
+  # One entry per protocol, keyed by its name (gemini, muse). An entry gives the label the page shows, the model and
+  # WebSocket endpoint the session opens, and the credentials.yaml value it reads, written section.field. A protocol
+  # with no entry is listed unavailable and fails with its key named. Every field is required.
+  backends:
+    gemini:
+      label: Gemini 3.5 Transcribe Live
+      model: models/gemini-3.5-transcribe-live
+      endpoint: wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent
+      credential: gemini.api_key
+    muse:
+      label: Muse Voice Transcribe
+      model: muse-voice-transcribe-1.0
+      endpoint: wss://api.meta.ai/v1/asr/realtime
+      credential: meta.model_api_key
 
 # Code server: code-server integration.
 code_server:

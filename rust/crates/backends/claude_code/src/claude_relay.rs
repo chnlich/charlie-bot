@@ -772,6 +772,16 @@ mod tests {
     json!({"type":"rate_limit_event","rate_limit_info":{"status":"rejected"}})
   }
 
+  fn lost_login_event() -> Value {
+    json!({
+      "type":"assistant",
+      "message":{"content":[{"type":"text","text":"Failed to authenticate"}]},
+      "error":"authentication_failed",
+      "is_api_error_message":true,
+      "api_error_status":401,
+    })
+  }
+
   fn watch_for(home: &std::path::Path, keyed: bool) -> (RelayWatch, Arc<Mutex<Option<String>>>) {
     let decision = Arc::new(Mutex::new(None));
     let watch = RelayWatch::new(
@@ -850,6 +860,17 @@ mod tests {
     let home = tempfile::tempdir().unwrap();
     let (mut watch, decision) = watch_for(home.path(), true);
     assert!(!watch.observe(&rejected_event()));
+    assert!(!watch.observe(&result_event(false)));
+    assert!(!watch.wants_next(1, ""));
+    assert_eq!(decision.lock().unwrap().as_deref(), None);
+  }
+
+  /// A clean end outranks a lost login on a keyed round too: the round finished, so no login-failed decision moves it.
+  #[test]
+  fn a_keyed_round_with_a_lost_login_and_a_clean_result_is_not_decided() {
+    let home = tempfile::tempdir().unwrap();
+    let (mut watch, decision) = watch_for(home.path(), true);
+    assert!(!watch.observe(&lost_login_event()));
     assert!(!watch.observe(&result_event(false)));
     assert!(!watch.wants_next(1, ""));
     assert_eq!(decision.lock().unwrap().as_deref(), None);

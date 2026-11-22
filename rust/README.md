@@ -242,7 +242,7 @@ rust/
   `crates/app/server/src/main.rs`.
 - YAML loads as YAML 1.2 (serde_yaml): unquoted `yes`, `no`, `on` and `off` are strings.
 - Startup also loads `credentials.yaml` and the `voice:` keys the page reads, and it fails on an
-  invalid file.
+  invalid file. The voice section is checked at load: each `voice.backends` entry must be whole.
 - Package-registered config sections stay raw YAML until their packages register their sections. The page reads only
-  `voice.default_backend`.
+  `voice.default_backend` and `voice.backends`.
 - A run token whose base64 holds characters outside the base64url alphabet is refused.

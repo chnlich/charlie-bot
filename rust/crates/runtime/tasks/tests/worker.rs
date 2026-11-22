@@ -51,7 +51,9 @@ use charliebot_registry::backend::{
 use charliebot_registry::context::{FeatureContext, StartupState};
 use charliebot_registry::sequence::QuotaFailure;
 use charliebot_registry::store_hooks::store_hooks;
-use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, TaskType, ThreadMetadata, UtcDateTime};
+use charliebot_store::metadata::{
+  SessionMetadata, TaskApprover, TaskProfile, TaskSpec, TaskType, ThreadMetadata, UtcDateTime,
+};
 use charliebot_store::run_records::{RAW_LOG_NAME, RunRecord};
 use charliebot_store::{ChatEvent, CreateTask, Store, TaskCaller};
 use charliebot_tasks::auto_switch::{self, MemberSwitch};
@@ -331,6 +333,16 @@ fn rejected_result() -> Value {
     "is_error": true,
     "api_error_status": 429,
     "result": "You've hit your 5-hour limit \u{b7} resets 3:50am (America/Los_Angeles)",
+  })
+}
+
+/// The errored result Claude Code writes when the login's token is revoked: a 401 with the authentication text.
+fn auth_failed_result() -> Value {
+  json!({
+    "type": ET::RESULT,
+    "is_error": true,
+    "api_error_status": 401,
+    "result": "Failed to authenticate: OAuth token revoked.",
   })
 }
 
@@ -1082,22 +1094,38 @@ async fn test_a_resumed_worker_run_rejected_on_main_relays_to_ext1_and_completes
   Ok(())
 }
 
-/// Re-attaches a run whose task names an improve host to its live process. No login on this machine holds the run's
-/// conversation, because the improve host keeps the transcript. The held process wrote its assistant text and result
-/// to the raw log and exited, so the follow reads the log to its end. Returns the worker and the count of processes
-/// it spawns.
-fn keyed_reattach(setup: &Setup, root: &Root, option_id: &str) -> anyhow::Result<(Worker, Arc<AtomicUsize>)> {
+/// Re-attaches a run to its live process, which wrote `events` to its raw log and exited, so the follow reads the log
+/// to its end. A keyed run's task names an improve host: no login on this machine holds its conversation, because the
+/// improve host keeps the transcript. Returns the worker and the count of processes it spawns.
+fn reattach_run(
+  setup: &Setup,
+  root: &Root,
+  option_id: &str,
+  events: &[Value],
+  keyed: bool,
+) -> anyhow::Result<(Worker, Arc<AtomicUsize>)> {
   let data = root.path().join("data");
   fs::create_dir_all(&data)?;
   let mut raw = String::new();
-  for event in [assistant_text("working"), result()] {
-    raw.push_str(&format!("{}\n", serde_json::to_string(&event)?));
+  for event in events {
+    raw.push_str(&format!("{}\n", serde_json::to_string(event)?));
   }
   fs::write(data.join(RAW_LOG_NAME), raw)?;
   let mut spec = setup.spec(root, Some(option_id), None)?;
   spec.held_native_id = Some(CC_ID.to_string());
-  spec.session_meta.as_mut().context("a task run with a backend option has session metadata")?.task =
-    Some(TaskSpec { improve_host: Some("improve-host".to_string()), ..TaskSpec::default() });
+  if keyed {
+    spec.session_meta.as_mut().context("a task run with a backend option has session metadata")?.task =
+      Some(TaskSpec {
+        goal: String::new(),
+        repo_path: None,
+        base_branch: None,
+        task_type: None,
+        keep_worktree: false,
+        cold_read: None,
+        approver: TaskApprover::User,
+        improve_host: Some("improve-host".to_string()),
+      });
+  }
   let spawns = Arc::new(AtomicUsize::new(0));
   let counter = Arc::clone(&spawns);
   let tracked = spec.on_spawned.take().context("a spec tracks its spawns")?;
@@ -1106,6 +1134,11 @@ fn keyed_reattach(setup: &Setup, root: &Root, option_id: &str) -> anyhow::Result
     tracked(thread)
   }));
   Ok((setup.worker(spec)?, spawns))
+}
+
+/// Re-attaches a keyed run whose held process wrote an assistant text and a clean result.
+fn keyed_reattach(setup: &Setup, root: &Root, option_id: &str) -> anyhow::Result<(Worker, Arc<AtomicUsize>)> {
+  reattach_run(setup, root, option_id, &[assistant_text("working"), result()], true)
 }
 
 #[tokio::test]
@@ -1154,6 +1187,48 @@ async fn test_a_keyed_run_reattached_on_codex_follows_without_placement() -> any
   assert_eq!(task_worker.resume(Arc::new(|| false), None).await?, 0);
   assert_eq!(spawns.load(Ordering::SeqCst), 0, "the run follows its live process and spawns none");
   assert_eq!(task_worker.account_relays(), 0, "a keyed run cannot relay, so the follow moves no login");
+  Ok(())
+}
+
+/// A reattached keyed run has no login watch, so no watch reads its lost-login event, and its errored result
+/// decides the end. That end is a token shortage: the round moves to the pool's next member and records no member out.
+#[tokio::test]
+#[ignore = "integration"]
+async fn test_a_keyed_run_reattached_that_loses_its_token_ends_as_token_short() -> anyhow::Result<()> {
+  let root = Root::new()?;
+  let state = Arc::new(ClaudeAccountState::new());
+  let scripts = Scripts::new(vec![String::new(), String::new()]);
+  let config = pooled_config(&root, &["main", "ext-1"], &[], &scripts.token)?;
+  let setup = Setup::new(&root, scripted_registry(&state)?, &config)?;
+  let lost = [lost_login("Failed to authenticate: OAuth token revoked."), auth_failed_result()];
+  let (task_worker, spawns) = reattach_run(&setup, &root, POOLED, &lost, true)?;
+
+  let error = task_worker.resume(Arc::new(|| false), None).await.expect_err("the lost token ends the run");
+  let quota = error.downcast_ref::<QuotaExhaustedError>().context("the run ends in a member failure")?;
+  assert_eq!(quota.failure(), charliebot_registry::backend::MemberFailure::TokenShort);
+  assert_eq!(quota.resets_at, None);
+  assert_eq!(spawns.load(Ordering::SeqCst), 0, "the run follows its live process and spawns none");
+  Ok(())
+}
+
+/// The same end on an unkeyed run keeps the access refusal, which the execution layer records as the member's
+/// shared row.
+#[tokio::test]
+#[ignore = "integration"]
+async fn test_an_unkeyed_run_reattached_that_loses_its_token_keeps_access_refused() -> anyhow::Result<()> {
+  let root = Root::new()?;
+  let state = Arc::new(ClaudeAccountState::new());
+  let scripts = Scripts::new(vec![String::new(), String::new()]);
+  let option = option_yaml("claude-plain", "cc-claude", Some(&scripts.token), None);
+  let config = config_text(&root, &[], &[], &[option])?;
+  let setup = Setup::new(&root, scripted_registry(&state)?, &config)?;
+  let lost = [lost_login("Failed to authenticate: OAuth token revoked."), auth_failed_result()];
+  let (task_worker, spawns) = reattach_run(&setup, &root, "claude-plain", &lost, false)?;
+
+  let error = task_worker.resume(Arc::new(|| false), None).await.expect_err("the refused token ends the run");
+  let quota = error.downcast_ref::<QuotaExhaustedError>().context("the run ends in a member failure")?;
+  assert_eq!(quota.failure(), charliebot_registry::backend::MemberFailure::AccessRefused);
+  assert_eq!(spawns.load(Ordering::SeqCst), 0, "the run follows its live process and spawns none");
   Ok(())
 }
 
@@ -1331,8 +1406,13 @@ async fn test_a_model_group_keeps_claude_while_a_login_can_run_and_takes_the_met
         profile: TaskProfile::Worker,
         task: Some(TaskSpec {
           goal: "synthetic group switch".to_string(),
+          repo_path: None,
+          base_branch: None,
           task_type: Some(TaskType::Implement),
-          ..TaskSpec::default()
+          keep_worktree: false,
+          cold_read: None,
+          approver: TaskApprover::User,
+          improve_host: None,
         }),
         name: Some("Model group switch".to_string()),
         backend: Some(GROUP.to_string()),

@@ -36,9 +36,13 @@ pub(crate) fn handler(features: Arc<FeatureContext>, request: WebSocketRequest) 
     let session_id = request.segments.first().expect("the route captures its session id").clone();
     let backend_id = query_value(&request.query, "backend").unwrap_or_default();
     let run_id = query_value(&request.query, "run_id").unwrap_or_default();
-    let backend = match features.credentials.get() {
-      Ok(credentials) => Backend::build(&backend_id, &credentials),
-      Err(error) => Err(error.to_string()),
+    let config = features.config.get();
+    let backend = match (&config, features.credentials.get()) {
+      (Ok(config), Ok(credentials)) => {
+        config.section::<VoiceSettings>("voice").backend(&backend_id).map(|entry| Backend::build(entry, &credentials))
+      }
+      (Err(error), _) => Err(error.to_string()),
+      (_, Err(error)) => Err(error.to_string()),
     };
     let refusal = match &backend {
       Err(error) => Some(error.clone()),
@@ -47,7 +51,6 @@ pub(crate) fn handler(features: Arc<FeatureContext>, request: WebSocketRequest) 
         .map(|reason| format!("voice backend {} is unavailable: {reason}", text_repr::str_repr(backend.id()))),
     };
     let refusal = refusal.or_else(|| run_id_refusal(&run_id));
-    let config = features.config.get();
     request.upgrade.max_message_size(16_777_216).max_frame_size(16_777_216).on_upgrade(move |socket| async move {
       let (writer, reader) = socket.split();
       let writer = Arc::new(Mutex::new(writer));

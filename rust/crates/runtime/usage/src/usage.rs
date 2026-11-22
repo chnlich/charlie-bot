@@ -1243,12 +1243,15 @@ mod tests {
     let mut registry = Registry::new();
     registry.register_package("backends.claude_code", claude_code::register).unwrap();
     let cfg = registry.load_config(home.path()).unwrap();
-    assert!(!claude_code::claude_compaction::expired_cache_compaction_wanted(
-      &cfg,
-      Some("claude-fable-5-1"),
-      usage["context_tokens"].as_i64(),
-      Some(last_request),
-      Some(now),
-    ));
+    assert!(
+      !claude_code::claude_compaction::expired_cache_compaction_wanted(
+        &cfg,
+        Some("claude-fable-5-1"),
+        usage["context_tokens"].as_i64(),
+        Some(last_request),
+        Some(now),
+      )
+      .unwrap()
+    );
   }
 }

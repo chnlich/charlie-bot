@@ -140,7 +140,7 @@ impl Home {
     }
     let registry = Arc::new(registry);
     let mut loaded = registry.load_config(dir.path()).expect("an empty home loads with the defaults");
-    // Task creation takes the first configured backend when a create names none.
+    // Task creation takes the `backends.calls.new_session` target when a create names none.
     loaded.backends.options.push(BackendOption {
       id: "synthetic-web".to_string(),
       label: "Synthetic web".to_string(),
@@ -151,6 +151,12 @@ impl Home {
       type_fields: Default::default(),
       visible: true,
     });
+    loaded.backends.calls = [(
+      charliebot_core::config::CallClass::NewSession,
+      charliebot_core::config::CallTarget::Backend("synthetic-web".to_string()),
+    )]
+    .into_iter()
+    .collect();
     let reload_config = loaded.clone();
     let config = Arc::new(HotReload::new(
       loaded.config_file(),

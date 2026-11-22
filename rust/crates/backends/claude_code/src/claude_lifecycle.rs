@@ -422,6 +422,34 @@ impl BackendLifecycle for ClaudeCodeLifecycle {
     Ok(Some(QuotaOutlook { can_run, earliest_reset }))
   }
 
+  /// The account directory picked by usage from the option's configured login pool. Returns `Ok(Ok(None))` when no
+  /// `accounts.claude` logins are configured, or `Ok(Err(reason))` when no pooled login is usable.
+  fn resolve_account_dir(
+    &self,
+    option: &BackendOption,
+    cfg: &CharlieBotConfig,
+  ) -> anyhow::Result<Result<Option<String>, String>> {
+    if !claude_accounts::is_pooled(option, cfg) {
+      return Ok(Ok(None));
+    }
+    let account_pool = claude_accounts::option_pool(option);
+    if let Some(account) = claude_accounts::select(
+      &self.state,
+      cfg,
+      Some(&option.model),
+      &HashSet::new(),
+      None,
+      None,
+      account_pool.as_deref(),
+      0.0,
+    )? {
+      return Ok(Ok(Some(account.config_dir)));
+    }
+    let message =
+      claude_relay::pool_exhausted_message(&self.state, cfg, Some(&option.model), None, account_pool.as_deref())?;
+    Ok(Err(message))
+  }
+
   /// The hold the login that a recovered run's process already uses takes for that run, read from the process's
   /// environment. A process whose environment names no pool login is an unknown login: the follow continues without
   /// a hold.
@@ -472,13 +500,9 @@ impl BackendLifecycle for ClaudeCodeLifecycle {
         failure: MemberFailure::Other,
         resets_at: None,
       })?;
-      if decision == claude_relay::LOGIN_FAILED {
-        master_cc_relay::report_login_failure(&self.state, ctx, &pooled.account)
-          .await
-          .map_err(|error| refused(error, MemberFailure::Other, None))?;
-      }
       let account_pool = claude_accounts::option_pool(&ctx.option);
       // A keyed round forwards its login's token once, when it starts, so it cannot relay: its decision ends the round.
+      // A lost forwarded token says nothing about the local login it was copied from, so that login is not marked.
       if keyed_round(ctx) {
         return Err(
           claude_relay::keyed_round_refusal(
@@ -490,6 +514,11 @@ impl BackendLifecycle for ClaudeCodeLifecycle {
           )
           .map_err(|error| refused(error, MemberFailure::Other, None))?,
         );
+      }
+      if decision == claude_relay::LOGIN_FAILED {
+        master_cc_relay::report_login_failure(&self.state, ctx, &pooled.account)
+          .await
+          .map_err(|error| refused(error, MemberFailure::Other, None))?;
       }
       if let Some(cap_refusal) = claude_relay::relay_cap_refusal(
         &self.state,
@@ -603,7 +632,7 @@ mod tests {
   use charliebot_agents::model_pool::{LaneStart, RotationPositions, Selector};
   use charliebot_registry::Registry;
   use charliebot_registry::backend::{ContextStateFn, EmitFn, LaunchArgs, RecordAccountFn, RunningTurnsFn};
-  use charliebot_store::metadata::{TaskProfile, TaskSpec, UtcDateTime};
+  use charliebot_store::metadata::{TaskApprover, TaskProfile, TaskSpec, UtcDateTime};
   use charliebot_store::run_records::RunKind;
   use serde_json::json;
 
@@ -858,8 +887,16 @@ mod tests {
     }
     let cfg = config(&home, &[("a", &account_a), ("b", &account_b)]);
     let ctx = context(cfg, LaunchKind::Task, None, None, None);
-    ctx.session_meta.lock().unwrap().task =
-      Some(TaskSpec { improve_host: Some("remote-test-host".to_string()), ..TaskSpec::default() });
+    ctx.session_meta.lock().unwrap().task = Some(TaskSpec {
+      goal: String::new(),
+      repo_path: None,
+      base_branch: None,
+      task_type: None,
+      keep_worktree: false,
+      cold_read: None,
+      approver: TaskApprover::User,
+      improve_host: Some("remote-test-host".to_string()),
+    });
 
     let refusal = match ClaudeCodeLifecycle::new().place(&ctx).await {
       Err(refusal) => refusal,
@@ -902,8 +939,16 @@ mod tests {
 
     // A keyed run keeps the id: its transcript is on the improve host, and the run forwards a chosen login's token.
     let keyed = context(cfg, LaunchKind::Task, None, Some(held), None);
-    keyed.session_meta.lock().unwrap().task =
-      Some(TaskSpec { improve_host: Some("remote-test-host".to_string()), ..TaskSpec::default() });
+    keyed.session_meta.lock().unwrap().task = Some(TaskSpec {
+      goal: String::new(),
+      repo_path: None,
+      base_branch: None,
+      task_type: None,
+      keep_worktree: false,
+      cold_read: None,
+      approver: TaskApprover::User,
+      improve_host: Some("remote-test-host".to_string()),
+    });
     let launch = ClaudeCodeLifecycle::new().place(&keyed).await.unwrap();
     assert_eq!(launch.resume_id.as_deref(), Some(held));
     assert!(launch.account_label.is_some(), "the keyed task picks its login by the ordinary pool choice");
@@ -922,8 +967,16 @@ mod tests {
     let state = Arc::new(claude_accounts::ClaudeAccountState::new());
     let lifecycle = ClaudeCodeLifecycle::with_state(Arc::clone(&state));
     let mut keyed = context(cfg.clone(), LaunchKind::Task, None, None, None);
-    keyed.session_meta.lock().unwrap().task =
-      Some(TaskSpec { improve_host: Some("remote-test-host".to_string()), ..TaskSpec::default() });
+    keyed.session_meta.lock().unwrap().task = Some(TaskSpec {
+      goal: String::new(),
+      repo_path: None,
+      base_branch: None,
+      task_type: None,
+      keep_worktree: false,
+      cold_read: None,
+      approver: TaskApprover::User,
+      improve_host: Some("remote-test-host".to_string()),
+    });
     keyed.run_id = Some("keyed-run".to_string());
 
     let launch = lifecycle.place(&keyed).await.unwrap();
@@ -977,8 +1030,16 @@ mod tests {
     assert_eq!(ClaudeCliLifecycle.checked_resume_id_for(&ctx, &config_dir).unwrap(), None);
 
     // A keyed run keeps the id: its transcript is on the improve host, so no local search decides.
-    ctx.session_meta.lock().unwrap().task =
-      Some(TaskSpec { improve_host: Some("remote-test-host".to_string()), ..TaskSpec::default() });
+    ctx.session_meta.lock().unwrap().task = Some(TaskSpec {
+      goal: String::new(),
+      repo_path: None,
+      base_branch: None,
+      task_type: None,
+      keep_worktree: false,
+      cold_read: None,
+      approver: TaskApprover::User,
+      improve_host: Some("remote-test-host".to_string()),
+    });
     assert_eq!(ClaudeCliLifecycle.checked_resume_id_for(&ctx, &config_dir).unwrap().as_deref(), Some(held));
   }
 
@@ -1023,8 +1084,16 @@ mod tests {
   ) -> (LaunchContext, Launch) {
     let ctx = context(cfg, LaunchKind::Task, None, None, None);
     if keyed {
-      ctx.session_meta.lock().unwrap().task =
-        Some(TaskSpec { improve_host: Some("remote-test-host".to_string()), ..TaskSpec::default() });
+      ctx.session_meta.lock().unwrap().task = Some(TaskSpec {
+        goal: String::new(),
+        repo_path: None,
+        base_branch: None,
+        task_type: None,
+        keep_worktree: false,
+        cold_read: None,
+        approver: TaskApprover::User,
+        improve_host: Some("remote-test-host".to_string()),
+      });
     }
     let account =
       claude_config::ClaudeAccount { label: "current".to_string(), config_dir: current.display().to_string() };
@@ -1172,7 +1241,10 @@ mod tests {
     assert!(!refusal.failure.records_out(), "a token shortage records no member out");
     let account =
       claude_config::ClaudeAccount { label: "current".to_string(), config_dir: current.display().to_string() };
-    assert!(!claude_accounts::healthy(&state, &account, None), "the refused login is cooled");
+    assert!(
+      claude_accounts::healthy(&state, &account, None),
+      "the forwarded copy failed, not the local login, so the login stays selectable"
+    );
   }
 
   #[tokio::test]
@@ -1410,6 +1482,38 @@ mod tests {
     assert_eq!(
       refused.resets_at,
       Some(UtcDateTime::from(failed.into_inner() + claude_accounts::AUTH_FAILURE_COOLDOWN))
+    );
+  }
+
+  #[test]
+  fn resolve_account_dir_picks_a_pooled_login_and_refuses_when_none_is_usable() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let a = root.path().join("a");
+    let b = root.path().join("b");
+    account_credentials(&a);
+    account_credentials(&b);
+    let cfg = config(&home, &[("a", &a), ("b", &b)]);
+    let option = cfg.get_backend_option("fable").unwrap();
+    let state = Arc::new(claude_accounts::ClaudeAccountState::new());
+    let lifecycle = ClaudeCodeLifecycle::with_state(Arc::clone(&state));
+
+    let dir = lifecycle.resolve_account_dir(option, &cfg).unwrap().unwrap();
+    assert!(
+      dir.as_deref() == Some(a.to_string_lossy().as_ref()) || dir.as_deref() == Some(b.to_string_lossy().as_ref()),
+      "{dir:?}"
+    );
+
+    let failed = UtcDateTime::now();
+    claude_accounts::record_auth_failure(&state, "a", Some(failed));
+    claude_accounts::record_auth_failure(&state, "b", Some(failed));
+    let refusal = lifecycle.resolve_account_dir(option, &cfg).unwrap().unwrap_err();
+    assert!(!refusal.is_empty());
+
+    let unpooled = unpooled_config(&root.path().join("unpooled"));
+    assert_eq!(
+      lifecycle.resolve_account_dir(unpooled.get_backend_option("fable").unwrap(), &unpooled).unwrap(),
+      Ok(None)
     );
   }
 }

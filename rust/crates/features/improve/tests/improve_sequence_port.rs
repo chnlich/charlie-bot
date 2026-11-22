@@ -15,9 +15,9 @@ use charliebot_registry::backend::{
   BackendLifecycle, BackendTraits, Launch, LaunchContext, LaunchRefused, MemberFailure, ResumeStyle,
 };
 use charliebot_registry::sequence::SequenceTree;
-use charliebot_store::StoreResult;
 use charliebot_store::metadata::{SessionMetadata, TaskApprover, TaskProfile, TaskSpec, UtcDateTime};
 use charliebot_store::run_records::{self, RunKind, RunOutcomeKind, SequenceRef};
+use charliebot_store::{CreateTask, StoreResult, TaskCaller};
 use charliebot_tasks::dispatch::DispatchExecutor;
 use charliebot_tasks::spawner_backends::{self, SubagentRole};
 use charliebot_tasks::test_support::process_guard;
@@ -153,6 +153,21 @@ struct LoopHarness {
 
 impl LoopHarness {
   async fn new(pool_ids: &[&str], extra_ids: &[&str], scripts: Vec<String>) -> anyhow::Result<LoopHarness> {
+    LoopHarness::new_with_keyed(pool_ids, extra_ids, scripts, false).await
+  }
+
+  /// A loop whose worker child's task names an improve host, so every run of the loop is a keyed round. The host is a
+  /// synthetic name, and the served checkout carries a launcher stub that runs the round on this host.
+  async fn new_keyed(pool_ids: &[&str], extra_ids: &[&str], scripts: Vec<String>) -> anyhow::Result<LoopHarness> {
+    LoopHarness::new_with_keyed(pool_ids, extra_ids, scripts, true).await
+  }
+
+  async fn new_with_keyed(
+    pool_ids: &[&str],
+    extra_ids: &[&str],
+    scripts: Vec<String>,
+    keyed: bool,
+  ) -> anyhow::Result<LoopHarness> {
     let git_override_guard = GIT_OVERRIDE_LOCK.lock().await;
     let write_timeout = charliebot_tasks::git::override_git_write_timeout(LOOP_GIT_WRITE_TIMEOUT);
     let scripts = Scripts::new(scripts);
@@ -165,6 +180,9 @@ impl LoopHarness {
     let options = option_ids.iter().map(|id| scripts.option(id, TEST_BACKEND_TYPE)).collect();
     let pool = pool_ids.iter().map(|id| id.to_string()).collect();
     let stack = Stack::start_with_package(options, pool, ("test.improve_port", register_improve_port)).await?;
+    if keyed {
+      install_local_improve_launcher(&stack)?;
+    }
     stack.write_access_key()?;
     let repo = SyntheticRepo::create()?;
     let manager = stack
@@ -205,16 +223,30 @@ impl LoopHarness {
         resolved_model,
       },
     )?;
-    let child = sequence::create_improve_child(
-      stack.store(),
-      &manager.id,
-      state.loop_id,
-      &state.goal,
-      Some(repo.repo.to_str().expect("synthetic repo path is UTF-8")),
-      Some("main"),
-      state.backend.as_deref(),
-    )
-    .await?;
+    let repo_path = repo.repo.to_str().expect("synthetic repo path is UTF-8");
+    let child = if keyed {
+      create_keyed_improve_child(
+        &stack,
+        &manager.id,
+        state.loop_id,
+        &state.goal,
+        Some(repo_path),
+        Some("main"),
+        state.backend.as_deref(),
+      )
+      .await?
+    } else {
+      sequence::create_improve_child(
+        stack.store(),
+        &manager.id,
+        state.loop_id,
+        &state.goal,
+        Some(repo_path),
+        Some("main"),
+        state.backend.as_deref(),
+      )
+      .await?
+    };
     let wakes = Arc::new(Mutex::new(Vec::new()));
     stack.dispatch.set_executor(Some(Arc::new(ParentWakes(Arc::clone(&wakes)))));
     Ok(LoopHarness {
@@ -309,6 +341,59 @@ impl LoopHarness {
   fn wake_count(&self) -> usize {
     self.wakes.lock().expect("wake list is not poisoned").len()
   }
+}
+
+/// Replace the served checkout's `dev/` link with a directory whose improve launcher runs the command on this host. A
+/// keyed round starts through that launcher, so without the stub the harness would run the real one and reach the
+/// improve host.
+fn install_local_improve_launcher(stack: &Stack) -> anyhow::Result<()> {
+  use std::os::unix::fs::PermissionsExt;
+
+  let checkout = stack.features.startup.require::<RepoRoot>()?;
+  let dev = checkout.path().join("dev");
+  std::fs::remove_file(&dev)?;
+  std::fs::create_dir_all(dev.join("improve"))?;
+  let launcher = dev.join("improve/remote-launch.sh");
+  std::fs::write(&launcher, "#!/bin/sh\nexec \"$@\"\n")?;
+  std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755))?;
+  Ok(())
+}
+
+/// The loop's worker child with a task that names an improve host, so each of its runs is a keyed round.
+/// `sequence::create_improve_child` records the same node without a host, which is what most loops here use.
+async fn create_keyed_improve_child(
+  stack: &Stack,
+  session_id: &str,
+  loop_id: i64,
+  goal: &str,
+  repo_path: Option<&str>,
+  base_branch: Option<&str>,
+  backend: Option<&str>,
+) -> anyhow::Result<SessionMetadata> {
+  let request = CreateTask {
+    request_id: sequence::improve_child_request_id(loop_id),
+    task_parent_id: Some(session_id.to_string()),
+    profile: TaskProfile::Worker,
+    task: Some(TaskSpec {
+      goal: goal.to_string(),
+      repo_path: repo_path.map(str::to_string),
+      base_branch: base_branch.map(str::to_string),
+      task_type: None,
+      keep_worktree: false,
+      cold_read: None,
+      approver: TaskApprover::User,
+      improve_host: Some("improve-host".to_string()),
+    }),
+    name: Some(format!("Improve loop {loop_id}")),
+    backend: backend.map(str::to_string),
+    group: None,
+    session_id: None,
+  };
+  stack
+    .store()
+    .create_task(request, TaskCaller::Agent { session_id: session_id.to_string() }, Map::new())
+    .await
+    .map_err(anyhow::Error::from)
 }
 
 fn event_script(event: &Value, exit_code: i32) -> String {
@@ -612,6 +697,43 @@ async fn a_token_short_round_runs_again_on_the_next_member_without_recording_it_
   );
   let state = command::require_loop_state(&harness.stack.cfg, &harness.manager.id, harness.state.loop_id)?;
   assert_eq!(state.blocked_iteration, None);
+  Ok(())
+}
+
+/// A keyed round runs on one member and then loses its forwarded token. That end is a token shortage: the round
+/// moves to the pool's next member, and the failed member is not recorded out for other sessions.
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_keyed_round_that_loses_its_token_moves_to_the_next_member_without_recording_it_out() -> anyhow::Result<()> {
+  let lost = json!({
+    "type": "result",
+    "subtype": "error",
+    "is_error": true,
+    "api_error_status": 401,
+    "result": "Failed to authenticate: OAuth token revoked.",
+  });
+  let harness = LoopHarness::new_keyed(
+    &["lost", "next"],
+    &[],
+    vec![event_script(&lost, 1), recovery_support::result_script("second words")],
+  )
+  .await?;
+
+  harness.finish_loop(harness.start_loop(1)).await;
+
+  let runs = harness.stack.run_records(&harness.child.id)?;
+  assert_eq!(
+    runs.iter().map(|run| run.backend.as_deref()).collect::<Vec<_>>(),
+    [Some("lost"), Some("next")],
+    "the keyed round fails over to the pool's next member"
+  );
+  assert_eq!(
+    harness.iteration_reports().iter().map(|event| event["outcome"].as_str()).collect::<Vec<_>>(),
+    [Some("success")]
+  );
+  let availability = charliebot_agents::backend_availability::backend_availability(&harness.stack.features)?;
+  assert!(availability.out_until("lost").is_none(), "a lost forwarded token records no member out");
+  assert!(availability.out_until("next").is_none(), "the member that answered is not recorded out");
   Ok(())
 }
 

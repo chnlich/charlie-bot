@@ -16,7 +16,7 @@ pub async fn transcribe_file(path: &Path, cfg: &CharlieBotConfig, credentials: &
     &recording::OnlineBackendFactory,
     &pcm,
     None,
-    &voice.default_backend,
+    voice,
     credentials,
     &voice.vocabulary,
     &voice.languages,

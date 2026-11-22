@@ -16,8 +16,9 @@
 # key: the review's charlie-code, installed from review-charlie-code.sh, reads it from that file. The member's
 # login goes into the launch's member-credential file (mode 600), which only this launch reads. The first form
 # checks the round's dependencies, prepares the round's environment, then starts the round's scope
-# through systemd-run; the scope runs the `--in-scope` form, which empties TMPDIR, runs the member's
-# agent under the Landlock boundary that limits its writes and signals, and records the scope's memory peak.
+# through systemd-run; the scope runs the `--in-scope` form, which makes the round's TMPDIR and removes the TMPDIR
+# directories that earlier scopes made, runs the member's agent under the Landlock boundary that limits its writes
+# and signals, and records the scope's memory peak.
 #
 # Exit codes: the agent's exit code; 1 a local failure, such as a missing input file or a refused
 # scope, or a round whose review still runs in the scope after its agent exited (stderr names the
@@ -688,11 +689,17 @@ ensure_mock_home() {
   flock -u "$lock_fd" || fail 1 "cannot unlock the shared mock home: $RUNNER_ROOT/mock-home.lock"
 }
 
-# Empty TMPDIR. A killed round leaves large copies there, and this round owns the directory: the
-# scope name keeps another round of this direction out.
-empty_tmpdir() {
-  [[ $ROUND_TMPDIR == "/tmp/improve-$direction-tmp" ]] || fail 1 "not this round's TMPDIR: $ROUND_TMPDIR"
-  find "$ROUND_TMPDIR" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + || fail 1 "cannot empty TMPDIR: $ROUND_TMPDIR"
+# Make this scope's TMPDIR: a directory that mktemp creates under the session TMPDIR. A killed round leaves its
+# copies in the directories that earlier scopes made, so those directories go, and nothing else in the session
+# TMPDIR is removed. The scope name keeps another round of this direction out, so no live round uses them.
+prepare_scope_tmpdir() {
+  local earlier tmpdir
+  for earlier in "$ROUND_TMPDIR"/scope.*; do
+    [[ -d $earlier && ! -L $earlier ]] || continue
+    rm -rf -- "$earlier" || fail 1 "cannot remove the earlier scope's TMPDIR: $earlier"
+  done
+  tmpdir=$(mktemp -d "$ROUND_TMPDIR/scope.XXXXXXXX") || fail 1 "cannot make this scope's TMPDIR under $ROUND_TMPDIR"
+  export TMPDIR=$tmpdir
 }
 
 # Append the scope's peak memory with the launch id. The value disappears when the scope ends, so
@@ -805,7 +812,7 @@ run_in_scope() {
   # The marker tells the heartbeat that this launch owns the scope: a refusal leaves no marker,
   # so a heartbeat that closes cannot stop the previous round's scope.
   : >"$LAUNCH_DIR/started"
-  empty_tmpdir
+  prepare_scope_tmpdir
   export_round_credentials
   local status=0 review
   "$RUNNER_ROOT/bin/improve-sandbox" "$direction" -- "$kind" "${REWRITTEN[@]}" || status=$?

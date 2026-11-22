@@ -102,7 +102,7 @@ function loadRoundActionModules(context, wsHandlers) {
 function forYouRig(
     messages,
     {
-      view = 'foryou', clientHeight = 900, profile = null, workerSummary = null, hasMore = false, forYouHead = [],
+      view = 'foryou', clientHeight = 900, profile = null, workerSummary = null, hasMore = false, forYouHead,
       onForYouFirstRow = null,
     } = {}) {
   const root = new FakeElement('DIV', {id: 'messages', className: 'space-y-3'});
@@ -961,6 +961,15 @@ test('older For-you rows show above the store rows and stay out of Everything', 
   const plain = forYouRig(fixture(), {view: 'everything'});
   rig.engine.setView('everything');
   assert.deepEqual(rowsOf(rig.root), rowsOf(plain.root), 'Everything shows the store alone');
+});
+
+// A stored first screen from before older_for_you carries no field, and the page passes the field as undefined. The view
+// paints the rows the copy holds, the same as an empty head.
+test('a copy with no older_for_you field paints the rows it holds, as an empty head', () => {
+  const absent = forYouRig(fixture());
+  const empty = forYouRig(fixture(), {forYouHead: []});
+  assert.deepEqual(rowsOf(absent.root), FIXTURE_ROWS);
+  assert.deepEqual(rowsOf(absent.root), rowsOf(empty.root));
 });
 
 test('an older page that carries a For-you row moves its node into the store, and the row shows once', () => {

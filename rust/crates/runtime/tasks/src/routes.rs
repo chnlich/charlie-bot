@@ -11,6 +11,7 @@ use axum::response::{IntoResponse, Response};
 use charliebot_agents::backend_pool::{BackendRoute, RouteTarget, RoutedRequest};
 use charliebot_agents::model_pool;
 use charliebot_agents::pool_display::session_detail_shown;
+use charliebot_cli_common::fields::SESSION_ID;
 use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, RequestBody};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
@@ -69,9 +70,9 @@ pub const SESSION_MESSAGE_PATH: &str = "/api/internal/session-message";
 pub const SESSION_MESSAGE_TARGET_SESSION_ID_FIELD: &str = "target_session_id";
 
 /// The delegate request's field names. The route validates against them and the CLI builds the body from them, so each
-/// name is spelled once, here. `keep_worktree`, `repo_path`, `base_branch`, `task_type` and `backend` name the stored
-/// record too, so `charliebot_store::metadata` defines them.
-pub const DELEGATE_SESSION_ID_FIELD: &str = "session_id";
+/// name is spelled once. The caller's `session_id` is the internal-request field `charliebot_cli_common::fields` owns.
+/// `keep_worktree`, `repo_path`, `base_branch`, `task_type` and `backend` name the stored record too, so
+/// `charliebot_store::metadata` defines them.
 pub const DELEGATE_DESCRIPTION_FIELD: &str = "description";
 pub const DELEGATE_TASK_TYPE_FIELD: &str = TASK_TYPE_FIELD;
 pub const DELEGATE_REPO_PATH_FIELD: &str = REPO_PATH_FIELD;
@@ -178,7 +179,7 @@ const DELEGATE_INVOCATION_FIELDS: &[Field] = &[
 ];
 const DELEGATE_INVOCATION_BODY: BodyModel = BodyModel::required(DELEGATE_INVOCATION_FIELDS).forbid_extra();
 const DELEGATE_BODY_FIELDS: &[Field] = &[
-  Field::required(DELEGATE_SESSION_ID_FIELD, FieldType::String),
+  Field::required(SESSION_ID, FieldType::String),
   Field::required(DELEGATE_DESCRIPTION_FIELD, FieldType::String),
   Field::optional(DELEGATE_BASE_BRANCH_FIELD, FieldType::NullableString),
   Field::optional(DELEGATE_BACKEND_FIELD, FieldType::NullableString),
@@ -239,7 +240,7 @@ fn parse_delegate_request(body: &RequestBody) -> Result<DelegateRequest, Box<Res
     .map(|value| serde_json::from_value(value.clone()).expect("validated cold_read matches ColdReadSpec"));
   let sent_refused_fields = BOUND_REFUSED_FIELDS.iter().copied().filter(|field| values.get(field).is_some()).collect();
   Ok(DelegateRequest {
-    session_id: values[DELEGATE_SESSION_ID_FIELD].as_str().expect("validated session_id is a string").to_string(),
+    session_id: values[SESSION_ID].as_str().expect("validated session_id is a string").to_string(),
     description: values[DELEGATE_DESCRIPTION_FIELD].as_str().expect("validated description is a string").to_string(),
     base_branch: optional_string(&values, DELEGATE_BASE_BRANCH_FIELD),
     backend: optional_string(&values, DELEGATE_BACKEND_FIELD),

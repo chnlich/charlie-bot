@@ -8,6 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use charliebot_cli_common::exit::CliExit;
+use charliebot_cli_common::fields::SESSION_ID;
 use charliebot_core::config;
 use charliebot_core::event_types;
 use charliebot_core::logline;
@@ -177,7 +178,7 @@ pub fn delegation_body(args: &[OsString]) -> Result<(), CliExit> {
 /// that validates the body names the delegate fields, and the store names the task record fields.
 fn delegation_request(session: &str, repo: &str, goal: &str) -> String {
   let body = json!({
-    (task_routes::DELEGATE_SESSION_ID_FIELD): session,
+    (SESSION_ID): session,
     (task_routes::DELEGATE_DESCRIPTION_FIELD): goal,
     (REPO_PATH_FIELD): repo,
     (BASE_BRANCH_FIELD): "main",

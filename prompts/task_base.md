@@ -111,7 +111,9 @@ its own there. That place is one directory per run, named for the task by conten
 
     ~/scripts/<YYYYMMDD>_<slug>/
 
-Every file you create on that host belongs in it, whatever produced it.
+By default, place every file you create on that host in `~/scripts/<YYYYMMDD>_<slug>/`, whatever produced it. When a
+host's storage rules assign large temporary artifacts to a data-disk task directory, place large temporary artifacts in
+that data-disk task directory and keep scripts and logs in `~/scripts/<YYYYMMDD>_<slug>/`.
 
 A working directory carries only within one ssh one-shot, so each command creates that directory if absent and enters it
 before anything else.

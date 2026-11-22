@@ -198,7 +198,7 @@ pub async fn one_shot_built(
   if !built.backend.one_shot_is_tool_less() {
     bail!(
       "option {option_id} ({}) has no one-shot without tools, so backend run --one-shot refuses it: it serves only \
-       the Claude Code types and opencode",
+       cc-claude, cc-anthropic-compatible, and opencode",
       built.backend_type
     );
   }

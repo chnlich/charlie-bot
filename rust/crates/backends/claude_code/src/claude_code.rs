@@ -428,8 +428,8 @@ fn one_shot_disallowed_tools() -> String {
   ["Bash", READ_TOOL, WRITE_TOOL, EDIT_TOOL, GLOB_TOOL, GREP_TOOL, AGENT_TOOL].join(",")
 }
 
-/// The argv of a `claude -p` text one-shot: no session persistence, tools disabled, the caller's model flags, and the
-/// system prompt file that `--system-prompt-file` reads. The prompt goes to stdin.
+/// The argv of a `claude -p` text one-shot: no session persistence, no built-in or inherited MCP tools, the caller's
+/// model flags, and the system prompt file that `--system-prompt-file` reads. The prompt goes to stdin.
 fn one_shot_argv(model_args: &[String], system_file: &str) -> Vec<String> {
   let mut command = vec![
     "claude".to_string(),
@@ -442,6 +442,9 @@ fn one_shot_argv(model_args: &[String], system_file: &str) -> Vec<String> {
   command.extend([
     "--system-prompt-file".to_string(),
     system_file.to_string(),
+    "--tools".to_string(),
+    String::new(),
+    "--strict-mcp-config".to_string(),
     DISALLOWED_TOOLS_FLAG.to_string(),
     one_shot_disallowed_tools(),
   ]);
@@ -1402,6 +1405,9 @@ mod tests {
         "claude-fable-5-1",
         "--system-prompt-file",
         "/synthetic/system.txt",
+        "--tools",
+        "",
+        "--strict-mcp-config",
         "--disallowed-tools",
         disallowed.as_str()
       ]

@@ -65,8 +65,8 @@ struct RunArgs {
   resume: Option<String>,
   /// Answer the prompt once under this system prompt file, through the option's one-shot with no session persistence;
   /// the answer text goes to stdout. The option comes from --call or --backend. Serves only the backend types whose
-  /// one-shot runs without tools: the Claude Code types and opencode. Any other type is refused, naming the option and
-  /// its type. A one-shot keeps no session, so it refuses --launch and --resume.
+  /// one-shot runs without tools: cc-claude, cc-anthropic-compatible, and opencode. Any other type is refused, naming
+  /// the option and its type. A one-shot keeps no session, so it refuses --launch and --resume.
   #[arg(long, value_name = "SYSTEM_PROMPT_FILE", conflicts_with_all = ["launch", "resume"])]
   one_shot: Option<String>,
 }

@@ -20,7 +20,7 @@ pub enum Class {
   /// The URL of a configured endpoint, or of a provider host.
   Gateway,
   /// A backend CLI name as a program's first argument or a constant's value, with the argument that makes a call. A
-  /// comment or prose sentence that names one describes a harness, so it is no site.
+  /// prose sentence that names one describes a harness, so it is no site.
   FixedCommand,
   /// A backend word on the right of a default operator.
   DefaultValue,

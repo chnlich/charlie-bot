@@ -6,7 +6,7 @@
 //! keeps the value.
 //!
 //! The rules that are not owned values stay out of the table: a file under `configs/`, and a mock or fixture tree, are
-//! not scanned at all, and a comment or a prose sentence is read as prose (`text_scan`).
+//! not scanned at all, and a code comment is not read at all (`text_scan`, `rust_scan`).
 
 use crate::rules::Class;
 

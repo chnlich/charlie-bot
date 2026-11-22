@@ -2,7 +2,8 @@
 //!
 //! `charliebot backend check` runs this scan, and the CI `rust-lint` job runs that command. The match definition is in
 //! `rules`, the vocabulary it matches against in `vocabulary`, the reviewed exceptions in `exemptions`. The Rust files
-//! are read by `rust_scan` through their syntax trees and their comments; every other text file is read by `text_scan`.
+//! are read by `rust_scan` through their syntax trees; every other text file is read by `text_scan`, which leaves a code
+//! file's comments out.
 
 pub mod exemptions;
 pub mod rules;

@@ -2,9 +2,9 @@
 //!
 //! A word is a run of name, path and flag characters. The scan reads the positions that select a backend from the words
 //! around a word: the program after a backend CLI name, the value after a `--backend` flag or a `backend` key, and the
-//! operand after a default operator. A code file (a shell, Python or script file) is read as code, and its comments as
-//! prose. Every other text file, and every Rust string literal and comment, is prose. A prose sentence that names a
-//! backend CLI describes a harness, so the name is no site there. A model id, an option id, a pool id, a default
+//! operand after a default operator. A code file (a shell, Python, Perl, awk or JavaScript file) is read as code with its
+//! comments left out, since a comment chooses nothing that runs. Every other text file is prose. A prose sentence that
+//! names a backend CLI describes a harness, so the name is no site there. A model id, an option id, a pool id, a default
 //! operand and a gateway URL are sites in prose and in code alike.
 
 use std::path::Path;
@@ -14,17 +14,30 @@ use charliebot_core::config;
 use crate::rules::{self, CALL_MARKERS, Class, Found, fixed_command};
 use crate::vocabulary::Vocabulary;
 
-/// The code file extensions, each with the marker that starts its comments.
-const CODE_EXTENSIONS: [(&str, &str); 9] = [
-  ("sh", "#"),
-  ("bash", "#"),
-  ("py", "#"),
-  ("pl", "#"),
-  ("awk", "#"),
-  ("mjs", "//"),
-  ("cjs", "//"),
-  ("js", "//"),
-  ("ts", "//"),
+/// The comment syntax of a code file: its line comment marker, and the delimiters of its block comments when it has any.
+#[derive(Clone, Copy)]
+struct Syntax {
+  line: &'static str,
+  block: Option<(&'static str, &'static str)>,
+}
+
+/// Shell, Python, Perl and awk: a `#` comment runs to the end of the line.
+const HASH: Syntax = Syntax { line: "#", block: None };
+
+/// JavaScript and TypeScript: a `//` comment runs to the end of the line, and a `/* ... */` comment may span lines.
+const SLASH: Syntax = Syntax { line: "//", block: Some(("/*", "*/")) };
+
+/// The code file extensions, each with its comment syntax.
+const CODE_EXTENSIONS: [(&str, Syntax); 9] = [
+  ("sh", HASH),
+  ("bash", HASH),
+  ("py", HASH),
+  ("pl", HASH),
+  ("awk", HASH),
+  ("mjs", SLASH),
+  ("cjs", SLASH),
+  ("js", SLASH),
+  ("ts", SLASH),
 ];
 
 /// The characters between a backend CLI name and its call marker: spaces, quotes and brackets, never a letter or `:`.
@@ -50,20 +63,19 @@ struct Word<'a> {
   text: &'a str,
 }
 
-/// Scan a whole text file. A code file's code is read as code and its comments as prose; any other text file is prose.
+/// Scan a whole text file. A code file's code is read as code, with its comments left out; any other text file is prose.
 pub fn scan_file(vocab: &Vocabulary, text: &str, path: &Path) -> Vec<Found> {
   let ext = path.extension().and_then(|ext| ext.to_str()).unwrap_or_default();
-  let code = CODE_EXTENSIONS.iter().find(|(name, _)| *name == ext);
+  let code = CODE_EXTENSIONS.iter().find(|(name, _)| *name == ext).map(|(_, syntax)| *syntax);
   let mut found = Vec::new();
+  // The closing delimiter of the block comment that the previous line left open, if any.
+  let mut open_block = None;
   for (index, line) in text.lines().enumerate() {
     let number = index + 1;
     match code {
-      Some((_, marker)) => {
-        let (code_text, comment) = split_comment(line, marker);
-        scan_line(vocab, code_text, number, Mode::Code, &mut found);
-        if let Some(comment) = comment {
-          scan_line(vocab, comment, number, Mode::Prose, &mut found);
-        }
+      Some(syntax) => {
+        let code_text = strip_comments(line, syntax, &mut open_block);
+        scan_line(vocab, &code_text, number, Mode::Code, &mut found);
       }
       None => scan_line(vocab, line, number, Mode::Prose, &mut found),
     }
@@ -71,26 +83,51 @@ pub fn scan_file(vocab: &Vocabulary, text: &str, path: &Path) -> Vec<Found> {
   found
 }
 
-/// The code of a line and the text of its comment, when the line has one. A comment starts at a marker that follows the
-/// line's start or a whitespace and lies outside a quoted string. An apostrophe in the comment comes after its marker,
-/// so it opens no quote.
-fn split_comment<'a>(line: &'a str, marker: &str) -> (&'a str, Option<&'a str>) {
-  let mut quote = None;
+/// The code of a line, with each comment blanked to a space so that the words on either side of it stay apart. A line
+/// comment starts at its marker when the line's start or a whitespace comes before the marker, and a block comment at its
+/// opening delimiter. Neither opens inside a quoted string. A block comment that the line does not close leaves its
+/// closing delimiter in `open_block` for the next line.
+fn strip_comments(line: &str, syntax: Syntax, open_block: &mut Option<&'static str>) -> String {
+  let mut code = String::with_capacity(line.len());
+  let mut quote: Option<char> = None;
+  let mut resume = 0;
   for (at, ch) in line.char_indices() {
-    match quote {
-      Some(open) if ch == open => quote = None,
-      Some(_) => {}
-      None if matches!(ch, '"' | '\'') => quote = Some(ch),
-      None if line[at..].starts_with(marker) && line[..at].chars().last().is_none_or(char::is_whitespace) => {
-        return (&line[..at], Some(&line[at + marker.len()..]));
-      }
-      None => {}
+    if at < resume {
+      continue;
     }
+    if let Some(close) = *open_block {
+      let Some(end) = line[at..].find(close) else { break };
+      *open_block = None;
+      resume = at + end + close.len();
+      code.push(' ');
+      continue;
+    }
+    if let Some(open) = quote {
+      if ch == open {
+        quote = None;
+      }
+      code.push(ch);
+      continue;
+    }
+    let rest = &line[at..];
+    if matches!(ch, '"' | '\'') {
+      quote = Some(ch);
+    } else if rest.starts_with(syntax.line) && code.chars().last().is_none_or(char::is_whitespace) {
+      break;
+    } else if let Some((block_open, block_close)) = syntax.block
+      && rest.starts_with(block_open)
+    {
+      *open_block = Some(block_close);
+      resume = at + block_open.len();
+      code.push(' ');
+      continue;
+    }
+    code.push(ch);
   }
-  (line, None)
+  code
 }
 
-/// Scan a text block whose first line is `first_line`, such as the value of a Rust string literal or comment, as prose.
+/// Scan a text block whose first line is `first_line`, such as the value of a Rust string literal, as prose.
 pub fn scan_block(vocab: &Vocabulary, text: &str, first_line: usize) -> Vec<Found> {
   let mut found = Vec::new();
   for (index, line) in text.lines().enumerate() {
@@ -264,29 +301,33 @@ mod tests {
     assert_eq!(model, vec![(1, Class::ModelId, "claude-opus-5-5".to_string())]);
   }
 
-  /// A code file's comment is prose: a harness name in it is no site, while an option id and a model id in it are. A
-  /// marker inside a quoted string opens no comment, so the call after that string is code.
+  /// A comment chooses nothing that runs, so a code file's comment is no site, whatever it names. A marker inside a
+  /// quoted string opens no comment, so the call after that string is code.
   #[test]
-  fn a_code_comment_is_prose_and_a_quoted_marker_is_no_comment() {
+  fn a_code_comment_is_no_site_and_a_quoted_marker_is_no_comment() {
     let found = classes(
       "# claude -p reads stdin\necho \"a # b\" && claude -p\n# option claude-opus, model claude-opus-5-5\n",
       "run.sh",
     );
-    assert_eq!(
-      found,
-      vec![
-        (2, Class::FixedCommand, "claude -p".to_string()),
-        (3, Class::OptionId, "claude-opus".to_string()),
-        (3, Class::ModelId, "claude-opus-5-5".to_string()),
-      ]
-    );
+    assert_eq!(found, vec![(2, Class::FixedCommand, "claude -p".to_string())]);
   }
 
-  /// A gateway URL in a JavaScript comment is a site, and the `//` that opens the comment is not part of the URL.
+  /// A block comment in a JavaScript file is no site, across its lines, and the code after its close is read.
   #[test]
-  fn a_gateway_url_in_a_comment_is_a_site() {
-    let found = classes("const x = 1; // see https://aigw.example.team/v1\n", "run.mjs");
-    assert_eq!(found, vec![(1, Class::Gateway, "https://aigw.example.team/v1".to_string())]);
+  fn a_block_comment_is_no_site_and_the_code_after_it_is_read() {
+    let found = classes("/* default\n   claude-opus-5-5 */ const x = \"claude-opus\";\n", "run.mjs");
+    assert_eq!(found, vec![(2, Class::OptionId, "claude-opus".to_string())]);
+  }
+
+  /// A gateway URL in a JavaScript line comment is no site, and the `//` of the comment is not part of any URL. The
+  /// same URL in a string of the code is a site.
+  #[test]
+  fn a_gateway_url_in_a_comment_is_no_site_and_in_code_it_is() {
+    let found = classes(
+      "const x = 1; // see https://aigw.example.team/v1\nconst y = \"https://aigw.example.team/v1\";\n",
+      "run.mjs",
+    );
+    assert_eq!(found, vec![(2, Class::Gateway, "https://aigw.example.team/v1".to_string())]);
   }
 
   /// In a code file a backend CLI with a call marker is a fixed command wherever it stands, as in an argv list.

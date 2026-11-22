@@ -7,9 +7,9 @@
 # A chosen that adds the user's qualifier to an option can never match a verbatim answer, so those rows are
 # skipped and the results page and the JSON report both counts.
 #
-# Every model call runs with the repo's one-shot argv (tools disabled, no session persistence) in a new empty
-# directory, so the model sees only its prompt. The model is the one `backends.calls.new_session` selects, read through
-# `charliebot backend resolve --call new_session`; that option must be a cc-claude option, which the one-shot runs.
+# Every model call is `charliebot backend run --call new_session --one-shot`: the option that
+# `backends.calls.new_session` selects answers with tools disabled and no session persistence, in a new empty
+# directory, so the model sees only its prompt. The CLI refuses an option whose one-shot keeps its tools.
 #
 # Each answer is appended to <output-dir>/answers.jsonl as its call returns. A rerun with the same output
 # directory continues from the answered row and condition pairs, so a failed call in a long run loses no
@@ -20,10 +20,9 @@
 # CHARLIEBOT_RELEASES_DIR (default $HOME/charliebot-releases) runs.
 set -euo pipefail
 
-DISALLOWED_TOOLS="Bash,Read,Write,Edit,Glob,Grep,Agent"
 CALL_TIMEOUT_SECONDS=300
 SYSTEM_PROMPT="You are helping reproduce a user's past choice. Read the question, then answer with exactly one option, copied verbatim, and nothing else."
-ISOLATION="Each call runs with tools disabled (--disallowed-tools $DISALLOWED_TOOLS) and --no-session-persistence, in a new empty directory. The model sees only the prompt."
+ISOLATION="Each call runs charliebot backend run with --one-shot: tools disabled and no session persistence, in a new empty directory. The model sees only the prompt."
 AS_OF_RULE="Condition B adds the domain's rows decided before the held-out row's decided_at, minus rows that a row decided before that moment supersedes, minus retracted rows. Covered rows stay in."
 HOLDOUT_RULE="A row is held out only when its chosen equals one of the row's options under the answer normalization (whitespace collapsed, quote and corner-bracket marks stripped, lowercased). A chosen that adds the user's qualifier to an option can never match a verbatim answer, so the row is skipped and counted."
 
@@ -115,30 +114,30 @@ resolve_cli() {
   echo "$current"
 }
 
-# The preflight: one real headless call, which fails when the login is dead.
-preflight() {
-  local call_dir reply
+# One model call through the one-shot mode, with the prompt in the file $1: the answer on stdout, from a new empty
+# directory. A failed call returns 1.
+one_shot() {
+  local prompt_file=$1 call_dir answer
   call_dir=$(mktemp -d)
-  reply=$(cd "$call_dir" && claude -p --max-turns 1 'Reply with the single word OK.' </dev/null) || {
+  answer=$(cd "$call_dir" && timeout "$CALL_TIMEOUT_SECONDS" "$CLI" backend run --call new_session \
+    --one-shot "$SYSTEM_FILE" --task-file "$prompt_file") || {
     rm -rf "$call_dir"
-    die "preflight model call failed; the login check failed"
-  }
-  rm -rf "$call_dir"
-  [[ -n "$reply" ]] || die "preflight model call returned no text; the login check failed"
-}
-
-# One model call: the prompt on stdin, the answer on stdout, in a new empty directory.
-ask() {
-  local model=$1 prompt=$2 call_dir answer
-  call_dir=$(mktemp -d)
-  answer=$(cd "$call_dir" && printf '%s' "$prompt" | timeout "$CALL_TIMEOUT_SECONDS" claude -p \
-    --output-format text --no-session-persistence --model "$model" --system-prompt "$SYSTEM_PROMPT" \
-    --disallowed-tools "$DISALLOWED_TOOLS") || {
-    rm -rf "$call_dir"
-    die "model call failed; earlier answers persist in the output directory"
+    return 1
   }
   rm -rf "$call_dir"
   printf '%s' "$answer"
+}
+
+# The preflight: one real call, which fails when the login is dead.
+preflight() {
+  printf '%s' 'Reply with the single word OK.' > "$WORK/preflight.txt"
+  one_shot "$WORK/preflight.txt" > /dev/null || die "preflight model call failed; the login check failed"
+}
+
+# One model call for a prompt: the answer on stdout. A failed call stops the run.
+ask() {
+  printf '%s' "$1" > "$WORK/prompt.txt"
+  one_shot "$WORK/prompt.txt" || die "model call failed; earlier answers persist in the output directory"
 }
 
 # True when the row's chosen equals one of its options under the answer normalization.
@@ -179,15 +178,16 @@ main() {
   fi
   local output_dir=$1
   command -v jq > /dev/null || die "jq is required on PATH"
-  command -v claude > /dev/null || die "claude is required on PATH"
   CLI=$(resolve_cli)
   NEW_SESSION=$("$CLI" backend resolve --call new_session) \
     || die "backends.calls.new_session does not resolve; the reason is printed above"
   MODEL=$(jq -r '.option.model // empty' <<< "$NEW_SESSION")
-  OPTION_TYPE=$(jq -r '.option.type // empty' <<< "$NEW_SESSION")
-  [[ $OPTION_TYPE == cc-claude ]] \
-    || die "backends.calls.new_session selects a $OPTION_TYPE option; the one-shot runs cc-claude options only"
   [[ -n "$MODEL" ]] || die "the option backends.calls.new_session selects names no model"
+
+  WORK=$(mktemp -d)
+  trap 'rm -rf "$WORK"' EXIT
+  SYSTEM_FILE="$WORK/system.txt"
+  printf '%s' "$SYSTEM_PROMPT" > "$SYSTEM_FILE"
 
   echo "taste-replay: preflight model call" >&2
   preflight
@@ -197,9 +197,6 @@ main() {
   index_text=$("$CLI" taste index)
   mapfile -t DOMAINS < <(printf '%s\n' "$index_text" | grep -E '^[^[:space:]]+$' || true)
   [[ ${#DOMAINS[@]} -gt 0 ]] || die "the taste table has no active row to replay"
-
-  WORK=$(mktemp -d)
-  trap 'rm -rf "$WORK"' EXIT
 
   # The answers persist in the output directory, so a rerun continues from the answered pairs.
   mkdir -p "$output_dir"
@@ -240,7 +237,7 @@ main() {
           prompt="$(base_prompt <<< "$row")"$'\n\n'"Earlier choices by the user in this domain:"$'\n'"$(context_block <<< "$context")"
         fi
         echo "taste-replay: $id condition $condition" >&2
-        answer=$(ask "$MODEL" "$prompt")
+        answer=$(ask "$prompt")
         match=$(answer_matches "$answer" "$chosen")
         jq -cn --arg row "$id" --arg domain "$domain" --arg condition "$condition" --arg chosen "$chosen" \
           --arg answer "$answer" --argjson match "$match" \

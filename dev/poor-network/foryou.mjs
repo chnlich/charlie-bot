@@ -69,14 +69,14 @@ async function bootstrapOf(api, sessionId) {
 }
 
 // Sizes `session` with human turns until its bootstrap content reaches the live view's bytes, as the bench's own
-// sized sessions are. Returns the event count the seed reads the tail's span against.
+// sized sessions are. Returns the turns it took and the untrimmed bootstrap bytes it reached.
 async function sizeTarget(api, session) {
   for (let turn = 1; ; turn++) {
     await api.sendMessage(session.id, `pn-foryou size ${session.tag} ${turn}`);
     await api.waitForIdle(session.id, TAIL_TURN_TIMEOUT_MS);
     const untrimmed = (await api.bootstrapWireBytes(session.id)).untrimmedBytes;
     if (untrimmed >= VIEW.bootstrapUntrimmedWireBytes) {
-      return;
+      return { turns: turn, untrimmedBytes: untrimmed };
     }
     if (turn === SIZING_MAX_TURNS) {
       throw new Error(
@@ -105,7 +105,7 @@ export async function seedForYouTargets(api, sessions) {
   const typical = { ...sessions.foryouTypical, tag, role: 'typical' };
   for (const target of [large, typical]) {
     if (target === large) {
-      await sizeTarget(api, target);
+      target.sizing = await sizeTarget(api, target);
     }
     // The marker names its target: a cell times its marker's first paint, so a page that still shows another target's
     // marker would time nothing.

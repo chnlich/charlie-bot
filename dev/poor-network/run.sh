@@ -13,6 +13,8 @@
 #                reference (CALIBRATION_REFERENCE in profile.mjs) and does not reproduce the switch-during-refresh
 #                hold, it stops after before, prints its numbers, and exits 3. Any other before side runs ungated.
 # --detach       starts the run as a transient systemd user unit and returns at once; the log is <out-dir>/pn-<id>.log.
+# --seed-only    seeds the sized sessions and the For-you targets on each side, writes the turns and untrimmed bootstrap
+#                bytes each reached into the side's JSON, and stops: no scenarios and no report.
 # --seed-home DIR  the view home that the run copies as its seed (default: the shared home
 #                  ~/improve/mock-home/<version>-view-<sessions>). A run with a pinned home names it here, so a
 #                  rebuild of the shared home cannot change the run's seed; each side still checks the copy's
@@ -59,6 +61,7 @@ scenarios=background,held,reset,stream
 open_conditions=link,held,reset,flaps,offline,release
 assets_dir=
 detach=0
+seed_only=0
 lock_wait=$BENCH_LOCK_WAIT_SECONDS
 open_rate_args=()
 seed_home=
@@ -94,6 +97,7 @@ while (($#)); do
     --lock-wait) lock_wait=${2:?--lock-wait needs a value}; shift 2 ;;
     --seed-home) seed_home=${2:?--seed-home needs a value}; shift 2 ;;
     --detach) detach=1; shift ;;
+    --seed-only) seed_only=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die 2 "unknown argument: $1" ;;
   esac
@@ -108,6 +112,11 @@ esac
 [[ $lock_wait =~ ^[1-9][0-9]*$ ]] || die 2 "--lock-wait must be a positive number of seconds, got $lock_wait"
 if [[ $side != after ]]; then
   [[ -n $before_clone ]] || die 2 "--before-clone is required for --side $side"
+fi
+
+mode_args=()
+if ((seed_only)); then
+  mode_args=(--mode seed)
 fi
 
 syn_drop_needed=0
@@ -156,6 +165,9 @@ if ((detach)); then
     --scenarios "$scenarios" --open-conditions "$open_conditions" --lock-wait "$lock_wait"
     ${open_rate_args+"${open_rate_args[@]}"})
   [[ -n $before_clone ]] && forwarded+=(--before-clone "$before_clone")
+  if ((seed_only)); then
+    forwarded+=(--seed-only)
+  fi
   [[ -n $assets_dir ]] && forwarded+=(--assets-dir "$assets_dir")
   systemd-run --user --unit="pn-$run_id" --collect --working-directory="$tree" \
     --setenv=PATH="$PATH" --setenv=HOME="$HOME" \
@@ -292,7 +304,8 @@ run_side() {
       --mock-home "$mock_home" --mock-home-bin "$mock_bin" --reply-dir "$run_dir/replies" \
       --assets "$POOR_NETWORK_ASSETS" --commit "$label" \
       --repetitions "$repetitions" --scenarios "$scenarios" --open-conditions "$open_conditions" \
-      ${open_rate_args+"${open_rate_args[@]}"} ${expect_args+"${expect_args[@]}"} &
+      ${open_rate_args+"${open_rate_args[@]}"} ${expect_args+"${expect_args[@]}"} \
+      ${mode_args+"${mode_args[@]}"} &
   trial_pid=$!
   # The side JSON is the bench's last artifact, and a bench that has written it can still sit alive and hold the trial,
   # and so the lock (this line's known defect). Once the JSON is SIDE_EXIT_GRACE_SECONDS old and the trial still runs,
@@ -368,6 +381,11 @@ fi
 if [[ $side == after || $side == both ]]; then
   (cd "$tree" && run_side after "$tree/scripts/release/trial.sh" "$after_commit" "$after_bin") \
     || die "$?" "the after side failed; see $run_dir/after.json"
+fi
+
+if ((seed_only)); then
+  echo "poor-network: seed-only sizes in $run_dir"
+  exit 0
 fi
 
 echo "poor-network: JSON in $run_dir"

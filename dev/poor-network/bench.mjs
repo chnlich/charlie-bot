@@ -82,9 +82,11 @@ function parseArgs(argv) {
     scenarios: DEFAULT_SCENARIOS.join(','),
     openConditions: OPEN_CONDITIONS.join(','),
     openCpuRate: undefined,
+    mode: 'measure',
   };
   const flags = {
     '--side': 'side',
+    '--mode': 'mode',
     '--out': 'out',
     '--mock-home': 'mockHome',
     '--mock-home-bin': 'mockHomeBin',
@@ -111,6 +113,10 @@ function parseArgs(argv) {
   }
   if (!['before', 'after'].includes(args.side)) {
     throw new Error(`--side must be before or after, got ${args.side}`);
+  }
+  // `seed` seeds the sized sessions and the For-you targets, records their sizes and stops: the seed-only check.
+  if (!['measure', 'seed'].includes(args.mode)) {
+    throw new Error(`--mode must be measure or seed, got ${args.mode}`);
   }
   args.repetitions = Number(args.repetitions);
   if (args.openCpuRate !== undefined) {
@@ -212,6 +218,22 @@ async function createSessions(api) {
     churn: made[BENCH_SESSIONS - 3],
     foryouLarge: made[BENCH_SESSIONS - 2],
     foryouTypical: made[BENCH_SESSIONS - 1],
+  };
+}
+
+// The seed-only record: the turns each sized session took and the untrimmed bootstrap bytes it reached, against the
+// target. The For-you large target's record comes from its own sizing.
+function sizingReport(args, sessions) {
+  const sized = [sessions.switchTarget, ...sessions.held].map(({ turns, bootstrapWireBytes }) => ({
+    turns,
+    bootstrapWireBytes,
+  }));
+  return {
+    side: args.side,
+    commit: args.commit,
+    targetBytes: VIEW.bootstrapUntrimmedWireBytes,
+    sized,
+    foryouLarge: sessions.foryou.large.sizing,
   };
 }
 
@@ -391,8 +413,13 @@ async function main() {
     ctx.assets = await loadAssets(args.assets);
     ctx.replyBytes = replyTextBytes(args.replyDir);
     ctx.sessions = await createSessions(api);
-    if (args.scenarios.includes(FOR_YOU_SCENARIO)) {
+    if (args.mode === 'seed' || args.scenarios.includes(FOR_YOU_SCENARIO)) {
       ctx.sessions.foryou = await seedForYouTargets(api, ctx.sessions);
+    }
+    if (args.mode === 'seed') {
+      fs.writeFileSync(args.out, `${JSON.stringify(sizingReport(args, ctx.sessions), null, 2)}\n`);
+      process.stderr.write(`wrote ${args.out}\n`);
+      process.exit(0);
     }
     ctx.view = await measureView(api);
     const serve = new URL(api.base);

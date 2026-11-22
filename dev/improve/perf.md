@@ -25,9 +25,12 @@ verdicts in `dev/poor-network/profile.mjs`. The bench's verdict is authoritative
 direction. The background scenario runs 3 repetitions, so the check stays inside the round's time.
 A scenario that passes before and fails after blocks landing.
 
-Each poor-network side and each serve-trial side waits at most 15 minutes for the host's bench lock. If a wait expires,
-the timed-out side takes no measurement. The round reports no result from an incomplete pair, stops without opening a
-pull request and names the held bench lock in its stop reason. The next scheduled fire tries again.
+Each take of the host's bench lock waits at most 15 minutes. A poor-network side takes the lock once per step, so one
+run takes it many times: after each step that a queued process waits for, the side gives the lock up and takes it again
+behind that process, and each take has its own 15-minute wait. A serve-trial side takes the lock once and waits at most
+15 minutes. If a wait expires, the timed-out side takes no measurement. The round reports no result from an incomplete
+pair, stops without opening a pull request and names the held bench lock in its stop reason. The next scheduled fire
+tries again.
 The poor-network bench exposes this limit through its `--lock-wait` contract; an improve round uses 900 seconds.
 
 ## Mock home

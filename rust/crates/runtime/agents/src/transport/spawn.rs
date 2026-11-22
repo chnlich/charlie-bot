@@ -362,7 +362,8 @@ impl PreparedSpawn {
         Some(c_string(state.path.join(PROCS_FILE_NAME).as_os_str().as_bytes())?),
         libc::c_int::try_from(SESSION_CGROUP_OOM_SCORE_ADJ).expect("oom_score_adj fits c_int"),
       ),
-      _ => (None, 0),
+      (SpawnSetup::ParentSideTurnTree | SpawnSetup::None, _)
+      | (SpawnSetup::ChildSideTurnTree | SpawnSetup::ChildSideCgroup, None) => (None, 0),
     };
     Ok(Self {
       argv,

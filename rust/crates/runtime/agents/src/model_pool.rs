@@ -716,7 +716,7 @@ pub fn all_exhausted_message(
     let state = member_state_reason(cfg, registry, availability, &member.backend, now)?;
     let label = match (pool.rule, member_billing(cfg, member)) {
       (PoolRule::Priority, Some(billing)) => format!(" ({})", billing_label(billing)),
-      _ => String::new(),
+      (PoolRule::Priority, None) | (PoolRule::Rotate, _) => String::new(),
     };
     lines.push(format!("- {}{label}: {state}", member.backend));
   }
@@ -741,7 +741,7 @@ fn member_state_reason(
         || "quota exhausted".to_string(),
         |reset| format!("quota exhausted, resets at {}", format_minutes(reset)),
       )),
-      _ => Ok("not selectable".to_string()),
+      Some(_) | None => Ok("not selectable".to_string()),
     },
   }
 }

@@ -235,7 +235,7 @@ One Claude login carries a five-hour and a weekly window, so a long master turn 
   A move never overwrites a destination copy that is strictly newer: the turn adopts that copy and continues, and never fails. The conversation keeps its id and continues from the newest transcript copy (the one with the latest modification time).
   A turn's moves are capped in code. A pool with no login left ends the turn with the earliest reset time; a worker reports that as quota exhaustion, review and cold-read children retry on the next member of their pool, and verify children do not retry.
   Redundant transcript copies are retired after a sound round, keeping the newest; failed rounds delete nothing.
-- **Keyed rounds** (a task that names an `improve_host`): a keyed Claude round keeps its login past the warning line until it ends; a quota rejection or a lost login moves the round to the pool's next member, unless the round ended without error.
+- **Keyed rounds** (a task that names an `improve_host`): a keyed Claude round keeps its login past the warning line until it ends. A quota rejection moves the round to the pool's next member. A lost login or a refused forwarded token is a token shortage: the round moves to the pool's next member, and no login or member is recorded out. A round that ended without error does not move.
 - **Headless calls**: pass the expanded command body and its arguments to `claude -p`; a bare `/command` can reach the model literally.
 - `claude -p --resume <session-id> --output-format json` reports session-cumulative `modelUsage`.
 - Subtract the latest pre-run `cost-state` row to isolate that resumed run's models.

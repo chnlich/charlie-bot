@@ -34,6 +34,7 @@ dev/remote-run/run.sh dev/poor-network/run.sh --side both --before-clone "$CLONE
 | `--lock-wait SECONDS` | How long each take of the bench lock waits (default 7200). An improve round passes 900. |
 | `--seed-home DIR` | The view home that the run copies as its seed (default: the shared home under `~/improve/mock-home`). A run with a pinned home names it here; each side still checks the copy's content hash. |
 | `--detach` | Start a transient systemd user unit and return; the log is `DIR/pn-<id>.log`. |
+| `--seed-only` | Size the sessions on each side the run names, write each side's sizes to its JSON, and stop: no scenario, no store update, no report. |
 
 Exit codes: 0 both sides measured; 1 a measurement or build failed (the side's JSON still names the error); 2 a
 precondition failed and nothing started, or the change does not apply to R; 3 the baseline calibration did not
@@ -250,7 +251,10 @@ turn. A run already on the page cannot time the switch, so the first unseen one 
 bytes the page's bootstrap actually moved.
 
 The trial's backend is `charlie-code`, which `run.sh` puts on `PATH` as `stub/charlie-code`. Each turn the stub prints the
-next of 16 reply pieces, 8 KB each, cut from repository docs (`reply.mjs`), in the charlie-code NDJSON the backend reads.
+next of 16 reply pieces, 8 KB each, in the charlie-code NDJSON the backend reads. The pieces are cut in order from
+`reply-fixture.txt`, the repository docs' text that `reply.mjs` reads. The fixture sits in the bench's own tree, so a change
+to the docs cannot move the reply the bench sends. A sizing turn prints `seed-<n>.ndjson` instead: 8,250 bytes of the same
+text in three events, which brings a sized session's untrimmed bootstrap to the target.
 The pieces differ, so the gzip of a session's history does not fold its replies into one copy. Each reply streams as
 about three or four text events of 2.2 KB, and the server keeps each event as one chat message; a bootstrap carries the
 last 40 messages, of which the event size and the turns' own messages set how much reply text a switch target carries. The stub calls no model

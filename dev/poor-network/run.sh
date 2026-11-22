@@ -24,6 +24,9 @@
 #                files come from --change-patch in the stored mode, or from --change-files FILE (one path per line)
 #                with --before-rev.
 # --detach       starts the run as a transient systemd user unit and returns at once; the log is <out-dir>/pn-<id>.log.
+# --seed-only    sizes the sessions on each side the run names (bench --mode seed), writes each side's sizes to its
+#                JSON and stops: no scenario, no store update and no report. The sizing check takes minutes, so a
+#                sizing change is checked on both sides before a bench lock is taken for the measurement.
 # --seed-home DIR  the view home that the run copies as its seed (default: the shared home
 #                  ~/improve/mock-home/<version>-view-<sessions>). A run with a pinned home names it here, so a
 #                  rebuild of the shared home cannot change the run's seed; each side still checks the copy's
@@ -74,6 +77,7 @@ scenarios=background,held,reset,stream
 open_conditions=link,held,reset,flaps,offline,release
 assets_dir=
 detach=0
+seed_only=0
 lock_wait=$BENCH_LOCK_WAIT_SECONDS
 open_rate_args=()
 seed_home=
@@ -111,6 +115,7 @@ while (($#)); do
     --lock-wait) lock_wait=${2:?--lock-wait needs a value}; shift 2 ;;
     --seed-home) seed_home=${2:?--seed-home needs a value}; shift 2 ;;
     --detach) detach=1; shift ;;
+    --seed-only) seed_only=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die 2 "unknown argument: $1" ;;
   esac
@@ -123,6 +128,10 @@ esac
 [[ -n $out_dir ]] || die 2 "--out-dir is required: the run's files go there, outside the tree"
 [[ $repetitions =~ ^[1-9][0-9]*$ ]] || die 2 "--repetitions must be a positive integer, got $repetitions"
 [[ $lock_wait =~ ^[1-9][0-9]*$ ]] || die 2 "--lock-wait must be a positive number of seconds, got $lock_wait"
+mode_args=()
+if ((seed_only)); then
+  mode_args=(--mode seed)
+fi
 if [[ $side != after ]]; then
   [[ -n $before_clone ]] || die 2 "--before-clone is required for --side $side"
 fi
@@ -164,6 +173,10 @@ if ((detach)); then
   [[ -n $change_patch ]] && forwarded+=(--change-patch "$change_patch")
   [[ -n $change_files ]] && forwarded+=(--change-files "$change_files")
   [[ -n $assets_dir ]] && forwarded+=(--assets-dir "$assets_dir")
+  [[ -n $seed_home ]] && forwarded+=(--seed-home "$seed_home")
+  if ((seed_only)); then
+    forwarded+=(--seed-only)
+  fi
   systemd-run --user --unit="pn-$run_id" --collect --working-directory="$tree" \
     --setenv=PATH="$PATH" --setenv=HOME="$HOME" \
     "${detached_env[@]}" \
@@ -360,7 +373,8 @@ run_side() {
     || die 1 "the seed copy $mock_home changed since the run recorded $seed_hash; the $name side did not start"
   # The after side of one invocation checks its newest-row targets against the before side's JSON.
   local expect_args=()
-  if [[ $name == after && $mode == explicit && $side == both && ",$side_scenarios," == *",open,"* ]]; then
+  if [[ $name == after && $mode == explicit && $side == both && $seed_only == 0 \
+    && ",$side_scenarios," == *",open,"* ]]; then
     expect_args=(--expect-targets "$run_dir/before.json")
   fi
   # The trial starts and stops the server; the bench takes the lock one step at a time inside it (bench.mjs).
@@ -374,7 +388,8 @@ run_side() {
       --assets "$POOR_NETWORK_ASSETS" --commit "$label" \
       --repetitions "$repetitions" --scenarios "$side_scenarios" --open-conditions "$side_conditions" \
       --lock-wait "$lock_wait" \
-      ${open_rate_args+"${open_rate_args[@]}"} ${expect_args+"${expect_args[@]}"} &
+      ${open_rate_args+"${open_rate_args[@]}"} ${expect_args+"${expect_args[@]}"} \
+      ${mode_args+"${mode_args[@]}"} &
   trial_pid=$!
   # The side JSON is the bench's last artifact, and a bench that has written it can still sit alive and hold the trial.
   # Once the JSON is SIDE_EXIT_GRACE_SECONDS old and the trial still runs, the runner ends the trial tree itself, so the
@@ -509,12 +524,15 @@ share_open_rate() {
 }
 
 if [[ $side == before || $side == both ]]; then
-  if [[ $mode == explicit || $side == before ]]; then
+  if ((seed_only)); then
+    # The sizing check measures and stores no row, so its before side sits at R whatever the store holds.
+    measure_before "${before_rev_resolved:-$before_rev}" "$scenarios" "$open_conditions"
+  elif [[ $mode == explicit || $side == before ]]; then
     measure_before "$before_rev" "$scenarios" "$open_conditions"
   elif [[ -n $before_scenarios || -n $before_conditions ]]; then
     measure_before "$before_rev_resolved" "$before_scenarios" "$before_conditions"
   fi
-  if [[ $side == both && ",$scenarios," == *",open,"* && ${#open_rate_args[@]} -eq 0 ]]; then
+  if [[ $side == both && ",$scenarios," == *",open,"* && ${#open_rate_args[@]} -eq 0 ]] && ((!seed_only)); then
     share_open_rate
   fi
 fi
@@ -534,6 +552,11 @@ if [[ $side == after || $side == both ]]; then
   (cd "$after_src" && run_side after "$after_src/scripts/release/trial.sh" "$after_commit" "$after_bin" \
     "$scenarios" "$open_conditions") \
     || die "$?" "the after side failed; see $run_dir/after.json"
+fi
+
+if ((seed_only)); then
+  echo "poor-network: seed-only sizes in $run_dir"
+  exit 0
 fi
 
 if [[ $stored_mode_before == 1 ]]; then

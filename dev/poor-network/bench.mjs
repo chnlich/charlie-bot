@@ -83,9 +83,11 @@ function parseArgs(argv) {
     scenarios: DEFAULT_SCENARIOS.join(','),
     openConditions: OPEN_CONDITIONS.join(','),
     openCpuRate: undefined,
+    mode: 'measure',
   };
   const flags = {
     '--side': 'side',
+    '--mode': 'mode',
     '--out': 'out',
     '--mock-home': 'mockHome',
     '--mock-home-bin': 'mockHomeBin',
@@ -113,6 +115,10 @@ function parseArgs(argv) {
   }
   if (!['before', 'after'].includes(args.side)) {
     throw new Error(`--side must be before or after, got ${args.side}`);
+  }
+  // `seed` sizes the sessions, records their sizes in the side's JSON and stops: the seed-only check.
+  if (!['measure', 'seed'].includes(args.mode)) {
+    throw new Error(`--mode must be measure or seed, got ${args.mode}`);
   }
   args.repetitions = Number(args.repetitions);
   if (!/^[1-9][0-9]*$/.test(args.lockWait)) {
@@ -352,6 +358,10 @@ async function prepare(ctx, args, openResult) {
   ctx.assets = await loadAssets(args.assets);
   ctx.replyBytes = replyTextBytes(args.replyDir);
   ctx.sessions = await createSessions(ctx.api);
+  // The seed-only check ends once the sessions are sized: the view, the front and the CDN serve the measurement only.
+  if (args.mode === 'seed') {
+    return;
+  }
   ctx.view = await measureView(ctx.api);
   const serve = new URL(ctx.api.base);
   const tls = makeCertificate(path.join(ctx.runDir, `tls-${args.side}`));
@@ -426,6 +436,9 @@ async function main() {
     if (prepared.status === 'capped') {
       throw new Error('the preparation stages passed their cap; the side did not start');
     }
+    if (args.mode === 'seed') {
+      status = 'seeded';
+    }
     segments = new Segments({
       gate,
       probe: () => openProbe(ctx, ctx.prepared.reference),
@@ -439,7 +452,7 @@ async function main() {
       }
       return outcome.value;
     };
-    for (const name of args.scenarios) {
+    for (const name of args.mode === 'seed' ? [] : args.scenarios) {
       if (name === OPEN_SCENARIO) {
         await openScenario(ctx, args.repetitions, openResult, ctx.prepared, args.openConditions,
           args.openCpuRate ?? null);
@@ -513,9 +526,12 @@ async function main() {
   });
   fs.writeFileSync(args.out, `${JSON.stringify(side, null, 2)}\n`);
   process.stderr.write(`wrote ${args.out}\n`);
-  if (status !== 'measured') {
+  if (status === 'failed') {
     process.stderr.write(`${error}\n`);
     process.exit(exitCode);
+  }
+  if (status === 'seeded') {
+    process.exit(0);
   }
   // The side's JSON and its table are its whole product, and the trial waits for this process before it stops the
   // server. A socket or a Chrome handle left behind must not hold the trial open, so the process ends once the

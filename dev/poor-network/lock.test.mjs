@@ -435,3 +435,26 @@ test('a marker that a dead side left is named and removed, and it never counts a
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// trial.sh's preflight refuses a socket path of 108 bytes or more. Its trial tree is <root>/trial-<12 hex>, its temp
+// root is the tree's tmp, and Chrome's singleton socket sits 45 bytes below that temp root.
+const SIDE_ROOT = path.join(BENCH_DIR, 'side-root.sh');
+const SOCKET_BYTE_LIMIT = 108;
+
+test('a side root keeps Chrome\'s socket path under trial.sh\'s limit for a 25-byte TMPDIR', () => {
+  const tmpdir = path.join(os.tmpdir(), 'x'.repeat(25 - Buffer.byteLength(os.tmpdir()) - 1));
+  fs.mkdirSync(tmpdir);
+  try {
+    assert.equal(Buffer.byteLength(tmpdir), 25);
+    const env = { ...process.env, TMPDIR: tmpdir };
+    const root = execFileSync('bash', [SIDE_ROOT], { encoding: 'utf8', env }).trim();
+    assert.ok(root.startsWith(`${tmpdir}/pn-`), root);
+    const socket = path.join(root, `trial-${'0'.repeat(12)}`, 'tmp', 'org.chromium.Chromium.XXXXXX', 'SingletonSocket');
+    assert.ok(
+      Buffer.byteLength(socket) < SOCKET_BYTE_LIMIT,
+      `Chrome's socket path is ${Buffer.byteLength(socket)} bytes: ${socket}`,
+    );
+  } finally {
+    fs.rmSync(tmpdir, { recursive: true, force: true });
+  }
+});

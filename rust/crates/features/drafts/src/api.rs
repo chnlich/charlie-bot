@@ -20,7 +20,7 @@ use charliebot_registry::FeatureContext;
 use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::draft::{DraftContext, DraftPlatform, DraftSendFailure, DraftSent};
 use charliebot_store::SESSION_NOT_FOUND_DETAIL;
-use charliebot_store::control_events::{ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_USER, sha256_hex};
+use charliebot_store::control_events::{ACTOR_AGENT, ACTOR_FIELD, ACTOR_SYSTEM, ACTOR_USER, sha256_hex};
 use charliebot_store::metadata::UtcDateTime;
 use serde_json::{Value, json};
 
@@ -95,7 +95,7 @@ async fn register(State(features): State<Arc<FeatureContext>>, request: Request<
   let event = json!({
     "type": event_types::DRAFT_REGISTERED,
     "id": draft_id.clone(),
-    "actor": actor(&caller),
+    ACTOR_FIELD: actor(&caller),
     log::DRAFT_ID: draft_id,
     log::PLATFORM: platform_name,
     log::TARGET: target,
@@ -194,7 +194,7 @@ async fn record_sent(
   let event = json!({
     "type": event_types::DRAFT_SENT,
     "content": format!("Draft {} sent by {}: {}", draft.draft_id, sent.sender, sent.url),
-    "actor": ACTOR_SYSTEM,
+    ACTOR_FIELD: ACTOR_SYSTEM,
     log::DRAFT_ID: draft.draft_id,
     log::SHA256: draft.sha256,
     log::SENDER: sent.sender,
@@ -225,7 +225,7 @@ async fn record_failed(
 ) -> charliebot_store::StoreResult<()> {
   let event = json!({
     "type": event_types::DRAFT_FAILED,
-    "actor": ACTOR_SYSTEM,
+    ACTOR_FIELD: ACTOR_SYSTEM,
     log::DRAFT_ID: draft_id,
     log::ERROR: failure.detail,
     log::OUTCOME: failure.outcome.as_str(),

@@ -12,6 +12,8 @@ const TASK_ID_NAMESPACE_NAME: &str = "charliebot/session-task-tree";
 pub const ACTOR_USER: &str = "user";
 pub const ACTOR_AGENT: &str = "agent";
 pub const ACTOR_SYSTEM: &str = "system";
+/// The request event's header field naming who made the event: one of `ACTOR_USER`, `ACTOR_AGENT` or `ACTOR_SYSTEM`.
+pub const ACTOR_FIELD: &str = "actor";
 /// The prefix of the request id of every round that a scheduled task starts: `cron:<task>:<time>:leaf`. A delegation
 /// outside a bound task may not carry it, so a round in flight is only ever a scheduled task's.
 pub const CRON_REQUEST_ID_PREFIX: &str = "cron:";
@@ -27,7 +29,7 @@ pub const REQUEST_EVENT_CORE_FIELDS: &[&str] = &[
   "id",
   "type",
   "timestamp",
-  "actor",
+  ACTOR_FIELD,
   SOURCE_SESSION_ID_FIELD,
   "content",
   "request_id",
@@ -196,7 +198,7 @@ pub fn build_control_event(
   event.insert("id".to_string(), Value::String(event_id.map_or_else(|| Uuid::new_v4().to_string(), str::to_string)));
   event.insert("type".to_string(), Value::String(event_type.to_string()));
   event.insert("timestamp".to_string(), Value::String(timestamp.unwrap_or_else(UtcDateTime::now).to_isoformat_text()));
-  event.insert("actor".to_string(), Value::String(actor.to_string()));
+  event.insert(ACTOR_FIELD.to_string(), Value::String(actor.to_string()));
   event.insert(SOURCE_SESSION_ID_FIELD.to_string(), Value::String(source_session_id.to_string()));
   for (key, value) in payload {
     event.insert(key, value);

@@ -72,6 +72,26 @@ test('a yield hands the lock to a process queued during the step, and the gate q
   await gate.close();
 });
 
+test('a step ends with the yield rule: a process queued during the step gets the lock when the step returns', async () => {
+  const gate = await openGate();
+  await gate.take();
+  const done = path.join(home, 'queued-during-step');
+  const { closed } = queueOutsideWaiter(done);
+  const result = await gate.step('measure', 'queued during', async () => {
+    await waitUntil(async () => (await gate.waiters()).length > 0);
+    return 'value';
+  });
+  assert.equal(await closed, 0);
+  assert.ok(fs.existsSync(done), 'the queued process ran before the gate queued again');
+  assert.equal(result.status, 'ok');
+  assert.equal(result.yielded, true);
+  assert.equal(gate.yields.length, 1);
+  assert.equal(gate.held, true, 'the gate queues again after the yield');
+  const quiet = await gate.step('measure', 'nothing queued', () => 'value');
+  assert.equal(quiet.yielded, false);
+  await gate.close();
+});
+
 test('nothing queued means no yield, and the gate keeps the lock', async () => {
   const gate = await openGate();
   await gate.take();

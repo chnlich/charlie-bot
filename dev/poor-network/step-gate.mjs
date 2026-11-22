@@ -161,8 +161,9 @@ export class BenchGate {
 
   // Runs one step under the cap. A step that passes the cap is stopped (every browser and proxy it started) and runs
   // again, up to `attempts` passes; a pass over the cap on the last attempt ends it as capped. A step that throws fails
-  // the caller. Returns { status: 'ok', value, unit } or { status: 'capped', unit }; the unit is the gate's record of
-  // the step.
+  // the caller. Every step ends with the yield rule: a process queued for the lock gets it, and the gate queues again
+  // behind it. Returns { status: 'ok', value, unit, yielded } or { status: 'capped', unit, yielded }; the unit is the
+  // gate's record of the step, and yielded says whether the step ended with a yield.
   async step(kind, name, body, { attempts = 2 } = {}) {
     this.#checkPoll();
     this.#requireOpen();
@@ -176,12 +177,17 @@ export class BenchGate {
       this.units.push(unit);
       this.#checkPoll();
       if (outcome.status === 'ok') {
-        return { status: 'ok', value: outcome.value, unit };
+        return { status: 'ok', value: outcome.value, unit, yielded: await this.#yieldAtStepEnd() };
       }
       if (attempt === attempts) {
-        return { status: 'capped', unit };
+        return { status: 'capped', unit, yielded: await this.#yieldAtStepEnd() };
       }
     }
+  }
+
+  // The yield rule at a step's end: true when a queued process took the lock from this gate.
+  async #yieldAtStepEnd() {
+    return (await this.yieldIfWaited()) !== null;
   }
 
   async #runCapped(body) {

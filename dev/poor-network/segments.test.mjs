@@ -20,7 +20,8 @@ function probeAt(rate) {
   };
 }
 
-// A gate that runs each step in place and keeps every unit, with yields scripted by the test.
+// A gate that runs each step in place and keeps every unit. The test scripts each step's yield in run order: a record
+// when the step gave the lock up, null when it did not.
 function fakeGate(yields = []) {
   const units = [];
   return {
@@ -29,10 +30,8 @@ function fakeGate(yields = []) {
       const value = await body();
       const unit = { kind, name, status: 'ok', attempt: 1 };
       units.push(unit);
-      return { status: 'ok', value, unit };
-    },
-    async yieldIfWaited() {
-      return yields.length > 0 ? yields.shift() : null;
+      const record = yields.length > 0 ? yields.shift() : null;
+      return { status: 'ok', value, unit, yielded: record !== null };
     },
   };
 }
@@ -106,7 +105,8 @@ test('a probe runs once per segment: a step without a yield does not start a new
 });
 
 test('a yield makes the next unit start with a new probe; the reference stays the first accepted rate', async () => {
-  const gate = fakeGate([{ waiterPids: [42], seenToReleaseMs: 3 }]);
+  // The probe's step gives no lock up; the first repetition's step does.
+  const gate = fakeGate([null, { waiterPids: [42], seenToReleaseMs: 3 }]);
   const { segments, probes } = segmentsWith(gate, [4.0, 3.9]);
   await segments.unit('rep', 'background 1', () => 1);
   await segments.unit('rep', 'background 2', () => 2);
@@ -114,4 +114,14 @@ test('a yield makes the next unit start with a new probe; the reference stays th
   assert.deepEqual(gate.units.map((unit) => unit.kind), ['probe', 'rep', 'probe', 'rep']);
   assert.equal(segments.reference, 4.0, 'the first accepted rate is the cells rate');
   assert.equal(gate.units[3].segment, 2);
+});
+
+test('a probe whose step gives the lock up is followed by a new probe before the unit runs', async () => {
+  const gate = fakeGate([{ waiterPids: [42], seenToReleaseMs: 3 }]);
+  const { segments, probes } = segmentsWith(gate, [4.0, 3.9]);
+  await segments.unit('rep', 'background 1', () => 1);
+  assert.equal(probes(), 2);
+  assert.deepEqual(gate.units.map((unit) => unit.kind), ['probe', 'probe', 'rep']);
+  assert.equal(gate.units[2].segment, 2, 'the unit runs in the segment its new probe started');
+  assert.equal(segments.reference, 4.0);
 });

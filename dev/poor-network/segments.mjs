@@ -66,18 +66,16 @@ export class Segments {
   }
 
   // Runs one unit as a step of the current segment and returns the step's outcome. A probe comes first when the segment
-  // is new. The lock is given up after the step when a process is queued for it.
+  // is new or the last step gave the lock up: a yield ends the segment, and the next unit starts with a new probe.
+  // The gate gives the lock up at each step's end (BenchGate.step), so every step, probes included, can end a segment.
   async unit(kind, name, body) {
-    if (this.#needProbe) {
+    while (this.#needProbe) {
       await this.#enter();
     }
     const outcome = await this.#gate.step(kind, name, body);
     outcome.unit.segment = this.#count;
     outcome.unit.probeRate = this.#probeRate;
-    if (Date.now() - this.#startedAt >= SEGMENT_MAX_MS) {
-      this.#needProbe = true;
-    }
-    if ((await this.#gate.yieldIfWaited()) !== null) {
+    if (Date.now() - this.#startedAt >= SEGMENT_MAX_MS || outcome.yielded) {
       this.#needProbe = true;
     }
     return outcome;
@@ -104,7 +102,8 @@ export class Segments {
         this.#count = number;
         this.#probeRate = rate;
         this.#reference ??= rate;
-        this.#needProbe = false;
+        // A probe whose step gave the lock up is followed by a new probe, so the segment it started ends at once.
+        this.#needProbe = outcome.yielded;
         this.#startedAt = Date.now();
         return;
       }

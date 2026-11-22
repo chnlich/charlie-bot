@@ -685,6 +685,16 @@ mod tests {
     assert!(error.to_string().contains("accounts.claude_compaction.families"), "{error}");
   }
 
+  #[test]
+  fn a_fable_session_compacts_on_the_configured_option_and_other_families_do_not() {
+    let root = tempfile::tempdir().unwrap();
+    let cfg = config(root.path());
+    assert_eq!(compaction_option(&cfg).map(|option| option.model.as_str()), Some("claude-sonnet-5"));
+    assert!(relay_compaction_wanted(&cfg, Some("claude-fable-5-2"), Some(100_000)).unwrap());
+    assert!(!relay_compaction_wanted(&cfg, Some("claude-fable-5-2"), Some(99_999)).unwrap());
+    assert!(!relay_compaction_wanted(&cfg, Some("claude-opus-5-5"), Some(200_000)).unwrap());
+  }
+
   fn fake_env(bin: &Path, home: &Path, config_dir: &Path) -> Env {
     let inherited = Env::from([
       ("HOME".to_string(), home.to_string_lossy().into_owned()),

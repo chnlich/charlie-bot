@@ -397,6 +397,7 @@ exit 0
 /// The direction of the focused export checks. Its TMPDIR name no real direction's round shares.
 const FOCUS_DIRECTION: &str = "focused";
 const SYMLINK_DIRECTION: &str = "symlink_review";
+const SCOPE_TMPDIR_DIRECTION: &str = "scope_tmpdir";
 
 /// The run of the runner's `--in-scope` form alone, with the stub improve-sandbox that records the gateway
 /// variables and the Codex home. The first form exports the launch environment before it starts the scope, so the
@@ -409,10 +410,22 @@ fn run_in_scope(world: &World, launch_id: &str, kind: &str) -> harness::Run {
 
 /// [`run_in_scope`] with `extra` variables set over its environment, such as a `PATH` that names a stub.
 fn run_in_scope_with(world: &World, launch_id: &str, kind: &str, extra: &[(&str, String)]) -> harness::Run {
+  run_in_scope_for(world, launch_id, FOCUS_DIRECTION, kind, extra)
+}
+
+/// [`run_in_scope_with`] for an explicit direction, so a test that asserts on `/tmp/improve-<direction>-tmp` does not
+/// race with the `FOCUS_DIRECTION` tests.
+fn run_in_scope_for(
+  world: &World,
+  launch_id: &str,
+  direction: &str,
+  kind: &str,
+  extra: &[(&str, String)],
+) -> harness::Run {
   let launch = world.stage_launch(launch_id);
   fs::write(launch.join("args"), "").expect("the launch arguments file");
-  fs::create_dir_all(format!("/tmp/improve-{FOCUS_DIRECTION}-tmp")).expect("the round's TMPDIR");
-  fs::create_dir_all(world.remote_home.join("improve").join(FOCUS_DIRECTION)).expect("the round root");
+  fs::create_dir_all(format!("/tmp/improve-{direction}-tmp")).expect("the round's TMPDIR");
+  fs::create_dir_all(world.remote_home.join("improve").join(direction)).expect("the round root");
   let bin = world.remote_home.join("improve/runner/bin");
   fs::create_dir_all(&bin).expect("the runner bin directory");
   harness::write_executable(&bin.join("improve-sandbox"), format!("#!/usr/bin/env bash\n{SCOPE_ENV_STUB}"));
@@ -432,7 +445,7 @@ fn run_in_scope_with(world: &World, launch_id: &str, kind: &str, extra: &[(&str,
   command.arg(harness::repo_root().join("dev/improve/remote-runner.sh")).args([
     "--in-scope",
     launch_id,
-    FOCUS_DIRECTION,
+    direction,
     kind,
   ]);
   harness::run(&mut command)
@@ -473,29 +486,33 @@ fn scope_tmpdir(world: &World) -> PathBuf {
 #[ignore = "integration"]
 fn a_scope_removes_the_directories_earlier_scopes_made_and_keeps_the_session_tmpdir() {
   let world = World::new();
-  let session_tmpdir = PathBuf::from(format!("/tmp/improve-{FOCUS_DIRECTION}-tmp"));
+  let session_tmpdir = PathBuf::from(format!("/tmp/improve-{SCOPE_TMPDIR_DIRECTION}-tmp"));
+  let _ = fs::remove_dir_all(&session_tmpdir);
   fs::create_dir_all(session_tmpdir.join("session-copy")).expect("a directory that no runner made");
   fs::write(session_tmpdir.join("session-copy/data.txt"), "session data").expect("the session copy");
   fs::write(session_tmpdir.join("loose.txt"), "loose").expect("a loose file in the session TMPDIR");
 
-  let first = run_in_scope(&world, "20261101T090000Z-1-310", "claude");
+  let first = run_in_scope_for(&world, "20261101T090000Z-1-310", SCOPE_TMPDIR_DIRECTION, "claude", &[]);
   assert_eq!(first.code, 0, "{}", first.describe());
   let first_tmpdir = scope_tmpdir(&world);
   assert_eq!(first_tmpdir.parent(), Some(session_tmpdir.as_path()), "{}", first_tmpdir.display());
   fs::write(first_tmpdir.join("killed-copy.bin"), "copy").expect("the first scope's copy");
 
-  let second = run_in_scope(&world, "20261101T090000Z-1-311", "claude");
-  assert_eq!(second.code, 0, "{}", second.describe());
+  let second = run_in_scope_for(&world, "20261101T090000Z-1-311", SCOPE_TMPDIR_DIRECTION, "claude", &[]);
   let second_tmpdir = scope_tmpdir(&world);
+  let first_exists = first_tmpdir.exists();
+  let second_is_dir = second_tmpdir.is_dir();
+  let session_copy =
+    fs::read_to_string(session_tmpdir.join("session-copy/data.txt")).expect("the session copy survived");
+  let loose = fs::read_to_string(session_tmpdir.join("loose.txt")).expect("the loose file survived");
+  let _ = fs::remove_dir_all(&session_tmpdir);
 
-  assert!(!first_tmpdir.exists(), "the earlier scope's directory survived: {}", first_tmpdir.display());
-  assert!(second_tmpdir.is_dir(), "the second scope made no TMPDIR: {}", second_tmpdir.display());
+  assert_eq!(second.code, 0, "{}", second.describe());
+  assert!(!first_exists, "the earlier scope's directory survived: {}", first_tmpdir.display());
+  assert!(second_is_dir, "the second scope made no TMPDIR: {}", second_tmpdir.display());
   assert_eq!(second_tmpdir.parent(), Some(session_tmpdir.as_path()), "{}", second_tmpdir.display());
-  assert_eq!(
-    fs::read_to_string(session_tmpdir.join("session-copy/data.txt")).expect("the session copy survived"),
-    "session data"
-  );
-  assert_eq!(fs::read_to_string(session_tmpdir.join("loose.txt")).expect("the loose file survived"), "loose");
+  assert_eq!(session_copy, "session data");
+  assert_eq!(loose, "loose");
 }
 
 /// Fake charlie-code for a review that outlives its agent: it records its process id, reports its start, and stays

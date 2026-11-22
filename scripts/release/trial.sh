@@ -182,6 +182,9 @@ fi
 if ! command -v ss >/dev/null 2>&1; then
   preflight_fail 'ss resolves on PATH for the port-holder check'
 fi
+if ! command -v pgrep >/dev/null 2>&1; then
+  preflight_fail 'pgrep resolves on PATH for the server-tree check'
+fi
 
 if ! CLC_PATH=$(command -v charlie-code 2>/dev/null) || [[ -z $CLC_PATH ]]; then
   preflight_fail 'charlie-code resolves on PATH'
@@ -748,50 +751,79 @@ startup_failed() {
   printf 'CAUSE serve: %s\n' "$1"
 }
 
-# port_holders prints the `ss` line of each socket that listens on the trial's port, with its owning process.
-port_holders() {
-  ss -H -ltnp "sport = :$CHOSEN_PORT"
+# port_listeners prints the `ss` line of each listening socket on the trial's port, with its socket inode (-e). The
+# lines name no owner, and the check does not ask ss for one: `ss -p` reads the fds of every process before it dumps
+# the sockets, so a listener bound during that read is listed without its owner. Ownership comes from the fd tables
+# of the trial's processes instead (server_tree_pids and unproven_holders).
+port_listeners() {
+  ss -H -ltne "sport = :$CHOSEN_PORT"
 }
 
-# holder_pid LINE prints the pid of the process in one `ss` line, or nothing when ss cannot name it.
-holder_pid() {
-  sed -n 's/.*pid=\([0-9]*\).*/\1/p' <<<"$1"
+# listener_inode LINE prints the socket inode of one `ss -e` line. A line without an inode fails: no proof exists.
+listener_inode() {
+  local inode
+  inode=$(sed -n 's/.* ino:\([0-9]*\).*/\1/p' <<<"$1")
+  [[ -n $inode ]] || return 1
+  printf '%s' "$inode"
 }
 
-# holder_text LINE describes the process that holds one listening socket: its pid, command line and working directory.
+# server_tree_pids prints the pid of the trial's server process and of each process it started, descendants included.
+# pgrep -P exits 1 for a process without children, which is not an error.
+server_tree_pids() {
+  local -a queue=("$SERVER_PID")
+  local pid children status
+  while (( ${#queue[@]} > 0 )); do
+    pid=${queue[0]}
+    queue=("${queue[@]:1}")
+    printf '%s\n' "$pid"
+    children=$(pgrep -P "$pid")
+    status=$?
+    (( status == 0 || status == 1 )) || return 1
+    queue+=($children)
+  done
+}
+
+# unproven_holders LISTENERS TREE prints the holder of each listening line whose socket no process of TREE holds, one
+# per line. A process of TREE holds a socket when its fd table lists the socket's inode. Only the trial's own processes
+# are read, so the proof admits nothing else. It fails when a line has no socket inode.
+unproven_holders() {
+  local listeners=$1 tree=$2 line inode pid proven
+  while IFS= read -r line; do
+    inode=$(listener_inode "$line") || return 1
+    proven=0
+    for pid in $tree; do
+      if ls -l "/proc/$pid/fd" 2>/dev/null | grep -F "socket:[$inode]" >/dev/null; then
+        proven=1
+        break
+      fi
+    done
+    if (( proven == 0 )); then
+      holder_text "$line" "$inode"
+      printf '\n'
+    fi
+  done <<<"$listeners"
+}
+
+# holder_text LINE describes the process that holds the socket of one `ss -e` line: the pid that `ss -p -e` names for
+# the same socket inode, with its command line and working directory. When `ss -p` names no pid, the line describes
+# the listener and its inode. The name is for the CAUSE line only; no decision reads it.
 holder_text() {
-  local pid
-  pid=$(holder_pid "$1")
+  local line=$1 inode=$2 named named_line pid=
+  if ! named=$(ss -H -ltnpe "sport = :$CHOSEN_PORT"); then
+    printf 'a listener ss could not name (%s)' "$line"
+    return 0
+  fi
+  while IFS= read -r named_line; do
+    [[ $named_line =~ (^|[[:space:]])ino:${inode}([[:space:]]|$) ]] || continue
+    pid=$(sed -n 's/.*pid=\([0-9]*\).*/\1/p' <<<"$named_line")
+    break
+  done <<<"$named"
   if [[ -z $pid ]]; then
-    printf 'a process this user cannot name (%s)' "$1"
+    printf 'a process this user cannot name (%s)' "$line"
     return 0
   fi
   printf 'pid %s %s (cwd %s)' "$pid" "$({ tr '\0' ' ' <"/proc/$pid/cmdline"; } 2>/dev/null)" \
     "$(readlink "/proc/$pid/cwd" 2>/dev/null)"
-}
-
-# pid_in_server_tree PID succeeds when PID is the trial's server process or one of its descendants.
-pid_in_server_tree() {
-  local pid=$1 parent
-  while [[ $pid =~ ^[0-9]+$ ]] && (( pid > 1 )); do
-    [[ $pid == "$SERVER_PID" ]] && return 0
-    parent=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]')
-    pid=$parent
-  done
-  return 1
-}
-
-# foreign_holders LINES prints the holder of each listening line that is not this trial's server or one of its
-# descendants. A line whose process ss cannot name counts as foreign.
-foreign_holders() {
-  local line pid
-  while IFS= read -r line; do
-    pid=$(holder_pid "$line")
-    if [[ -z $pid ]] || ! pid_in_server_tree "$pid"; then
-      holder_text "$line"
-      printf '\n'
-    fi
-  done <<<"$1"
 }
 
 start_server() {
@@ -808,37 +840,57 @@ start_server() {
   fi
   SERVER_PID=$!
   SERVER_PIDS+=("$SERVER_PID")
-  # Each poll asks who listens on the port before it asks the port anything. A listener that is not this server's tree
-  # is another process's, and this server's bind fails behind it, so the side fails now with that holder named.
+  # Each poll reads the port's listeners, then asks whether a process this trial started holds each one. A listener that
+  # none of them holds is another process's: this server's bind fails behind it, so the side fails now, with the holder.
   for _ in $(seq 1 "$SERVE_READY_POLLS"); do
-    local holders foreign status state holder
-    if ! holders=$(port_holders); then
+    local listeners tree holders summary held_by status state
+    if ! listeners=$(port_listeners); then
       startup_failed "ss cannot list the listeners on 127.0.0.1:$CHOSEN_PORT"
       return 1
     fi
-    if [[ -n $holders ]]; then
-      foreign=$(foreign_holders "$holders")
-      if [[ -n $foreign ]]; then
-        holder=$(paste -sd ';' <<<"$foreign")
-        startup_failed "port $CHOSEN_PORT is held by another process, so this trial's server cannot bind it: $holder"
+    if [[ -n $listeners ]]; then
+      if ! tree=$(server_tree_pids); then
+        summary=$(paste -sd ';' <<<"$listeners")
+        startup_failed "port $CHOSEN_PORT has unproven listener $summary; trial process list failed"
         return 1
       fi
-      # Every listener on the port belongs to this trial's server, so the answer is this server's.
+      if ! holders=$(unproven_holders "$listeners" "$tree"); then
+        summary=$(paste -sd ';' <<<"$listeners")
+        startup_failed "port $CHOSEN_PORT has a listener without a socket inode: $summary"
+        return 1
+      fi
+      if [[ -n $holders ]]; then
+        summary=$(paste -sd ';' <<<"$holders")
+        startup_failed "port $CHOSEN_PORT is held by another process, so this trial's server cannot bind it: $summary"
+        return 1
+      fi
+      # Every listener on the port is held by this trial's server, so the answer is this server's.
       status=$(http_get /api/auth/status "$AUTH_STATUS_FILE")
       [[ $status == 200 ]] && grep -qE '[[:space:]]server_ready[[:space:]]' "$SERVER_LOG" && return 0
     fi
     state=$(process_state "$SERVER_PID")
     if [[ -z $state || $state == *Z* ]]; then
-      if ! holders=$(port_holders); then
+      if ! listeners=$(port_listeners); then
         startup_failed "the trial server exited before it became ready; ss cannot list the listeners"
         return 1
       fi
-      if [[ -n $holders ]]; then
-        holder=$(paste -sd ';' <<<"$(foreign_holders "$holders")")
-        startup_failed "the trial server exited before it became ready; port $CHOSEN_PORT is held by $holder"
-      else
+      if [[ -z $listeners ]]; then
         startup_failed "the trial server exited before it became ready; port $CHOSEN_PORT has no listener"
+        return 1
       fi
+      if ! tree=$(server_tree_pids); then
+        summary=$(paste -sd ';' <<<"$listeners")
+        startup_failed "server exited; port $CHOSEN_PORT has unproven listener $summary (process list failed)"
+        return 1
+      fi
+      if ! holders=$(unproven_holders "$listeners" "$tree"); then
+        summary=$(paste -sd ';' <<<"$listeners")
+        startup_failed "server exited before ready; port $CHOSEN_PORT has listener without socket inode: $summary"
+        return 1
+      fi
+      summary=$(paste -sd ';' <<<"$holders")
+      held_by=${summary:-a process of the trial tree}
+      startup_failed "the trial server exited before it became ready; port $CHOSEN_PORT is held by $held_by"
       return 1
     fi
     sleep 0.25

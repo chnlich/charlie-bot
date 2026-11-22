@@ -974,6 +974,78 @@ fn test_trial_serve_fails_the_side_when_another_process_holds_its_port() {
   assert_eq!(fs::read_dir(tree_root).expect("the tree root").count(), 0, "{}", run.describe());
 }
 
+/// The `ss` on the test process's PATH, by its absolute path.
+fn real_ss() -> PathBuf {
+  std::env::var_os("PATH")
+    .and_then(|path| std::env::split_paths(&path).map(|dir| dir.join("ss")).find(|candidate| candidate.is_file()))
+    .expect("ss resolves on PATH")
+}
+
+/// A serve trial whose own server holds its port while `ss -p` names no listener. The stub `ss` strips the users field
+/// from every line, as `ss -p` does for a listener that it lists without its owner. The side passes on the trial's own
+/// fd tables, and the command runs once the server answers.
+#[test]
+#[ignore = "integration"]
+fn test_trial_serve_passes_its_own_server_when_ss_names_no_listener() {
+  let world = ServeWorld::new();
+  let seed = world.seed_home("seed", "1");
+  let tree_root = world.tree_root();
+  world.sandbox.stub(
+    "ss",
+    &format!(
+      "out=$('{}' \"$@\") || exit $?\n[ -z \"$out\" ] || printf '%s\\n' \"$out\" | sed 's/ users:[^ ]*//'\nexit 0\n",
+      real_ss().display()
+    ),
+  );
+
+  let run = world.serve(tree_root, &seed, &["true"]);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(run.stdout.contains("SERVE PASS Startup"), "{}", run.describe());
+  assert!(!run.stdout.contains("CAUSE serve"), "{}", run.describe());
+  assert!(run.stdout.contains("SERVE command exit=0"), "{}", run.describe());
+}
+
+/// A serve trial whose chosen port a process takes after the trial picks it. That process's fd table is unreadable to
+/// this user, so `ss -p` names it by no pid. The holder is not the trial's server: the side fails at start with the
+/// port and the unnamed holder, and no command runs.
+#[test]
+#[ignore = "integration"]
+fn test_trial_serve_fails_the_side_when_an_unnamed_process_holds_its_port() {
+  let _serial = TRIAL_RUNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+  let world = ServeWorld::new();
+  let tree_root = world.tree_root();
+  let stub_release = world.sandbox.dir("stub-release");
+  symlink(harness::built_binary("serve-stub"), stub_release.join("charliebot-server")).expect("the stub link");
+  symlink(world.release.join("charliebot"), stub_release.join("charliebot")).expect("the CLI link");
+  let port = TcpListener::bind(("127.0.0.1", 0)).expect("a free port").local_addr().expect("the port").port();
+  let marker = world.sandbox.root().join("command-ran");
+  let touch = format!("touch '{}'", marker.display());
+  let trial =
+    world.spawn_serve_on_port(tree_root, port, &stub_release.join("charliebot-server"), &["sh", "-c", touch.as_str()]);
+
+  let server_log = tree_root.join(format!("trial-{}", &world.commit[..12])).join("server-1.log");
+  wait_for_server_ready(&server_log);
+  let mut holder =
+    harness::spawn(harness::command(harness::built_binary("port-holder"), &world.env).arg(port.to_string()));
+
+  let output = trial.wait_with_output().expect("the trial ends");
+  holder.kill().expect("the holder stops");
+  holder.wait().expect("the holder ends");
+  let run = Run {
+    code: output.status.code().unwrap_or(-1),
+    stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+    stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+  };
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(run.stdout.contains("FAIL serve Startup"), "{}", run.describe());
+  assert!(run.stdout.contains(&format!("CAUSE serve: port {port} is held by another process")), "{}", run.describe());
+  assert!(run.stdout.contains("a process this user cannot name"), "{}", run.describe());
+  assert!(!run.stdout.contains("SERVE PASS Startup"), "{}", run.describe());
+  assert!(!marker.exists(), "a command ran on a side whose port an unnamed process holds: {}", run.describe());
+  assert_eq!(fs::read_dir(tree_root).expect("the tree root").count(), 0, "{}", run.describe());
+}
+
 /// Waits until the trial's server log holds the stand-in's readiness line, which the trial reads before it checks the
 /// port.
 fn wait_for_server_ready(log: &Path) {

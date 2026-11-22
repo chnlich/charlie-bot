@@ -500,13 +500,9 @@ impl BackendLifecycle for ClaudeCodeLifecycle {
         failure: MemberFailure::Other,
         resets_at: None,
       })?;
-      if decision == claude_relay::LOGIN_FAILED {
-        master_cc_relay::report_login_failure(&self.state, ctx, &pooled.account)
-          .await
-          .map_err(|error| refused(error, MemberFailure::Other, None))?;
-      }
       let account_pool = claude_accounts::option_pool(&ctx.option);
       // A keyed round forwards its login's token once, when it starts, so it cannot relay: its decision ends the round.
+      // A lost forwarded token says nothing about the local login it was copied from, so that login is not marked.
       if keyed_round(ctx) {
         return Err(
           claude_relay::keyed_round_refusal(
@@ -518,6 +514,11 @@ impl BackendLifecycle for ClaudeCodeLifecycle {
           )
           .map_err(|error| refused(error, MemberFailure::Other, None))?,
         );
+      }
+      if decision == claude_relay::LOGIN_FAILED {
+        master_cc_relay::report_login_failure(&self.state, ctx, &pooled.account)
+          .await
+          .map_err(|error| refused(error, MemberFailure::Other, None))?;
       }
       if let Some(cap_refusal) = claude_relay::relay_cap_refusal(
         &self.state,
@@ -1240,7 +1241,10 @@ mod tests {
     assert!(!refusal.failure.records_out(), "a token shortage records no member out");
     let account =
       claude_config::ClaudeAccount { label: "current".to_string(), config_dir: current.display().to_string() };
-    assert!(!claude_accounts::healthy(&state, &account, None), "the refused login is cooled");
+    assert!(
+      claude_accounts::healthy(&state, &account, None),
+      "the forwarded copy failed, not the local login, so the login stays selectable"
+    );
   }
 
   #[tokio::test]

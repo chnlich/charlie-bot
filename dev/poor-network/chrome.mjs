@@ -6,6 +6,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { trackLive } from './live.mjs';
+
 // The Chrome binary the bench drives, named by POOR_NETWORK_CHROME. run.sh resolves it before the trial starts, because
 // the trial replaces HOME for its own tree. The report prints the path, so a run names its browser.
 export function chromeBinary() {
@@ -137,11 +139,15 @@ export class Page {
 
 export class Browser {
   #child;
+  #closed = false;
+  #untrack = () => {};
   #cdp;
   #exited;
   #logFd;
 
   constructor(child, cdp, exited, logFd) {
+    // The browser registers itself while it runs, so a step that passes its cap can stop it (live.mjs, step-gate.mjs).
+    this.#untrack = trackLive('chrome', () => this.close());
     this.#child = child;
     this.#cdp = cdp;
     this.#exited = exited;
@@ -188,6 +194,12 @@ export class Browser {
 
   // Stops Chrome and every process in its group. The bench calls it on every path, including a failed run.
   async close() {
+    // Idempotent: a step that passed its cap stops the browser, and the step's own cleanup may run after that.
+    if (this.#closed) {
+      return;
+    }
+    this.#closed = true;
+    this.#untrack();
     if (this.#child.exitCode === null && this.#child.signalCode === null) {
       try {
         process.kill(-this.#child.pid, 'SIGTERM');

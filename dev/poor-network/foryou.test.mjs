@@ -39,7 +39,10 @@ function fakeApi({
     async scheduleTrigger(id, _delay, message) {
       calls.push(['trigger', id, message]);
       logOf(id).push({role: 'scheduled_trigger', content: message}, {role: 'assistant', content: 'tail reply'});
-      return `trigger-${calls.length}`;
+      return `trigger:${message}`;
+    },
+    async cancelTrigger(id, triggerId) {
+      calls.push(['cancel', id, triggerId]);
     },
     async bootstrapWireBytes() {
       return {wireBytes: 10, untrimmedBytes: 999999};
@@ -73,9 +76,17 @@ test('the seed gives both targets the marker turn and the trigger tail, and retu
   assert.match(largeTurns[0][2], /^pn-foryou size /);
   assert.match(largeTurns[1][2], /^pn-foryou marker /);
   assert.equal(api.calls.filter((call) => call[0] === 'send' && call[1] === 'typical').length, 1);
-  // Each target's tail fires its trigger turns, which the wait for idle follows.
-  assert.equal(api.calls.filter((call) => call[0] === 'trigger' && call[1] === 'large').length, 23);
-  assert.equal(api.calls.filter((call) => call[0] === 'trigger' && call[1] === 'typical').length, 23);
+  // Each target's tail holds its keeper and fires its trigger turns, which the wait for idle follows; the keeper is
+  // cancelled after the last turn, so no turn wakes on it.
+  for (const id of ['large', 'typical']) {
+    const triggers = api.calls.filter((call) => call[0] === 'trigger' && call[1] === id).map((call) => call[2]);
+    assert.equal(triggers.length, 24);
+    assert.match(triggers[0], /^pn-foryou keeper /);
+    assert.equal(triggers.filter((message) => /^pn-foryou tail /.test(message)).length, 23);
+    const cancels = api.calls.filter((call) => call[0] === 'cancel' && call[1] === id);
+    assert.equal(cancels.length, 1);
+    assert.match(cancels[0][2], /^trigger:pn-foryou keeper /);
+  }
 });
 
 test('a first screen that holds a For-you row by the page rule fails the seed', async () => {

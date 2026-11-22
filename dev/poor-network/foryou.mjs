@@ -90,12 +90,25 @@ async function sizeTarget(api, session) {
   }
 }
 
+// A tail turn leaves no wake of its own: no Waiting item, no child, and the next tail trigger is scheduled only after
+// it. The turn-end `pending-wake` check would then block it, continue it once, and post the no-wake notice, which a
+// trigger turn holds no user message to attach to: the runner posts it as an agent message, and an agent message is an
+// input, so the notice starts a new turn that posts the same notice again and the session never idles. The keeper
+// trigger is the tail's wake: it is pending while every tail turn runs, and the seed cancels it after the last one, so
+// no turn wakes on it. The one-hour delay stays inside the four hours the check asks a wake trigger to fire within.
+const TAIL_KEEPER_DELAY_S = 3600;
+
 // Adds the tail's trigger turns. Each fires after its one-second delay and runs the stub backend; the wait is the
 // same idle poll the bench's seeding uses.
 async function addTriggerTail(api, session) {
-  for (let turn = 0; turn < TAIL_TURNS; turn++) {
-    await api.scheduleTrigger(session.id, TAIL_TRIGGER_DELAY_S, `pn-foryou tail ${session.tag} ${turn}`);
-    await api.waitForIdle(session.id, TAIL_TURN_TIMEOUT_MS);
+  const keeper = await api.scheduleTrigger(session.id, TAIL_KEEPER_DELAY_S, `pn-foryou keeper ${session.tag}`);
+  try {
+    for (let turn = 0; turn < TAIL_TURNS; turn++) {
+      await api.scheduleTrigger(session.id, TAIL_TRIGGER_DELAY_S, `pn-foryou tail ${session.tag} ${turn}`);
+      await api.waitForIdle(session.id, TAIL_TURN_TIMEOUT_MS);
+    }
+  } finally {
+    await api.cancelTrigger(session.id, keeper);
   }
 }
 

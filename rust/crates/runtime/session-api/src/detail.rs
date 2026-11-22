@@ -93,8 +93,9 @@ pub struct BootstrapPayload {
 /// The payload renders the session's message tail trimmed to [`FIRST_SCREEN_WIRE_BUDGET_BYTES`] on
 /// the wire, so the switch's own transfer sets its time on a slow link. The trim drops the tail's
 /// oldest whole turns and moves the paging cursor onto the first kept one. The dropped history
-/// still reaches the page through scroll-up paging, and the newest turn — its user message
-/// included — always renders on the first screen.
+/// still reaches the page through scroll-up paging. The newest finished turn's last row always renders
+/// on the first screen: when that turn alone is over the budget, the cut lands inside it, keeping its
+/// newest events that fit, and the payload may then exceed the budget by that row.
 pub fn build_bootstrap_payload(
   store: &Store,
   cfg: &CharlieBotConfig,
@@ -110,16 +111,26 @@ pub fn build_bootstrap_payload(
     Slots { messages: Vec<Value>, start: usize, projection: Arc<MessageProjection> },
     Events { events: Vec<charliebot_store::ChatEvent>, start: usize, messages: Vec<Value> },
   }
-  let (tail, pending_draft, event_count) = if meta.profile == TaskProfile::Worker {
+  let (tail, pending_draft, event_count, newest) = if meta.profile == TaskProfile::Worker {
     let transcript = worker_transcript::load_worker_transcript(store, &meta.id)?;
     let (messages, oldest, _has_more) = transcript.projection.tail(BOOTSTRAP_MESSAGE_LIMIT);
     worker_summary = Some(transcript.summary.clone());
     let pending_draft = transcript.projection.pending_draft().cloned();
     let event_count = transcript.projection.event_count();
+    let separators: Vec<usize> = messages
+      .iter()
+      .enumerate()
+      .filter(|(_, message)| message["role"] == SEPARATOR_ROLE)
+      .map(|(index, _)| index)
+      .collect();
+    let rows =
+      messages.iter().enumerate().filter(|(_, message)| message["role"] != SEPARATOR_ROLE).map(|(index, _)| index);
+    let newest = NewestTurn::of(messages.len(), &separators, rows, |separator| separator + 1);
     (
       Tail::Slots { messages, start: oldest, projection: Arc::clone(&transcript.projection) },
       pending_draft,
       event_count,
+      newest,
     )
   } else {
     let archive_offset = usize::try_from(meta.archive_offset.max(0)).expect("non-negative archive offset fits usize");
@@ -140,7 +151,22 @@ pub fn build_bootstrap_payload(
       }
       read = next_bootstrap_read(read, messages.len(), total_count);
     };
-    (Tail::Events { events, start: oldest, messages }, pending_draft, archive_offset + total_count)
+    let separators: Vec<usize> = events
+      .iter()
+      .enumerate()
+      .filter(|(_, event)| {
+        matches!(event["type"].as_str(), Some(event_types::MASTER_DONE) | Some(event_types::RUN_END))
+      })
+      .map(|(index, _)| index)
+      .collect();
+    let rows = messages
+      .iter()
+      .filter(|message| message["role"] != SEPARATOR_ROLE)
+      .filter_map(|message| message[event_types::EVENT_INDEX].as_u64())
+      .map(|index| index as usize - oldest);
+    let newest =
+      NewestTurn::of(events.len(), &separators, rows, |separator| events_turn_start_after(&events, separator));
+    (Tail::Events { events, start: oldest, messages }, pending_draft, archive_offset + total_count, newest)
   };
 
   // The payload's fields that no trim step changes, built once. Each step clones them and inserts
@@ -174,10 +200,10 @@ pub fn build_bootstrap_payload(
     payload.insert(api::HAS_MORE_FIELD.to_string(), Value::Bool(start > 0));
     Ok(Value::Object(payload))
   };
-  // The next turn start a trim step may drop to, in the tail's own indexes (the `drop` a `build` step takes).
-  // A step therefore keeps every kept turn whole and never cuts the newest turn. A worker's projection branch
-  // reads the projection's separator ordinals, which are history ordinals. Every other session reads the events
-  // behind the fold's turn separators (master_done, run_end).
+  // The next turn start a trim step may drop to, in the tail's own indexes (the `drop` a `build` step takes). The
+  // trim accepts a step only up to the newest finished turn's start, so every older turn is dropped whole. A worker's
+  // projection branch reads the projection's separator ordinals, which are history ordinals. Every other session reads
+  // the events behind the fold's turn separators (master_done, run_end).
   let next_drop = |drop: usize| -> Option<usize> {
     match &tail {
       Tail::Slots { start, projection, .. } => {
@@ -191,11 +217,10 @@ pub fn build_bootstrap_payload(
         .find(|(_, event)| {
           matches!(event["type"].as_str(), Some(event_types::MASTER_DONE) | Some(event_types::RUN_END))
         })
-        .map(|(index, _)| index + 1)
-        .filter(|next| *next < events.len()),
+        .map(|(index, _)| events_turn_start_after(events, index)),
     }
   };
-  let (value, untrimmed_wire_bytes) = fit_first_screen_payload(&mut build, &next_drop)?;
+  let (value, untrimmed_wire_bytes) = fit_first_screen_payload(&mut build, &next_drop, newest)?;
   Ok(BootstrapPayload { value, untrimmed_wire_bytes })
 }
 
@@ -210,32 +235,102 @@ fn next_bootstrap_read(read: usize, messages: usize, total: usize) -> usize {
   grown.max(wanted.min(read.saturating_mul(8))).min(total)
 }
 
-/// The payload with the tail kept from turn boundary `drop` on, for the smallest turn-aligned
-/// `drop` whose messages fit `BOOTSTRAP_MESSAGE_LIMIT` and whose gzip fits
-/// [`FIRST_SCREEN_WIRE_BUDGET_BYTES`]. Returns the payload and the wire bytes the untrimmed payload takes.
+/// The newest finished turn of a tail, in the tail's own indexes: the trim's two stages both stay inside it.
+#[derive(Clone, Copy)]
+struct NewestTurn {
+  /// The first unit of the newest finished turn. A turn-boundary step never moves past it, so every older turn is
+  /// dropped whole before the newest one is cut.
+  start: usize,
+  /// The unit of the newest finished turn's last visible row. A cut inside the turn never passes it.
+  last_row: usize,
+}
+
+impl NewestTurn {
+  /// The newest finished turn of a tail of `len` units. `separators` lists the units holding a turn separator in
+  /// order, `rows` the units of the tail's visible rows, and `turn_start_after` the first unit of the turn after a
+  /// separator.
+  ///
+  /// A turn after the last separator is still running, so the finished turn ends at that separator: it starts after
+  /// the separator before it, and its last row is the newest row at or before the last separator. A turn with no row
+  /// before its separator keeps the separator as its row.
+  fn of(
+    len: usize,
+    separators: &[usize],
+    rows: impl Iterator<Item = usize>,
+    turn_start_after: impl Fn(usize) -> usize,
+  ) -> NewestTurn {
+    let start = match separators {
+      [.., before, _] => turn_start_after(*before),
+      _ => 0,
+    };
+    let end = separators.last().copied().unwrap_or(len.saturating_sub(1));
+    let last_row = rows.filter(|row| *row <= end).max().unwrap_or(end);
+    NewestTurn { start, last_row }
+  }
+}
+
+/// The role the fold gives a turn's separator row, which `master_done` and `run_end` render as.
+const SEPARATOR_ROLE: &str = "separator";
+
+/// The first event of the turn after the separator at `index`. The run's `run_finished` closes the run behind its
+/// separator and folds to no message, so the turn starts past it.
+fn events_turn_start_after(events: &[charliebot_store::ChatEvent], index: usize) -> usize {
+  let mut next = index + 1;
+  while events.get(next).is_some_and(|event| event["type"] == event_types::RUN_FINISHED) {
+    next += 1;
+  }
+  next
+}
+
+/// The payload with the tail kept from unit `drop` on, for the trim's smallest cut whose messages fit
+/// `BOOTSTRAP_MESSAGE_LIMIT` and whose gzip fits [`FIRST_SCREEN_WIRE_BUDGET_BYTES`]. Returns the payload and the wire
+/// bytes the untrimmed payload takes.
 ///
-/// The trim drops one whole turn per step and stops at the turn boundary when the newest turn
-/// alone exceeds the budget. That turn is the first screen, and the served size then exceeds the
-/// budget, with the untrimmed size naming it in the response header. Each step serializes and gzips one
-/// payload, well under a millisecond of a level-one gzip at these sizes, and the step count is the
-/// number of dropped turns.
+/// The trim runs in two stages. It first drops whole older turns, one turn-boundary step at a time, and never past the
+/// newest finished turn's start. When that turn alone is still over the budget, the trim searches the cuts inside it
+/// for the smallest that fits, which keeps its newest events that fit, and it never cuts past the turn's last row. A
+/// payload still over the budget at that row keeps the row, so the served size exceeds the budget by one row. Each
+/// step serializes and gzips one payload, well under a millisecond of a level-one gzip at these sizes.
 fn fit_first_screen_payload(
   build: &mut dyn FnMut(usize) -> StoreResult<Value>,
   next_drop: &dyn Fn(usize) -> Option<usize>,
+  newest: NewestTurn,
 ) -> StoreResult<(Value, usize)> {
   let wire_of = |payload: &Value| gzip_level_one(&charliebot_compat::json::fast_json_bytes(payload)).len();
   let messages_of = |payload: &Value| payload["messages"].as_array().map_or(0, Vec::len);
+  let over_budget = |payload: &Value| {
+    wire_of(payload) > FIRST_SCREEN_WIRE_BUDGET_BYTES || messages_of(payload) > BOOTSTRAP_MESSAGE_LIMIT
+  };
   let mut payload = build(0)?;
   let untrimmed_wire = wire_of(&payload);
-  let mut wire = untrimmed_wire;
   let mut drop = 0;
-  while wire > FIRST_SCREEN_WIRE_BUDGET_BYTES || messages_of(&payload) > BOOTSTRAP_MESSAGE_LIMIT {
-    let Some(next) = next_drop(drop) else { break };
+  while over_budget(&payload) {
+    let Some(next) = next_drop(drop).filter(|next| *next <= newest.start) else { break };
     drop = next;
     payload = build(drop)?;
-    wire = wire_of(&payload);
   }
-  Ok((payload, untrimmed_wire))
+  if !over_budget(&payload) || newest.last_row <= drop {
+    return Ok((payload, untrimmed_wire));
+  }
+  // `low` is over the budget, and `high` is the largest cut the newest turn keeps its last row at. The smallest cut
+  // in (low, high] that fits is the answer, when one fits at all.
+  let mut low = drop;
+  let mut high = newest.last_row;
+  let mut fitting = build(high)?;
+  if over_budget(&fitting) {
+    return Ok((fitting, untrimmed_wire));
+  }
+  while high - low > 1 {
+    let middle = low + (high - low) / 2;
+    let candidate = build(middle)?;
+    if over_budget(&candidate) {
+      low = middle;
+    } else {
+      high = middle;
+      fitting = candidate;
+    }
+  }
+  Ok((fitting, untrimmed_wire))
 }
 
 /// A session page's bootstrap payload as the page carries it.
@@ -1699,7 +1794,8 @@ backends:
       Ok(json!({"messages": messages}))
     };
     let next_drop = |drop: usize| if drop + turn_slots <= slots { Some(drop + turn_slots) } else { None };
-    let (payload, untrimmed) = fit_first_screen_payload(&mut build, &next_drop).unwrap();
+    let newest = NewestTurn { start: slots - turn_slots, last_row: slots - 1 };
+    let (payload, untrimmed) = fit_first_screen_payload(&mut build, &next_drop, newest).unwrap();
     assert!(untrimmed > FIRST_SCREEN_WIRE_BUDGET_BYTES, "the fixture's full payload must exceed the budget");
     let served_wire = gzip_level_one(&charliebot_compat::json::fast_json_bytes(&payload)).len();
     assert!(served_wire <= FIRST_SCREEN_WIRE_BUDGET_BYTES, "served {served_wire} over the budget");
@@ -1727,9 +1823,43 @@ backends:
     let mut build = |drop: usize| -> StoreResult<Value> {
       Ok(json!({"messages": (drop..1).map(|_| json!({"role": "user", "content": oversized})).collect::<Vec<_>>()}))
     };
-    let (payload, untrimmed) = fit_first_screen_payload(&mut build, &|_| None).unwrap();
+    let newest = NewestTurn { start: 0, last_row: 0 };
+    let (payload, untrimmed) = fit_first_screen_payload(&mut build, &|_| None, newest).unwrap();
     assert_eq!(payload["messages"].as_array().unwrap().len(), 1);
     assert!(untrimmed > FIRST_SCREEN_WIRE_BUDGET_BYTES);
+  }
+
+  /// Inside the newest turn, the cut keeps the largest suffix of its rows that fits, and the last row always survives.
+  #[test]
+  fn a_cut_inside_the_newest_turn_keeps_the_largest_row_suffix_that_fits() {
+    let rows = 10usize;
+    let row_text = |index: usize| fixture_text(index as u64 + 500, 1_600);
+    let suffix = |from: usize| -> Value {
+      json!({"messages": (from..rows).map(|index| json!({"role": "user", "content": row_text(index)})).collect::<Vec<_>>()})
+    };
+    let mut build = |drop: usize| -> StoreResult<Value> { Ok(suffix(drop)) };
+    let newest = NewestTurn { start: 0, last_row: rows - 1 };
+    let (payload, _) = fit_first_screen_payload(&mut build, &|_| None, newest).unwrap();
+    let wire_of = |value: &Value| gzip_level_one(&charliebot_compat::json::fast_json_bytes(value)).len();
+    let kept = payload["messages"].as_array().unwrap().len();
+    assert!(wire_of(&suffix(rows - kept)) <= FIRST_SCREEN_WIRE_BUDGET_BYTES, "the kept rows fit");
+    assert!(wire_of(&suffix(rows - kept - 1)) > FIRST_SCREEN_WIRE_BUDGET_BYTES, "one row more would not fit");
+    assert_eq!(payload["messages"][kept - 1]["content"], json!(row_text(rows - 1)), "the last row renders");
+  }
+
+  /// A last row that is over the budget alone is the first screen: the cut keeps that row and nothing older.
+  #[test]
+  fn a_last_row_over_the_budget_alone_is_kept_past_the_budget() {
+    let rows = [fixture_text(1, 900), fixture_text(2, 900), fixture_text(3, 20_000)];
+    let mut build = |drop: usize| -> StoreResult<Value> {
+      Ok(
+        json!({"messages": rows[drop..].iter().map(|text| json!({"role": "user", "content": text})).collect::<Vec<_>>()}),
+      )
+    };
+    let newest = NewestTurn { start: 0, last_row: 2 };
+    let (payload, _) = fit_first_screen_payload(&mut build, &|_| None, newest).unwrap();
+    assert_eq!(payload["messages"].as_array().unwrap().len(), 1);
+    assert_eq!(payload["messages"][0]["content"], json!(rows[2]));
   }
 
   /// A tail over the budget trims through the route's payload, whole turns only. The newest turn's

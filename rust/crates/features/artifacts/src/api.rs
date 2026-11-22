@@ -17,7 +17,7 @@ use charliebot_store::metadata::BASE_BRANCH_FIELD;
 use serde_json::{Map, Value, json};
 
 use crate::plan_verbs::{self, Amendment, SessionLocks, VerbError};
-use crate::plans::{self, PLAN_CLOSE_ABANDONED, PLAN_CLOSE_COMPLETED, PLAN_CLOSE_SUPERSEDED, PLANS_FILE};
+use crate::plans::{self, PLAN_AMEND_TRIGGER_DEFAULT, PLAN_AMEND_TRIGGERS, PLAN_CLOSE_MODES, PLANS_FILE};
 
 /// The state of the plan routes: the feature context, and the session locks that the verbs share.
 #[derive(Clone)]
@@ -148,14 +148,13 @@ const PRESENT_FIELDS: &[Field] = &[
 ];
 const PRESENT_BODY: BodyModel = BodyModel::required(PRESENT_FIELDS).forbid_extra();
 
-/// The triggers of `PlanAmendTrigger`, and the fields of `PlanAmendRequest` in the model's order. `trigger` defaults to
-/// `feedback`, `note` is required, and the base fields default to `None`.
-const AMEND_TRIGGERS: &[&str] = &["auto_amend", "feedback"];
+/// The fields of `PlanAmendRequest`, in the model's order. `trigger` takes one of `PLAN_AMEND_TRIGGERS`, and
+/// `PLAN_AMEND_TRIGGER_DEFAULT` when it is absent. `note` is required, and the base fields default to `None`.
 const AMEND_FIELDS: &[Field] = &[
   Field::required("session_id", FieldType::String),
   Field::required("file", FieldType::String),
   Field::optional("plan_id", FieldType::NullableInteger),
-  Field::optional("trigger", FieldType::Literal(AMEND_TRIGGERS)),
+  Field::optional("trigger", FieldType::Literal(&PLAN_AMEND_TRIGGERS)),
   Field::required("note", FieldType::String),
   Field::optional("base_repo", FieldType::NullableString),
   Field::optional(BASE_BRANCH_FIELD, FieldType::NullableString),
@@ -204,7 +203,7 @@ impl AmendRequest {
       Some(plan_id) => Some(plan_id),
     };
     let trigger = match fields.remove("trigger") {
-      None => "feedback".to_string(),
+      None => PLAN_AMEND_TRIGGER_DEFAULT.to_string(),
       Some(Value::String(trigger)) => trigger,
       Some(_) => unreachable!("a validated trigger is one of the triggers"),
     };
@@ -230,12 +229,11 @@ const APPROVE_FIELDS: &[Field] =
   &[Field::required("session_id", FieldType::String), Field::optional("plan_id", FieldType::NullableInteger)];
 const APPROVE_BODY: BodyModel = BodyModel::required(APPROVE_FIELDS).forbid_extra();
 
-/// The close modes of `PlanCloseMode`, and the fields of `PlanCloseRequest` in the model's order.
-const CLOSE_MODES: &[&str] = &[PLAN_CLOSE_SUPERSEDED, PLAN_CLOSE_ABANDONED, PLAN_CLOSE_COMPLETED];
+/// The fields of `PlanCloseRequest`, in the model's order. `close_as` takes one of `PLAN_CLOSE_MODES`.
 const CLOSE_FIELDS: &[Field] = &[
   Field::required("session_id", FieldType::String),
   Field::required("plan_id", FieldType::Integer),
-  Field::required("close_as", FieldType::Literal(CLOSE_MODES)),
+  Field::required("close_as", FieldType::Literal(&PLAN_CLOSE_MODES)),
 ];
 const CLOSE_BODY: BodyModel = BodyModel::required(CLOSE_FIELDS).forbid_extra();
 

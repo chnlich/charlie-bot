@@ -466,3 +466,50 @@ test('a side root keeps Chrome\'s socket path under trial.sh\'s limit for a 25-b
     fs.rmSync(tmpdir, { recursive: true, force: true });
   }
 });
+
+// run.sh names each side's commit in the bench tree before that side's trial starts, because trial.sh reads the commit
+// and its origin/main merge base from that tree.
+const SIDE_COMMIT = path.join(BENCH_DIR, 'side-commit.sh');
+
+test('side-commit.sh fetches a commit the bench tree lacks from its source and names it origin/main', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pn-side-commit-'));
+  try {
+    const env = {
+      ...process.env,
+      GIT_AUTHOR_NAME: 'bench',
+      GIT_AUTHOR_EMAIL: 'bench@example.invalid',
+      GIT_COMMITTER_NAME: 'bench',
+      GIT_COMMITTER_EMAIL: 'bench@example.invalid',
+    };
+    const git = (cwd, ...args) =>
+      execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    const source = path.join(dir, 'source');
+    const tree = path.join(dir, 'tree');
+    fs.mkdirSync(source);
+    fs.mkdirSync(tree);
+    git(source, 'init', '-q');
+    git(source, 'commit', '--allow-empty', '-q', '-m', 'baseline');
+    const baseline = git(source, 'rev-parse', 'HEAD');
+    git(tree, 'init', '-q');
+    git(tree, 'commit', '--allow-empty', '-q', '-m', 'upload');
+    assert.throws(() => git(tree, 'cat-file', '-e', `${baseline}^{commit}`), 'the tree starts without the baseline');
+
+    execFileSync('bash', [SIDE_COMMIT, tree, baseline, source], { env });
+
+    git(tree, 'cat-file', '-e', `${baseline}^{commit}`);
+    assert.equal(git(tree, 'rev-parse', 'refs/remotes/origin/main'), baseline);
+    assert.equal(git(tree, 'merge-base', 'origin/main', baseline), baseline);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('run.sh names each side\'s commit in the bench tree before that side\'s trial starts', () => {
+  const source = fs.readFileSync(RUN, 'utf8');
+  const beforeNamed = source.indexOf('name_trial_commit "$before_commit"');
+  const beforeRun = source.indexOf('run_side before "$bench_trial_script"');
+  const afterNamed = source.indexOf('name_trial_commit "$after_commit"');
+  const afterRun = source.indexOf('run_side after "$bench_trial_script"');
+  assert.ok(beforeNamed > 0 && beforeNamed < beforeRun, 'the before commit is named after the before trial starts');
+  assert.ok(afterNamed > 0 && afterNamed < afterRun, 'the after commit is named after the after trial starts');
+});

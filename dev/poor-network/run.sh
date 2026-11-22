@@ -449,15 +449,11 @@ run_side() {
   return "$trial_status"
 }
 
-# name_trial_commit COMMIT SOURCE makes COMMIT the bench tree's origin/main, fetching it from SOURCE when the tree
-# lacks it. Both sides run the bench tree's trial.sh, and the trial reads its commit and its origin/main merge base from
-# the repo its script runs in. The synced tree holds only the upload's own commit, so the other commit is fetched into it.
+# name_trial_commit COMMIT SOURCE names COMMIT in the bench tree for the trial that runs its side (side-commit.sh). Both
+# sides run the bench tree's trial.sh, so each side's commit must be there before its trial starts.
 name_trial_commit() {
-  local commit=$1 source=$2
-  git -C "$tree" cat-file -e "$commit^{commit}" 2>/dev/null \
-    || git -C "$tree" fetch -q "$source" "$commit" \
-    || die 2 "the trial commit $commit cannot be fetched into $tree from $source"
-  git -C "$tree" update-ref refs/remotes/origin/main "$commit"
+  bash "$BENCH_DIR/side-commit.sh" "$tree" "$1" "$2" \
+    || die 2 "the trial commit $1 cannot be named in $tree from $2"
 }
 
 # The before side: the commit `before_rev_resolved` (stored mode) or `before_rev` (explicit mode), measured for the rows

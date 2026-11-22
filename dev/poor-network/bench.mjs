@@ -161,8 +161,10 @@ function requireEnv(names) {
 // message is rendered.
 async function seedSession(api, tag, index, targetBytes) {
   const { id, group } = await api.createSession(`pn-${tag}-${index}`, STUB_BACKEND_ID);
+  // A sized session's turns carry the sizing marker, which the stub answers with a sized seed reply.
+  const prefix = targetBytes === null ? 'pn-seed' : 'pn-seed-sized';
   for (let turn = 1; ; turn++) {
-    const marker = `pn-seed ${tag} ${index} ${turn}`;
+    const marker = `${prefix} ${tag} ${index} ${turn}`;
     await api.sendMessage(id, marker);
     await api.waitForIdle(id, SEED_TIMEOUT_MS);
     if (targetBytes === null) {

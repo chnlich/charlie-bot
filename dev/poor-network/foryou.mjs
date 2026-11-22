@@ -341,7 +341,9 @@ export async function forYouRep(ctx, repetition) {
   );
   const openLarge = await openCell(ctx, foryou.large, `fy-open-large-${repetition}`);
   const openTypical = await openCell(ctx, foryou.typical, `fy-open-typical-${repetition}`);
-  const offline = await offlineReopenCell(ctx, foryou.large, `fy-offline-${repetition}`);
+  // The offline reopen waits for the copies-refresh report of the offline client, which only the after side emits (the
+  // main side has no such client), so the before side records no offline cell (null).
+  const offline = ctx.side === 'after' ? await offlineReopenCell(ctx, foryou.large, `fy-offline-${repetition}`) : null;
   return {
     switch: { large: cells.large, typical: cells.typical },
     failedPage: cells.failedPage,

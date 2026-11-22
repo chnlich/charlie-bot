@@ -358,6 +358,10 @@ function buildSide({
   }
   for (const metric of METRICS) {
     const repsOf = { 1: 'background', 2: 'background', 3: 'background', 4: 'held', 5: 'reset', 6: 'stream', 7: 'tools', 8: 'foryou' }[metric.scenario];
+    // An after-only metric reads a cell only the after side measures, so the before side has no row for it.
+    if (metric.afterOnly && args.side !== 'after') {
+      continue;
+    }
     if (results[repsOf].length > 0 && status === 'measured') {
       side.metrics[metric.id] = summarize(results[repsOf], metric);
     }

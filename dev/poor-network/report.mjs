@@ -203,6 +203,7 @@ export const METRICS = Object.freeze([
     title: 'For-you offline reopen of the large target after an online open, navigation to the first row',
     unit: 'ms',
     target: TARGETS.foryouOfflineReopenMs,
+    afterOnly: true,
     value: (rep) => rep.offline.firstRowMs,
     raw: (rep) => rep.offline.firstRowMs,
     capped: (rep) => rep.offline.capped,
@@ -213,6 +214,7 @@ export const METRICS = Object.freeze([
     title: 'For-you offline reopen, document bytes',
     unit: 'bytes',
     target: TARGETS.foryouOfflineDocumentBytes,
+    afterOnly: true,
     value: (rep) => rep.offline.documentBytes,
   },
 ]);

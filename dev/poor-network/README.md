@@ -236,7 +236,9 @@ bytes the page's bootstrap actually moved.
 
 The trial's backend is `charlie-code`, which `run.sh` puts on `PATH` as `stub/charlie-code`. Each turn the stub prints the
 next of 16 reply pieces, 8 KB each, cut from repository docs (`reply.mjs`), in the charlie-code NDJSON the backend reads.
-The pieces differ, so the gzip of a session's history does not fold its replies into one copy. Each reply streams as
+The pieces differ, so the gzip of a session's history does not fold its replies into one copy. A turn-end check's
+continuation run, whose prompt is the blocked checks' reasons, prints a one-line acknowledgement instead of a piece, so
+one turn's own messages stay inside the bootstrap's 10 KB first-screen budget. Each reply streams as
 about three or four text events of 2.2 KB, and the server keeps each event as one chat message; a bootstrap carries the
 last 40 messages, of which the event size and the turns' own messages set how much reply text a switch target carries. The stub calls no model
 and reads no credential. A prompt carrying the marker `bench-hold` keeps its turn open for the background load, until

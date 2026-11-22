@@ -128,11 +128,11 @@ pub enum FieldType {
   NullableModelList {
     model: &'static BodyModel,
   },
-  /// A `list[A | B | C] | None` field discriminated on `discriminator`: null is valid, and each item of a list is
-  /// validated as the variant whose tag it carries. An object without the discriminator reports
-  /// `union_tag_not_found` at its index. A tag matching no variant reports `union_tag_invalid` there, with the tag's
-  /// text rendering. A member's errors sit under `[index, tag]`: a bad `pid` in a `local_pid` item at index 0 reports
-  /// `["body", "watch_targets", 0, "local_pid", "pid"]`. Non-list values and list bounds follow `ModelList`.
+  /// A `list[A | B | C] | None` field discriminated on `discriminator`: null is valid.
+  /// Each item of a list is validated as the variant whose tag it carries. An object without the discriminator
+  /// reports `union_tag_not_found` at its index. A tag matching no variant reports `union_tag_invalid` there, with
+  /// the tag's text rendering. A member's errors sit under `[index, tag]`: a bad `pid` in a `local_pid` item at index 0
+  /// reports `["body", "watch_targets", 0, "local_pid", "pid"]`. Non-list values and list bounds follow `ModelList`.
   NullableTaggedUnionList {
     discriminator: &'static str,
     variants: &'static [TaggedVariant],

@@ -1,19 +1,16 @@
 //! The request path's one-shot gzip deflators, and the zstd form of a body a memo serves.
 //!
-//! A response pays the deflate once per body it builds. A memo serves the repeats. The level-1
-//! deflator covers the per-response bodies of ordinary size, and its byte count is one counter. A
-//! per-response body too large for its short hash chain to find the long matches takes the level-4
-//! form instead. A body a memo keeps and serves on every repeat deflates at the level-9 and level-8
-//! forms, and the memo keeps whichever is smaller: the output reaches every repeat request, so the
-//! second deflate is paid once per version and is worth it.
+//! A response pays the deflate once per body it builds, and a memo serves the repeats. The level-1 deflator
+//! covers per-response bodies of ordinary size, and its byte count is one counter. A per-response body too large
+//! for its short hash chain to find the long matches takes the level-4 form instead. A body a memo keeps and
+//! serves on every repeat deflates at the level-9 and level-8 forms, and keeps the smaller one. The output reaches
+//! every repeat request, so the second deflate, paid once per version, is worth it.
 //!
-//! A body a memo keeps also has a zstd form, which a client that accepts zstd takes instead. Zstd
-//! compresses a page's markup and inline script smaller than gzip does. The memo pays its slower
-//! compression once per body version.
+//! A body a memo keeps also has a zstd form, which a client that accepts zstd takes instead. Zstd compresses a
+//! page's markup and inline script smaller than gzip does. The memo pays its slower compression once per body version.
 //!
-//! A page's body is built per request, but its last substituted value ends near the front of the document. The
-//! scripts and stylesheets after it are the same bytes in every body the page serves. [`PageTail`] keeps the
-//! compressed forms of those bytes, so a body pays the deflate of its own head and copies the tail's form.
+//! [`PageTail`] keeps the compressed forms of the bytes after a page's last substituted value, which every body of
+//! the page shares.
 
 use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -91,15 +88,15 @@ pub fn gzip_level_four(data: &[u8]) -> Vec<u8> {
 /// The gzip levels a memoized body deflates at. The smaller form is the one the memo keeps.
 ///
 /// Level 9 is not the smaller form of every body with this backend. On the 14,451-row status answer of the mock home,
-/// level 9 produces 352,154 bytes where level 8 produces 308,813 (14.03% more), and level 8 takes 18 ms where level 9
-/// takes 24 ms. On the chat page body the level-9 form is 287 bytes smaller than the level-8 one (0.3%). The level a
-/// body prefers depends on the body, so a memoized body deflates at both and keeps the smaller form.
+/// level 9 produces 352,154 bytes where level 8 produces 308,813 (14.03% more). On that answer, level 8 takes 18 ms
+/// and level 9 takes 24 ms. On the chat page body the level-9 form is 287 bytes smaller than the level-8 one (0.3%).
+/// The level a body prefers depends on the body, so a memoized body deflates at both and keeps the smaller form.
 const MEMOIZED_LEVELS: [u32; 2] = [9, 8];
 
 /// The smallest gzip form of a body a memo serves on every repeat request.
 ///
-/// The memo keeps the output, so the deflates pay once per body version and every repeat request reads the smaller
-/// bytes: on the 14,451-session mock home's chat page the level-1 form is 143,335 bytes and the memoized form is
+/// The memo keeps the output, so the deflates pay once per body version, and every repeat request reads the smaller
+/// bytes. On the 14,451-session mock home's chat page, the level-1 form is 143,335 bytes and the memoized form is
 /// 98,761 (31.1% smaller). The second deflate costs the level-8 form's own time once per version, which the repeat
 /// requests do not pay.
 pub fn gzip_memoized_body(data: &[u8]) -> Vec<u8> {
@@ -297,8 +294,8 @@ mod tests {
 
   #[test]
   fn a_memoized_body_takes_the_smaller_of_the_two_levels() {
-    // A body of near-identical Han-heavy rows, the shape of a status answer: this backend's level 9 runs past its
-    // level 8 on such a body, so the memoized form is the smaller of the two, not the level-9 form alone.
+    // A body of near-identical Han-heavy rows has the shape of a status answer. On such a body this backend's
+    // level 9 runs past its level 8, so the memoized form is the smaller of the two, not the level-9 form alone.
     let mut state = 0x2545_f491_4f6c_dd1du64;
     let mut body = String::new();
     for index in 0..200 {

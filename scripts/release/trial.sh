@@ -371,6 +371,8 @@ trial_option() {
   fi
 }
 
+# backends.calls.new_session names the trial's first option, the target new sessions took before the key was required.
+# Without it the server refuses to start.
 cat >"$TRIAL_CB_HOME/config.yaml" <<EOF
 server:
   host: 127.0.0.1
@@ -396,6 +398,7 @@ backends:
       members:
         - charlie-code-release-trial
   calls:
+    new_session: charlie-code-release-trial
     worker: pool
     improve: pool
     verify: pool

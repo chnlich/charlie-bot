@@ -864,6 +864,29 @@ fn test_trial_serve_seeded_home_passes_the_mock_home_check() {
   assert_eq!(fs::read_dir(tree_root).expect("the tree root").count(), 0, "{}", run.describe());
 }
 
+/// The command that reads the chat page's status. `/?session=` is the chat shell: it renders without redirecting to a
+/// session row, so the page reaches the new-session target that the chat route reads.
+const CHAT_PAGE_STATUS: &[&str] = &[
+  "sh",
+  "-c",
+  r#"printf 'CHAT_PAGE %s\n' "$(curl -s -o /dev/null -w '%{http_code}' -H "$CHARLIEBOT_SERVE_AUTH_HEADER" "$CHARLIEBOT_SERVE_URL/?session=")""#,
+];
+
+/// A serve trial's chat page answers 200. The server refuses a chat page whose config names no new-session target, so
+/// the trial's config must name one, as the live config does.
+#[test]
+#[ignore = "integration"]
+fn test_trial_serve_answers_the_chat_page_with_200() {
+  let world = ServeWorld::new();
+  let seed = world.seed_home("seed", "2");
+  let tree_root = world.tree_root();
+
+  let run = world.serve(tree_root, &seed, CHAT_PAGE_STATUS);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(run.stdout.contains("CHAT_PAGE 200\n"), "{}", run.describe());
+}
+
 #[test]
 #[ignore = "integration"]
 fn test_trial_config_carries_the_live_weight_switches_and_an_absent_one_takes_its_default() {

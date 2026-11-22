@@ -62,6 +62,8 @@ set -euo pipefail
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly BENCH_DIR="$SCRIPT_DIR"
 source "$SCRIPT_DIR/lock.sh"
+# The sides run inside trials that replace HOME, so the host's lock file goes to them through the environment.
+bench_lock_export
 # How long a side's written JSON may sit beside a bench that does not exit, before the runner ends the trial tree.
 readonly SIDE_EXIT_GRACE_SECONDS=120
 readonly RATE_GATE_EXIT=5

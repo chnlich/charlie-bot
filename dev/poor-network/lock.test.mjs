@@ -187,6 +187,25 @@ test('two side attempts serialize on the one lock, and the second waits for the 
   }
 });
 
+test('a run exports the host lock, and a process under a trial HOME takes that lock, not one under its own HOME', () => {
+  const host = scratch('pn-lock-host-');
+  const trialHome = scratch('pn-lock-trial-');
+  try {
+    const hostLock = path.join(host, LOCK_FILE);
+    const env = { ...process.env, HOME: host };
+    delete env.BENCH_LOCK_FILE;
+    // The run resolves the lock under its HOME and exports it; the trial's bench then runs under its own HOME.
+    const under = (exportFirst) => execFileSync('bash', ['-c',
+      'source "$1"; if [[ $2 == export ]]; then bench_lock_export; fi; exec env HOME="$3" bash -c \'source "$1"; bench_lock_path\' bash "$1"',
+      'bash', LOCK, exportFirst, trialHome], { env, encoding: 'utf8' }).trim();
+    assert.equal(under('export'), hostLock, 'the exported lock is the one the trial bench takes');
+    assert.equal(under('none'), path.join(trialHome, LOCK_FILE), 'without the export, the trial HOME names its own lock');
+  } finally {
+    fs.rmSync(host, { recursive: true, force: true });
+    fs.rmSync(trialHome, { recursive: true, force: true });
+  }
+});
+
 test('the bench refuses a caller-chosen lock file and takes the lock itself', { timeout: 30000 }, async () => {
   const home = scratch('pn-lock-home-');
   const chosen = path.join(home, 'chosen.lock');

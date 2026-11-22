@@ -236,6 +236,7 @@
       .${PREFIX}-item-controls button { padding: 3px 6px; font-size: 10px; min-height: 24px; }
       .${PREFIX}-edit { min-height: 58px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace !important; }
       .${PREFIX}-reason { display: none; padding: 6px 7px; border-radius: 6px; background: #fef2f2; color: #b91c1c; }
+      .${PREFIX}-reason-loading { background: none; color: #64748b; }
       .${PREFIX}-toast {
         position: fixed; left: 50%; bottom: 18px; z-index: 30; transform: translateX(-50%);
         max-width: min(400px, calc(100vw - 24px)); border-radius: 999px; padding: 8px 12px;
@@ -756,11 +757,12 @@
     return id ? sessions.find((session) => session.id === id) : null;
   }
 
+  // A loading reason takes the muted style; the red reason style stays with the errors.
   function targetReason(target) {
-    if (target) return pickerLoading ? 'Loading sessions…' : '';
-    if (sessionLoadError) return `Unable to load target sessions: ${sessionLoadError}`;
-    if (querySessionStatus === 'loading' || !sessionsLoaded) return 'Loading target session…';
-    return 'No target session is available.';
+    if (target) return pickerLoading ? { text: 'Loading sessions…', loading: true } : { text: '', loading: false };
+    if (sessionLoadError) return { text: `Unable to load target sessions: ${sessionLoadError}`, loading: false };
+    if (querySessionStatus === 'loading' || !sessionsLoaded) return { text: 'Loading target session…', loading: true };
+    return { text: 'No target session is available.', loading: false };
   }
 
   function buildTrayItem(index, entry) {
@@ -817,8 +819,9 @@
     noticeEl.textContent = notice;
     noticeEl.style.display = notice ? 'block' : 'none';
     const reason = targetReason(target);
-    reasonEl.textContent = reason;
-    reasonEl.style.display = reason ? 'block' : 'none';
+    reasonEl.textContent = reason.text;
+    reasonEl.className = reason.loading ? `${PREFIX}-reason ${PREFIX}-reason-loading` : `${PREFIX}-reason`;
+    reasonEl.style.display = reason.text ? 'block' : 'none';
     // The header and the select name the target, so the button carries the action alone: its
     // label stays inside the tray whatever the session name's length.
     sendButton.textContent = 'Send';

@@ -250,6 +250,24 @@ async function firstRowPhase(tab, name, timeoutMs) {
   }, timeoutMs);
 }
 
+// Asks the page's own scroll handler for an older page until its failure hook records the request. Repeated scrolls
+// cover a page that was already filling when the first For-you row appeared: that flight may finish before the hook
+// becomes eligible, and the next scroll starts the measured failure.
+export async function triggerOlderPageUntilFailure(tab, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const failedAt = await tab.evaluate('window.__pnFail?.at ?? null');
+    if (failedAt !== null) return failedAt;
+    await tab.evaluate(`(() => {
+      const container = document.getElementById('messages');
+      container.scrollTop = 0;
+      container.dispatchEvent(new Event('scroll'));
+    })()`);
+    await sleep(200);
+  }
+  return null;
+}
+
 // Whether the page's chat shows `marker` now. A cell times the marker's first paint after its click, so a marker the
 // page already shows before the click would time nothing; the cell fails instead of reporting a value of zero.
 async function assertMarkerOffScreen(tab, marker, cell) {
@@ -291,9 +309,9 @@ async function switchCell(ctx, tab, target, name) {
   };
 }
 
-// The failed-page cell: the same switch, with the page's own fetch made to fail the target's first older-page
-// request with a 500. The readouts are the click-to-first-row time, the failure's arrival, and whether the page
-// retried the cursor (a plan-5 page retries the same cursor on its backoff; a page before it stops).
+// The failed-page cell: the same switch, with the page's first older-page request after the marker appears failing with
+// a 500. The failure follows the click-to-first-row measurement, so it cannot mask that row on main. The readouts are
+// the first-row time, the failure's arrival, and whether the page retried the cursor on its backoff.
 async function failedPageCell(ctx, tab, target, name) {
   await tab.showRow(target);
   await assertMarkerOffScreen(tab, target.marker, name);
@@ -303,7 +321,9 @@ async function failedPageCell(ctx, tab, target, name) {
     window.__pnFail = { at: null, url: null };
     window.fetch = (input, init) => {
       const url = typeof input === 'string' ? input : (input && input.url) || '';
-      if (window.__pnFail.at === null && url.includes('/api/sessions/${target.id}/events')) {
+      const markerShown = (document.getElementById('messages')?.textContent || '')
+        .includes(${JSON.stringify(target.marker)});
+      if (window.__pnFail.at === null && markerShown && url.includes('/api/sessions/${target.id}/events')) {
         window.__pnFail = { at: Date.now(), url };
         return Promise.resolve(new Response('{"error":"injected"}', { status: 500 }));
       }
@@ -312,9 +332,12 @@ async function failedPageCell(ctx, tab, target, name) {
   })()`);
   const clickedAt = await tab.clickSession(target.id);
   const shown = await tab.shownBy(name, clickedAt, SHOW_TIMEOUT_MS);
-  const failedAt = await pollFor(() => tab.evaluate('window.__pnFail?.at ?? null'), FAIL_OBSERVE_TIMEOUT_MS);
+  const failedAt = await triggerOlderPageUntilFailure(tab, FAIL_OBSERVE_TIMEOUT_MS);
+  if (failedAt === null) {
+    throw new Error(`${name}: no older-page request failed after the first For-you row appeared`);
+  }
   await sleep(FAILED_PAGE_SETTLE_MS);
-  const pageRequestsAfterFailure = olderPageRequests(tab, target.id, failedAt ?? clickedAt, Date.now());
+  const pageRequestsAfterFailure = olderPageRequests(tab, target.id, failedAt, Date.now());
   return {
     firstRowMs: shown.at - clickedAt,
     capped: shown.capped,

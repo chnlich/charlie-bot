@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { deliverReplyOnline } from './open.mjs';
+import { triggerOlderPageUntilFailure } from './foryou.mjs';
 import { withLink } from './scenarios.mjs';
 import { pollFor, sleep } from './tabs.mjs';
 
@@ -51,12 +52,14 @@ async function capture(tab, file) {
 }
 
 // Fails every older-page request for the target with a 500, so the page keeps its failed state and backs off.
-function failEveryOlderPage(sessionId) {
+function failEveryOlderPage(sessionId, marker) {
   return `(() => {
     const original = window.fetch;
     window.fetch = (input, init) => {
       const url = typeof input === 'string' ? input : (input && input.url) || '';
-      if (url.includes('/api/sessions/${sessionId}/events')) {
+      const markerShown = (document.getElementById('messages')?.textContent || '')
+        .includes(${JSON.stringify(marker)});
+      if (markerShown && url.includes('/api/sessions/${sessionId}/events')) {
         return Promise.resolve(new Response('{"error":"injected"}', { status: 500 }));
       }
       return original.call(window, input, init);
@@ -97,8 +100,17 @@ async function retryShot(ctx, size, target, file) {
     await tabs.waitIdle(SHOT_SETTLE_MS);
     await openPhoneDrawer(tab, size);
     await tab.showRow(target);
-    await tab.evaluate(failEveryOlderPage(target.id));
-    await tab.clickSession(target.id);
+    await tab.watchChat(name, target.marker);
+    await tab.evaluate(failEveryOlderPage(target.id, target.marker));
+    const clickedAt = await tab.clickSession(target.id);
+    const shown = await tab.shownBy(name, clickedAt, SHOT_SHOW_TIMEOUT_MS);
+    if (shown.capped) {
+      throw new Error(`${name}: the target's For-you row did not show within ${SHOT_SHOW_TIMEOUT_MS} ms`);
+    }
+    const failedAt = await triggerOlderPageUntilFailure(tab, RETRY_STATE_TIMEOUT_MS);
+    if (failedAt === null) {
+      throw new Error(`${name}: no older-page request failed after the first For-you row appeared`);
+    }
     const failed = await pollFor(() => tab.evaluate(SENTINEL_FAILED), RETRY_STATE_TIMEOUT_MS);
     if (failed === null) {
       throw new Error(`${name}: no failed older-page state within ${RETRY_STATE_TIMEOUT_MS} ms`);

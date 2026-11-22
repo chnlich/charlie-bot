@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { cellsDue, seedForYouTargets, seedSparseTarget } from './foryou.mjs';
+import { cellsDue, seedForYouTargets, seedSparseTarget, triggerOlderPageUntilFailure } from './foryou.mjs';
 
 // An api whose session log ends with the marker turn and `above` (the painted rows that turn leaves, one notice by
 // default), followed by the trigger tail's rows (none painted). The bootstrap's first screen carries `firstScreen`
@@ -139,4 +139,20 @@ test('each For-you cell runs for its own repetitions', () => {
   assert.equal(dueAt(1).length, 7);
   assert.deepEqual(dueAt(3), ['switchLarge', 'openLarge', 'openTypical']);
   assert.deepEqual(dueAt(6), []);
+});
+
+test('the failed-page cell keeps asking the page to scroll until its hook records the request', async () => {
+  let scrolls = 0;
+  let failedAt = null;
+  const tab = {
+    async evaluate(script) {
+      if (script === 'window.__pnFail?.at ?? null') return failedAt;
+      assert.match(script, /container\.dispatchEvent\(new Event\('scroll'\)\)/);
+      scrolls++;
+      if (scrolls === 2) failedAt = 123;
+    },
+  };
+
+  assert.equal(await triggerOlderPageUntilFailure(tab, 2000), 123);
+  assert.equal(scrolls, 2);
 });

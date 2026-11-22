@@ -8,7 +8,9 @@ import { readCredential } from './gateway.mjs';
 
 // The CLI that resolves. `CHARLIEBOT_BIN` names another one, as taste-replay's does.
 function charliebotBin() {
-  return process.env.CHARLIEBOT_BIN || 'charliebot';
+  if (process.env.CHARLIEBOT_BIN === undefined) return 'charliebot';
+  if (process.env.CHARLIEBOT_BIN === '') throw new Error('CHARLIEBOT_BIN is empty');
+  return process.env.CHARLIEBOT_BIN;
 }
 
 function resolve(args, subject) {

@@ -78,7 +78,7 @@ async function judgePacket({ packet, prompt, judge }) {
   return { answers, result, fillResult, dropped };
 }
 
-// A judgment saved by an earlier run of the same window is reused; a judgment from another judge is refused.
+// A judgment saved by an earlier run of the same window and judge option is reused; another option is refused.
 function loadJudgment(file, packet, judgeId) {
   const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
   if (saved.judge_backend !== judgeId) {
@@ -102,8 +102,33 @@ export async function labelWindow({ home, from, to, reportsUntil, out, credentia
   }
   const judge = gatewayCall(resolveCall('judge'), credentialsPath);
 
+  const promptHashes = { manager: sha256(prompts.manager), worker: sha256(prompts.worker) };
   fs.mkdirSync(path.join(out, 'packets'), { recursive: true });
-  fs.mkdirSync(path.join(out, 'judgments'), { recursive: true });
+  const judgmentsDir = path.join(out, 'judgments');
+  fs.mkdirSync(judgmentsDir, { recursive: true });
+  const judgmentFiles = fs.readdirSync(judgmentsDir).filter((name) => name.endsWith('.json'));
+  const runFile = path.join(out, 'run.json');
+  let runMatchesJudge = false;
+  if (fs.existsSync(runFile)) {
+    const savedRun = JSON.parse(fs.readFileSync(runFile, 'utf8'));
+    runMatchesJudge = savedRun.judge_backend === judge.id && savedRun.judge_model === judge.model;
+    if (judgmentFiles.length > 0 && !runMatchesJudge) {
+      throw new Error(
+        `saved judgments came from ${savedRun.judge_backend} (${savedRun.judge_model}), not ` +
+          `${judge.id} (${judge.model}); use a fresh output directory`,
+      );
+    }
+  } else if (judgmentFiles.length > 0) {
+    throw new Error('saved judgments have no run metadata; use a fresh output directory');
+  }
+  const runIdentity = {
+    from,
+    to,
+    reports_until: reportsUntil,
+    judge_backend: judge.id,
+    judge_model: judge.model,
+    prompt_sha256: promptHashes,
+  };
   const homeDir = os.homedir();
 
   const sessions = readSessionMetadata(sessionsRoot);
@@ -145,11 +170,11 @@ export async function labelWindow({ home, from, to, reportsUntil, out, credentia
   for (const packet of packets) {
     fs.writeFileSync(path.join(out, 'packets', `${packet.name}.md`), packet.text);
   }
+  if (!runMatchesJudge) fs.writeFileSync(runFile, `${JSON.stringify(runIdentity, null, 1)}\n`);
 
-  const promptHashes = { manager: sha256(prompts.manager), worker: sha256(prompts.worker) };
   const judgments = new Map();
   const tasks = packets.map((packet) => async () => {
-    const file = path.join(out, 'judgments', `${packet.name}.json`);
+    const file = path.join(judgmentsDir, `${packet.name}.json`);
     const kind = promptKind(packet.profile);
     if (fs.existsSync(file)) {
       judgments.set(packet.name, loadJudgment(file, packet, judge.id));
@@ -227,7 +252,7 @@ export async function labelWindow({ home, from, to, reportsUntil, out, credentia
     fill_passes: [...judgments.values()].filter((saved) => saved.fill_result !== null).length,
     dropped_answers: [...judgments.values()].reduce((total, saved) => total + saved.dropped_ids.length, 0),
   };
-  fs.writeFileSync(path.join(out, 'run.json'), `${JSON.stringify(run, null, 1)}\n`);
+  fs.writeFileSync(runFile, `${JSON.stringify(run, null, 1)}\n`);
   return { run, records };
 }
 

@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { mergeFiles, FILE_CAP } from '../lib/files.mjs';
 import { PACKET_LIMIT, buildChildPackets } from '../lib/packets.mjs';
 import { VERDICTS, checkAnswers, parseAnswers, runPool, splitAnswers } from '../lib/judge.mjs';
+import { resolveCall } from '../lib/backend.mjs';
 import { labelWindow } from '../lib/label.mjs';
 import { readCredential } from '../lib/gateway.mjs';
 import { sampleIndices } from '../lib/rejudge.mjs';
@@ -251,6 +252,10 @@ async function withCli(cli, fn) {
 
 const homeOf = (name) => path.join(scratch, name);
 
+test('an empty CHARLIEBOT_BIN is refused instead of falling back to PATH', async () => {
+  await withCli('', () => assert.throws(() => resolveCall('judge'), /CHARLIEBOT_BIN is empty/));
+});
+
 function labelOptions(home, out, credentialsPath) {
   return {
     home,
@@ -314,8 +319,10 @@ test('label judges each packet through the option the server resolves, and recor
     const credentials = path.join(scratch, 'judge-credentials.yaml');
     writeFile(credentials, 'fixture-entry:\n  api_key: fixture-key\n');
     const cli = writeCliStub('judge-cli', `printf '%s\\n' '${JSON.stringify({ option })}'`);
+    const home = homeOf('judged');
+    const out = path.join(scratch, 'judged-out');
     const { run, records } = await withCli(cli, () =>
-      labelWindow(labelOptions(homeOf('judged'), path.join(scratch, 'judged-out'), credentials)),
+      labelWindow(labelOptions(home, out, credentials)),
     );
     assert.ok(records.length > 0, 'the window holds messages to label');
     assert.ok(records.every((record) => record.judge_backend === 'fixture-judge' && record.verdict === 'needed'));
@@ -324,6 +331,19 @@ test('label judges each packet through the option the server resolves, and recor
     assert.ok(calls.length > 0, 'the packets reached the gateway');
     const expected = { url: '/v1/chat/completions', auth: 'Bearer fixture-key', model: 'fixture-model' };
     assert.deepEqual(calls, calls.map(() => expected));
+
+    const changedModelCli = writeCliStub(
+      'changed-model-judge-cli',
+      `printf '%s\\n' '${JSON.stringify({ option: { ...option, model: 'changed-model' } })}'`,
+    );
+    const callsBeforeResume = calls.length;
+    await withCli(changedModelCli, () =>
+      assert.rejects(
+        labelWindow(labelOptions(home, out, credentials)),
+        /saved judgments came from fixture-judge \\(fixture-model\\), not fixture-judge \\(changed-model\\)/,
+      ),
+    );
+    assert.equal(calls.length, callsBeforeResume, 'a changed model does not reuse or replace cached judgments');
   } finally {
     gateway.closeAllConnections();
     gateway.close();

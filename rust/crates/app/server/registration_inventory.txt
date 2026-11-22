@@ -44,6 +44,7 @@ page_packages	features.files	features.files
 routers	runtime.session_api	runtime.session_api
 routers	runtime.session_api	runtime.session_api
 routers	runtime.session_api	runtime.session_api
+routers	runtime.session_api	runtime.session_api
 routers	runtime.tasks	runtime.tasks
 routers	runtime.triggers	runtime.triggers
 routers	features.artifacts	features.artifacts

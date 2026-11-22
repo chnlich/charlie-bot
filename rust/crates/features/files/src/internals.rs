@@ -23,8 +23,8 @@ use charliebot_store::run_logs;
 use http::{HeaderMap, Method, StatusCode, header};
 use serde_json::json;
 
-use crate::api::MOUNT;
 use crate::listing::{self, FailureKind, ListingError};
+use crate::mount::MOUNT;
 
 /// The `mimetypes` table of this process, read once at first use.
 static MIME_TYPES: LazyLock<MimeTypes> = LazyLock::new(MimeTypes::load);

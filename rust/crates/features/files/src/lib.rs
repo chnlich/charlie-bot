@@ -8,5 +8,7 @@ mod api;
 mod human_size;
 mod internals;
 mod listing;
+mod mount;
 
-pub use api::{MOUNT, register};
+pub use api::register;
+pub use mount::MOUNT;

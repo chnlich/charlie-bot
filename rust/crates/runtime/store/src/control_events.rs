@@ -81,6 +81,11 @@ pub fn stable_run_error_notice_id(session_id: &str, run_id: &str) -> String {
   stable_id(&format!("run-error-notice:{session_id}:{run_id}"))
 }
 
+/// The stable notice id to the initiator for one turn-end notice that a child session recorded as `notice_event_id`.
+pub fn stable_turn_notice_id(session_id: &str, notice_event_id: &str) -> String {
+  stable_id(&format!("turn-notice:{session_id}:{notice_event_id}"))
+}
+
 /// The stable task-closed fact id for one `(session_id, request_id)` pair.
 pub fn stable_close_event_id(session_id: &str, request_id: &str) -> String {
   stable_id(&format!("task-closed:{session_id}:{request_id}"))

@@ -201,7 +201,7 @@ fn unanswered_user_messages(turn: &[Value]) -> anyhow::Result<Vec<(String, Strin
 /// Shows the notice `message` for each user message of the turn that no web reply answers, then marks the session
 /// unread. A message that already holds this notice gets none, so a retried delivery adds nothing; another notice
 /// on the same message still shows. A turn with no such message attaches nothing and resolves to `false`: the
-/// turn-end runner then posts the notice itself.
+/// turn-end runner then records the notice itself, as a notice that admits no input.
 pub async fn show_notice(
   features: &Arc<FeatureContext>,
   session_id: &str,
@@ -426,7 +426,7 @@ mod tests {
     assert!(show_notice(&home.features, &session_id, &turn, "no reply").await.unwrap());
     assert_eq!(home.events(&session_id).iter().filter(|event| event["type"] == WEB_REPLY_NOTICE).count(), 1);
 
-    // A turn without an unanswered user message attaches nothing, so the runner posts the notice itself.
+    // A turn without an unanswered user message attaches nothing, so the runner records the notice itself.
     assert!(!show_notice(&home.features, &session_id, &[], "no reply").await.unwrap());
     assert_eq!(home.events(&session_id).iter().filter(|event| event["type"] == WEB_REPLY_NOTICE).count(), 1);
   }

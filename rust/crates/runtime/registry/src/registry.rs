@@ -1896,8 +1896,9 @@ pub trait TurnContribution: Send + Sync {
 
   /// Attaches a turn-end check's notice, which the check passed with, to a message of the turn `turn` in the session
   /// `session_id`. `turn` is the turn's events as the check read them. Resolves to `true` once the notice is attached,
-  /// and to `false` when the turn has no message to attach it to; the runner then posts the notice itself. A failed
-  /// delivery returns its error, and the check records that error.
+  /// and to `false` when the turn has no message to attach it to; the runner then records the notice in the session
+  /// without an input and forwards it to the parent. A failed delivery returns its error, and the check records that
+  /// error.
   fn show_turn_notice<'a>(
     &'a self,
     _features: &'a Arc<FeatureContext>,

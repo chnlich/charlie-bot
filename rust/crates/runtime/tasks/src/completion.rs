@@ -2060,6 +2060,24 @@ impl TaskCompletion {
       .await
   }
 
+  /// Tell the initiator of a child session that one of the child's turn-end checks left a notice on a turn with no
+  /// message to attach it to. `notice_event_id` is the notice the child recorded, so a replayed delivery admits no
+  /// second input to the initiator.
+  pub async fn notify_initiator_of_turn_notice(
+    &self,
+    session_id: &str,
+    notice_event_id: &str,
+    check: &str,
+    notice: &str,
+  ) -> StoreResult<()> {
+    let notice_id = control_events::stable_turn_notice_id(session_id, notice_event_id);
+    self
+      .notify_initiator(session_id, &notice_id, |name| {
+        format!("Session {name} ({session_id}) left a notice from turn-end check {check}:\n{notice}")
+      })
+      .await
+  }
+
   /// Apply successful-run close requests and ordinary worker delivery follow-ups for a run's live end.
   pub async fn after_run_finished(&self, session_id: &str, run_id: &str) -> StoreResult<()> {
     self.finish_successful_run(session_id, run_id, RunEnd::Live).await

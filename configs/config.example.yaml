@@ -137,6 +137,11 @@ backends:
   #   triage: fast
   #   thread: human-communication
   #   new_session: claude-opus
+  #   # The four below are unset by default and each caller refuses until one is set.
+  #   improve_review: <option or pool id>   # the improve round's review, avoiding the author's member
+  #   compaction: <cc-claude option id>
+  #   web_search: <option id with api_base and credential>
+  #   judge: <option id with api_base and credential, not a pool>
   # Backends available for model switching. Editing the list REPLACES it — to
   # add a codex backend, append an entry such as:
   #   - id: codex-luna

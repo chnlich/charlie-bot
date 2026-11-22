@@ -31,7 +31,7 @@ use charliebot_store::control_events::SOURCE_SESSION_ID_FIELD;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
 use charliebot_store::run_records::{HostBoot, RunFacts, RunOrder, RunRecord};
 use charliebot_store::trigger_files::{PendingTrigger, TriggerStatus};
-use charliebot_store::{MessageProjection, Store, StoreError, StoreResult, TaskFacts, path_error};
+use charliebot_store::{Store, StoreError, StoreResult, TaskFacts, path_error};
 use charliebot_triggers::triggers::TriggerManager;
 use http::header::HeaderValue;
 use lru::LruCache;
@@ -108,7 +108,7 @@ pub fn build_bootstrap_payload(
   // projection, and an event index for every other session, whose events fold to messages one to
   // many. The events branch keeps the fold of the whole tail, which is the payload's first trim step.
   enum Tail {
-    Slots { messages: Vec<Value>, start: usize, projection: Arc<MessageProjection> },
+    Slots { messages: Vec<Value>, start: usize },
     Events { events: Vec<charliebot_store::ChatEvent>, start: usize, messages: Vec<Value> },
   }
   let (tail, pending_draft, event_count, newest) = if meta.profile == TaskProfile::Worker {
@@ -125,13 +125,9 @@ pub fn build_bootstrap_payload(
       .collect();
     let rows =
       messages.iter().enumerate().filter(|(_, message)| message["role"] != SEPARATOR_ROLE).map(|(index, _)| index);
-    let newest = NewestTurn::of(messages.len(), &separators, rows, |separator| separator + 1);
-    (
-      Tail::Slots { messages, start: oldest, projection: Arc::clone(&transcript.projection) },
-      pending_draft,
-      event_count,
-      newest,
-    )
+    let newest =
+      NewestTurn::of(messages.len(), &separators, rows, |separator| worker_turn_start_after(&messages, separator));
+    (Tail::Slots { messages, start: oldest }, pending_draft, event_count, newest)
   } else {
     let archive_offset = usize::try_from(meta.archive_offset.max(0)).expect("non-negative archive offset fits usize");
     // A turn's events fold to more than one message, so a read of the message budget's count of events can fold to
@@ -202,14 +198,16 @@ pub fn build_bootstrap_payload(
   };
   // The next turn start a trim step may drop to, in the tail's own indexes (the `drop` a `build` step takes). The
   // trim accepts a step only up to the newest finished turn's start, so every older turn is dropped whole. A worker's
-  // projection branch reads the projection's separator ordinals, which are history ordinals. Every other session reads
-  // the events behind the fold's turn separators (master_done, run_end).
+  // step reads the separator messages of its tail, and every other session reads the events behind the fold's turn
+  // separators (master_done, run_end).
   let next_drop = |drop: usize| -> Option<usize> {
     match &tail {
-      Tail::Slots { start, projection, .. } => {
-        let start = *start;
-        projection.next_turn_start_after(start + drop).map(|next| next - start)
-      }
+      Tail::Slots { messages, .. } => messages
+        .iter()
+        .enumerate()
+        .skip(drop)
+        .find(|(_, message)| message["role"] == SEPARATOR_ROLE)
+        .map(|(index, _)| worker_turn_start_after(messages, index)),
       Tail::Events { events, .. } => events
         .iter()
         .enumerate()
@@ -250,9 +248,9 @@ impl NewestTurn {
   /// order, `rows` the units of the tail's visible rows, and `turn_start_after` the first unit of the turn after a
   /// separator.
   ///
-  /// A turn after the last separator is still running, so the finished turn ends at that separator: it starts after
-  /// the separator before it, and its last row is the newest row at or before the last separator. A turn with no row
-  /// before its separator keeps the separator as its row.
+  /// A turn after the last separator is still running, so the finished turn ends where the next turn starts: it starts
+  /// after the separator before it, and its last row is the newest row before the running turn. A turn whose last
+  /// unit is a row keeps that row, and a turn with no row keeps its separator.
   fn of(
     len: usize,
     separators: &[usize],
@@ -263,7 +261,7 @@ impl NewestTurn {
       [.., before, _] => turn_start_after(*before),
       _ => 0,
     };
-    let end = separators.last().copied().unwrap_or(len.saturating_sub(1));
+    let end = separators.last().map_or(len.saturating_sub(1), |last| turn_start_after(*last).saturating_sub(1));
     let last_row = rows.filter(|row| *row <= end).max().unwrap_or(end);
     NewestTurn { start, last_row }
   }
@@ -280,6 +278,12 @@ fn events_turn_start_after(events: &[charliebot_store::ChatEvent], index: usize)
     next += 1;
   }
   next
+}
+
+/// The first message of the run after the separator at `index`. A worker's run closes with its `run_delivery` row right
+/// after the separator, so the next run starts past that row.
+fn worker_turn_start_after(messages: &[Value], index: usize) -> usize {
+  index + 1 + messages[index + 1..].iter().take_while(|message| message["role"] == event_types::RUN_DELIVERY).count()
 }
 
 /// The payload with the tail kept from unit `drop` on, for the trim's smallest cut whose messages fit
@@ -1845,6 +1849,19 @@ backends:
     assert!(wire_of(&suffix(rows - kept)) <= FIRST_SCREEN_WIRE_BUDGET_BYTES, "the kept rows fit");
     assert!(wire_of(&suffix(rows - kept - 1)) > FIRST_SCREEN_WIRE_BUDGET_BYTES, "one row more would not fit");
     assert_eq!(payload["messages"][kept - 1]["content"], json!(row_text(rows - 1)), "the last row renders");
+  }
+
+  /// A worker's run closes with its delivery row after the separator, so the next run starts past that row.
+  #[test]
+  fn a_worker_run_starts_past_its_delivery_row() {
+    let messages = [
+      json!({"role": "assistant"}),
+      json!({"role": "separator"}),
+      json!({"role": "run_delivery"}),
+      json!({"role": "user"}),
+    ];
+    assert_eq!(worker_turn_start_after(&messages, 1), 3);
+    assert_eq!(worker_turn_start_after(&messages[..2], 1), 2);
   }
 
   /// A last row that is over the budget alone is the first screen: the cut keeps that row and nothing older.

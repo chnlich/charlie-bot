@@ -25,6 +25,7 @@
   let sessions = [];
   let sessionLoadError = '';
   let sessionNotice = '';
+  let pickerError = '';
   let targetLoad = null;
   let sessionListLoad = null;
   let sessionsLoaded = false;
@@ -603,7 +604,9 @@
     target.className = `${PREFIX}-target`;
     target.appendChild(document.createTextNode('Target session'));
     targetSelect = document.createElement('select');
-    targetSelect.addEventListener('focus', openPicker);
+    // A focus, a press or a key on the picker opens it. The first open loads the list, and a failed load is retried
+    // at the next open, which a select that keeps its focus reaches only through a press or a key.
+    for (const type of ['focus', 'pointerdown', 'keydown']) targetSelect.addEventListener(type, openPicker);
     targetSelect.addEventListener('change', () => {
       querySessionId = null;
       querySessionStatus = 'none';
@@ -700,6 +703,7 @@
         sessions = listed.slice();
         if (querySession && !sessions.some((session) => session.id === querySession.id)) sessions.push(querySession);
         if (!dropdownSessionId) dropdownSessionId = mostRecentSessionId(sessions);
+        pickerError = '';
         populateSessionSelect();
       });
     }
@@ -715,7 +719,7 @@
       .catch((error) => {
         console.error('Diff comment session list failed:', error);
         sessionListLoad = null;
-        sessionNotice = `Unable to load the session list: ${error.message}`;
+        pickerError = `Unable to load the session list: ${error.message}`;
       })
       .finally(() => {
         pickerLoading = false;
@@ -798,8 +802,9 @@
     pending.forEach((entry, index) => trayList.appendChild(buildTrayItem(index, entry)));
     tray.style.display = pending.length > 0 ? 'flex' : 'none';
 
-    noticeEl.textContent = sessionNotice;
-    noticeEl.style.display = sessionNotice ? 'block' : 'none';
+    const notice = [sessionNotice, pickerError].filter(Boolean).join(' ');
+    noticeEl.textContent = notice;
+    noticeEl.style.display = notice ? 'block' : 'none';
     const reason = targetReason(target);
     reasonEl.textContent = reason;
     reasonEl.style.display = reason ? 'block' : 'none';

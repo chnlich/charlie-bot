@@ -1,0 +1,1993 @@
+# Improve round: landing protocol
+
+This file is the round protocol for the five improve directions.
+Each direction prompt names its own scope, topic sources and evidence.
+This file carries the steps that every direction shares.
+
+Read `skills/writing-style/genres/code.md` before writing code.
+Its rules govern the diff this round produces.
+
+`main` takes no direct pushes: every change lands through a pull request.
+The pull request is the triage record, and CI is the full test run.
+
+Every text the round writes to GitHub   a pull-request title, body, comment, commit message or branch name   goes through `dev/improve/github-post.sh`, which checks it against the leak rules and the round's credential values before it sends anything.
+Every push and every `gh` call of the round passes the same credential check: the clone's pre-push hook checks each pushed commit's message and diff, and the round's `gh` checks every argument and file argument.
+A credential value never enters any text the round writes, and no write reaches GitHub while the check holds a hit.
+A leak-rule hit is the only hit the round rewrites: the round removes the matched content from the text, rewrites it, and runs the subcommand again.
+The script sends nothing on a hit, so the posted text is always text that passed.
+A credential hit stops the round. The kind that the check names is the round's stop reason, and the round writes no rewrite of the text.
+A merge goes through the posting script's `pr-merge`, which refuses a web page change whose evidence directory fails the screenshot check or whose pull request body names no `View:` line, and carries the `View:` lines into the squash commit message.
+`gh pr update-branch`, `gh run rerun` and the read-only calls stay bare: they carry no text of the round, and the `gh` shim still checks their arguments.
+
+## The round's login and the launch's exit codes
+
+The launch forwards the member's login for one round only.
+A subscription member's access token travels to the host with the round, and its refresh token stays on the launching host.
+The host keeps the token in the launch's `member-credential` file, mode 600, and the runner removes that file when the round ends.
+
+- A Claude subscription round receives the token as `CLAUDE_CODE_OAUTH_TOKEN`.
+- A codex round runs under `CODEX_HOME=/tmp/improve-<direction>/codex-home`, whose `auth.json` holds the access token and an empty `refresh_token`.
+  The round uses that per-round login only inside its scope; the refresh token stays on the launching host. The runner
+  removes `auth.json` when its round ends or a later start finds no live round. Symlink and ownership checks protect
+  the directory and its parent before cleanup or use.
+- A gateway member receives its token as `ANTHROPIC_AUTH_TOKEN`.
+- A `cc-openai-compatible` member never reaches a round. The server refuses its option at save, at fire and at round start: its model is reached through the server's own proxy route, which a host cannot reach, and its Claude Code token is the server's access key.
+
+The launch exits 8 before it contacts the host when the login's access token has less life left than `IMPROVE_TOKEN_MIN_SECONDS`, and its stderr names the login and the minutes left.
+The launch exits 7 when a round dependency is missing, and its stderr names the missing item.
+Neither exit starts a round.
+An exit 8 moves the round to another pool member when the pool has one; an exit 7 does not, because another member would miss the same item.
+
+## The member CLI version
+
+A round runs the version of its member CLI that the server host runs, so any model that the server host's CLI serves also works on the improve host.
+The launch reads that version from the agent binary's `--version` output: claude prints `X.Y.Z (Claude Code)` and codex prints `codex-cli X.Y.Z`.
+The launch exits 7 before it contacts the host when that output names no version.
+
+The runner installs that exact version from the vendor's distribution, and no other CLI on the improve host runs a round:
+
+- Codex: the standalone package `codex-package-<arch>-unknown-linux-musl.tar.gz` of the GitHub release `rust-v<version>`. Its sha256 is the digest that the release's asset list publishes. The whole package is unpacked with its layout: `codex-code-mode-host` and `codex-exec-server` sit beside the executable in `bin/`, because codex starts them for tool calls. A codex install that copied only the executable failed every tool call on 2026-11-20 04:52 UTC.
+- Claude Code: the native binary of the version's release, for `linux-arm64` or `linux-x64`. Its sha256 is the digest that the version's `manifest.json` publishes.
+
+The install goes into `~/improve/runner/members/<kind>-<version>/` under the runner's build lock, before the write boundary starts.
+The round's PATH puts that directory's `bin` first, so `claude` and `codex` never resolve to a copy in `~/.local/bin`.
+The runner then checks the installed CLI's `--version` against the version the launch read.
+When the install or the check fails, the runner exits 7 and its stderr names the local version and the host's version (`none` when nothing is installed). No round starts, and no other CLI is tried.
+
+Retention bounds the disk: each kind keeps the version of its last round and every version that a live round names, and removes the rest when a round installs.
+The round tools under `~/improve/runner/bin/` keep the current commit and the commits that live rounds name.
+
+`remote-runner.sh --member-cli <kind> <version>` runs the same install alone, prints what the installed CLI reports and starts no round, so an operator can check a version before a round needs it.
+
+These scripts run from the server's checkout at each launch, so a change reaches rounds on the remote test host when the server runs a release that carries it.
+
+## Step 1: set the clone
+
+The whole round runs on the remote host, in the direction's own clone, `~/improve/<direction>/charlie-bot`.
+Every command of the round runs there, so this host's profile home and runtime clone stay out of reach.
+The write boundary allows writes in that clone, in the evidence directory and in two scratch directories.
+The scratch directories are `/tmp/improve-<direction>/` and `/tmp/improve-<direction>-tmp/`.
+Two rounds of one direction never run together: the runner's scope name, `improve-<direction>.scope`, refuses the second round.
+
+Record the round start in UTC with `date -u +%Y%m%dT%H%MZ`; Step 5 names the evidence directory with it.
+
+At round start, delete what an earlier round left under `/tmp/improve-<direction>/`, except `codex-home/`: the runner owns it.
+Build that path from the literal prefix `improve-` and the direction name, and refuse an empty direction name.
+An earlier round's scratch holds large copies, so the next round removes it before it starts.
+
+Before the round's agent starts, the runner sets the clone to `origin/main`: it fetches `origin` and detaches the clone's HEAD there, so the clone's hooks come from `main`.
+The runner keeps the clone's local branches and its uncommitted changes.
+A checkout that would overwrite uncommitted work ends the launch with exit 4.
+
+The runner then ends the launch with exit 4 when the clone:
+
+- is missing;
+- does not set `core.hooksPath` to `dev/git-hooks`;
+- has no executable `dev/git-hooks/pre-push` in its tree;
+- has an origin that is not `charlie-bot`.
+
+The hooks check each commit before it can be pushed, so a clone without them is not this protocol's clone.
+
+A dirty clone from a killed round is reset to clean before the round starts:
+
+    git -C ~/improve/<direction>/charlie-bot reset --hard
+    git -C ~/improve/<direction>/charlie-bot clean -fd
+
+Otherwise a killed round's uncommitted edits would enter this round's commits.
+
+Then enter the clone, fetch `origin`, and start every branch from `origin/main`:
+
+    git fetch origin main
+
+## Step 2: adopt an open pull request
+
+List the open pull requests whose head branch starts with `improve/<direction>/`:
+
+    gh pr list --state open --limit 50 --json number,headRefName,createdAt --jq \
+      '.[] | select(.headRefName | startswith("improve/<direction>/"))'
+
+When more than one is open, take the oldest.
+An adopted pull request is the whole round.
+Switch the clone to its branch.
+Run Step 6 unless a review verdict comment already sits on the pull request, then run Step 7.
+When its newest comment starts `improve-waiting:`, read Step 8 first.
+End the round after it closes, merged or abandoned, and open no new pull request.
+This rule finishes a started topic before a new one.
+
+Go to Step 3 only when no such pull request is open, because an adopted pull request holds the round.
+
+## Step 3: avoid in-flight files and abandoned topics
+
+Read the in-flight files list in this round's launch directory.
+The runner names that directory in `IMPROVE_LAUNCH_DIR`:
+
+    "$IMPROVE_LAUNCH_DIR/inflight-files.txt"
+
+The launcher runs `dev/improve/inflight-files.sh improve/<direction>/` on this host, because the other lines' worktrees exist only there.
+The runner also adds the files that the other directions' clones change on the remote host, because those clones are standalone repositories that the launcher cannot see.
+The list names live work only, and every source of it   this host's worktrees and the remote clones included   follows one contract: a source claims paths only while live work holds them.
+An open pull request claims its files, whichever checkout holds its branch.
+A worktree claims its committed paths since its merge base and its uncommitted and untracked paths while a task's record names it and that task is open, or while a process runs in the worktree.
+A worktree that no record names claims its paths, because operator work carries no record.
+A worktree whose owning task is closed and whose branch has no open pull request names no path, whether its branch landed or not; the worktree stays on disk.
+A task owns a worktree when the task store names its path, a run record under `data/runs/` or a task record under `threads/`, and the owning session's event history, not a run's end, decides whether that task is open.
+A clone holds one checkout, so its claim is the work of the branch that checkout carries: the checked-out branch's committed paths since its merge base and the clone's uncommitted and untracked paths are claimed while that direction's round runs   the runner's own round state, or a process in the clone, is the live signal   and a branch that the checkout does not carry claims no path; the branch stays in the clone, and its open pull request, when one exists, is already on the list through the pull-request source.
+A clone or record that cannot be read stops the list with an error naming the condition.
+The runner's own checkout names nothing at all.
+Both computations fetch `origin/main` before they compare a branch against it, because a stale ref would make merged work look live.
+The fetch goes into a ref the reading side owns, `refs/improve/inflight/<direction>` in each clone and `refs/improve/inflight/<branch prefix>` in this host's main checkout, and never into `refs/remotes/origin/main` or `FETCH_HEAD`: the directions start in a burst, so concurrent launches, rounds and operators fetch those shared refs themselves.
+Pick a topic whose files the list does not name.
+A file that another branch changes would force that branch to resolve our conflict.
+The list prints work a branch carries as `path<TAB>branch`   uncommitted work with the dirty worktree's branch, work with an unmerged commit with that commit's branch, an open pull request's files with its head branch   and a path whose only branch commits are patch-equivalent on main bare, when the fetched main tree holds it; read a branch-carried path as work that branch holds, not as a stale name.
+
+List the closed pull requests of this direction and read each `improve-abandoned:` comment:
+
+    gh pr list --state closed --limit 500 --json headRefName,comments --jq \
+      '.[] | select(.headRefName | startswith("improve/<direction>/"))
+       | select(any(.comments[].body; startswith("improve-abandoned:"))) | .headRefName'
+
+Read at least 500 closed pull requests: merged rounds fill a short list, and an older abandonment would drop out of it.
+Skip every topic that a comment names.
+The comment records a topic that already failed, and the round does not retry it.
+
+## Step 4: finish one topic
+
+Take one topic from the direction prompt.
+Complete the topic in the clone: this round has no line cap and no file cap.
+The round lands a whole topic, not a fragment.
+For a fresh topic, create the branch with `git switch -c improve/<direction>/<topic slug> origin/main`.
+The branch name records the topic for the abandoned-topic check.
+
+When the topic touches `rust/`, run the checks from the `rust/` directory of the clone, on the remote host where
+  the round already runs.
+The remote host is the host that the host rule names for agent compiles, so the checks satisfy that rule.
+The checks reach no other host, so the round uses neither the remote-run runner (`dev/remote-run/`) nor an ssh
+  connection.
+The round's profile home, `~/improve/home`, leaves `remote_run.host` unset by design.
+Finding it unset is expected, and the round runs its checks directly in the clone.
+The checks use the direction's pinned target directory, `~/.cache/improve-target/<direction>`, which the write
+  boundary allows.
+The round runs `cargo check` for the workspace and `cargo test` for each crate that the change touches.
+The round limits its tests to those crates, because CI runs the full suite.
+The builds run with four build jobs at nice level 19, so the host's CPU stays with the other owners' builds.
+
+## Step 5: write the evidence and open the pull request
+
+The pull request's evidence carries numbers, commands and conclusions.
+Keep every screenshot, measurement log and other evidence file in the round's evidence directory, `~/improve/<direction>/evidence/<UTC round start, YYYYMMDDTHHMMZ>/`, one directory per round.
+Hourly rounds once overwrote each other's files under a per-day path, so the timestamp separates the rounds.
+The clone holds code only.
+
+Before a `trial.sh --serve` run, set `CHARLIEBOT_RELEASE_RUN_DIR` to that round directory and export it:
+
+    export CHARLIEBOT_RELEASE_RUN_DIR=~/improve/<direction>/evidence/<UTC round start>
+
+The trial writes its own evidence under that directory.
+Without the variable the trial writes `~/charliebot-release-logs`, which the write boundary refuses, so the step fails.
+
+The pull request names each screenshot by its file name and width, at the widths and states that the Web UI Screenshots rule in `prompts/task_base.md` sets.
+The pull request names no link to an evidence file and no host path; the evidence text stands on its own.
+Step 9 carries the evidence files to the user.
+
+Push the branch and open one pull request against `main` through the posting script:
+
+    dev/improve/github-post.sh push -u origin improve/<direction>/<topic slug>
+    dev/improve/github-post.sh pr-create --title "<topic>" --body-file <body file> --base main --head improve/<direction>/<topic slug>
+
+The body carries the direction's evidence under a `## Evidence` heading; the CI contract check rejects a pull request without it.
+One pull request per round is the unit that CI and the reviewer check.
+
+## Step 6: review the diff
+
+The review is one direct `charlie-code` run, outside the clone.
+The round makes the review's scratch directory under `/tmp/improve-<direction>/` with `mktemp -d`, and writes the review task file in it: `dev/improve/code_review_prompt.md` verbatim, then, when the pull request names screenshots, an `EVIDENCE: <the round's evidence directory>` line, and then one final line `PR: <number> <url>`.
+
+The round runs `charlie-code --json` from the scratch directory, with the task file on `--task-file` and the sessions on `--session-dir ~/improve/<direction>/clc-sessions`.
+The command passes no `--model`, `--api-base` or key flag.
+The round's PATH finds `charlie-code` first in `~/improve/runner/bin/`, where the runner installs its review shim (`review-charlie-code.sh`).
+The shim sets these variables for the review process alone, whichever model runs the round, and then runs the host's `~/.local/bin/charlie-code`:
+
+- `CHARLIE_CODE_MODEL`: the review option's model with an `openai/` prefix, from `IMPROVE_REVIEW_MODEL`.
+- `CHARLIE_CODE_API_BASE`: the review option's API base, ending in `/v1`, from `IMPROVE_REVIEW_API_BASE`.
+- `CHARLIE_CODE_API_KEY`: the review option's gateway key, read from `$CHARLIEBOT_HOME/credentials.yaml` under the credential that `IMPROVE_REVIEW_CREDENTIAL` names.
+
+The round's own environment and every tool shell under it carry none of the three variables.
+A `charlie-code` that the round starts by its full path skips the shim and gets none of them, so it cannot review.
+
+The review option is the `config.yaml` entry that names the review's model and API base.
+Its key sits in `credentials.yaml`, under the credential that the entry names.
+The context window is `charlie-code`'s default.
+
+The scratch directory sits outside the clone, so the reviewer's own git checkouts stay away from the clone's HEAD.
+The write boundary allows the scratch directory and the session directory, and denies every write outside the round's own directories.
+The review is the independent check that the topic is complete and correct.
+
+The reviewer's stdout is an NDJSON event stream.
+The round keeps it as `events.ndjson` in the scratch directory and takes the verdict from the `final_output` field of its final `result` event.
+
+One foreground tool call ends at 15 minutes, the round's per-call tool limit.
+A review of any length completes: the round waits for it past that limit and reads back its outcome.
+A round has no wake: its host runs no CharlieBot server, so no trigger registers for it.
+Every wait of a round, for every member, stays inside the round's run
+until its review verdict is posted and its merge or no-PR outcome is reached.
+
+Post the verdict as one pull-request comment through the posting script:
+
+    dev/improve/github-post.sh pr-comment --body-file <verdict file> <PR>
+
+The comment is the review record on the pull request, and it carries the verdict without the event stream.
+Act on every finding on the same branch before the merge.
+A round whose review cannot run or fails leaves the pull request open and reports the reason in the final message.
+On a failed review, the round quotes charlie-code's own message from the last `error` event of `events.ndjson` verbatim in the final message; LiteLLM's stderr lines are noise, not the error.
+The round names the kept `events.ndjson`, and the failed review's scratch directory stays on disk until the next round's start (Step 1).
+A silent skip breaks the protocol.
+
+## Step 7: land the pull request or abandon it
+
+Merge only when the pull request carries a review verdict comment.
+A pull request without one waits: the round that posted no verdict leaves it open, and Step 2 adopts it in the next round to run the review first.
+
+Before the merge, the pull request's title and body describe its final commits.
+When the branch gained commits after the description was written, update the title and body through `dev/improve/github-post.sh pr-edit`.
+Keep the body's `## Evidence` section.
+
+Wait for the checks in this round:
+
+    gh pr checks <PR> --watch --fail-fast
+
+Retry the watch a few times, several seconds apart, while it reports no checks.
+The workflow needs a moment to register after the push.
+
+Before the merge, rebase onto the latest `origin/main`:
+
+    git fetch origin main
+    git rebase origin/main
+
+Resolve each conflict, run `git add` and `git rebase --continue`, then push through the posting script:
+
+    dev/improve/github-post.sh push --force-with-lease
+
+Wait for the checks again.
+The rebase proves that the topic still applies to today's `main`.
+
+When a conflict cannot be resolved, run `git rebase --abort` and abandon the pull request.
+Write `improve-abandoned: <topic>   conflict with origin/main` into a comment file and close through the posting script:
+
+    dev/improve/github-post.sh pr-close --comment-file <comment file> <PR>
+
+Every `improve-abandoned:` and `improve-waiting:` comment goes through the posting script.
+The abort restores the branch as it was before the rebase, so the clone is left clean for the next round.
+The comment records the topic for the next round.
+
+With the checks green, confirm that the pull request still carries a diff against a fresh `main`:
+
+    git diff origin/main...HEAD --stat
+
+An empty diff means that the topic already landed.
+Close the pull request through the posting script with the comment `improve-abandoned: <topic>   duplicate of #<N>`, naming the landed pull request, in a comment file:
+
+    dev/improve/github-post.sh pr-close --comment-file <comment file> <PR>
+
+A non-empty diff merges through the posting script, with the round's evidence directory:
+
+    dev/improve/github-post.sh pr-merge --evidence-dir <the round's evidence directory> <PR>
+
+The merge checks a web page change's screenshots, and its squash message comes from the pull request's title and body, which the posting script checks before it sends them.
+
+Read a red check with `gh run view --log-failed <run-id>`.
+The failure class selects the fix steps below.
+
+A failure inside this diff earns at most two fixes on the same branch.
+Each fix pulls the branch with `git pull --ff-only`, fixes the failure, pushes through the posting script, and watches the checks again.
+When the check stays red after the second fix, abandon the pull request with `improve-abandoned: <topic>   <reason>` in a comment file, through `pr-close` as above.
+
+Name the topic in the comment, because Step 3 reads it to skip the topic on the next round.
+
+A failure outside this diff takes these steps.
+Each step either clears the failure or names the main run that blocks the merge.
+
+1. Update the branch from `main` with `gh pr update-branch <PR>`, and watch the new checks.
+2. When `gh pr update-branch` reports no change, rerun the failed jobs with
+   `gh run rerun <run-id> --failed`, and watch again.
+3. When the checks pass, go to the merge above.
+4. When the check is red again, read main's CI state.
+5. When the main run failed, run Step 8.
+   When the repair merges, start these steps again at step 1.
+6. When the repair returns with main still failed, leave the pull request open with an
+   `improve-waiting: main fails <check> at <sha>, run <run-id>` comment file, posted through the posting script, and end the round.
+7. When the main run passed, the failure comes from this diff: apply the inside-diff fix steps.
+
+## Step 8: repair main first when main is red
+
+Main's CI state is the newest CI run on `main`:
+
+    gh run list --branch main --workflow CI --limit 1 --json databaseId,status,conclusion,headSha
+
+When that run is in progress, wait for it with `gh run watch <run-id>`.
+
+When that run failed, repair `main` before this round continues.
+A red main turns every direction's checks red, so the repair comes first.
+
+The repair branch is the fixed name `main-repair/current`.
+All five directions share one repair at a time, and the branch is the placeholder.
+The merge deletes it, because the repository sets `delete_branch_on_merge`, and an abandoned repair closes with `--delete-branch`; either way the next repair can take the branch.
+
+Before building a fix, read the branch and the open pull requests:
+
+    git ls-remote origin refs/heads/main-repair/current
+    gh pr list --state open --json headRefName --jq '.[].headRefName' | grep '^main-repair/'
+
+When the branch exists with an open pull request, another direction holds the repair.
+A second repair would race the first for the same branch, so this round waits: write an `improve-waiting: main repair held by another direction` comment file, post it on this round's pull request through the posting script, and end the round.
+
+When the branch exists with no open pull request, the round that pushed it died before it opened one.
+Check out the branch, open its pull request through the posting script, and continue at repair step 5:
+
+    git fetch origin main-repair/current
+    git switch -c main-repair/current origin/main-repair/current
+    dev/improve/github-post.sh pr-create --title "<repair topic>" --body-file <body file> --head main-repair/current
+
+A "pull request already exists" refusal means that another direction opened it first: wait as above.
+
+When the branch is absent, this round repairs `main` with the steps below.
+These steps return `main` to green and resume the step that needed it.
+
+1. Read the failure with `gh run view --log-failed <run-id>`.
+2. When `gh run view <run-id> --json attempt` reads 1, rerun the failed jobs once with `gh run rerun <run-id> --failed`.
+   Watch the run after the rerun.
+   A green rerun returns to the sending step with main green.
+3. When the failure names its fix, create `main-repair/current` from the failing main sha, apply the fix, commit it, and push it without force:
+
+       git switch -c main-repair/current origin/main
+       dev/improve/github-post.sh push origin HEAD:refs/heads/main-repair/current
+
+   A named fix is safe to apply without a design decision.
+   A failing test without its expected value in the log names no fix, because a guessed value would hide the regression.
+   A rejected push means another direction pushed its repair first: wait as above.
+   The two repair commits do not contain each other, so GitHub refuses the second non-force push.
+4. Open the pull request through the posting script, with `--head main-repair/current`.
+   A red check follows the inside-diff fix steps with the same two-fix budget.
+5. Confirm that the repair still carries a diff against a fresh `origin/main`.
+   An emptied repair has nothing to merge, so close it through the posting script with `--delete-branch` and a comment file that reads `improve-abandoned: main repair   nothing left to merge`, then return to the sending step.
+6. Review the repair pull request with Step 6, act on its findings, and merge it through `dev/improve/github-post.sh pr-merge <PR>` once it is green and carries its verdict comment (Step 7).
+   A repair lands on `main` as well, so it gets the same review as a topic.
+   Wait for the merge's main run with `gh run watch`, then return to the sending step.
+7. When the failure names no fix, or the repair pull request is abandoned,
+   return to the sending step with main still failed.
+
+When the newest comment of an adopted pull request starts `improve-waiting:`, read main's CI state first.
+When the main run failed, repair main by the steps above.
+When the repair returns with main still failed, end the round with no change.
+When the main run passed, start at step 1 of the outside-diff steps above.
+
+## Cleanup before the report
+
+Delete each completed review's scratch directory, through the exact path `mktemp` returned.
+Copies of session data and other large scratch live only there, and deleting by a rebuilt path risks the wrong directory.
+The evidence directory stays: it holds the round's screenshots and measurement logs.
+An earlier round's leftovers under `/tmp/improve-<direction>/` are deleted at the next round's start (Step 1), except `codex-home/`.
+The runner empties `/tmp/improve-<direction>-tmp/` when the next round's scope starts, so a killed round's TMPDIR does not grow.
+
+## Step 9: report once at the end
+
+Before the round ends, write the round's final report to `report.md` in its evidence directory.
+The report carries the same content as the final message, so it survives a lost final message.
+
+Write one final message at the end of the round.
+It names:
+
+- the topic;
+- the pull-request link;
+- the evidence summary;
+- the absolute path of the round's evidence directory on the remote host.
+
+It names no file-server URL, because the remote host holds no CharlieBot URL and the round constructs none.
+The message wakes the task session, which replies to the user.
+
+The task session mints the file-server links for the report from the copy that the launcher places at `~/improve/<direction>/evidence/<round>/` on the task host after the round.
+Its reply carries those links, and a reader who opens one reads that copy, because the evidence files themselves stay on the remote host.
+No evidence link appears on GitHub.
+
+When the round opened no pull request, it gives the reason.
+A round that cannot finish its wait leaves its pull request open and reports that.
+Step 2 adopts the pull request in the next round, so the wait resumes without a new topic.
+
+# `charliebot-store` API
+
+The store owns writes to session `metadata.json`,
+`data/chat_events.jsonl`, task facts, and immutable prompt bodies. It receives the ordered `MetadataSlot` list and all
+six required runtime hooks at construction; absent hooks fail startup. Metadata mutation methods read from disk while
+holding the session lock, save atomically, then return a fresh read-back. No public whole-object save
+accepts a cached metadata value.
+Expired active metadata entries are checked by stat outside the cache mutex. Refresh and eviction apply only to the entry
+that was checked, so a concurrent write's cached result stays current.
+
+## Metadata and listing (S1, implemented)
+
+- `Store::get_session(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>>`
+- `Store::read_metadata_fresh(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>>`
+- `Store::session_dir(&self, session_id: &str) -> PathBuf`; `Store::metadata_path(&self, session_id: &str) -> PathBuf`
+- `Store::persist_cc_session_id(&self, session_id: &str, cc_session_id: &str, native_backend: Option<&str>) -> StoreResult<Option<String>>`
+- `Store::persist_native_backend(&self, session_id: &str, native_backend: &str) -> StoreResult<Option<String>>`
+- `Store::persist_native_anchor_provenance(&self, session_id: &str, prompt_hash: &str, native_backend: &str, model: Option<&str>) -> StoreResult<()>`
+- `Store::clear_cc_session_anchor(&self, session_id: &str) -> StoreResult<()>`
+- `Store::persist_account_label(&self, session_id: &str, label: &str) -> StoreResult<Option<String>>`
+- `Store::context_state(&self, session_id: &str) -> StoreResult<(Option<i64>, Option<UtcDateTime>)>` (legacy form; the agent-runtime caller moves to `SessionUsage::context_state`)
+- `Store::update_thinking_state(&self, session_id: &str, updated_at: UtcDateTime) -> StoreResult<()>`
+- `Store::mark_unread(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>>`
+- `Store::mark_read(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>>`
+- `Store::rename_session(&self, session_id: &str, name: &str) -> StoreResult<Option<SessionMetadata>>`
+- `Store::set_group(&self, session_id: &str, group: Option<&str>) -> StoreResult<Option<SessionMetadata>>`
+- `Store::star_session(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>>`; `Store::unstar_session(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>>`
+- `Store::rename_group(&self, old_name: &str, new_name: &str) -> StoreResult<usize>`; `Store::delete_group(&self, group: &str) -> StoreResult<usize>`
+- `Store::rate_round(&self, session_id: &str, round_id: &str, rating: Option<RoundRating>) -> StoreResult<Option<SessionMetadata>>`
+- `Store::delete_session_permanently(&self, session_id: &str) -> StoreResult<bool>`
+- `Store::switch_backend(&self, session_id: &str, backend: &str) -> StoreResult<Option<SessionMetadata>>`
+- `Store::archive_session(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>>`
+- `Store::unarchive_session(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>>`
+- `Store::update_slot_fields(&self, session_id: &str, owner: &str, values: Map<String, Value>) -> StoreResult<Option<SessionMetadata>>`
+- `Store::update_slot_fields_at(&self, session_id: &str, owner: &str, values: Map<String, Value>, updated_at: UtcDateTime) -> StoreResult<Option<SessionMetadata>>`
+- `Store::update_slot_fields_locked(&self, guard: &ControlGuard, session_id: &str, owner: &str, values: Map<String, Value>) -> StoreResult<Option<SessionMetadata>>`
+- `Store::load_session_metas(&self, status: Option<SessionStatus>) -> StoreResult<Vec<SessionMetadata>>`
+- `Store::list_sessions(&self, status: Option<SessionStatus>, starred: Option<bool>, scheduled: Option<bool>) -> StoreResult<MetadataListing>`
+- `Store::list_sessions_readonly(&self, status: SessionStatus) -> StoreResult<Vec<SessionMetadata>>`
+- `Store::list_group_names(&self) -> StoreResult<Vec<String>>`
+- `Store::sequence_subtree_roots(&self) -> StoreResult<Arc<HashMap<String, String>>>`
+- `Store::view_subtree_roots(&self) -> StoreResult<Arc<HashMap<String, HashMap<String, String>>>>`
+- `Store::list_archived_page(&self, group: Option<&str>, limit: usize, before: Option<&str>, before_id: Option<&str>) -> StoreResult<ArchivedPage>`
+- `Store::archived_context_rows(&self, rows: &[SessionMetadata]) -> StoreResult<Vec<SessionMetadata>>`
+- `trigger_files::iter_trigger_file_stats(triggers_dir: impl AsRef<Path>) -> io::Result<Vec<(PathBuf, Metadata)>>`
+- `trigger_files::pending_trigger_state(triggers_dir: impl AsRef<Path>) -> (usize, Option<UtcDateTime>)`
+- `Store::raw_metadata_scan(&self) -> StoreResult<Vec<RawMetadata>>`
+
+Session listings apply `Store::derived_archived_ids` after stored-status reads. This overlay reads task-tree facts and leaves metadata unchanged. `SequenceListingFields` supplies controller fields and subtree ownership, borrowing the memoized `Arc` rows: `Store::subtree_roots_shared` keys both subtree maps on the corpus snapshot they were built from and hands out the cached `Arc` maps, which is what `sequence_subtree_roots` and `view_subtree_roots` return.
+
+The `*_at` variants of rename, group, backend switch, archive, unarchive, and native-id persistence
+take an explicit `UtcDateTime`. Production wrappers supply the current time; the explicit forms make
+replay deterministic.
+
+Metadata slots are serialized in registration order, each placed by its `after` key. An unregistered key
+remains in `extra` and is emitted after registered slots. Metadata floats render in the model JSON form
+(`1e16`, `0.00001`), which differs from the event-log form (`1e+16`, `1e-05`). `SessionMetadata` writes omit the
+runtime-only transient fields. Atomic metadata writes use a sibling temporary file followed by rename, with
+no fsync.
+
+## Chat event log (S1, implemented)
+
+- `Store::chat_events_path(&self, session_id: &str) -> PathBuf`
+- `Store::append_chat_event(&self, session_id: &str, event: Value) -> StoreResult<ChatEvent>`
+- `Store::load_chat_events_sync(&self, session_id: &str) -> StoreResult<Vec<ChatEvent>>`
+- `Store::load_chat_events_shared_sync(&self, session_id: &str) -> StoreResult<Arc<Vec<ChatEvent>>>`
+- `Store::load_chat_events_delta_sync(&self, session_id: &str, known_generation: Option<u64>, covered: usize) -> StoreResult<ChatEventsDelta>` (read the appended suffix for the same cached list, otherwise rebuild from the replacement list)
+- `Store::load_all_facts(&self, session_id: &str) -> StoreResult<Vec<ChatEvent>>` (archived segments plus live log)
+- `Store::load_all_facts_shared_sync(&self, session_id: &str) -> StoreResult<Arc<Vec<ChatEvent>>>` (archived segments plus live log)
+- `Store::load_chat_events_range(&self, session_id: &str, start: usize, end: usize) -> StoreResult<(Vec<ChatEvent>, bool)>`
+- `Store::find_event_by_id(&self, session_id: &str, event_id: &str) -> StoreResult<Option<ChatEvent>>` (replay lookup)
+- `Store::get_chat_event_count_sync(&self, session_id: &str) -> StoreResult<usize>`
+- `Store::archive_events_before(&self, session_id: &str, cutoff: UtcDateTime) -> StoreResult<Option<PathBuf>>` (strict UTF-8 decode; error cases below)
+- `Store::append_control_fact(&self, guard: &ControlGuard, session_id: &str, event: Value) -> StoreResult<ChatEvent>`
+- `Store::control_lock(&self) -> ControlGuard`
+
+Append writes each event as one JSON line with the `, `/`: ` separators and non-ASCII characters unescaped, appends
+`id` then an `isoformat` timestamp if absent, writes one newline-terminated record, and syncs event data before
+returning. Readers skip blank and malformed lines, replace invalid UTF-8, and parse a partial final
+line. Each session has its own event-cache mutex; the cache-map mutex is held only to find or create
+that entry. Appends and cold reads hold the session mutex across file I/O, so another session's
+event operations do not wait on that I/O. A shared read returns the cached `Arc<Vec<ChatEvent>>`;
+reads without an intervening append share its allocation, and copy-on-write keeps an older snapshot
+unchanged when an append lands. The control guard is store-bound, non-cloneable, and required by
+locked operations.
+
+`load_chat_events_range` keeps the physical range indexes: an unarchived cold read selects physical `\n`-delimited lines,
+so blank and malformed lines consume indexes; an unarchived warm read slices the parsed-event cache. The
+`/api/sessions/{session_id}/events` fallback uses this range API, while projection and other whole-log callers keep
+the shared parsed-event read.
+
+`load_chat_events_delta_sync` returns the cached generation, current event count, the suffix start index, and the
+events from that index. Appends retain the generation; cache eviction or replacement gives a new generation.
+`SessionUsage` uses this to advance its single event fold by the appended suffix. It asks the registered backend
+resolver first (Codex's native rollout), then the event tiers. `Store::context_state` remains unchanged until the
+agent-runtime caller switches to `SessionUsage::context_state`. `load_all_facts` and
+`load_all_facts_shared_sync` compose the archived and live segments: the archived count is the total event count
+minus the live event count, the archived events are the range read from 0 to that count, and archive files beyond
+that count stay unread. The shared form returns the live cache allocation directly when there are no archived
+events; with archived events it returns a shared allocation containing the composed history.
+
+`archive_events_before` decodes the whole live log as strict UTF-8 before any write. Invalid UTF-8 returns a
+`StoreError` that names the path and the byte offset of the first invalid byte. Before the split point, a line that
+parses as JSON but is not an object returns a `StoreError`, and so does a truthy `timestamp` that is not a string.
+Each error returns before any write, so the live log, the archive file and
+`archive_offset` stay byte-identical. Lines end at `\r\n`, a lone `\r`, or `\n`, and a final line without an end is
+kept. A blank line before the split point (`str_methods::strip` is empty) is dropped. Archived and kept lines are written
+with a trailing `\n`. A non-JSON line, or a falsy or unparsable `timestamp`, starts the kept part.
+
+## Run records (S2, implemented)
+
+- `register_run_locked(&self, guard: &ControlGuard, session_id: &str, run: RunRecord, task_spec: Option<&str>) -> StoreResult<RunRecord>`
+- `create_retry_run_locked(&self, guard: &ControlGuard, session_id: &str, request_id: &str, original_run_id: &str, task_spec_text: Option<&str>, fields: RetryRunFields) -> StoreResult<RunRecord>`
+- `record_launch(&self, session_id: &str, run_id: &str, pid: u32, pid_start: &str) -> StoreResult<RunRecord>`
+- `record_observation(&self, session_id: &str, run_id: &str, fields: Map<String, Value>) -> StoreResult<RunRecord>`
+- `record_finish_locked(&self, guard: &ControlGuard, session_id: &str, run_id: &str, outcome: RunOutcome) -> StoreResult<RunRecord>`
+- `request_stop(&self, session_id: &str, run_id: &str, reason: &str) -> StoreResult<StopRequest>`
+- `reconcile_stop_request(&self, session_id: &str, run_id: &str) -> StoreResult<StopResult>`
+- `claim_input_events_locked(&self, guard: &ControlGuard, session_id: &str, run_id: &str, event_ids: &[String]) -> StoreResult<RunRecord>`
+- `read_run_sync(&self, session_id: &str, run_id: &str) -> StoreResult<Option<RunRecord>>`; `list_run_records_sync(&self, session_id: &str) -> StoreResult<Vec<RunRecord>>`
+- `list_runs_page_sync(&self, session_id: &str, cursor: Option<&str>, limit: usize, order: RunOrder) -> StoreResult<RunPage>`
+- `newest_run_record_sync(&self, session_id: &str) -> StoreResult<Option<RunRecord>>`; `last_ended_run_id(&self, session_id: &str) -> StoreResult<Option<String>>`
+- `run_records::terminal_outcome(events: &[Value], run_id: &str) -> StoreResult<Option<RunOutcomeKind>>`
+- `run_records::stop_requested_in_events(events: &[Value], run_id: &str, request_id: Option<&str>) -> bool`
+- `run_display_state(&self, session_id: &str, run_id: &str) -> StoreResult<RunDisplayState>`; `run_blockers(&self, session_id: &str) -> StoreResult<Vec<RunBlocker>>`
+- `records_generation(&self) -> u64`; `mark_sidebar_dirty(&self, session_id: &str)`
+
+Run records keep the stored field order and reject unknown fields. Their JSON writes are atomic.
+`RunOrder::Descending` reads the `(started_at, id)` order backwards. A page cursor carries its order (`d` is set
+only when descending), and a cursor read under the other order is refused with an error that names both orders.
+`register_run_locked`, retry creation, finish and `claim_input_events_locked` require `ControlGuard`. Control facts
+append through `append_control_fact` while the guard is held. A finish fact lands before its record mirror.
+
+Registration pins `task_spec` only when it is `Some`: the body lands in `task_spec.md` before the record,
+which then carries `task_spec_ref` and `task_spec_hash`. A `None` spec writes neither field. Retry creation
+takes `RetryRunFields` (`kind`, `backend`, `model`, `repo_path`, `base_branch`, `branch_name`,
+`worktree_path`, `sequence_ref`, `review_of_run_id`, `input_event_ids`) and goes through the same registration,
+so a replay of one request returns the first record unchanged.
+
+`RunOutcome` carries the terminal outcome, an optional input list, an optional exit code and an
+optional end time. Repeated finish calls keep the first fact's payload and repair a missing record mirror.
+A run's terminal outcome is its last `run_finished` fact's outcome. The display state, the blockers, the stop
+requests and the finish path read it through
+`terminal_outcome`; the run-identity refusal asks only whether any finish fact exists.
+Stop requests append their fact under the guard. The process identity check, SIGTERM and bounded
+exit wait run after the guard is released.
+
+The store exports the legacy and v2 run-layout names. It provides
+read-only path scans for legacy master logs, legacy thread event logs and v2 run raw logs, plus a
+scan of all run records. `run_identity_refusal` reads the run record and full fact history before a
+route accepts run-token identity. `records_generation` increments after each run-record write.
+`mark_sidebar_dirty` updates the process-local sidebar dirty set and its derived generation.
+
+## Task tree (S3, implemented)
+
+- `Store::session_detail(&self, session_id: &str) -> StoreResult<Value>`
+- `create_task(&self, request: CreateTask, caller: TaskCaller, slot_values: Map<String, Value>) -> StoreResult<SessionMetadata>`
+- `runtime_gate(&self, request: &CreateTask, caller: &TaskCaller) -> StoreResult<()>` (the create-task runtime gate)
+- `set_node_backend_locked(&self, guard: &ControlGuard, session_id: &str, backend: &str) -> StoreResult<()>`
+- `adopt_metadata_slot_locked(&self, guard: &ControlGuard, session_id: &str, old: &SessionMetadata, owner: &str, fields: Option<&[&str]>) -> StoreResult<SessionMetadata>`
+- `record_native_anchor(&self, session_id: &str, prompt_hash: &str, backend: &str, model: Option<&str>) -> StoreResult<()>`; `record_native_anchor_with_reset(&self, session_id: &str, prompt_hash: &str, backend: &str, model: Option<&str>, reset_anchor: bool) -> StoreResult<()>`
+- `archive_unsuccessful_worker(&self, guard: &ControlGuard, session_id: &str, run_id: &str, outcome: &str) -> StoreResult<bool>`
+- `archive_subtree(&self, session_id: &str, caller: TaskCaller) -> StoreResult<Vec<String>>`
+- `delete_permanently(&self, session_id: &str, caller: TaskCaller) -> StoreResult<bool>`
+- `patch_task(&self, session_id: &str, patch: PatchTask, caller: TaskCaller, guards: &dyn StructuralBlockers) -> StoreResult<SessionMetadata>`
+- `ensure_prompt_changed_fact(&self, session_id: &str, meta: &SessionMetadata, scope: PromptScope) -> StoreResult<()>`
+- `load_meta(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>>`; `load_task_meta(&self, session_id: &str) -> StoreResult<SessionMetadata>`
+- `task_state(&self, session_id: &str) -> StoreResult<TaskState>`; `facts_of(&self, session_id: &str) -> StoreResult<TaskFacts>`
+- `archived_of(&self, session_id: &str) -> StoreResult<bool>`; `check_task_authorization(&self, session_id: &str) -> StoreResult<()>`
+- `ancestor_ids(&self, session_id: &str) -> StoreResult<Vec<String>>`; `descendant_ids(&self, session_id: &str) -> StoreResult<Vec<String>>`
+- `resolve_successor_chain(&self, session_id: &str) -> StoreResult<Vec<SessionMetadata>>`; `deliver_to_successor(&self, session_id: &str, event: ChatEvent) -> StoreResult<Option<String>>`
+- `invalidate_tree_index(&self)`; `require_open_ancestry(&self, session_id: &str) -> StoreResult<Vec<String>>`
+- `child_ids(&self, session_id: &str) -> StoreResult<Vec<String>>`; `derived_archived_ids(&self) -> StoreResult<Vec<String>>`
+- `task_tree_activity(&self, session_id: &str) -> StoreResult<TaskTreeActivity>`
+- `store_prompt_body(&self, body: &str) -> StoreResult<String>`; `prompt_bodies_dir(&self) -> PathBuf`
+- `rebind_elone_bindings_locked(&self, guard: &ControlGuard, source_session_id: &str, new_session_id: &str) -> StoreResult<bool>`
+
+`TaskFacts` is the durable event fold: task state, run outcomes and first finish positions, input boundaries and
+acknowledgements, close facts, delivered child reports, and the event-id index all come from `load_all_facts`.
+`check_task_authorization` verifies that `session_id` is an open manager whose ancestors are all open.
+`archive_unsuccessful_worker` returns whether it appended the archive fact.
+
+Tree-node metadata writes and control-fact writes run under the shared control guard. The locked methods verify its
+store identity, and each metadata write re-reads its disk row before mutation. Tree reads use a generation-invalidated,
+two-second index. Prompt bodies are immutable files under `prompt_bodies/<sha256>.md`; prompt-change facts point to
+those hashes. The store calls required sequence archive and binding-mover hooks for archive, subtree archive, and
+elone rebind. `archive_subtree` accepts only `TaskCaller::Operator`, and it takes the control lock itself.
+`mark_read` keeps `updated_at` and broadcasts `unread_changed` only when the unread flag flips. Permanent deletion removes
+the session directory, clears runtime state, and removes an empty session cgroup.
+`patch_task` accepts only `TaskCaller::Operator` too. Its pending-input and undelivered-report guards come through
+`StructuralBlockers`, which the task dispatcher implements: the dispatcher owns the input boundary, and the store cannot
+call it. The field write re-reads the row, so a rename that lands meanwhile is kept.
+The reset-aware native-anchor method clears the held conversation id and timestamp after persisting provenance when a
+launch starts a fresh native context; the four-argument method is the continuing-context form.
+
+## Session fork and elone (S3, implemented)
+
+- `fork_session(&self, parent_id: &str, event_index: Option<i64>, backend: Option<&str>) -> StoreResult<SessionMetadata>`
+- `elone_session(&self, parent_id: &str, event_index: i64, backend: Option<&str>, redelivery: &dyn CloseReportRedelivery) -> StoreResult<SessionMetadata>`
+- `CloseReportRedelivery::redeliver_close_reports_locked(&self, guard: &ControlGuard, session_id: &str) -> StoreHookFuture<'_, ()>` (implemented by `Dispatcher`; redelivers the subtree's close reports)
+- `RuntimeEventHooks::copy_on_fork(&self, parent_dir: &Path, child_dir: &Path) -> StoreResult<()>`
+- `FORK_BOOTSTRAP_OPENER`, `ELONE_BOOTSTRAP_OPENER`, `HISTORY_LOCATION_NOTE`
+
+The child's chat log is born whole: the parent's raw lines for `[0, end)`, then the `clone_start` marker and the child's
+`task_created` fact, written as one atomic stream. Elone runs under the control lock: it validates the blockers, redelivers
+the subtree's close reports through `CloseReportRedelivery`, moves the source's children, closes the source as archived,
+and archives it. The session-api route resolves the backend before either call, and it admits the bootstrap prompt and
+dispatches the successor's run after the call returns.
+
+## Task errors (S3)
+
+Every task-tree refusal is a `StoreError` variant. The shared route mapping (`task_errors::task_http_error`) sets the
+HTTP status from the variant.
+
+| Rust variant | HTTP | Store producers |
+| --- | --- | --- |
+| `StoreError::invalid` (`Invalid`) | 400 | `create_task`: a missing request id, a worker parent |
+| `StoreError::not_found` (`NotFound`) | 404 | `load_task_meta` and every tree read of an absent node; `archive_subtree`, `delete_permanently`; the locked slot, backend, adopt and rebind writes of an absent session; `require_run` |
+| `StoreError::forbidden` (`Forbidden`) | 403 | an agent's create outside its own open manager task (`runtime_gate`); every `check_task_authorization` refusal; `archive_subtree` and `delete_permanently` for a caller that is not the operator |
+| `StoreError::archived` (`Archived`) | 409, the sentence alone | none in the store yet: machine input to an archived node is refused by the dispatcher's input admission (`admit_input`) |
+| `StoreError::conflict` (`Conflict`) | 409, `{message, blockers}` | a closed parent or ancestor (including a create under an archived parent); a relation cycle or hop limit; `archive_subtree`'s unfinished runs; `delete_permanently`'s saved references and content |
+| `StoreError::conflict` with one blocker | 409, `{message, blockers}` | the stop path's process identity checks (`follow_through_stop`) |
+| `StoreError::new` (`Failure`) | none | every other error: I/O, serialization, corrupt state, hook and invariant errors |
+
+`Display` gives the refusal text: a conflict joins its blockers with `; `, and an archived refusal reads
+`task <id> is archived`. `blockers()` returns a conflict's list and `None` for every other variant. The archived
+variant carries no list: its route answers the sentence alone. A refusal from `check_task_authorization` is
+`forbidden` on every path.
+
+`create_task` without a name takes `Session N` from `sessions/.counter`. An unreadable or unparsable counter takes
+the session-directory count and is then rewritten with the next number.
+
+Each control fact notifies the sidebar with its type after it is durable: `append_control_fact` sends
+`task_tree_changed` with the fact's type, and `create_task` sends `task_created` after its publish and index
+invalidation. A replayed create notifies nothing. A failed notification logs `task_tree_changed_broadcast_failed` and
+the write still succeeds.
+
+## Runtime event bus, message model, and busy state (S4, implemented)
+
+- `prime_aggregator(&self, session_id: &str) -> StoreResult<u64>`; `announce_appended_event(&self, session_id: &str, event: &ChatEvent, epoch: u64) -> StoreResult<()>`
+- `persist_and_broadcast(&self, session_id: &str, event: ChatEvent) -> StoreResult<ChatEvent>`; `drop_session_runtime_state(&self, session_id: &str)`
+- `subscribe(&self, channel: &str) -> Subscription`; `unsubscribe(&self, subscription: &mut Subscription)`; `broadcast(&self, channel: &str, frame: Value) -> StoreResult<()>`
+- `register_socket(&self) -> SocketHandle`; `close_subscribers(&self)` (async: closes every registered socket with code 1000 and waits for each close frame)
+- `session_channel(session_id: &str) -> String`; `SIDEBAR_CHANNEL`; `STREAM_COALESCE_INTERVAL`
+- `broadcast_only(&self, session_id: &str, frame: Value) -> StoreResult<()>`; `broadcast_sidebar(&self, session_id: &str, event_type: &str, fields: Map<String, Value>) -> StoreResult<()>`; `broadcast_task_tree_changed(&self, session_id: &str, event_type: Option<&str>) -> StoreResult<()>`
+- `notify_task_tree_changed(&self, session_id: &str, event_type: Option<&str>)` (best effort, no result)
+- `load_chat_events_tail(&self, session_id: &str, limit: usize) -> StoreResult<(Vec<ChatEvent>, usize, bool)>`; `load_chat_events_range(&self, session_id: &str, start: usize, end: usize) -> StoreResult<(Vec<ChatEvent>, bool)>`; `get_chat_event_count_sync(&self, session_id: &str) -> StoreResult<usize>`
+- `get_message_projection(&self, session_id: &str) -> StoreResult<Option<Arc<MessageProjection>>>`
+- `Store::new_message_aggregator(&self, event_index_offset: usize, emit_stream_deltas: bool) -> MessageAggregator`; `MessageAggregator::{new, with_renderers, feed, feed_indexed, flush_pending, pending_draft_message}`
+- `MessageProjection::{new, advanced, history, committed, pending_draft, tail, slice_before}` and bounded page-body cache methods
+- `RuntimeEventHooks` and `EventRenderer` supplied in `StoreHooks.runtime_events`
+- `mark_busy(&self, session_id: &str, since: UtcDateTime) -> StoreResult<(UtcDateTime, bool)>`; `clear_busy(&self, session_id: &str)`; `busy_since(&self, session_id: &str) -> Option<UtcDateTime>`
+- `mark_run_busy(&self, session_id: &str, run_id: &str, since: UtcDateTime)`; `clear_run_busy(&self, session_id: &str, run_id: &str)`; `note_run_backend(&self, session_id: &str, backend: &str)`; `run_backend(&self, session_id: &str) -> Option<String>`
+- `build_scheduled_trigger_event(content: &str) -> ChatEvent`; `build_agent_message_event(&self, session_id: &str, text: &str, provenance: MessageProvenance) -> ChatEvent`; `master_done_input_event_ids(&self, event: &ChatEvent) -> Vec<String>`; `events_to_messages(&self, events: &[ChatEvent]) -> StoreResult<Vec<Value>>`; `events_to_view(&self, events: &[ChatEvent]) -> StoreResult<(Vec<Value>, Option<Value>)>`
+- `require_session(&self, session_id: &str) -> StoreResult<SessionMetadata>`; `SESSION_NOT_FOUND_DETAIL` (404 detail `Session not found`)
+- `handle_compaction_event(&self, session_id: &str, event: &Value) -> StoreResult<Option<ChatEvent>>`
+- `normalize_user_message_event`, `serialize_uploaded_files`, `strip_attached_files_block`, `build_agent_input_content`, `stable_history_projection`, `stable_closed_prefix_len`
+
+`persist_and_broadcast` feeds the aggregator after the durable append and broadcasts the event. The
+master queue runs the repository's turn-end hook list before it writes `master_done`. Stream deltas are
+coalesced per channel over 200 ms, with a leading frame and the latest trailing frame; message and
+error frames discard a pending preview. The control-sink two-phase path primes before the tree lock,
+appends under the lock, then announces after release only when its epoch still matches. Feature event
+renderers enter through `StoreHooks.runtime_events`; they are not mutable store hooks.
+
+## Test write faults (`write-faults` feature, test-only)
+
+The `write-faults` feature compiles `charliebot_store::write_faults`. It fails the store's own writes on demand, so a
+test can drive the out-of-space landing retry through a live store write.
+
+The feature is off by default, and no production crate enables it. The seam also compiles in this crate's own test
+builds, so its unit tests cover the injectors. A crate that needs the seam in its tests adds a `[dev-dependencies]`
+entry, `charliebot-store = { path = "...", features = ["write-faults"] }`. No other build compiles the seam.
+
+- `inject_chat_append_fault(store: &Store, event_type: &str, session_ids: &[&str], times: usize, errno: i32) -> WriteFault`
+- `inject_run_record_write_fault(store: &Store, only_finished: bool, times: usize, errno: i32) -> WriteFault`
+- `WriteFault::hits(&self) -> Vec<Hit>`   one entry per matching write, in write order; a failed write is a failed hit.
+
+- A chat-append fault matches an append whose event `type` is `event_type` and whose session is in `session_ids`. The
+  first `times` matching appends fail, and every other append writes through. The check runs in `append_chat_event`,
+  and in the first append of a new task node (`publish_task_node`), before the log is written.
+- A run-record fault matches the record writes that set `ended_at` when `only_finished` is set, and every record write
+  otherwise. The check runs at the top of `write_run_record`, before the disk is touched, so a failed record write
+  leaves no record file. A caller may already have created the run directory, as it would after a real failure.
+- A failed write returns a `StoreError` shaped as the store's I/O errors are: `<path>: <io::Error::from_raw_os_error>`.
+  `charliebot-tasks::is_out_of_space_error` reads it as a disk error.
+- An injector is scoped to one `Store` value. Its `WriteFault` guard removes the fault on drop. When two faults match
+  one write, each decides it, and the write fails with the errno of the first fault that fails it.
+- `hits` has one entry per matching write, in write order: `Hit::Failed` for a write the fault failed, and
+  `Hit::Written` for a match after its `times` were spent.
+
+## Not store-owned
+
+The feature request's plan files, explain results, voice files, host-auth data, usage ledger, trace
+cache, models, backup, trigger files, worktrees, and transport files remain owned by their feature or
+runtime components. `charliebot-store` supplies metadata and chat-event access in S1 through S3 and the event,
+message, projection, and busy-state model in S4. Usage storage's raw metadata scan is read-only and is
+exposed as `raw_metadata_scan`.
+
+## Behavior notes
+
+- Non-UTC offsets in chat-event timestamps normalize to UTC on read and write.
+- Slot values are not type-checked on write. `MetadataSlot` carries defaults only, so a typed write
+  refusal lives with the caller.
+- Archive rotation has no lock against a concurrent append, so an append racing
+  `archive_events_before` can land in either the old or the new live file.
+- The session counter parses a signed 64-bit integer. A counter with digit underscores or a larger
+  value takes the session-directory count.
+- One task-tree notification has no sender in this crate. A run's first launch is
+  not sent by `record_launch`; it will send through `notify_task_tree_changed`. A fork sends its own
+  `broadcast_task_tree_changed` for the child (`session_fork.rs:302`), and the metadata patch sends from `patch_task`.
+
+# Chat Platforms
+
+This document is what a contributor reads before adding a chat platform to CharlieBot. It explains why the thread entrypoint is one shared core plus one thin adapter per platform, what the core owns, what an adapter must supply, how Slack, Discord, and Feishu fill that contract, and how Telegram would map onto it. It is written from the code in `rust/crates/features/chat_threads/src/thread_entry.rs`, `rust/crates/features/slack/src/slack_listener.rs`, `rust/crates/features/discord/src/discord_listener.rs`, and `rust/crates/features/feishu/src/listener.rs`.
+
+---
+
+## Why one core
+
+A summon binds one platform thread to one session: the session is created for (or reattached to) that thread, and every round it runs reads and answers that same thread. The shared core owns one session per thread, the follow triggers that wake the session when new messages arrive, the read-before-reply gate, reply delivery, the turn-end reply check, and the lost-summon report after a restart. A platform module supplies only what differs: its connection, event parsing, and API calls for posting, reactions, and reading the thread.
+
+The dependency direction is one way. The platform crates depend on the core (`rust/crates/features/slack`, `rust/crates/features/discord`, and `rust/crates/features/feishu` each depend on `rust/crates/features/chat_threads`); the core never depends on a platform crate. Each platform contribution answers the shared `thread-reply` turn-end check in process with its own platform contract. The master queue runs the names in `hooks/turn_end.json` before it writes `master_done`; the platform contribution owns notice delivery and the existing failure and quota path.
+
+---
+
+## The core's flow
+
+The core owns the whole life of a thread-bound session. Each step below names the core function that implements it; the platform side only feeds events in and carries posts out through its adapter.
+
+- **Summon**   `accept_summon` resolves the session (create, unarchive, or reuse), advances the watermark past the mention and cancels armed follow triggers (`consume_mention`), groups the session under its label (`ensure_group`), persists the summon event, and fires the round and the ack eye as logged tasks.
+- **Follow**   `follow_message` checks the session-side guards (session exists, is ACTIVE, its origin matches the event's channel, the message id sorts above the watermark) and calls `arm_follow_trigger`, which cancel-then-creates the session's one persisted follow trigger: a 10-second quiet delay from the newest message, capped 300 seconds from the chain's first message, with the chain floor parsed back off the replaced label so a steady trickle still flushes. When the trigger fires, the wake reaches the session as a scheduled trigger labeled `<prefix> floor=<id>`; the wake enters the session log with no platform block, so silence stays a legal round outcome outside the audit.
+- **Read before reply**   `assert_thread_fresh` refuses the reply with 412 while eligible thread messages sit above the session's watermark; `ack_messages` advances the watermark over the given ids (every eligible unread id at or below the newest must be included) and persists a small ack event for the audit trail.
+- **Reply**   `post_reply` posts the text exactly as written, after `assert_no_file_server_links` refuses the whole reply with a 422 naming the link and the `charliebot publish` command that fixes it when the text still links a file-server URL (any host or port; the mount path segment is the only marker), names the application-route URLs on the server port for the operator (`application_route_links`), splits the text at the platform's per-message limit (`chunk_text`), posts chunk by chunk through `post_with_retry` (two retries, 1 s then 4 s, before a 502), persists the platform's reply event, and clears the ack of the newest summon the session's running turn received.
+- **Turn end**   the `thread-reply` entry checks whether the turn answered its newest summon. A first miss blocks the same turn and sends its reason through the session; a second miss posts the no-reply notice and records its marker only after delivery succeeds. A failed or quota-ended turn skips the hook list and uses `audit_failed_turn` to keep the existing nudge and notice path.
+- **Crash replay**   the master queue derives whether a block's continuation ran from the turn event log. It replays a block whose continuation did not run and reruns the hook list after the continuation. `backfill_lost_summons` reports summons that no finished turn received and no backfill marked; it does not rerun completed turn checks.
+- **Reconnect**   `backfill_followed_threads` runs on every (re)connection and arms the follow trigger of every ACTIVE thread-bound session whose thread holds unread messages, covering the events no live connection delivered.
+
+---
+
+## The adapter contract
+
+A platform describes itself to the core with one `ThreadPlatform` value and one `ThreadAdapter` implementation; the core reads everything it needs off the two. The Slack values below are the `SLACK` constant in `rust/crates/features/slack/src/thread_contract.rs`, and the Discord values are the `DISCORD` constant in `rust/crates/features/discord/src/thread_contract.rs`. `ThreadMessage` is the shape both sides exchange for one thread message: `id` is the platform's message id (a Slack ts, a Discord snowflake), `user` its author (None when the platform names none), and `text` its text (empty when the platform names none).
+
+### `ThreadPlatform` fields
+
+| Field | Meaning | Slack | Discord | Feishu |
+|-------|---------|-------|---------|--------|
+| `name` | Summon event-block key and prefix of every persisted marker; the derived keys spell themselves from it | `slack` | `discord` | `feishu` |
+| `display_name` | Human-facing platform name in prompts, notices, and logs | `Slack` | `Discord` | `Feishu` |
+| `reply_event_type` | Wire type of the persisted reply event | `SLACK_REPLY` (`slack_reply`) | `DISCORD_REPLY` (`discord_reply`) | `FEISHU_REPLY` (`feishu_reply`) |
+| `reply_command` | The reply command the thread reply contract states; the turn-end check reads it to recognize the older full-prompt contract | `charliebot slack reply` | `charliebot discord reply` | `charliebot feishu reply` |
+| `max_post_chars` | Per-message limit `chunk_text` splits at | `40000` | `2000` | `30000` |
+| `scope_doc` | The platform's scope doc under prompts/ (what personal information may enter its threads): read fresh into the session's thread reply contract. The host file `$CHARLIEBOT_HOME/prompts/<scope_doc>`, when it exists, replaces the repo's; its absence alone falls back to the repo file | `slack_reply_scope.md` | `discord_reply_scope.md` | `feishu_reply_scope.md` |
+| `follow_trigger_prefix` | Trigger-label prefix identifying the session's armed follow record | `slack-thread-follow` | `discord-thread-follow` | `feishu-thread-follow` |
+| `id_key` | Maps one message id to its ordering key | `str` (dotted ts strings sort as strings) | `snowflake_key` (snowflakes sort as integers) | `TimeThenId` (the `<create_time ms>-<om_id>` composite sorts by milliseconds, then by `om_id`) |
+| `origin_field` | Field holding the thread origin in the platform's registered session metadata slot | `slack_origin` | `discord_origin` | `feishu_origin` |
+| `watermark_field` | Field holding the newest consumed message id in the platform's registered session metadata slot | `slack_watermark_ts` | `discord_watermark_id` | `feishu_watermark_id` |
+| `id_label` | Key naming a message id in readbacks and refusals (the 412 payload's per-message key) | `ts` | `id` | `id` |
+| `mention_key` | Summon-block key of the mention message; a block without it carries no ack to clear | `mention_ts` | `mention_id` | `mention_id` |
+| `block_keys` | Summon-block keys the failed-turn recovery nudge copies from the summon | `channel_id`, `thread_ts`, `mention_ts` | `guild_id`, `channel_id`, `thread_id`, `mention_id` | `chat_id`, `root_id`, `mention_id` |
+| `summon_line` | The whole summon input: one fixed line naming the platform and the event; the turn-end check reads it to recognize the current contract | `Slack     ` | `Discord     ` | `       ` |
+
+Three marker keys derive from `name` and so carry no field of their own: `notice_key` names the marker payload that the turn-end notice delivery and boot backfill read, `backfill_key` names the lost-summon marker payload, and `ack_event_type` names the ack record's wire type (`slack_ack`, `discord_ack`).
+
+### `ThreadAdapter` methods
+
+| Method | What the core uses it for | Slack (`SlackThreadAdapter`) | Discord (`DiscordThreadAdapter`) | Feishu (`FeishuThreadAdapter`) |
+|--------|---------------------------|------------------------------|----------------------------------|--------------------------------|
+| `post(address, text)` | `post_with_retry` posts every reply chunk and every notice through it | `SlackClient.post_message` (`chat.postMessage` with `thread_ts`) | `DiscordClient.create_message_with_post_key` on the thread (a JSON body) | `FeishuClient.reply_in_thread` on the root message, with a uuid derived from the post key |
+| `add_ack(block)` | Lights the summon ack when the summon round fires | `reactions.add` of `eyes` (`_ACCEPTANCE_REACTION`) on the mention ts | `add_reaction` of `  ` (`_ACCEPTANCE_EMOJI`) on the mention id | `add_reaction` of `OnIt` (`ACK_EMOJI`) on the mention message id |
+| `remove_ack(block)` | Closes the summon ack when a reply, notice, or lost-summon report answers it | `reactions.remove`; a `no_reaction` error is the end state, so the clear is idempotent | `remove_own_reaction` of `  ` | lists the message's reactions and deletes the one whose operator is the app |
+| `read_eligible(origin, cfg)` | The eligible thread read behind the freshness gate, the ack check, and the reconnect backfill | one `conversations.replies` call; keeps plain (subtype-absent) human messages from allowed users | `get_messages` paged oldest-first, 100 per call from id `0` until a short page; keeps human-authored, non-webhook messages of type 0 or 19 from allowed users | the thread's message list, paged oldest-first; `thread_message` marks every non-deleted human message eligible |
+| `address_of(origin)` | Builds the address dict `post` accepts | `{"channel_id", "thread_ts"}` from the `SlackOrigin` | `{"guild_id", "thread_id"}` from the `DiscordOrigin` | `{"chat_id", "root_id"}`, plus `thread_id` once the origin holds it, from the `FeishuOrigin` |
+| `log_fields(address)` | Log fields naming the thread on every core log line | `channel`, `thread_ts` | `guild`, `thread` | `chat`, `thread` (the thread id, else the root id) |
+
+### What a platform module owns outside the adapter
+
+The adapter is not the whole platform module. Each platform also owns:
+
+- **The connection loop.** Slack: `run_listener` in `rust/crates/features/slack/src/slack_listener.rs`   a Socket Mode websocket whose backoff doubles from 1 s to 30 s. Discord: `run_listener` in `rust/crates/features/discord/src/discord_listener.rs`   a gateway websocket with identify and heartbeat, the stop close codes in `STOP_CLOSE_CODES` (retrying cannot fix them), and a `preflight` that refuses to start without the Message Content intent.
+- **Event parsing and drop rules.** Slack: `handle_app_mention` (summons: type `app_mention`, sender on the allowed list) and `handle_thread_message` (follows: drop subtypes, drop non-thread messages, drop bots and non-allowed senders before the core's session guards run). Discord: `handle_message_create`   one guard chain over human sender, message type, allowed author, the DM notice (`_DM_NOTICE`, a DM binds no guild thread), mention versus follow traffic, and channel type (a mention already in a thread binds that thread; a channel mention starts a thread named from the stripped mention content, `_thread_name`).
+- **The session-id namespace.** The namespaces and the uuid5 derivation live once in `rust/crates/features/chat_threads/src/summon.rs` (`SLACK_NAMESPACE`, `DISCORD_NAMESPACE`, `namespaced_uuid`). Slack's `summon_session_id(team_id, channel_id, thread_ts)` in `rust/crates/features/slack/src/slack_listener.rs` and Discord's `summon_session_id(guild_id, thread_id)` in `rust/crates/features/discord/src/discord_listener.rs` key it with the thread's coordinates.
+- **The session label.** Slack: `Slack #<channel name>`, resolved once in `handle_app_mention` (channel id when the name lookup fails); Discord: `Discord #<parent channel name>`, resolved in `handle_message_create`.
+- **The origin model and its metadata fields.** `SlackOrigin` (`team_id`, `channel_id`, `thread_ts`) lives in `rust/crates/features/slack/src/metadata.rs`; `DiscordOrigin` (`guild_id`, `parent_channel_id`, `thread_id`) lives in `rust/crates/features/discord/src/metadata.rs`. Each package registers its session fields as a `MetadataSlot` from its `register()` (`rust/crates/infra/core/src/metadata_slot.rs`); create requests carry those keys as registered extras.
+- **The summon block keys.** The platform decides them (`block_keys` in the table above): the Slack block is built in `handle_app_mention`, the Discord block in `handle_message_create`.
+- **The summon line and the thread reply contract.** The summon input is the platform's one `summon_line` (`Slack     `, `Discord     `); the rules live once in the session's managed instructions. Each platform's turn contribution (`rust/crates/features/slack/src/turn_contribution.rs`, `rust/crates/features/discord/src/turn_contribution.rs`) builds the contract with `thread_entry.thread_reply_contract`: its own platform part (`ThreadPlatform.platform_line` plus the read, summon, and ack rules; Slack's part carries the session's `slack_origin` channel id and thread ts rather than a summon link) followed by the platform's scope doc (`slack_reply_scope.md`, `discord_reply_scope.md`, the rules on what personal information may enter that platform's threads), the PII red line, and the reply-format contract, each read fresh on every build. The scope doc is `$CHARLIEBOT_HOME/prompts/<scope_doc>` when the host has that file, else the repo's `prompts/<scope_doc>`; the red line and the reply format always come from the repo. A host file that exists but cannot be read, or is not UTF-8, fails the build and names its path. The Discord read command flags the pending summon with `summon: true`; Slack's contract states that the summon is the newest bot mention in the thread.
+- **The follow wake label.** One shared builder, `follow_wake_label` in `rust/crates/features/chat_threads/src/thread_entry.rs`: the label is the single line `<prefix> floor=<id>` (`slack-thread-follow floor=<ts>`, `discord-thread-follow floor=<id>`). It carries no link and no rule text   the thread reply contract in the session's managed instructions states how the wake reads the thread and replies.
+- **The server start and stop.** Each platform's `service.rs` (`rust/crates/features/slack/src/service.rs`, `rust/crates/features/discord/src/service.rs`) defines the `start`/`stop` pair: the listener task plus the boot-backfill task, started when the platform's credentials and allowed users are set and cancelled on shutdown. The lifespan runs every registered service through the registry's lifespan (`rust/crates/runtime/registry/src/lifespan.rs`; `rust/crates/app/packages/src/lib.rs` lists the packages).
+- **The turn-end check.** The shared `thread-reply` name is one entry in `hooks/turn_end.json`. Each platform contribution answers it in process with its own `ThreadPlatform` (`run_turn_end_check`), and supplies its notice delivery and the failure or quota recovery path.
+- **The CLI and the internal endpoints.** Slack: the Rust CLI module `rust/crates/features/slack/src/cli.rs` (`charliebot slack reply`, `charliebot slack ack`) over `POST /api/internal/slack/reply` and `POST /api/internal/slack/ack`; Discord: the Rust CLI module `rust/crates/features/discord/src/cli.rs` (`charliebot discord reply`, `charliebot discord read`, `charliebot discord check`) over the matching endpoints in `rust/crates/features/slack/src/api.rs` and `rust/crates/features/discord/src/api.rs`.
+- **The reply event type and its session-view row.** `SLACK_REPLY` lives in `rust/crates/features/slack/src/event_types.rs` and `DISCORD_REPLY` in `rust/crates/features/discord/src/event_types.rs`; each platform's turn contribution returns its renderer from `event_renderers`, and the chat aggregator (`rust/crates/runtime/store/src/aggregator.rs`) merges them into its render table ("Posted to Slack: ..." / "Posted to Discord: ...").
+
+---
+
+## Feishu
+
+The Feishu package (`rust/crates/features/feishu`) fills the same contract. Its own parts are:
+
+- **The connection loop.** `run_listener` in `rust/crates/features/feishu/src/listener.rs` reads the bot's identity once for the service start   a `preflight` that stops with one error when the app has no bot capability (Feishu code 11205), which only the developer console fixes   then opens the long connection that `POST /callback/ws/endpoint` returns, pings at the interval Feishu sets, and reconnects with backoff from 1 s to 30 s. Each event is acknowledged before it is handled, because Feishu redelivers an event it does not see acknowledged within three seconds. The protobuf frame codec is `rust/crates/features/feishu/src/frame.rs`.
+- **Event parsing and drop rules.** `classify` in `rust/crates/features/feishu/src/event.rs` reads `im.message.receive_v1`. A summon is a group message that mentions the bot and comes from a human. A follow is a human's message in a thread of a group. Every other event is dropped, and the drop reason is logged at debug level.
+- **The group admission rule.** `chat_has_owner` in `rust/crates/features/feishu/src/owners.rs` decides whether a group has an owner: a person listed in `feishu.allowed_users` is a member of it. The listener calls it after `classify` admits a summon or a follow (`admit` in `listener.rs`), and `post` in `adapter.rs` calls it before every reply. Each call reads the group's member list fresh, through every page, and keeps nothing. A failed member-list read fails the event or the reply.
+- **The session-id namespace and label.** `summon_session_id(tenant_key, chat_id, root)` in `rust/crates/features/feishu/src/adapter.rs` keys the uuid5 under `FEISHU_NAMESPACE` from `rust/crates/features/chat_threads/src/summon.rs`. The root is the message's `root_id` when the message sits in a thread, and the summon message's own id otherwise. The session label is `     <chat_id>`.
+- **The origin model.** `FeishuOrigin` (`tenant_key`, `chat_id`, `root_id`, and an optional `thread_id`) lives in `rust/crates/features/feishu/src/metadata.rs`, with its slot validator. Feishu creates the thread on the bot's first reply, so `thread_id` is recorded after that reply.
+- **Message ids.** A Feishu message id is the composite `<create_time ms>-<om_id>`. Only the adapter builds and splits it, and `IdOrdering::TimeThenId` orders it.
+- **The summon block, line, and contract.** The block carries `chat_id`, `root_id`, and `mention_id`. The summon input is `       `. `FeishuTurnContribution` in `rust/crates/features/feishu/src/turn_contribution.rs` builds the contract from `rust/crates/features/feishu/src/thread_contract.rs`.
+- **The service gate.** `FeishuService` in `rust/crates/features/feishu/src/service.rs` starts the listener and the boot backfill only when `feishu.app_id` and `feishu.app_secret` are set and `feishu.allowed_users` is not empty.
+- **The CLI and the internal endpoints.** `charliebot feishu reply`, `read`, `download`, and `check` (`rust/crates/features/feishu/src/cli.rs`) call `/api/internal/feishu/*` (`rust/crates/features/feishu/src/api.rs`). `download` writes the file into the session directory. `check` verifies the tenant token, the bot identity, the long-connection endpoint, and that `allowed_users` names at least one owner. `charliebot feishu request`, `consent-url`, and `exchange-code` are the user-token verbs, in `rust/crates/features/feishu/src/user_token.rs`.
+- **The reply event type.** `FEISHU_REPLY` lives in `rust/crates/features/feishu/src/event_types.rs`. Its renderer writes "Posted to Feishu: ...".
+
+## Feishu app setup
+
+A Feishu bot is one app in the Feishu Open Platform console. Whichever way the app is created, it needs these settings:
+
+- The bot capability (   ) turned on.
+- Events delivered by long connection (         ), with the event `im.message.receive_v1` subscribed under app identity. The console calls this event      v2.0.
+- Five API scopes:
+  - `im:message.group_msg` (a sensitive scope): every message that users post in the groups the bot is in. The mention summons and the follow of threads both depend on it, and reading a thread in a group requires it.
+  - `im:message:readonly`: read thread messages, get one message, and download images and files.
+  - `im:message:send_as_bot`: reply as the bot inside a thread.
+  - `im:message.reactions:write_only`: add and delete the `OnIt` acknowledgement reaction.
+  - `im:chat.members:read`: read a group's member list, which decides whether the group has an owner before a summon, a follow, or a reply.
+
+Two ways create the app:
+
+- **Custom app (    ).** In the console, create a custom app. Turn on the bot capability, set the event subscription to long connection, subscribe to `im.message.receive_v1`, and request the five scopes. Feishu accepts the long-connection setting only while a client holds a connection to the app, so start CharlieBot with the app's credentials before saving that setting.
+- **One-click agent app.** Feishu's agent-integration guide (https://open.larkoffice.com/document/mcp_open_tools/integrating-agents-with-feishu/overview.md) creates the app from a link or a QR code. The link expires after ten minutes and works for one user. The preset covers the bot capability, long-connection delivery, `im.message.receive_v1`, and these messaging scopes: `im:message:readonly`, `im:message:send_as_bot`, `im:message.group_at_msg:readonly`, `im:message.p2p_msg:readonly`, and `im:resource`. The preset does not include `im:message.group_msg`, `im:message.reactions:write_only`, or `im:chat.members:read`, so add those three in the console. The guide does not describe the version approval step.
+
+Every change to the bot capability, the event subscription, or the scopes is a new app version. The version takes effect only after an enterprise admin approves it. If you are not an admin of the organization, ask its admin to approve the version.
+
+Then set up CharlieBot:
+
+1. Put the app's values in `credentials.yaml` under `feishu:` as `app_id` and `app_secret`.
+2. Add the bot to a group (the group's settings, then     , then      ).
+3. List each owner in `config.yaml` under `feishu.allowed_users`, mapping the owner's Feishu open_id (the `ou_` id) to the person's name. A group is admitted when one of these people is a member of it, and then every human member of that group can summon the bot and follow its threads. A group with no listed member gets no reply. An empty map leaves the Feishu feature unconfigured.
+4. Run `charliebot feishu check`. It exits 1 until every check passes.
+
+## Adding a platform
+
+A new platform repeats the shape Slack, Discord, and Feishu already fill. Work down this checklist in order; each step instantiates one item of the adapter contract above.
+
+1. Describe the platform with one `ThreadPlatform` value   every field of the first table   built from the module's own constants, so each value keeps one home.
+2. Implement `ThreadAdapter` over the platform's client, supplying every method of the second table against the same platform value.
+3. Add the origin model to the platform's `metadata.rs`: the origin type, the `origin_field` on `SessionMetadata` and `CreateSessionRequest`, and the `watermark_field` on `SessionMetadata`; register the fields as a `MetadataSlot` from the package's `register()` (`rust/crates/infra/core/src/metadata_slot.rs`).
+4. Write the event parsing and drop rules: the summon handler and the follow handler, with the eligibility rule shared between the follow guard and the adapter's readback (gate eligibility equals read eligibility, so nothing is demanded of an ack the session would never consume).
+5. Write the connection loop (`run_listener`): connect, reconnect with backoff, and run `backfill_followed_threads` on every (re)connection.
+6. Pick the session-id namespace and `summon_session_id`, and resolve the session label once per accepted summon.
+7. Write the summon line (`summon_line`), the contract's platform part, and the summon block keys; build the contract segment in the turn contribution with `thread_entry.thread_reply_contract` (the follow wake label comes from the shared `follow_wake_label`).
+8. Register the service in the feature crate's `lib.rs` (`registry.service(...)`) and write its `service.rs`: the listener task plus the boot-backfill task, behind the platform's credentials and allowed users.
+9. Register the platform's `turn_kind`, notice delivery, and failed-turn recovery on its turn contribution. The contribution answers `thread-reply` with its `ThreadPlatform` (`turn_end_check_names` and `run_turn_end_check`); the shared hook list already contains that name.
+10. Add the CLI verbs and the internal endpoints for reply and ack (or the platform's read equivalent, as Discord's `read` is).
+11. Add the reply event type constant in the package's own `event_types.rs` and return its session-view renderer from the same contribution's `event_renderers`.
+12. Add the tests. The shared core is already covered platform-neutrally by the synthetic platform in `rust/crates/features/chat_threads/src/thread_entry/tests.rs` ("fakechat", an integer id sort that is not the string sort); the platform's own tests mirror `rust/crates/features/discord/src/discord_listener_tests.rs`.
+
+---
+
+## Telegram mapping
+
+This section is design only: no Telegram code exists in the repository. Every point below states what the Bot API documentation (https://core.telegram.org/bots/api) specifies; re-check each against it before building.
+
+- **Thread.** A forum topic in a supergroup with topics enabled (`message_thread_id`), or a reply chain in a plain group (its root message id). The session id derives from the chat id plus the thread id, in the pattern of the two `summon_session_id` functions above.
+- **Message ids.** Integers unique per chat, so `id_key=int`   the Discord row's ordering, not Slack's string sort.
+- **Summon.** A `mention` entity naming the bot's username, or a reply to one of the bot's messages.
+- **Ack.** `setMessageReaction` with    (Bot API 7.0 and later)   the same lit-at-summon, cleared-when-answered contract both adapters implement.
+- **Post.** `sendMessage` with `message_thread_id`; 4096 characters per message sets `max_post_chars` for `chunk_text`.
+- **Linked pages.** The round publishes each page with `charliebot publish` and writes the printed URL into the reply; the reply path posts the text as written and refuses a CharlieBot file-server link with 422, as on Slack and Discord. The adapter needs no file upload (`sendDocument`).
+- **Reading the thread.** The Bot API has no history read, so `read_eligible` needs a local store of the messages the bot received, kept per followed thread. This is the main divergence from Slack and Discord, whose adapters read the platform's history API.
+- **Follow visibility.** With privacy mode on (the default), a bot in a group receives only messages that mention it, reply to it, or are commands (https://core.telegram.org/bots/features#privacy-mode). Following a thread needs privacy mode off or the bot as a group admin   the analog of Discord's Message Content intent, which `_preflight` refuses to start without.
+- **Connection.** `getUpdates` long polling or a webhook, instead of the websocket both current listeners hold open.
+
+# The plug-in registry
+
+`charliebot-registry` is the plug-in seam. Each package makes its contributions through one
+`register(&mut Registry)` function, and the server builds one `Registry` at startup. The registry is read-only after
+that, except for one binding: the server binds its feature context right after building it (`bind_feature_context`),
+and the store's hooks read that binding through a `Weak`.
+
+Rules that hold for every hook kind:
+
+- A registration names its hook. A name that another registration of the same kind holds fails. The error names the
+  package that made the earlier registration, and the server does not start.
+- A registration outside a package's `register` fails.
+- The registries keep registration order. Routes merge, page parts list, metadata keys serialize, template paths
+  search, and lifespan steps and services run in that order.
+- A package appears once in the list. A second listing fails.
+
+## Composition root
+
+`rust/crates/app/packages/src/lib.rs` owns the package list, one entry per package. The list order is the server's
+registration order:
+
+```rust
+const PACKAGES: &[(&str, RegisterFn)] = &[
+  ("features.artifacts", charliebot_artifacts::register),
+  ("features.backup", charliebot_backup::register),
+  // ...
+];
+```
+
+The list is crate-private; `registry()` is the crate's only `pub` item.
+
+Before `PACKAGES`, `RUNTIME` registers hooks owned by the runtime itself. Its first entry is
+`("runtime.agents", charliebot_agents::register_runtime)`. It installs `agent_environment` and then
+`session_cgroups` as pre-recovery steps: the environment snapshot is available before recovery, and cgroup startup
+logging and stale sweeping happen before recovery and early services.
+`("runtime.usage", charliebot_usage::register)` follows them and inserts the one `SessionUsage` into startup state
+before the session API routes serve requests. The runtime owns these steps, so they do not appear in
+`PACKAGES`.
+
+Each entry names its package's `register` function. `packages::registry()` calls `register_package` for each entry;
+the first failure stops the server with exit code 1.
+
+## Hook kinds
+
+Each entry gives the Rust registration method and one example registration. The `&mut self`
+receiver is `Registry`, and every method returns `Result<(), RegistryError>` unless noted.
+
+### Routers
+
+- Rust: `router_patterns(build: RouterBuilder, patterns: &[&str])`, where `RouterBuilder = fn(&Arc<FeatureContext>) -> axum::Router`
+  and the patterns are the route patterns the router mounts, in axum's syntax. matchit matches these patterns and
+  rejects empty parameter captures. `router(build, matches: PathMatch)` takes a `PathMatch = fn(&str) -> bool` for a
+  router whose claims are not route patterns. The server merges the routers in registration order, after its own route
+  families. The redirect for a trailing slash asks each router's claim.
+- Example: `registry.router_patterns(notes_routes, &["/api/notes/{note_id}"])?;`
+
+### WebSocket routes
+
+- Rust: `websocket(pattern: &'static str, handler: WebSocketHandler)`. A `*` matches one non-empty decoded path segment.
+  `WebSocketRequest` carries the decoded path, captured segments, raw query string, and axum upgrade. The server checks
+  WebSocket auth before it calls the handler. A repeated pattern fails and names both packages.
+- Example: `registry.websocket("/ws/voice/*", preview)?;`
+
+### Services
+
+- Rust: `service(service: Arc<dyn Service>)`. `Service` has `name`, `phase` (`Phase::Early` or `Phase::Ready`),
+  `start(ServiceContext) -> BoxFuture<anyhow::Result<()>>` and `stop() -> BoxFuture<anyhow::Result<()>>`.
+  `ServiceContext` carries the `FeatureContext` and the crash-recovery future.
+- Example: `registry.service(Arc::new(Indexer::default()))?;`
+
+### File views
+
+- Rust: `file_view(name: &'static str, view: Arc<dyn FileView>)`. `FileView::view` receives the request's
+  `FeatureContext`, request parts and path. It answers the request or passes it on.
+- Example: `registry.file_view("artifacts", Arc::new(ArtifactView))?;`
+
+### Startup checks
+
+- Rust: `startup_check(name: &'static str, check: StartupCheckFn)`, where
+  `StartupCheckFn = fn(&Registry, &CharlieBotConfig) -> Result<(), String>`. The check reads the registry, so it can
+  resolve the usage sources and backend attributions the packages registered. The server runs each check once, after
+  the config loads, and refuses to start on an `Err`.
+- Example: `registry.startup_check("backend_ids", check_backend_ids)?;`
+
+### Config checks
+
+- Rust: `config_check(name: &'static str, check: CheckFn)`. The checks run after every config load, including a hot
+  reload, which then keeps the previous config.
+- Example: `registry.config_check("check_default_backend", check_default_backend)?;`
+
+### Diff roots
+
+- Rust: `diff_root(name: &'static str, root: DiffRootFn)`, where `DiffRootFn = fn(&CharlieBotConfig) -> PathBuf`.
+- Example: `registry.diff_root("workspace", workspace_root)?;`
+
+### Scheduled handlers
+
+- Rust: `scheduled_handler(name: &'static str, handler: ScheduledHandlerFn)`, where
+  `ScheduledHandlerFn = fn(Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Result<String>>`. A cron task with
+  `handler: <name>` awaits it, and the `Ok` string is the fire's summary.
+- Example: `registry.scheduled_handler("publish_sweep", publish_sweep)?;`
+
+### Worktree removal
+
+- Rust: `worktree_removal(remove: WorktreeRemovalFn)` (at most one), where
+  `WorktreeRemovalFn = for<'a> fn(WorktreeRemoval<'a>) -> BoxFuture<'a, Option<String>>`. The request names the
+  repository, the worktree, its branch, the owning run and the caller's log identity; a `Some` message reports the
+  removal's failure in the caller's own words. `runtime.tasks` registers it, and the disk sweep reads it with
+  `worktree_remover()`, which fails when no package registered one.
+- Example: `registry.worktree_removal(remove_worktree_hook)?;`
+
+### Config sections
+
+- Rust: `config_section(section: ConfigSection)`, where `ConfigSection { key, legacy_keys, parse, dump }`,
+  `parse: fn(&serde_yaml::Value) -> Result<SectionValue, String>` and
+  `dump: fn(&SectionValue) -> Result<serde_json::Value, String>`. The parsed value is read with
+  `CharlieBotConfig::section::<T>(key)`, which panics on an unregistered key or a type mismatch. An absent section
+  parses from an empty mapping, and a parse failure fails the config load.
+- A section whose model serde reads whole declares `impl SectionModel for T { const KEY: &'static str = ...; }` and
+  builds with `ConfigSection::of::<T>(legacy_keys)`, which parses from the model's YAML and dumps the model as JSON. A
+  section that inspects its raw YAML first declares its own `parse`.
+- Example: `registry.config_section(ConfigSection::of::<FeishuConfig>(&[]))?;`
+
+### Legacy config keys
+
+- Rust: `legacy_keys(&[(&'static str, &'static str)])`. A key that moved reports its new location and fails the load.
+  A `credentials: ` prefix names a path in `credentials.yaml`.
+- Example: `registry.legacy_keys(&[("credentials: gemini_api_key", "gemini.api_key")])?;`
+
+### Backend option models
+
+- Rust: the `option_model: OptionModel` field of `BackendTypeRegistration`, where
+  `OptionModel = fn(&serde_yaml::Mapping) -> Result<(), String>`. It checks one `backends.options[]` entry's
+  type-specific keys. A failure fails the config load.
+- Example: see `backend_type` below.
+
+### Metadata slots
+
+- Rust: `metadata_slot(slot: MetadataSlot)`, where `MetadataSlot { owner, on: MetadataFile, after, fields }`. One owner
+  registers once per file (`MetadataFile::Session` or `MetadataFile::Thread`). `metadata_slots()` hands the list to
+  `Store::new`, which validates it at startup. The store serializes the session slots' keys in registration order; no
+  Rust code writes a thread metadata file.
+- Example: `registry.metadata_slot(MetadataSlot { owner: "cron", on: MetadataFile::Session, after: Some("backend"), fields })?;`
+
+### Page packages
+
+- Rust: no method. `register_package` records the package after its `register` succeeds, so its `static/` mounts at
+  `/static/<kind>/<name>/` and its `templates/` join the search path in list order. `page_parts(repo_root, packages, slot)`
+  reads the part templates in that order.
+- Example: none; the composition root's list is the registration.
+
+### Template globals
+
+- Rust: `template_global(name: &'static str, global: TemplateGlobalFn)`, where
+  `TemplateGlobalFn = fn(&FeatureContext) -> Result<minijinja::Value, String>`. The global reads the live config through the
+  context. An `Err` fails the page render. `Templating::render_page` calls every global once per render.
+- Example: `registry.template_global("voice_default_backend", voice_default_backend)?;`
+
+### Home cards
+
+- Rust: `home_card(card: HomeCard)` with `HomeCard { name, url, description }`, all `&'static str`. Cards list in
+  registration order.
+- Example: `registry.home_card(HomeCard { name: "Usage", url: "/usage", description: "Token usage" })?;`
+
+### Turn contributions
+
+- Rust: `turn_contribution(name: &'static str, contribution: Arc<dyn TurnContribution>)`. The contribution may add
+  instruction segments, a workflow-rules file, an input preamble, a status goal, event renderers, turn-end ownership,
+  notice delivery, and a failed-turn action. Its other methods default to adding nothing. `repo` is the checkout the
+  server serves (`RepoRoot`); a contribution reads its prompt docs through it, and `Registry::instruction_segments`
+  passes the same `repo` to each contribution in registration order. Two contributions that render the same event type
+  fail.
+- Example: `registry.turn_contribution("memory", Arc::new(MemoryTurn))?;`
+- Turn-end ownership: `turn_kind(meta)` names the session kind whose checks the contribution serves. The registry
+  selects the first contribution that claims the session. `master_queue::process_item` runs the names in
+  `hooks/turn_end.json` before it writes `master_done`. The turn owner answers each name it lists in process
+  (`turn_end_check_names`, `run_turn_end_check`) from the same `TurnInput`; a name it does not list passes, and a name
+  that no contribution answers fails the checkpoint. `show_turn_notice` delivers a passing check's notice.
+  `after_failed_turn` preserves the contribution's existing behavior for a failure or quota handoff, after `master_done`
+  is persisted.
+- Context: the server calls `Registry::bind_feature_context` once after it builds the context and before the lifespan
+  starts. Cron sequence controllers read the bound context through the registry's `Weak` link; the link avoids a strong
+  cycle with the store.
+
+### Sidebar contributions
+
+- Rust: `sidebar_contribution(name: &'static str, contribution: Arc<dyn SidebarContribution>)`. The trait has
+  `watched_files`, `row_flags`, `copy_on_fork` and `view_member`, each defaulted.
+- Example: `registry.sidebar_contribution("trace", Arc::new(TraceSidebar))?;`
+
+### Backend types
+
+- Rust: `backend_type(registration: BackendTypeRegistration)`. The registration holds `type_name`, `traits: BackendTraits`
+  (`resume`, `restart_reattach`, `preassigned_session_id`, `family_prefix`, `manual_compact`, `compact_hint`),
+  `option_model`, `factory: Arc<dyn BackendFactory>`, `lifecycle: Option<Arc<dyn BackendLifecycle>>`, and
+  `translate_fallback`. At most one type holds the translate fallback. A type without a lifecycle runs one process per
+  run.
+- Example: `registry.backend_type(BackendTypeRegistration { type_name: "codex", traits, option_model, factory, lifecycle: None, translate_fallback: false })?;`
+- `LaunchContext.base_env: Arc<Env>` carries the base agent environment into lifecycle launches and compaction.
+- `LaunchContext.run_kind: RunKind` carries `manager_turn` for a manager launch and the persisted run kind for a worker launch.
+- Three seams that a backend type uses beyond `AgentBackend`'s command, environment and translator:
+  - **One-shot.** `AgentBackend::one_shot_text(base_env, prompt, system, timeout)` returns
+    `Option<BoxFuture<..>>`: `Some` is the CLI-native, tool-less one-shot, and `None` means the type has none (the
+    default). Callers never call the trait method; `charliebot_agents::one_shot_text(built, base_env, prompt, system,
+    timeout)` runs the native one-shot when present and `agent_one_shot_text` otherwise.
+  - **Uploads.** `RunRequest.uploaded_files: Vec<Value>` carries the message's attachment refs. The runner calls
+    `AgentBackend::accept_uploads(&uploaded_files)` before the cwd, the transport and the process. `Err(message)` ends
+    the run with exactly one error event and no process; the outcome's exit code is `None`. The default accepts every
+    upload.
+  - **Final stdout.** `TransportKind::FinalStdout` runs the process with a piped stdout, which the runner tees into
+    `stdout.log` (truncated at open), and with stderr streamed to `stderr.log`. After the exit the runner calls
+    `AgentBackend::finish_final_stdout(stdout, stderr, exit_code)`, which returns a `FinalStdoutOutcome { events,
+    exit_code, guard_error }`. The runner emits the events, records `exit_code` (`AgentRunner::exit_code()`), and then
+    fails the run with `guard_error` when it is set.
+
+### Running turns
+
+- Rust: `LaunchContext.running_turns: Option<RunningTurnsFn>`, where `RunningTurnsFn` returns metadata for every other running manager turn.
+- `LaunchContext.session_meta: Arc<Mutex<SessionMetadata>>` is shared by the master queue's running-turn entry and the turn's lifecycle calls.
+- Lifecycle account-label setters and the queue's anchor refresh write the shared metadata object.
+- No `std::sync::Mutex` guard crosses `.await`; `clippy::await_holding_lock`, denied by `-D warnings` in the acceptance command, enforces this rule.
+- A manager turn receives `Some`; a task receives `None`. A task path that reads this field fails with an error naming `running_turns`.
+- The callback reads the queue when it is called, not when the launch context is built.
+- Example: `running_turns: Some(Arc::new(|| queue.running_turns_except(session_id)))`.
+
+### Child environment
+
+- Rust: `child_env(name: &'static str, edit: ChildEnvFn)`, where `ChildEnvFn = fn(&mut Env)` and `Env` is a
+  `BTreeMap<String, String>`. The edits apply in registration order to every agent child process.
+- Example: `registry.child_env("home", set_home_env)?;`
+
+### Reading limits
+
+- Rust: `reading_limits(kind: &'static str, limits: ReadingLimitsFn)`, where `ReadingLimitsFn = fn(RunKind) -> ContextLimits`.
+- Example: `registry.reading_limits("claude", claude_limits)?;`
+
+### Usage resolvers
+
+- Rust: `usage_resolver(backend_type: &'static str, constructor: UsageResolverConstructor)`, where
+  `UsageResolverConstructor = Arc<dyn Fn(&UsageResolverHost) -> Arc<dyn UsageResolver> + Send + Sync>`.
+  `UsageResolverHost` carries the hot-reloaded config and store; the store owns the events cache and chat-events path.
+  The registry stores cloneable constructors only. `charliebot-usage::SessionUsage` builds each resolver once per
+  backend type and retains it.
+- Example:
+  ```rust
+  let codex_home_dir = codex_home(host);
+  registry.usage_resolver(
+    "codex",
+    Arc::new(move |usage_host| resolver::usage_resolver(codex_home_dir.clone(), usage_host)),
+  )?;
+  ```
+
+### Usage sources
+
+- Rust: `usage_source(source: UsageSource)` and `attribute_backend_type(backend_type, source)`. A source declares the
+  operations it defines in `UsageOps { logs, read, live_cli_sessions, quota_accounts, sweep }`, and the usage code calls
+  only those. A call to an undeclared operation panics. An attribution may name a source
+  that registers later, and it fails at use if the source never registers.
+- `UsageSourceImpl::logs(&self, cfg: &CharlieBotConfig) -> anyhow::Result<Vec<(PathBuf, String)>>` receives the loaded
+  config. The source reads config through `cfg`.
+- `UsageSourceImpl::quota_accounts(&self, cfg: &CharlieBotConfig) -> anyhow::Result<Vec<Arc<dyn QuotaAccount>>>` derives
+  accounts from the loaded config. `Registry::quota_accounts` returns the first source error.
+- `QuotaAccount::fetch<'a>(&'a self) -> BoxFuture<'a, anyhow::Result<Option<Map<String, Value>>>>` returns `Ok(Some(_))`
+  for a reading, `Ok(None)` for no reading, and `Err` for a failed fetch.
+- The poll loop logs each fetch error once as `ext_usage_poll_error`, with provider, account, and error, then skips that
+  account. A `quota_accounts` error skips the whole round.
+- Example: `registry.usage_source(UsageSource { name: "Codex", id_prefixes: &["codex"], run_logs_only: false, implementation: Some(Arc::new(CodexLogs)) })?;`
+
+### Sequence controllers
+
+- Rust: `sequence_controller(name: &'static str, controller: Arc<dyn SequenceController>)`. The trait has
+  `sequence_kind`, `redrive`, `launch_context`, `after_run`, `recover_run`, `reconcile_interrupted`, `binding`,
+  `owns_session`, `listing_fields` and the defaulted `move_bindings`. Two controllers that bind one session fail at use.
+- Example: `registry.sequence_controller("scheduled", Arc::new(ScheduledSequences))?;`
+
+`SequenceTree` joins the store's run records, task metadata, control lock and successor delivery with the dispatcher,
+completion and session-event services. `StoreSequenceTree::new(store, runtime)` requires those runtime providers; the
+executor is optional because startup and recovery can run before the execution adapter is installed. No controller is
+registered by the registry crate. Its controllers receive the combined tree and implement the five run lifecycle
+methods above.
+
+`SequenceCompletion::restore_chain_locked` returns the `(restored, announcements)` pair:
+the restored ids, topmost first, and one `(node, event, epoch)` triple per
+`task_reopened` fact the call wrote. The caller sends each announcement with its epoch after it releases the control
+lock. `restore_chain` takes the lock itself and returns the restored ids.
+
+### Lifespan steps
+
+- Rust: `pre_recovery_step(name, StepFn)`, `recovery_step(name, StepFn)` (at most one), `trigger_step(name, StepFn)` (at most
+  one) and `let_go_step(name, StepFn)`, where `StepFn = fn(Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Result<()>>`.
+- Order: the pre-recovery steps in registration order; the recovery step, started as a task before the early services
+  start and awaited after them; the early services; the trigger step; the ready services. Shutdown stops ready services
+  in reverse order, stops early services in reverse order, closes shared clients, releases the fence, and logs
+  `charliebot_shutdown`. On SIGINT and failed bind, the server then runs let-go steps in
+  registration order and exits 0 or 1. SIGTERM skips let-go and is re-raised under its
+  default action. The registered order is `task_execution`, `headless_renderer`, then
+  `speech`.
+- Example: `registry.recovery_step("sweep_orphans", sweep_orphans)?;`
+
+## Route helpers
+
+`caller::resolve_caller(headers: &HeaderMap, features: &FeatureContext) -> Result<CallerIdentity, Response>` resolves
+the operator or active agent identity from request headers, the live `FeatureContext.credentials` and the store's run
+identity. `CallerIdentity` exposes `is_operator()`, `session_id()` and `claims()`, and implements
+`FromRequestParts<Arc<FeatureContext>>` for route extractors. A handler that checks the caller takes this extractor.
+
+`task_errors::task_http_error(error: StoreError) -> Response` is the shared HTTP mapping for task-domain errors. It
+maps refusal variants to their HTTP status and detail, conflicts include their message and blockers, and failures use
+the ordinary unhandled-exception response. Every task-error answer from a route uses this function.
+
+`request_body::read(&headers, body).await` reads a route's body before its dependencies. It decodes only
+`application/json` and `application/*+json` bodies through `json_loads`; other
+content types stay raw bytes. After the dependencies succeed, `RequestBody::validate(&model)` checks the body model
+and returns its declared fields. A handler keeps that order:
+
+```rust
+async fn update(request: Request<Body>) -> Response {
+  let (parts, stream) = request.into_parts();
+  let body = match request_body::read(&parts.headers, stream).await {
+    Ok(body) => body,
+    Err(response) => return *response,
+  };
+  let session = match require_session(&parts).await {
+    Ok(session) => session,
+    Err(response) => return response,
+  };
+  let model = match body.validate(&SESSION_BODY) {
+    Ok(model) => model,
+    Err(response) => return *response,
+  };
+  update_session(session, model).await
+}
+```
+
+`form_body::read(&headers, body).await` streams multipart file parts to temporary files before route dependencies run.
+After the dependencies succeed, `FormBody::validate(&model)` checks required and typed `File` and `Form` fields in
+declaration order. A handler then reads the parsed values:
+
+```rust
+async fn upload(request: Request<Body>) -> Response {
+  let (parts, stream) = request.into_parts();
+  let form = match form_body::read(&parts.headers, stream).await {
+    Ok(form) => form,
+    Err(response) => return *response,
+  };
+  let session = match require_session(&parts).await {
+    Ok(session) => session,
+    Err(response) => return response,
+  };
+  if let Err(response) = form.validate(&UPLOAD_FORM) {
+    return *response;
+  }
+  let file = form.file("file").expect("the required file field validated");
+  save_upload(session, file).await
+}
+```
+
+A model forbids extra keys with `BodyModel::required(FIELDS).forbid_extra()`. Each `Field`
+declares its bounds as builders: `ge`, `gt` and `le` on an `Integer`, `NullableInteger` or `NullableFloat` field,
+with a `Bound::Int` or `Bound::Float` bound, and `min_length` and `max_length` on a `String` or `StringList` field. `validate` reports the
+pinned validation errors for the body, in a fixed order: the declared fields in declaration order, then
+the forbidden keys in input order. A route takes these errors from `validate` and does not re-derive them. The module
+doc of `charliebot_compat::request_body` gives the order in full.
+
+## The typed startup state
+
+`FeatureContext` holds the config and credentials (`Arc<HotReload<_>>`), the store, the registry and the
+`StartupState`. The state holds one value per Rust type: a lifespan step or service inserts its value with `insert`, a
+second value of one type fails, and a route handler reads it with `get` or `require`. A pre-recovery step that
+fills a value makes it visible to a ready service, which reads it at start.
+`AgentBaseEnvironment` is the startup state's one owner of the base agent environment. Code with a `FeatureContext`
+reads it through `features.startup.require::<AgentBaseEnvironment>()?`; one-shot calls and launch contexts carry the
+environment explicitly.
+
+## Rendering pages
+
+Two values in the startup state serve pages. `run()` inserts both before the lifespan starts, so a lifespan step or
+a service reads them at start, and a route handler reads them per request.
+
+- `RepoRoot` (`charliebot_core::repo_root`) is the checkout the server serves. `main.rs` reads the repo root variable
+  once and validates it. Read it with `startup.require::<RepoRoot>()?` and `.path()` when a file lives in the checkout.
+  A template needs no path: `render_page` searches `web/templates` and each page package's `templates/`.
+- `Templating` (`charliebot_registry::templating`) is the page engine, built once at startup. Read it with
+  `startup.require::<Templating>()?`, then call `render_page(features, name, context, request)`. It evaluates the
+  registry's template globals, renders the template with `request` added to the context (the method, the raw path and
+  the raw query), and returns the response: status 200 with `text/html; charset=utf-8`. `RenderError::kind()` names the
+  failure's exception class for the request log.
+
+A feature page whose template is `web/features/notes/templates/notes.html`:
+
+```rust
+use axum::http::request::Parts;
+use axum::response::Response;
+use charliebot_registry::FeatureContext;
+use charliebot_registry::templating::Templating;
+use serde_json::json;
+
+fn notes_page(features: &FeatureContext, request: &Parts) -> anyhow::Result<Response> {
+  let templating = features.startup.require::<Templating>()?;
+  let context = json!({"title": "Notes"});
+  Ok(templating.render_page(features, "notes.html", &context, request)?)
+}
+```
+
+The package registers `features.notes` and its template name must be unique across the search path, since a name
+in two directories fails the first render.
+
+## Store hooks
+
+The store calls six traits (`AccountLabelKeeper`, `AnchorFieldReconciler`, `SequenceListingFields`,
+`SequenceArchiveHook`, `SequenceBindingMover` and `RuntimeEventHooks`) and does not name any package. `store_hooks::store_hooks(registry)`
+implements them over the registered lifecycles and sequence controllers, and the server passes the result to
+`Store::new` at startup.
+
+## Excluded from the seam
+
+- CLI commands and setup steps. The `charliebot` CLI owns its subcommands outside the registry, so the server
+  registers neither.
+
+# CharlieBot Project Specification
+
+## 1. Project Overview & Objectives
+**CharlieBot** is a system designed to coordinate and manage multiple **Claude Code** instances (Workers) to complete complex tasks. The primary interface is a responsive Web UI for desktop and mobile access. The server and the `charliebot` CLI are the Rust release under `rust/crates/`.
+
+### 1.1 Objectives
+- **Agent Orchestration**: A **Master Agent** (running as a Claude Code session) manages and coordinates Worker instances via a CLI delegation workflow.
+- **Task Delegation**: Master delegates coding tasks to Workers that run in isolated git worktrees; a separate Review Agent automatically verifies and merges the work.
+- **Rust server and CLI**: both run from `rust/crates/`, the server as `charliebot-server` and the CLI as the `charliebot` binary built beside it.
+
+---
+
+## 2. Technical Stack
+- **Language**: Rust (`rust/crates/`, axum and tokio) for the server and the CLI
+- **Master Agent**: Claude Code session (pluggable backends)
+- **Worker Agent**: Claude Code (local CLI invocation, non-interactive mode)
+- **Backend**: the Rust server (`charliebot-server`, entry point `rust/crates/app/server/src/main.rs`), WebSockets for real-time streaming, tokio for concurrency
+- **Frontend**: vanilla JS + Tailwind CSS, served by the Rust server's static mounts (`rust/crates/infra/compat/src/static_files.rs`)
+- **Storage**: JSON for state/data, YAML for configuration
+
+---
+
+## 3. Directory Structure
+
+### 3.1 Home Directory (`~/.charliebot/` or `CHARLIEBOT_HOME`)
+All instance-specific data (configs, sessions, memory) is stored here.
+
+`CHARLIEBOT_HOME` selects which one: unset gives `~/.charliebot`, and a set value (absolute
+or `~`-prefixed; relative is rejected) gives a separate profile, seeded on first use. Several
+profiles run side by side on one host, each with its own port in its own `config.yaml`. The
+home path is resolved once per side, `charliebot_home_dir()` in `rust/crates/infra/core/src/home.rs`;
+every other path derives from `CharlieBotConfig.charliebot_home`. One raw read of the variable
+sits outside them: the web terminal's profile check (`rust/crates/features/terminal/src/terminal.rs`). A tmux
+pane inherits the tmux server's environment rather than the server process's, so the terminal
+checks whether a profile is set and passes the resolved home to new panes explicitly.
+
+```text
+~/.charliebot/
+    config.yaml          # Structure settings in sections; workspace_dirs list
+    credentials.yaml     # Secrets (API keys, tokens), section   key
+    memory/             # Labeled-entry memory store (local git repo)
+        entries/<topic>/<slug>.md   # canonical entries (one fact per file)
+        topics                       # controlled topic vocabulary
+        staging/                     # candidate entries (.gitignore'd)
+    sessions/            # Session directories
+        {session_uuid}/
+            metadata.json      # Session info (name, status, timestamps)
+            data/              # Session-level JSON data
+                runs/              # Run directories
+                    {run_id}/
+                        metadata.json    # Run record (identity, backend, status, timestamps)
+                        task_spec.md     # The run's pinned task-spec body
+                        events.jsonl     # The run's translated transport events
+                        agent.raw.ndjson # The CLI's raw stream
+                        agent.stderr.log # The CLI's stderr
+```
+
+**Worktrees** are stored under `worktree_dir` (config, default `~/worktrees`), one directory per
+thread branch   the directory name is the branch name with `/` replaced by `-`:
+
+```text
+<worktree_dir>/
+    charliebot-task-{ts}-{id}/      # Thread worktree (isolated branch `charliebot/task-{ts}-{id}`)
+```
+
+**Notes:**
+- Individual Worker logs are in `data/runs/{run_id}/`: the raw-log spawn writes `agent.raw.ndjson` (the
+  CLI's stream) plus `agent.stderr.log`; the pipe transports write `stdout.log` plus `stderr.log`;
+  `events.jsonl` holds the translated events.
+- The `run_log_compaction` cron handler replaces those two log files with `<name>.zst` once the run's record
+  holds an end at least 24 hours old. Metadata refs keep the plain names, and readers resolve each name through
+  `charliebot_store::run_logs`, which opens the plain file or the `.zst` and yields the decompressed bytes.
+- `workspace_dirs`: Config option (`config.yaml`) listing workspace directories to scan for git projects. The diff page's repo picker lists the discovered projects.
+
+### 3.2 Repository Code Structure (Stateless)
+```text
+charlie-bot/
+    rust/crates/        # The Rust server and CLI crates; the server's entry point is app/server
+    web/                # The whole frontend: templates/, static/, features/, backends/, tests/ and the
+                        # frontend web/package.json and web/tailwind.config.js, plus the events viewer's own
+                        # build in web/tailwind.events.config.js
+    configs/            # Default templates and examples
+    dev/                # Repository maintenance: git hooks, checks, the CSS build and the improve prompts
+    docs/               # This specification and the design documents
+    scripts/            # Operator scripts
+    skills/, prompts/   # Agent skills and prompts
+```
+
+---
+
+## 4. Core Architecture
+
+### 4.1 Agent Roles
+| Role | Type | Responsibilities |
+|------|------|------------------|
+| **Master Agent** | Claude Code session (`rust/crates/runtime/tasks/src/master_run.rs`) | User interaction, high-level planning, delegating coding tasks to Workers, reviewing combined worker+reviewer results. Runs as a persistent Claude Code subprocess with `--resume` support across messages. Can use any configured backend. |
+| **Worker Agent** | Claude Code CLI (`rust/crates/runtime/tasks/src/worker.rs`) | Code analysis, implementation, file editing, git operations, testing. Runs in an isolated git worktree on a dedicated branch. Told NOT to rebase/merge/remove the worktree   a reviewer handles that. |
+| **Review Agent** | Claude Code CLI (same run loop as the Worker, `rust/crates/runtime/tasks/src/review.rs`) | Automatically spawned after a Worker succeeds. Reviews the diff, fixes issues, rebases onto the remote base, and pushes the branch to the base (git rejects a non-fast-forward push). Prefers a selectable backend outside the work and earlier work-run backends, then tries the writer first when no such backend is available. |
+
+**Backend Abstraction**: Workers and Master use a pluggable `AgentBackend` trait (`rust/crates/runtime/registry/src/registry.rs`). Each backend package's `register()` hands the registry a `BackendTypeRegistration` (`registry.backend_type` in `rust/crates/runtime/registry/src/registry.rs`) that carries its type string, option model and factory, and the registry builds each `BackendOption.type` through that factory; config loading parses each `backends.options[]` entry through the option models each backend's `options.rs` holds. Backend selection is configured via `backends.options`, `backends.pools` and `backends.calls` in `config.yaml`.
+
+**Turn Contributions**: Feature packages add to a master turn through the registry's `TurnContribution` trait (`rust/crates/runtime/registry/src/registry.rs`): a package registers a `TurnContribution` from its `register()`, and the turn path (instruction build, queue, run, session funnel, chat aggregator) asks every registered contribution at its own step and names no feature. The chat-threads, cron, Discord, memory, Slack and voice packages register one each.
+
+### 4.2 Session & Thread Model
+- **Session**: Represents a project/workspace. Each Session has:
+  - A `cc_session_id` for resuming the Master Agent's Claude Code conversation
+  - Multiple Threads (concurrent Workers and Reviewers)
+
+- **Thread**: Represents a single Worker or Reviewer task. Each Thread has:
+  - Its own isolated Git branch (e.g., `charliebot/task-{timestamp}-{id}`)
+  - A dedicated worktree directory
+  - Metadata fields: `branch_name`, `repo_path`, `worktree_path`, `backend`, `model`, `context`
+  - Reviewer-specific field: `tried_backends` (for retry tracking)
+
+### 4.3 Git Isolation Strategy
+- **Thread Branch Isolation**: Each Worker operates on its own branch in an isolated git worktree to prevent conflicts
+- **Reviewer Merge-Back**: The review agent rebases the worker's branch onto the remote base branch and pushes it there; git rejects a non-fast-forward push, so the base only fast-forwards
+- **Worktree Cleanup**: The executor removes the worktree once the task actually delivers; failed, blocked and unproven outcomes keep it, and `keep_worktree` pins it
+
+---
+
+## 5. Core Workflows
+
+### 5.1 Delegation Workflow
+The Master Agent delegates coding tasks to Workers via the CLI delegate command:
+
+1. **Task Delegation** (Master   Worker):
+   - User submits request via Web UI chat
+   - Master Agent (Claude Code session) decides to delegate a coding task
+   - Master calls `charliebot delegate --repo /path --base-branch main --task-spec-file <file> --keep-worktree 0` (`rust/crates/app/cli/src/commands/delegate.rs`); session identity comes from the `CHARLIEBOT_SESSION_ID` the server writes into the master process, with cwd as the fallback when it is absent
+   - The CLI POSTs to `/api/internal/delegate`, which creates the worker task-tree child and registers its first work Run (`delegate_task_tree` in `rust/crates/runtime/tasks/src/routes.rs`); the tree's executor launches it (`execute_run` in `rust/crates/runtime/tasks/src/execution.rs`)
+
+2. **Worker Execution** (Phase 1   Implement):
+   - Spawner creates an isolated git worktree on a new branch (`charliebot/task-{ts}-{id}`)
+   - Worker receives a prompt with session info, worktree instructions, and the task description
+   - Worker is explicitly told: "Do NOT rebase, merge, or remove the worktree. A reviewer will handle that."
+   - Worker implements the task, commits changes, and exits
+   - Events are streamed via WebSocket and persisted to `events.jsonl`
+
+3. **Review** (Phase 2   Automatic on Worker Success):
+   - On successful work-run completion, `maybe_spawn_review` (`rust/crates/runtime/tasks/src/execution.rs`) registers a review Run on the same task and launches it, picking the reviewer backend with `select_reviewer_backend` (`rust/crates/runtime/tasks/src/review.rs`)
+   - The reviewer prefers a selectable backend outside the work and earlier work-run backends, using `backends.calls.review` or the route fallback
+   - Reviewer reads session conversation + worker log for context, then:
+     - Reviews `git diff base_branch...branch_name`
+     - Fixes any issues found, commits fixes
+     - Rebases the branch onto the base branch
+     - Pushes the rebased branch to the remote base (`git push origin HEAD:{base_branch}`); git rejects a non-fast-forward push
+     - Cleans up the worktree
+   - If the reviewer **fails**, it retries with the next selectable backend while keeping failed reviewers excluded. If no preferred backend is selectable, it tries the writer first, then another backend already used by the worker session.
+
+4. **Master Trigger on Completion**:
+   - After review completes (success or all retries exhausted), the master agent is triggered via `trigger_master()` with a combined summary of worker + reviewer results
+   - If the worker itself failed (no review spawned), the master is triggered immediately with the worker's summary
+   - The master can then inform the user and decide on follow-up actions
+
+5. **Thread Metadata Tracking**:
+   - `tried_backends`: Tracks which backends have been attempted for reviewer retries
+   - `branch_name`, `worktree_path`, `repo_path`: Git isolation state
+   - `backend`, `model`: Which LLM backend/model was used
+
+### 5.2 Plan Registry (Draft, Approve, Delegate)
+For complex tasks, the master plans before building; the plan registry keeps that lifecycle:
+
+- **Draft & present**: The master drafts the plan as an HTML artifact (`artifacts/plan_NN.html`, grammar in `prompts/plan_template.html`) and registers it with `charliebot plan present --file <artifact> --title <title>` (the CLI command `rust/crates/features/artifacts/src/cli/plan.rs` over the server's `present` verb in `rust/crates/features/artifacts/src/plan_verbs.rs`). `charliebot plan amend --file <artifact> --note <why>` appends the next version (trigger: `auto_amend` or `feedback`).
+- **Review**: The plan renders in the web Plans panel with a version switcher, a diff toggle against the predecessor, and block-anchored comments (`web/features/artifacts/static/plan-panel.js`).
+- **Approve**: After the plan's Improve round and verify, the parent node or the root line approves it; `charliebot plan approve` records the approval against the latest version. The runtime gate (`rust/crates/runtime/store/src/task_tree.rs`, `check_task_authorization` and `runtime_gate`) admits `/delegate` and `/improve` when the calling node is an open manager and every ancestor on its task chain is open.
+- **Close**: `charliebot plan close --plan N --as superseded|abandoned|completed` terminates the lineage.
+
+---
+
+## 6. Memory & Knowledge Management
+
+### 6.1 Labeled-Entry Memory Store
+A local git repo at `$CHARLIEBOT_HOME/memory/` holds one durable fact or rule set per file under
+`entries/<topic>/<slug>.md`, tagged by `scope`/`topic`/`audience` in a restricted front matter.
+
+| Path | Purpose | Access Pattern |
+|------|---------|----------------|
+| **memory/entries/** | Canonical entries (user preferences, host facts, master guidance) | Resident topics injected in full at master spawn; topic-matched entries at worker spawn; queryable mid-session via `charliebot memory query` |
+| **memory/staging/** | Candidate entries proposed by sessions | Written by `charliebot memory add`; never auto-merged; admitted only via user-approved curation diffs |
+
+### 6.2 Context Management Strategies
+- **Master Layer**: Conversation summarization (compress early history, keep last ~10 turns); hierarchical context (System > Session Summary > Recent Dialogue > Retrieved snippets)
+- **Worker Layer**: Task decomposition; file scoping via the task spec (explicitly limit focus to relevant modules)
+
+---
+
+## 7. User Interface
+
+### 7.1 Web UI Layout
+- **Sessions (Sidebar)**: Multi-channel organization (like Slack). Each session = separate project/context.
+- **Session row indicators**: activity spinner, delegated-work gear, queued clock, unread and subtree-unread dots,
+  pending-trigger bell, pending-plan icon, solid orange square for a session's Waiting on you items, and an outlined
+  orange square on folded rows above them.
+- **Chat Interface**: Main area for Master Agent interaction (ChatGPT-like).
+- **Threads (Sub-Agents)**: Nested under sessions. Each thread = Claude Code Worker task. Users can drill down to view status/logs.
+
+### 7.2 Voice Input (Push-to-Talk)
+**Workflow**:
+1. User presses/clicks button to start recording
+2. Presses/clicks again to stop and send
+3. Audio uploaded to backend
+4. **Online transcription** sends the complete recording through the selected backend (`gemini` or `muse`; `voice.default_backend` when the request names none). No speech model runs on the server.
+5. Transcription displayed in UI first
+6. Passed to Master with a note: the displayed message stays verbatim, the web client sends the message with `input_mode: "voice"`, and the voice package's turn contribution (`rust/crates/features/voice/src/lib.rs`) opens the prompt's copy of the message with the fixed voice note (`VOICE_NOTE`)
+
+---
+
+## 8. Communication & Monitoring
+
+### 8.1 Real-Time Streaming
+- **WebSockets**: Stream PTY output and live events directly to the frontend; the browser never consumes SSE (SSE parsing exists only server-side, for upstream LLM streams)
+- **HTTP GET**: Used for loading historical logs (non-real-time)
+- **Persistence**: Worker state is flushed to disk in real-time; Master can resume after restart
+
+### 8.2 JSON Stream Monitoring
+Workers run with `--output-format stream-json --verbose`, so the raw NDJSON log (`agent.raw.ndjson`)
+holds the CLI's stream. The lines are `assistant` events carrying `message.content` blocks
+(`text`, `thinking`, `tool_use`), `user` tool-result wrappers, and a final `result`.
+`AgentBackend.translate_event` (the `translate` method on `AgentBackend` in `rust/crates/runtime/registry/src/registry.rs`, driven by the runner in `rust/crates/runtime/agents/src/runner.rs`) turns each line into the events that
+land in `events.jsonl` and the WebSocket stream: the Anthropic-endpoint backends (cc-claude,
+cc-anthropic-compatible, cc-openai-compatible) pass lines through unchanged; the other backends translate their
+native streams into CC-compatible events with per-backend vocabularies (codex, for one, emits
+`thinking` and `file_write`).
+The WebSocket carries a shaped copy, not the event itself: `socket_frames` (`rust/crates/runtime/store/src/streaming.rs`) sends `master_done` and `result` with only the fields the page reads, draws the round separator from `master_done`, and folds each streamed-draft commit into the next frame of its event. `events.jsonl` keeps the full events.
+A raw log that stops growing while the process is still alive is what the server reports as stuck
+(the no-output silence report); thinking in progress is the `thinking` content.
+
+---
+
+## 9. Error Handling & Resilience
+
+### 9.1 Model Fallback
+- Multiple backends configured via `backends.options` in `config.yaml` (see that file for the current list)
+- `backends.calls` names the option or pool that each internal call class runs on (worker, improve, verify, review, cold_read, probe, autoname, triage, thread, new_session); a pool id takes the next selectable member under the pool's rule, and a member whose quota runs out cools until its reset, or 30 minutes when none is named, and a worker interrupted by quota continues on the next member (`rust/crates/runtime/agents/src/backend_pool.rs`)
+- Failed reviewers stay excluded from retries for the same work run; review is blocked only when no candidate backend is selectable
+
+### 9.2 Rebase Conflict Handling
+- The Review Agent rebases the worker branch onto the base branch before merging
+- If the rebase fails (conflicts), the reviewer attempts to resolve them as part of its review
+- If unresolvable, the review fails and retries with the next selectable backend that has not already failed this review
+
+---
+
+## 10. Development Guidelines
+
+### 10.1 Code Style
+- **Standard**: Google Code Style (2-space indent, 120 column limit), applied to the Rust code by rustfmt
+  (`rust/rustfmt.toml`)
+- **Rust**: CI (`.github/workflows/ci.yml`) runs `cargo clippy --all-targets --locked -- -D warnings` and
+  `cargo fmt --check` from `rust/` on every pull request and push
+
+### 10.2 Worker Instructions
+Each worker and reviewer launch writes its managed instructions to `harness_instructions.md` in its Run directory
+(`HARNESS_INSTRUCTIONS_NAME`, `rust/crates/runtime/tasks/src/worker.rs`). The text is the run's `PromptSnapshot.instructions_text`
+(`rust/crates/runtime/tasks/src/prompts/snapshot.rs`): the worker role rules from `prompts/worker.md`, `review_rules_text`
+(`rust/crates/runtime/tasks/src/review_text.rs`) for reviewers, and the memory block. The worktree is never written, so the checked-out
+repo's own guide files stay in effect for the agent. Each backend passes the instructions on every launch,
+including a resumed run and a pool relay:
+
+- Claude Code: `--append-system-prompt-file <run dir>/harness_instructions.md`.
+- charlie-code: `--instructions-file <run dir>/harness_instructions.md`.
+- Codex: `-c developer_instructions=<file text as a TOML string>` and `-c project_doc_fallback_filenames=["CLAUDE.md"]`.
+- OpenCode: the base class frames the text into the prompt.
+- Devin: the framed text goes into the prompt file that `--prompt-file` names, in the run's log directory.
+
+A run on a repository starts in its worktree root, so its CLI can read that repository's guide and skills from there;
+a run without a repository starts in its Run directory. A manager turn is the one path that writes an instructions
+file into a working directory: the backend writes it into the session cwd (CLAUDE.md for Claude Code, AGENTS.md
+for the other backends) and passes no flag.
+
+---
+
+## 11. Implementation Status
+
+### 11.1 Completed (MVP)
+
+**Backend**
+- Rust server (`rust/crates/app/server/src/main.rs`)
+- All API routes: `/api/sessions`, `/api/chat`, `/api/internal/delegate` (full list: the route tables in `rust/crates/app/server/src/routes` and the packages in `rust/crates/app/server/src/packages/mod.rs`)
+- Master Agent as Claude Code session (`rust/crates/runtime/tasks/src/master_run.rs`) with `--resume` support for persistent conversations. Supports any configured backend via the pluggable `AgentBackend` trait (`rust/crates/runtime/registry/src/registry.rs`)
+- Delegation CLI (`rust/crates/app/cli/src/commands/delegate.rs`)   called by the master to spawn workers via `POST /api/internal/delegate`
+- Worker spawner (`rust/crates/runtime/tasks/src/execution.rs`, `rust/crates/runtime/tasks/src/spawner_prompt.rs`, `rust/crates/runtime/tasks/src/spawner_backends.rs`)   creates isolated git worktrees, builds enriched prompts, spawns workers, and orchestrates the two-phase worker+reviewer pipeline
+- Automatic review: on worker success, a Review Agent prefers a selectable backend outside the work and earlier work-run backends (configurable via `backends.calls.review`). It falls back to the writer and then another previously used backend when needed; failed reviewers stay excluded.
+- Master trigger on completion: combined worker+reviewer summary is sent to the master agent via `trigger_master()` for user notification and follow-up decisions
+- Session blocks (`rust/crates/runtime/store/src/session_events.rs` and the other `session_*.rs` blocks), `PlanRegistryManager` (`rust/crates/features/artifacts/src/plans.rs`), `TriggerManager` (`rust/crates/runtime/triggers/src/triggers.rs`), `StreamingManager` (`rust/crates/runtime/store/src/streaming.rs`)
+- `init_charliebot_home()` (`rust/crates/app/server/src/home_init.rs`)   seeds `$CHARLIEBOT_HOME/` on first run with default `config.yaml`
+- Memory store: `ensure_store` (`rust/crates/features/memory/src/memory.rs`) creates the scaffold (git repo + topics vocabulary) at first use, so a fresh home has no `memory/` directory until then
+- Memory updates: sessions stage candidates via `charliebot memory add` (writes `staging/`, never `entries/`); the daily memory curator builds a user-approved diff that admits, revises, or evicts entries
+
+**WebSocket Endpoints**
+- `/ws/sessions/{session_id}`   session-level events (worker completion summaries pushed to chat)
+- `/ws/terminal`   the profile's tmux-backed web terminal
+
+Voice input records locally and ends one of two ways. With a live transcription backend the
+browser also streams every audio chunk to the preview relay `/ws/voice/{session_id}`; on stop
+the relay archives the recording it already received (under `sessions/{id}/voice/`, 16 kHz mono
+PCM16 WAV plus a `.txt` with the final text) and pushes the final, and the browser uploads
+nothing. The fallback   no final inside the budget or a relay failure   uploads the whole
+recording: `POST /api/voice/{session_id}` persists it under `sessions/{id}/voice/`, then transcribes
+it through the selected online backend and returns the text. A failed transcription keeps the
+recording for the browser's retry.
+
+**Frontend**
+- Vanilla-JS UI under `web/static/js/`, served by the Rust server's static mounts (`rust/crates/infra/compat/src/static_files.rs`; Node.js/npm is build-time only: Tailwind CSS)
+- Panels: the sessions sidebar plus the tab strip   Terminal, Plans, Chat
+- The session WebSocket (`web/static/js/websocket.js`) drives the chat: rendering is fully driven by aggregated `message`/`stream` deltas, so a worker completion summary arrives as an assistant message
+- Polls: the sidebar status poll adapts (3 s with running tasks, 10 s idle); an open session view polls its usage every 3 s while the master is thinking, and an open worker transcript polls every 2 s (all ride the page-timers registry, so a hidden tab polls nothing)
+- Draft persistence: unsent message text is saved to localStorage per session (debounced 300ms) and restored on session switch-back or page reload
+
+**Configuration**
+- `$CHARLIEBOT_HOME/config.yaml` holds structure in sections (`server`, `paths`, `backends`, `accounts`, `voice`, `code_server`, `ui`, `slack`, `discord`, `feishu`, `publish`, `telegram`); `$CHARLIEBOT_HOME/credentials.yaml` holds every secret as section   key and is the single source of truth for API keys   no environment variables
+- `backends.options`: configurable list of LLM backends (see that file for the current list); an option id names the model family, never a version, and starts with a prefix its type's usage source registers (the id rule: usage's startup check, `rust/crates/features/usage/src/backend_ids.rs`, refuses an id outside those prefixes). `visible: false` (optional, default `true`) keeps the entry, and the same field on a `backends.pools` entry the pool, out of the web pickers (`picker_entries`/`picker_visible` in `rust/crates/infra/core/src/config.rs`); a hidden entry keeps its label wherever a label renders and still serves as a pool member, a `backends.calls` target and a switch target, and a session running it stays shown on it in the header menu
+- `backends.pools`: named pools, each `{id, label, rule, members}`. Every member is a `backends.options` id under either rule. `rule: rotate` takes the next selectable member in rotation (a repeated id takes a larger share). `rule: priority` takes subscription members in turn, and pay-as-you-go members in turn only when no subscription is selectable; each member's option names `billing: subscription|payg` on its `backends.options` entry; startup refuses a priority member whose option has no billing. Server startup refuses a pool member that is not an option id, and a cron step backend that names neither an option id nor a pool id (`backend_refs_check` in `rust/crates/features/cron/src/loader.rs`); the pool rules live in `rust/crates/runtime/agents/src/model_pool.rs`
+- A session whose backend is a pool id runs each turn on one member, which turn start records in the `pool_member` metadata slot (`rust/crates/runtime/agents/src/model_pool.rs`). Within the selectable subscription tier (members not near exhaustion, or all selectable subscriptions when none is not near exhaustion; near exhaustion is usage at or above 90% with the earliest reset more than 45 minutes away), a priority pool takes its members in turn: each pick is the first selectable tier member at or after the tier's position, and the position moves past it. Pay-as-you-go members take turns the same way from their own position, and only when no subscription is selectable. Positions live in process memory, one for a rotate pool and one per tier of a priority pool: the server starts each at the first member, and each CLI process starts each at a random member. A member that spends its quota during a manager turn is recorded out in `state/backend_availability.json` (its stated reset, else 30 minutes), and the turn continues as a retry run on the next member under a switch note naming the session chat log, its archives and the failed run's directory (`rust/crates/runtime/tasks/src/handoff.rs`); with no member left the turn ends with one error that lists each member. Removing a pool from `backends.pools` makes its id an invalid session backend and fails that session's next turn by name.
+
+# charliebot-tasks
+
+This crate owns manager turns. `MasterQueue` contains the per-session work queues, consumers, current items, running
+turns, and the shared backend pool used by after-round naming. Each session consumer runs one manager turn at a time,
+persists its translated events through `charliebot-store`, and finishes with the unread decision and session anchors.
+
+The execution task inserts `MasterQueue` into typed startup state and wires chat routes. The recovery task wires
+shutdown and re-attachment into server lifespan.
+
+## Public API
+
+- `MasterQueue` and `MasterQueue::new(Arc<BackendPool>)`
+- `MasterQueue::session_callbacks` and `master_queue::session_callbacks`
+- `SessionCallbacks` and `PersistAndBroadcastFn`, `MarkUnreadFn`, `PersistNativeIdFn`, `PersistAccountLabelFn`, `ContextStateFn`, `TaskTreeActivityFn`, and `AfterRoundFn`
+- `MasterTurnRequest` and its fields
+- `MasterResumeRequest` and its fields
+- `MasterQueue::run_message`
+- `MasterQueue::enqueue_master_resume`
+- `MasterQueue::session_is_busy` and `master_queue::session_is_busy`
+- `MasterQueue::shutdown`, which cancels the consumers at server stop
+- `TaskRunBinding` and its fields
+- `MasterResumeRecord` and its fields
+- `TaskSpawnCallback`, `TaskFinishCallback`, and `ResumeLiveness`
+- `master_state` module and its work item
+- `master_queue` module
+- `master_run` module
+- `autonamer::iter_light_backends`
+- `autonamer::name_after_round`
+- `autonamer::maybe_auto_name`
+- `autonamer::is_default_session_name`, `prefix_session_number_if_default`, and `build_groups_clause`
+- `autonamer::parse_name_and_group` and `fuzzy_match_group`
+- `spawner_backends::resolve_backend_option`
+- `spawner_backends::resolve_session_default_backend_model`
+- `spawner_backends::resolve_requested_subagent_backend_model`, `SubagentRole`, `BackendResolutionValueError`
+- `spawner_backends::select_verify_backend`
+- `review` module
+- `review::worker_summary_from_events_log`
+- `review::worker_error_from_events_log`
+- `review::extract_review_context`
+- `review::select_reviewer_backend`
+- `review::ReviewScope`
+- `review::ReviewerBackendSelection`
+- `task_sessions::create_retry`
+- `session_anchors::manager_context_reset_note` and `manager_switch_reset_note`
+- `session_anchors::worker_switch_reset_note` and `backend_switch_reset_reason`
+- `execution::LaunchSettlement`
+- `execution::TaskExecutionAdapter` and `TaskExecutionAdapter::new`
+- `TaskExecutionAdapter::take_quota_failure`
+- `TaskExecutionAdapter::call`
+- `TaskExecutionAdapter::launch`, `execute_run`, and `launch_and_settle`
+- `execution::pre_recovery_step` and crate `register`
+- `execution::apply_sequence_wake_duties`
+- `execution::native_continuation_matches`
+- `execution::compose_input_prompt`
+- `execution::is_out_of_space_error`, `free_disk_gib`
+- `routes::routes`, `routes::ROUTE_PATTERNS`, and `register`
+- `dispatch::input_event_type_for_caller`, `agent_provenance`
+- `Dispatcher::pending_inputs` input-id deduplication
+- `Dispatcher::deliver_child_report_locked_as_actor`
+
+## Task completion
+
+- `completion::LandingEvidence` and its fields
+- `completion::CompletionEvidence` and its fields
+- `completion::SequenceCloseOutcome`
+- `completion::TaskCompletion` and `TaskCompletion::new`
+- `completion::RUN_REF_PREFIX`
+- `TaskCompletion::complete_task`
+- `TaskCompletion::cancel_task`
+- `TaskCompletion::restore_task`, `restore_chain`, and `restore_chain_locked`
+- `TaskCompletion::acknowledge_inputs`
+- `TaskCompletion::close_sequence_child`
+- `TaskCompletion::recheck_close_requests`
+- `TaskCompletion::evaluate_automatic_completion`
+- `TaskCompletion::after_run_finished` (a live run end)
+- `TaskCompletion::replay_run_finished` (the startup re-drive of a run that ended before the boot; no notice)
+- `TaskCompletion::pause_reason`
+- `TaskCompletion::pause_delivery(session, run, RunEnd)` (every run-end pause. A `RunEnd::Live` end notifies the
+  initiator once per run when the worker holds pending triggers created by that run's end. A `RunEnd::Replay` end
+  decides the same pause and sends no notice.)
+- `TaskCompletion::notify_initiator_of_run_error(session, run, error)` (a child manager's live turn that ended with a
+  non-quota error, a refusal to start the turn included. The initiator gets one notice with the error text and the run
+  id. Nothing runs again.)
+- `completion::RunEnd` (`Live` or `Replay`)
+- `RunFinishedCompletion for TaskCompletion`
+- `SequenceCompletion for TaskCompletion`
+- `completion::task_completion`
+- `completion::recheck_close_requests`
+- `completion::after_run_finished`
+- `completion::pause_reason`
+- `git::git_verify_commit_landed`
+
+## Git worktree and remote helpers
+
+The git helpers task runs and the improve loop call. One subprocess path (`git::git_proc_bytes`) serves the whole
+module; `git_verify_commit_landed` runs on it too. The `test-hooks` feature shrinks the worktree-add and per-attempt
+remote limits and injects a test git program; production builds use the timeout constants listed below.
+
+- `git::git_worktree_dir_name`
+- `git::git_current_branch`
+- `git::BaseBranchResolutionError`
+- `git::BaseResolution` and its fields
+- `git::git_stdout` (crate-public)
+- `git::git_rev_parse_optional` (crate-public)
+- `git::git_remote_default_branch_and_tip`
+- `git::resolve_base_branch`
+- `git::git_create_worktree`
+- `git::git_worktree_remove`
+- `git::git_worktree_remove_reporting`
+- `git::git_worktree_prune`
+- `git::git_rev_parse`
+- `git::git_rev_list_count`
+- `git::git_push_branch`
+- `git::git_push_refspec`
+- `git::SUBPROCESS_GIT_READ_TIMEOUT_ASYNC`
+- `git::SUBPROCESS_GIT_WRITE_TIMEOUT`
+- `git::SUBPROCESS_GIT_REMOTE_ATTEMPT_TIMEOUT`
+- `git::GIT_REMOTE_MAX_ATTEMPTS`
+
+## Input dispatch and master triggers
+
+`dispatch::Dispatcher` owns durable task inputs, run claims and child reports over the shared store. Its executor and
+post-finish completion traits are supplied by the execution and completion stages. The dispatcher also implements
+`charliebot_registry::sequence::SequenceDispatch` for sequence controllers.
+
+- `dispatch` module
+- `dispatch::DispatchExecutor` and `DispatchExecutor::launch`
+- `dispatch::RunFinishedCompletion` and `RunFinishedCompletion::after_run_finished`
+- `dispatch::Dispatcher`, `Dispatcher::new`
+- `Dispatcher::set_executor`, which registers the executor
+- `Dispatcher::admit_input`
+- `Dispatcher::pending_inputs`, `pending_input_blockers`
+- `Dispatcher::claim_input_batch_locked`
+- `Dispatcher::dispatch_pending`
+- `Dispatcher::wake_parent`
+- `Dispatcher::finish_run`
+- `Dispatcher::report_source_event`
+- `Dispatcher::child_report_provenance`, `child_report_provenances`
+- `Dispatcher::deliver_child_report`
+- `Dispatcher::deliver_child_report_locked`
+- `Dispatcher::recover_pending_reports`, `recover_pending_reports_locked`
+- `Dispatcher::undelivered_report_blockers`
+- `dispatch::note_run_liveness`
+- `dispatch::unprocessed_input_blocker`
+- `dispatch::inputs_not_pending_conflict`
+- `dispatch::child_report_text`
+- `dispatch::dispatcher(&FeatureContext)`
+- `master_trigger` module
+- `master_trigger::TriggerMasterRequest` and its fields
+- `TriggerMasterRequest::new`, which sets the defaults of the optional fields
+- `master_trigger::trigger_master`
+
+## Startup recovery and shutdown
+
+`recovery::recovery_step`, registered as `task_recovery`, runs after the pre-recovery step. It re-attaches manager turns
+that are still alive, drains runs that exited while the server was down, and replays the follow-ups their crash window
+lost. A replayed run end decides its delivery pause again from the state at the boot, and sends no pending-trigger
+notice: that notice belongs to the live end of the run. `recovery::let_go_step`, registered as `task_execution`, runs
+after services stop. It first cancels each run launch and waits for it to end: the run keeps no terminal fact, a started
+agent keeps running, and the next boot launches or re-attaches the run. A launch requested after this point starts no
+task. It then cancels the queue's consumers: a turn whose record is durable detaches, and an uncovered turn terminates.
+
+- `recovery::recovery_step`
+- `recovery::reconcile_task_tree`
+- `recovery::reconcile_node`
+- `recovery::replay_followups` (private)
+- `recovery::replay_owes_review`
+- `recovery::closed_task_stop_request_id`
+- `recovery::resume_run` (private `resume_run_checked`, `enqueue_manager_resume`)
+- `recovery::repair_end_metadata`
+- `recovery::let_go_step`
+- `TaskExecutionAdapter::let_go_launches`
+- `recovery::start_end_landing_retry`, `retry_while_out_of_space`, `RUN_END_LANDING_RETRY_INTERVAL`
+
+A manager turn that is alive enqueues a master resume through `MasterQueue::enqueue_master_resume`, and the follow is
+tracked and never awaited, so the boot pass does not wait on the queue. The resumed record carries no input ids. The
+resume is queued behind the session's turns, so a run that ends first is dropped when its item dequeues: the item writes
+no checkpoint, `master_done` or message.
+
+A re-attached or drained worker run ends through the end handling its first launch uses: `execute_worker_run` and
+`resume_worker_run` both call `TaskExecutionAdapter::end_worker_run`, which records the run's end and then takes the
+first-launch follow-up, either the pool failover or the parent report. A re-attached process still alive when its
+follow ends is terminated first. A manager resume whose follow returns an error lands the first launch's failure
+through `land_launch_failure`: the failed end record, the "Turn failed" notice and the node's pending inputs. The
+follow checkpoints a line whose event ended the run as a quota or temporary-unavailable rejection (such as an `is_error`
+result with a 429 or 5xx status), so a later boot does not append that line again.
+
+### Follow-ups that return a named error
+
+The follow-ups that have no replay yet return an error that names the owner and the step. Startup logs each one as
+`task_recovery_node_failed` and continues with the other nodes.
+
+| Owner | Rust call site | Follow-up that is not replayed |
+| --- | --- | --- |
+| cold-read | `replay_followups` for a cold-read run that succeeded, failed without later work, or was interrupted | cold-read delivery, failure chain and interrupted report |
+| improve | `replay_followups` for an improve sequence run, queued, launched or terminal; no terminal fact is written | the loop's close step (the improve sequence controller's `recover_run`) |
+
+`tests/recovery.rs` drives each row through the full execution stack.
+
+### Sequence runs whose kind no controller claims
+
+A sequence Run whose kind no registered controller claims (its package was deleted) is never launched by the dispatcher
+(`dispatch::Dispatcher::dispatch_pending`). Its other three paths handle it as follows:
+
+| Path | Rust call site | Result |
+| --- | --- | --- |
+| finish | `execution::after_worker_run_inner` | logs `sequence_run_without_controller` with the session, run and owner_ref, then returns |
+| launch | `execution::execute_worker_run` | fails before any process starts; the error event names the owner_ref |
+| recovery | `recovery::replay_followups` | an unlaunched run gets one `interrupted` finish; a terminal or unlaunched run logs the warning; a launched run is followed as any other |
+
+For a kind in `UNLANDED_SEQUENCE_KINDS`, each path fails by name instead, because its controller has not landed.
+`tests/dispatch.rs` and `tests/recovery.rs` cover these paths.
+
+## Task-run worker
+
+`worker::Worker` runs one task run's process. A run is one process, or a chain of processes when the backend lifecycle
+relays it through `launch_loop::run_launches`. Each process's events pass through a run sink: they are appended to the
+run's events log and broadcast on the thread's channel, and the compaction events that `handle_compaction_events`
+synthesizes follow each one. The terminal events close the run: hang diagnostics, stderr, the cgroup report, then
+`complete` or `error`. Nothing outside the tests constructs `Worker` yet.
+
+- `worker::Worker` and `Worker::new(Arc<FeatureContext>, WorkerSpec)`
+- `worker::WorkerSpec` and its fields
+- `Worker::set_on_session_event`, `SessionEventFn`
+- `worker::SpawnedFn`
+- `Worker::account_relays`
+- `Worker::run`
+- `Worker::resume`
+- `Worker::terminate`, `Worker::detach`
+- `Worker::build_backend` (private)
+- `Worker::launch_context` (private)
+- `Worker::persist_and_broadcast` (private)
+- `Worker::emit_terminal_events` (private)
+- `handle_event` (private)
+- `handle_compaction_events` (private)
+- `worker::QuotaExhaustedError`, `QuotaExhaustedError::new`, `resets_at`
+- `worker::HARNESS_INSTRUCTIONS_NAME`
+- `worker::HANG_DIAGNOSTICS_NAME`
+- `worker::NO_OUTPUT_REPORT_THRESHOLD` (private)
+- `worker::STDERR_LOG_CHARS` (private)
+- `worker::GIT_STASH_GUARD_DIR` (private)
+- `worker::QUOTA_MESSAGE_FALLBACK` (private)
+
+`run_support` is crate-private. It holds the helpers that `master_run` and `worker` share: the runner's event channel
+(`StreamEvent`, `stream_event_channel`), the stderr tail, the subprocess buffer limit, the resume routing of a backend
+type, and a launch's extra flags.
+
+Test hooks under the `test-hooks` feature: `Worker::with_hang_timeouts` shortens the follow after a result, and
+`Worker::build_process_backend_for_test` and `Worker::process_event_for_test` expose the build and event paths. The
+hooks let the tests reach these paths directly, without mocks.
+
+Behavior notes:
+
+- The hang-diagnostics, stderr and cgroup terminal events are appended through the run's held events-log handle with
+  `sync_data`, not through `charliebot-store`'s `ndjson::append`, which is crate-private. The line bytes are the same
+  compact JSON.
+- A process ended by a signal reports the signal as its exit code (`-15` for SIGTERM).
+
+## Prompt assembly
+
+`prompts` assembles the managed instructions of every agent run. For the same sources it produces the same blocks,
+`prompt_hash` and `char_count` as the server it replaced. The two exports below are the entry points for the launch path
+and the run-context read. On this branch neither has a caller outside `tests/task_prompts.rs`.
+
+| Export | Signature |
+| --- | --- |
+| `prompts::assemble_coherent_snapshot` | `async fn(store: &Store, env: &PromptEnv<'_>, meta: &SessionMetadata, kind: &str, option: &BackendOption) -> anyhow::Result<CoherentSnapshot>`, where `CoherentSnapshot { snapshot, overlay_error, declared }` |
+| `prompts::read_run_context` | `fn(store: &Store, session_id: &str, run_id: &str) -> Result<serde_json::Value, ContextReadError>`, where `ContextReadError { status: u16, detail: String }` carries 404 or 500 |
+
+`PromptEnv { cfg, registry, checkout }` gathers the inputs of one assembly. `checkout` is `charliebot_core::RepoRoot`,
+the validated checkout root held in typed startup state.
+
+- `prompts::SNAPSHOT_FILENAME`, `prompts::LAUNCH_TEXT_FILENAME`
+- `charliebot_registry::turn::SCOPE_BASE`, `SCOPE_MEMORY`, `SCOPE_SUBTREE`, `SCOPE_NODE`, `SCOPE_TASTE`,
+  `DELIVERY_FULL`, `DELIVERY_INDEX`
+- `prompts::MANAGER_KINDS`, `prompts::WORKER_KINDS`
+- `prompts::COHERENCE_PASSES`
+- `prompts::MAX_AGENT_MESSAGE_WEIGHTED_CHARS`
+- `prompts::HOST_SUPPLEMENT_FILENAME`
+- `charliebot_core::home::PROMPT_BODIES_DIR_NAME`
+- `prompts::TaskPromptError`
+- `charliebot_core::RepoRoot`
+- `prompts::PromptEnv`
+- `prompts::PromptSource`, `prompts::RuleSegment` (re-exported, not redefined)
+- `prompts::PromptBlock`
+- `PromptSnapshot::instructions_text`, `char_count`, `prompt_hash`, `to_json_dict`, `from_json_dict`
+- `prompts::assemble_snapshot`
+- `prompts::build_segments`, `prompts::RuleInputs`
+- `prompts::ChainLink { session_id, subtree_ref }`
+- `prompts::OverlayError::class_name`
+- `prompts::prompt_task_type`
+- `prompts::read_local_rule_body`
+- `prompts::resolve_launch_overlay`
+- `prompts::capture_prompt_chain`
+- `prompts::assemble_coherent_snapshot`, `prompts::CoherentSnapshot`
+- `prompts::read_run_context`, `prompts::ContextReadError`
+- `prompts::render_session_info`
+- `prompts::binding_intro`
+- `prompts::render_worktree_bindings`
+- `prompts::render_task_body`
+- `prompts::render_worktree_persistence`
+- `prompts::review_task_context`
+- `prompts::repo_less_review_task_context`
+- `spawner_prompt::workflow_prompt_sections`, `repo_less_workflow_sections`
+- `spawner_prompt::REPO_LESS_SOURCE_FILES_SECTION`
+- `spawner_prompt::workflow_rule_section_ids`
+- `spawner_prompt::load_marker_sections`
+- `spawner_prompt::load_worker_prompt_sections`
+- `spawner_prompt::substitute_tokens`, `spawner_prompt::Tokens`
+- `spawner_prompt::verify_contract_tokens`
+- `spawner_prompt::worktree_binding_tokens`
+- `spawner_prompt::read_text`, `spawner_prompt::TextReadError`
+- `verify_trailer::VERIFY_RESULT_TRAILER_PATTERN`, `verify_result_trailer_expected`
+- `review_text::review_rules_text`
+- `review_text::review_numbered_steps`
+- `review_text::review_published_branch`
+- `review_text::review_landing_target`
+- `review_text::review_spec_text`
+- `review_text::review_context_lines`
+- `review_text::review_log_pointer`
+- `review_text::review_git_venue`
+- `cold_read::PROMPT_FILENAME`, `TRIGGER_PLACEHOLDER`, `EVIDENCE_FILENAME`
+- `cold_read::load_texts`
+- `cold_read::probe_input`
+- `cold_read::format_report`, `cold_read::ColdReadOutcome` (`ColdReadOutcome` has the `Answered` and `AllFailed` branches that `format_report` renders)
+- `cold_read::page_sha256`
+- `execution::TaskExecutionAdapter::after_cold_read_run` (`pub(crate)`)
+- `recovery::replay_followups` cold-read rows (private)
+- `text_length::weighted_length`
+- `routes::session_message`
+
+Behavior notes:
+
+- Malformed snapshot JSON other than invalid values and literals reports serde_json's parse message in the run-context
+  `unreadable` detail.
+- A snapshot field with the wrong type reports the Rust message.
+- Overlay and template read errors reproduce the common `OSError` and `UnicodeDecodeError` texts.
+- Assembly reads its files on the calling thread.
+- The cold-read launch and report read the page and the evidence file on the calling thread.
+- The memory contribution is not implemented, so no rule source here emits `SCOPE_MEMORY`.
+
+## Tests
+
+`tests/prompt_snapshot_golden.rs` compares the 19-case golden matrix (`fixtures/prompt_snapshot_golden.json`) byte for
+byte, with each `prompt_hash` and `char_count`, and the damaged-snapshot error texts. `tests/task_prompts.rs` covers the
+task-tree and run-context cases over a temporary store; the staged-memory case is not covered. Unit tests cover the
+verify trailer, the worker prompt loader, the review steps and the snapshot dedup and hash.
+
+`tests/turn_golden.rs` compares the recorded twelve scripted streams (`fixtures/turn_golden.json`) through the
+Rust queue after normalizing event ids, timestamps, and elapsed timing fields. It starts only synthetic `/bin/sh`
+backends.
+
+`recovery.rs` unit tests cover the review-owed rule
+(`a_review_is_owed_only_to_the_newest_unfollowed_work_run_of_an_open_task`), the closed-task stop id, and the
+end-landing retry rounds. `tests/recovery.rs` covers the manager-turn MASTER_DONE out-of-space case over the store's
+write-fault seam (`write-faults` feature) and a live `/bin/sh` turn, with the retry interval replaced through the
+`test-hooks` feature. Other startup-recovery cases are not covered yet. The cases that replay a named follow-up above
+(failed-run report, review spawn) need that replay before they can pass, and the rest need a store fixture with live
+run processes.
+
+`tests/delegate.rs` covers the artifact check's cold-read delegation cases and the session-message relay cases.
+`tests/worker_run.rs` covers the cold-read run cases: the instructions and input, the report with its attempts, the
+empty answer, the next-backend retry and the all-failed archive. `tests/recovery.rs` covers the five cold-read replay
+cases.
+
+`tests/worker.rs` covers the account relay, backend build, hang diagnostics, event line, quota scan and non-Claude build
+cases. It runs scripted `/bin/sh` processes, which the process-group guard kills when a test ends, and it starts no agent
+CLI. The resume path has a case with no counterpart in the reference suite: a fake agent writes a result and stays alive,
+and the case checks the diagnostics file, the group's exit and the terminal event. Three cases observe their behavior
+differently. The falls-back case raises the below-line target's reading from a subscriber on the thread channel, when the
+safe point's `user` frame is broadcast. The watch has observed that event by then, and the move reads the pool only after
+the process exits, so the reading rises between the gate and the move. The case does not stub `claude_accounts.select`.
+The hang-diagnostics case checks the written file's shape rather than its content, since the runner captures the
+diagnostics itself. The compaction case checks the events log, not a spy on `compact_with_sonnet`.

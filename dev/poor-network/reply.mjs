@@ -5,6 +5,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export const REPLY_SOURCES = Object.freeze([
   'dev/improve/landing.md',
@@ -22,12 +23,15 @@ export const REPLY_BYTES = 8192;
 // 26,592 bytes on the wire untrimmed. A reply of 8 KB makes about three or four stream updates.
 const EVENT_BYTES = 2200;
 
+// The fixed file holding the reply text: the REPLY_SOURCES files, joined with newlines, with every non-ASCII character
+// replaced by spaces, copied byte for byte when this file was added. The bench reads this copy, so a change to the
+// repository docs cannot change the reply the bench sends; the fixture's bytes are part of the bench's tree key.
+const REPLY_FIXTURE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'reply-fixture.txt');
+
 // The pieces of the reply text, each REPLY_BYTES long. Every non-ASCII character becomes a space, so a character is one
 // byte and every piece has the same byte count.
-export function loadReplyPieces(repoRoot) {
-  const text = REPLY_SOURCES.map((file) => fs.readFileSync(path.join(repoRoot, file), 'utf8'))
-    .join('\n')
-    .replace(/[^\x20-\x7e\n]/g, ' ');
+export function loadReplyPieces() {
+  const text = fs.readFileSync(REPLY_FIXTURE, 'utf8');
   if (text.length < REPLY_PIECES * REPLY_BYTES) {
     throw new Error(`the reply sources hold ${text.length} bytes, short of ${REPLY_PIECES * REPLY_BYTES}`);
   }
@@ -93,15 +97,15 @@ export function toolRowBytes() {
   return Buffer.byteLength(JSON.stringify({name: 'Bash', input: {command}, output, is_error: false}));
 }
 
-// `node reply.mjs <repo root> <out dir>` writes the pieces as reply-<n>.ndjson, the tool piece as tools-0.ndjson,
+// `node reply.mjs <out dir>` writes the pieces as reply-<n>.ndjson, the tool piece as tools-0.ndjson,
 // and `next`, the index of the piece the next turn prints. The stub advances `next` on each turn.
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname)) {
-  const [repoRoot, outDir] = process.argv.slice(2);
-  if (!repoRoot || !outDir) {
-    throw new Error('usage: node reply.mjs <repo root> <out dir>');
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const [outDir] = process.argv.slice(2);
+  if (!outDir) {
+    throw new Error('usage: node reply.mjs <out dir>');
   }
   fs.mkdirSync(outDir, { recursive: true });
-  loadReplyPieces(repoRoot).forEach((piece, index) => {
+  loadReplyPieces().forEach((piece, index) => {
     fs.writeFileSync(path.join(outDir, `reply-${index}.ndjson`), replyNdjson(piece));
   });
   fs.writeFileSync(path.join(outDir, 'tools-0.ndjson'), toolNdjson());

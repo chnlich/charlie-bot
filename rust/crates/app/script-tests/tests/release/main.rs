@@ -8,12 +8,15 @@
 mod release_lock;
 mod world;
 
+use std::ffi::OsString;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+use std::os::unix::io::AsRawFd;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -737,21 +740,29 @@ impl ServeWorld {
   /// answers. The command reads the seed path from MOCK_HOME_SEED.
   fn serve(&self, tree_root: &Path, seed: &Path, command: &[&str]) -> Run {
     let _serial = TRIAL_RUNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let arguments = self.serve_arguments(tree_root, seed, &self.release.join("charliebot-server"), command);
     let mut trial = harness::command("bash", &self.env);
-    trial
-      .env("MOCK_HOME_SEED", seed)
-      .env("MOCK_HOME_TOOL", mock_home())
-      .arg(self.repo.join("scripts/release/trial.sh"))
-      .args(["--serve", "--tree-root"])
-      .arg(tree_root)
-      .args(["--seed-home"])
-      .arg(seed)
-      .arg("--in-caller-scope")
-      .arg(&self.commit)
-      .arg(self.release.join("charliebot-server"))
-      .arg("--")
-      .args(command);
+    trial.env("MOCK_HOME_SEED", seed).env("MOCK_HOME_TOOL", mock_home()).args(arguments);
     harness::run(&mut trial)
+  }
+
+  /// The arguments of one serve trial in the caller's scope: the script's path, then the tree root, the seed, the
+  /// commit, the server and the command after `--`. The program that runs them is bash.
+  fn serve_arguments(&self, tree_root: &Path, seed: &Path, server: &Path, command: &[&str]) -> Vec<OsString> {
+    let mut arguments: Vec<OsString> = vec![
+      self.repo.join("scripts/release/trial.sh").into_os_string(),
+      "--serve".into(),
+      "--tree-root".into(),
+      tree_root.into(),
+      "--seed-home".into(),
+      seed.into(),
+      "--in-caller-scope".into(),
+      self.commit.clone().into(),
+      server.into(),
+      "--".into(),
+    ];
+    arguments.extend(command.iter().map(OsString::from));
+    arguments
   }
 
   /// One serve trial started without waiting for it: its port range is `port` alone, and `server` is its server binary,
@@ -928,6 +939,105 @@ fn test_trial_serve_stops_the_tmux_server_it_started_and_removes_its_tree() {
   let tmux_pid: i32 =
     fs::read_to_string(&pid_file).expect("the tmux server pid").trim().parse().expect("a numeric tmux server pid");
   assert!(!process_is_running(tmux_pid), "the trial left tmux server {tmux_pid} running: {}", run.describe());
+  assert_eq!(fs::read_dir(tree_root).expect("the tree root").count(), 0, "{}", run.describe());
+}
+
+/// Runs `trial` in its own process group and waits at most `limit` for it. A trial still running at the limit has its
+/// group killed, so the server it started dies too, and the run's code is -1: the caller's assertions name the hang.
+fn run_within(trial: &mut Command, limit: Duration) -> Run {
+  trial.process_group(0).stdout(Stdio::piped()).stderr(Stdio::piped());
+  let mut child = harness::spawn(trial);
+  let deadline = Instant::now() + limit;
+  while child.try_wait().expect("the trial's status").is_none() {
+    if Instant::now() >= deadline {
+      // SAFETY: kill sends SIGKILL to the process group the trial leads, which this test created for it.
+      unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) };
+      break;
+    }
+    thread::sleep(Duration::from_millis(50));
+  }
+  let output = child.wait_with_output().expect("the trial's output");
+  Run {
+    code: output.status.code().unwrap_or(-1),
+    stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+    stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+  }
+}
+
+/// The pid that a serve trial logged for its started server, from its `SERVE PASS Startup ... pid=<pid>` line.
+fn started_server_pid(run: &Run) -> String {
+  let line = run.stdout.lines().find(|line| line.starts_with("SERVE PASS Startup")).expect("the startup line");
+  line.split_whitespace().find_map(|field| field.strip_prefix("pid=")).expect("the server pid").to_string()
+}
+
+/// A serve trial whose server stops as its command exits: the command sends SIGTERM to the server and ends at once. The
+/// trial waits for the runs of its home, and it cannot read a run page from a server that is gone, so it ends within a
+/// minute, failing the run wait and naming the server's pid.
+#[test]
+#[ignore = "integration"]
+fn test_trial_serve_ends_within_a_minute_when_its_server_stops_as_the_command_exits() {
+  let _serial = TRIAL_RUNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+  let world = ServeWorld::new();
+  let seed = world.seed_home("seed", "2");
+  let tree_root = world.tree_root();
+  let server = world.release.join("charliebot-server");
+  let mut trial = harness::command("bash", &world.env);
+  trial.args(world.serve_arguments(tree_root, &seed, &server, &["sh", "-c", "kill -TERM \"$CHARLIEBOT_SERVE_PID\""]));
+
+  let run = run_within(&mut trial, Duration::from_secs(60));
+
+  assert_eq!(run.code, 1, "the trial did not end within 60 s: {}", run.describe());
+  let pid = started_server_pid(&run);
+  assert!(run.stdout.contains("SERVE command exit=0"), "{}", run.describe());
+  assert!(run.stdout.contains("FAIL serve RunWait:"), "{}", run.describe());
+  // The server is gone or still shutting down when the wait reads its runs, so the CAUSE names the pid either way.
+  let cause = format!("CAUSE serve: server pid {pid} ");
+  assert!(run.stdout.lines().any(|line| line.starts_with(&cause)), "{}", run.describe());
+  assert!(!run.stdout.contains("SERVE PASS RunWait"), "{}", run.describe());
+  assert_eq!(fs::read_dir(tree_root).expect("the tree root").count(), 0, "{}", run.describe());
+}
+
+/// A serve trial whose server ignores SIGTERM. The trial waits its bounded time, sends SIGKILL and fails the side,
+/// naming the server's pid. The trial runs under a lock held on fd 9 the way dev/poor-network/lock.sh's bench_lock_hold
+/// holds it, so every process the trial starts inherits the lock: a process that survives the trial keeps it held.
+#[test]
+#[ignore = "integration"]
+fn test_trial_serve_names_a_server_that_ignores_sigterm_and_releases_the_bench_lock() {
+  let _serial = TRIAL_RUNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+  let world = ServeWorld::new();
+  let seed = world.seed_home("seed", "1");
+  let tree_root = world.tree_root();
+  let stub_release = world.sandbox.dir("stub-release");
+  symlink(harness::built_binary("term-ignoring-server"), stub_release.join("charliebot-server"))
+    .expect("the stub link");
+  symlink(world.release.join("charliebot"), stub_release.join("charliebot")).expect("the CLI link");
+  let port = TcpListener::bind(("127.0.0.1", 0)).expect("a free port").local_addr().expect("the port").port();
+  let lock = world.sandbox.root().join("bench.lock");
+  let mut trial = harness::command("sh", &world.env);
+  trial
+    .arg("-c")
+    .arg("exec 9>\"$0\"; flock -n 9 || exit 75; exec \"$@\"")
+    .arg(&lock)
+    .arg("bash")
+    .args(world.serve_arguments(tree_root, &seed, &stub_release.join("charliebot-server"), &["true"]))
+    .env("TRIAL_PORT_MIN", port.to_string())
+    .env("TRIAL_PORT_MAX", port.to_string());
+
+  let run = run_within(&mut trial, Duration::from_secs(120));
+
+  assert_eq!(run.code, 1, "{}", run.describe());
+  let pid = started_server_pid(&run);
+  assert!(run.stdout.contains("SERVE command exit=0"), "{}", run.describe());
+  assert!(run.stdout.contains("FAIL serve Stop:"), "{}", run.describe());
+  let cause = format!("CAUSE serve: server pid {pid} did not exit within 20000 ms of SIGTERM; the trial sent SIGKILL");
+  assert!(run.stdout.contains(&cause), "{}", run.describe());
+  let server_pid: i32 = pid.parse().expect("a numeric server pid");
+  assert!(!process_is_running(server_pid), "the server {pid} outlived the trial: {}", run.describe());
+  // A process of the trial that still holds fd 9 keeps the lock, and the test's own flock on a new descriptor fails.
+  let file = fs::File::open(&lock).expect("the bench lock file");
+  // SAFETY: flock takes a descriptor this test owns and two flag values, and reads no memory.
+  let locked = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+  assert_eq!(locked, 0, "a process of the trial still holds the bench lock: {}", run.describe());
   assert_eq!(fs::read_dir(tree_root).expect("the tree root").count(), 0, "{}", run.describe());
 }
 

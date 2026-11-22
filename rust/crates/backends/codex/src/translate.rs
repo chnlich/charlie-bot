@@ -132,7 +132,7 @@ impl CodexTranslator {
       Some(value) if is_truthy(value) => {
         value.as_str().context("codex agent_message text must be a string")?.to_string()
       }
-      _ => content_text(item)?,
+      Some(_) | None => content_text(item)?,
     };
     if full_text.is_empty() {
       return Ok(Vec::new());
@@ -153,7 +153,7 @@ impl CodexTranslator {
     // Newer codex emits `text`. The older schema carried the `summary_text` parts of `summary`.
     let mut text = match item.get("text") {
       Some(value) if is_truthy(value) => value.as_str().context("codex reasoning text must be a string")?.to_string(),
-      _ => String::new(),
+      Some(_) | None => String::new(),
     };
     if text.is_empty()
       && let Some(summary) = item.get("summary").and_then(Value::as_array)
@@ -193,7 +193,7 @@ impl CodexTranslator {
       Some("item.completed") => {
         let output = match item.get("aggregated_output") {
           Some(value) if !value.is_null() => value.clone(),
-          _ => item.get("output").cloned().unwrap_or_else(|| json!("")),
+          Some(_) | None => item.get("output").cloned().unwrap_or_else(|| json!("")),
         };
         if *stringify_output {
           vec![make_tool_result_event(tool, &value_str(&output))]
@@ -376,8 +376,8 @@ fn todo_marker(todo: &Map<String, Value>) -> &'static str {
       "in_progress" => "[~]",
       _ => "[ ]",
     },
-    _ if todo.get("completed") == Some(&Value::Bool(true)) => "[x]",
-    _ => "[ ]",
+    Some(_) | None if todo.get("completed") == Some(&Value::Bool(true)) => "[x]",
+    Some(_) | None => "[ ]",
   }
 }
 
@@ -390,7 +390,7 @@ fn error_item(event: &Map<String, Value>, item: &Map<String, Value>) -> Vec<Valu
   }
   let message = match item.get("message") {
     Some(message) if is_truthy(message) => value_str(message),
-    _ => format!("Codex item error with no message. Full event: {}", full_event(event)),
+    Some(_) | None => format!("Codex item error with no message. Full event: {}", full_event(event)),
   };
   vec![make_system_message_event(&message)]
 }

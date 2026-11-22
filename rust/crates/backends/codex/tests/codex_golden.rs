@@ -547,7 +547,7 @@ fn replace_fixture_paths(value: &mut Value, replacements: &[(&str, &str)]) {
     }
     Value::Array(values) => values.iter_mut().for_each(|value| replace_fixture_paths(value, replacements)),
     Value::Object(fields) => fields.values_mut().for_each(|value| replace_fixture_paths(value, replacements)),
-    _ => {}
+    Value::Null | Value::Bool(_) | Value::Number(_) => {}
   }
 }
 

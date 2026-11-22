@@ -10,6 +10,66 @@ mod thread_rules_tests;
 #[cfg(test)]
 mod web_search_gate;
 
+/// The composed app over `home`, whose access key is the one its `credentials.yaml` names, with the repository's
+/// templates rendering the pages. Returns the features beside the service, so a test seeds the store the app reads.
+#[cfg(test)]
+pub(crate) fn composed_app(
+  home: &std::path::Path,
+) -> (
+  tower::util::BoxCloneSyncService<
+    axum::http::Request<axum::body::Body>,
+    axum::response::Response,
+    std::convert::Infallible,
+  >,
+  std::sync::Arc<charliebot_registry::FeatureContext>,
+) {
+  use std::sync::Arc;
+
+  use charliebot_compat::mimetypes::MimeTypes;
+  use charliebot_core::hot_reload::HotReload;
+  use charliebot_registry::templating::Templating;
+  use charliebot_registry::{FeatureContext, StartupState};
+  use charliebot_store::Store;
+
+  use crate::app;
+  use crate::buildinfo::BuildInfo;
+  use crate::state::AppState;
+
+  let registry = Arc::new(registry().expect("the listed packages register"));
+  let config = registry.load_config(home).expect("the test config loads");
+  let store = Arc::new(
+    Store::new(config, registry.metadata_slots(), charliebot_registry::store_hooks::store_hooks(Arc::clone(&registry)))
+      .expect("the test store"),
+  );
+  let config_registry = Arc::clone(&registry);
+  let config_home = home.to_path_buf();
+  let credentials_home = home.to_path_buf();
+  let features = Arc::new(FeatureContext {
+    config: Arc::new(HotReload::new(
+      home.join("config.yaml"),
+      "test_config_reload_failed",
+      Box::new(move || config_registry.load_config(&config_home)),
+    )),
+    credentials: Arc::new(HotReload::new(
+      home.join("credentials.yaml"),
+      "test_credentials_reload_failed",
+      Box::new(move || charliebot_core::credentials::load_credentials(&credentials_home)),
+    )),
+    store,
+    registry,
+    startup: Arc::new(StartupState::default()),
+  });
+  let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..");
+  features.startup.insert(Templating::new(&repo_root, &[])).expect("no other Templating was inserted");
+  let state = Arc::new(AppState {
+    features: Arc::clone(&features),
+    build_info: BuildInfo { sha: "synthetic".to_string(), started_at: "synthetic".to_string() },
+    static_mounts: Vec::new(),
+    mime_types: MimeTypes::builtin(),
+  });
+  (app::build(state), features)
+}
+
 #[cfg(test)]
 mod tests {
   use std::env;

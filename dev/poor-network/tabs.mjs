@@ -682,6 +682,11 @@ export class Tabs {
     await page.send('Page.addScriptToEvaluateOnNewDocument', {
       source: `localStorage.setItem(${JSON.stringify(ACCESS_KEY_NAME)}, ${JSON.stringify(this.#accessKey)});`,
     });
+    // The server refuses the chat page's own navigation without the key, and a document request carries no
+    // localStorage. The key goes as the cookie the server reads for it, so the navigation loads the chat page.
+    await this.#browser.send('Storage.setCookies', {
+      cookies: [{name: ACCESS_KEY_NAME, value: this.#accessKey, url: this.#origin}],
+    });
     if (initScript !== null) {
       await page.send('Page.addScriptToEvaluateOnNewDocument', { source: initScript });
     }

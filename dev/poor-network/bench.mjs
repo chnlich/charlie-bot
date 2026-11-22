@@ -221,19 +221,55 @@ async function createSessions(api) {
   };
 }
 
-// The seed-only record: the turns each sized session took and the untrimmed bootstrap bytes it reached, against the
-// target. The For-you large target's record comes from its own sizing.
-function sizingReport(args, sessions) {
+// One seeded session's fingerprint: the turns its seeding took, the untrimmed first-screen bytes, the first screen's
+// message count, and a hash of its role and content. A before side that would reuse an older run's rows compares its
+// fingerprints with that run's; a difference means the scenario's sessions changed and its before side re-measures.
+async function sessionFingerprint(api, session) {
+  const bootstrap = await api.json('GET', `/api/sessions/${session.id}/bootstrap`);
+  const messages = (bootstrap.messages ?? []).map(({ role, content }) => ({ role, content }));
+  const { untrimmedBytes } = await api.bootstrapWireBytes(session.id);
+  return {
+    turns: session.turns ?? null,
+    bootstrapWireBytes: session.bootstrapWireBytes ?? null,
+    firstScreenMessages: messages.length,
+    firstScreenUntrimmedBytes: untrimmedBytes,
+    firstScreenHash: crypto.createHash('sha256').update(JSON.stringify(messages)).digest('hex').slice(0, 16),
+  };
+}
+
+// The seed-only record: the turns each sized session took and the untrimmed bootstrap bytes it reached, every seeded
+// session's fingerprint, the For-you large target's sizing, and the default view's listing bytes. Two runs whose
+// records match seeded the same sessions, so a before side reuses an older run's rows only when they do.
+async function seedReport(args, api, sessions) {
   const sized = [sessions.switchTarget, ...sessions.held].map(({ turns, bootstrapWireBytes }) => ({
     turns,
     bootstrapWireBytes,
   }));
+  const roles = {
+    open: [sessions.open],
+    background: [sessions.background],
+    probes: sessions.probes,
+    switchTarget: [sessions.switchTarget],
+    held: sessions.held,
+    churn: [sessions.churn],
+    foryouLarge: [sessions.foryou.large],
+    foryouTypical: [sessions.foryou.typical],
+  };
+  const fingerprints = {};
+  for (const [role, list] of Object.entries(roles)) {
+    fingerprints[role] = [];
+    for (const session of list) {
+      fingerprints[role].push(await sessionFingerprint(api, session));
+    }
+  }
   return {
     side: args.side,
     commit: args.commit,
     targetBytes: VIEW.bootstrapUntrimmedWireBytes,
     sized,
+    fingerprints,
     foryouLarge: sessions.foryou.large.sizing,
+    view: { ...await measureView(api), live: VIEW },
   };
 }
 
@@ -421,7 +457,7 @@ async function main() {
       ctx.sessions.foryou = await seedForYouTargets(api, ctx.sessions);
     }
     if (args.mode === 'seed') {
-      fs.writeFileSync(args.out, `${JSON.stringify(sizingReport(args, ctx.sessions), null, 2)}\n`);
+      fs.writeFileSync(args.out, `${JSON.stringify(await seedReport(args, api, ctx.sessions), null, 2)}\n`);
       process.stderr.write(`wrote ${args.out}\n`);
       process.exit(0);
     }

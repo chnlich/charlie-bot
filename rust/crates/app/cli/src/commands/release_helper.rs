@@ -72,6 +72,7 @@ const VERBS: &[(&str, &str)] = &[
   ("session-id", "RESPONSE_PATH"),
   ("session-ids", "SESSIONS_DIR"),
   ("session-weights", "CONFIG_PATH"),
+  ("stand-in-options", "CRON_DEFAULTS CONFIG_EXAMPLE"),
   ("sweep-check", "SERVER_LOG SESSIONS_DIR"),
   ("version-sha", "RESPONSE_PATH"),
   ("websocket", "BASE_URL SESSION CREDENTIALS_PATH OUTPUT_PATH"),
@@ -137,6 +138,7 @@ fn dispatch(name: &str, args: &[String]) -> Result<i32, String> {
     "session-id" => session_id(args),
     "session-ids" => session_ids(args),
     "session-weights" => session_weights(args),
+    "stand-in-options" => stand_in_options(args),
     "sweep-check" => sweep_check(args),
     "version-sha" => version_sha(args),
     "websocket" => websocket(args),
@@ -978,9 +980,9 @@ fn cgroup_clean(args: &[String]) -> Result<i32, String> {
 
 // ---- the preflight reads --------------------------------------------------------------------------------------------
 
-/// A live `config.yaml` as the JSON document the release verbs read.
-fn live_config_document(config_path: &str) -> Result<Value, String> {
-  let document = config::read_yaml_document(Path::new(config_path)).map_err(|error| error.to_string())?;
+/// A YAML file as the JSON document the release verbs read.
+fn yaml_document_json(path: &str) -> Result<Value, String> {
+  let document = config::read_yaml_document(Path::new(path)).map_err(|error| error.to_string())?;
   config::yaml_to_json(&document)
 }
 
@@ -988,7 +990,7 @@ fn live_config_document(config_path: &str) -> Result<Value, String> {
 /// default. The trial copies both into its config.
 fn session_weight_lines(config_path: &str) -> Result<[String; 2], String> {
   let (cpu, io) =
-    config::session_weight_switches(&live_config_document(config_path)?).map_err(|error| error.to_string())?;
+    config::session_weight_switches(&yaml_document_json(config_path)?).map_err(|error| error.to_string())?;
   Ok([cpu.to_string(), io.to_string()])
 }
 
@@ -997,6 +999,46 @@ fn session_weights(args: &[String]) -> Result<i32, String> {
   for line in session_weight_lines(path)? {
     println!("{line}");
   }
+  Ok(0)
+}
+
+/// The scheduled task whose step backends name the trial's stand-in options.
+const STAND_IN_TASK: &str = "memory-curator";
+
+/// The option records the trial's stand-ins copy: the step backends of `STAND_IN_TASK` in `cron_defaults`, in step
+/// order, each as the record of the same id in `config_example`. A step backend that the example does not define fails.
+fn stand_in_records(cron_defaults: &str, config_example: &str) -> Result<Vec<Value>, String> {
+  let cron = yaml_document_json(cron_defaults)?;
+  let example = yaml_document_json(config_example)?;
+  let task = cron["scheduled_tasks"]
+    .as_array()
+    .and_then(|tasks| tasks.iter().find(|task| task["name"] == STAND_IN_TASK))
+    .ok_or_else(|| format!("{cron_defaults} has no scheduled task named {STAND_IN_TASK}"))?;
+  let mut ids: Vec<&str> = Vec::new();
+  for step in task["steps"].as_array().into_iter().flatten() {
+    if let Some(id) = step["backend"].as_str().filter(|id| !ids.contains(id)) {
+      ids.push(id);
+    }
+  }
+  if ids.is_empty() {
+    return Err(format!("the {STAND_IN_TASK} task in {cron_defaults} names no step backend"));
+  }
+  let options: &[Value] = example["backends"]["options"].as_array().map_or(&[], Vec::as_slice);
+  ids
+    .iter()
+    .map(|id| {
+      options.iter().find(|option| option["id"] == *id).cloned().ok_or_else(|| {
+        format!("{config_example} has no option {id}, which the {STAND_IN_TASK} task in {cron_defaults} names")
+      })
+    })
+    .collect()
+}
+
+/// `stand-in-options <cron-defaults> <config-example>`: the stand-in records as a YAML list, for the trial's config.
+fn stand_in_options(args: &[String]) -> Result<i32, String> {
+  let [cron_defaults, config_example] = arguments::<2>(args, "stand-in-options")?;
+  let records = stand_in_records(cron_defaults, config_example)?;
+  print!("{}", serde_yaml::to_string(&records).map_err(|error| error.to_string())?);
   Ok(0)
 }
 
@@ -1520,5 +1562,53 @@ mod tests {
   fn a_session_whose_web_reply_and_assistant_texts_differ_from_the_word_does_not_answer_it() {
     let events = [assistant_text_row("DONE soon"), web_reply_row("DONE soon")];
     assert_eq!(reply_form(&events, "DONE"), ReplyForm::NoMatch);
+  }
+
+  /// The stand-ins are the memory-curator's step backends in step order, each copied from the example config by id.
+  #[test]
+  fn the_stand_ins_copy_the_memory_curator_steps_records_from_the_example() {
+    let dir = tempfile::tempdir().unwrap();
+    let cron = dir.path().join("cron.yaml");
+    let example = dir.path().join("example.yaml");
+    fs::write(
+      &cron,
+      concat!(
+        "scheduled_tasks:\n  - name: other\n    steps:\n      - backend: gamma\n",
+        "  - name: memory-curator\n    steps:\n",
+        "      - name: selector\n        backend: beta\n",
+        "      - name: reviewer\n        backend: alpha\n        distinct_backend_from: selector\n",
+        "      - name: again\n        backend: beta\n",
+      ),
+    )
+    .unwrap();
+    fs::write(
+      &example,
+      concat!(
+        "backends:\n  options:\n",
+        "    - id: alpha\n      type: cc-claude\n      model: model-alpha\n",
+        "    - id: beta\n      type: cc-claude\n      model: model-beta\n      effort: xhigh\n",
+        "    - id: gamma\n      type: cc-claude\n      model: model-gamma\n",
+      ),
+    )
+    .unwrap();
+    let records = stand_in_records(cron.to_str().unwrap(), example.to_str().unwrap()).unwrap();
+    let ids: Vec<&str> = records.iter().map(|record| record["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["beta", "alpha"]);
+    assert_eq!(records[0]["effort"], "xhigh");
+    assert_eq!(records[1]["model"], "model-alpha");
+
+    fs::write(&example, "backends:\n  options: []\n").unwrap();
+    let error = stand_in_records(cron.to_str().unwrap(), example.to_str().unwrap()).unwrap_err();
+    assert!(error.contains("beta"), "{error}");
+  }
+
+  /// The repository's own configs name stand-ins that the example config defines.
+  #[test]
+  fn the_default_memory_curator_names_stand_ins_the_example_config_defines() {
+    let cron = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../configs/cron.default.yaml");
+    let example = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../configs/config.example.yaml");
+    let records = stand_in_records(cron, example).unwrap();
+    assert!(!records.is_empty());
+    assert!(records.iter().all(|record| record["type"] == "cc-claude"), "{records:?}");
   }
 }

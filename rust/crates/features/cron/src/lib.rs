@@ -60,6 +60,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.startup_check("cron_backend_refs", loader::backend_refs_check)?;
   registry.derived_waiting_items(host_gate::derived_waiting_rows)?;
   registry.bound_round(rounds::bound_round_readers())?;
+  registry.bound_next_fire(scheduler::sessions_with_next_fire)?;
   let (registry_sender, registry_receiver) = tokio::sync::watch::channel(None);
   registry.service(Arc::new(sequence_controller::BindingContextService::new(registry_sender)))?;
   registry.service(Arc::new(scheduler::SchedulerService::default()))?;

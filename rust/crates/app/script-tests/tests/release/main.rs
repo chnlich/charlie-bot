@@ -1021,7 +1021,9 @@ fn test_trial_disables_every_cron_task_of_its_home_before_its_server_starts() {
   );
 
   assert_eq!(run.code, 0, "{}", run.describe());
-  assert!(run.stdout.contains("SERVE PASS CronDisabled: "), "{}", run.describe());
+  let disabled_at = run.stdout.find("SERVE PASS CronDisabled: ").expect("the pre-start cron check");
+  let startup_at = run.stdout.find("SERVE PASS Startup ").expect("the ready trial server");
+  assert!(disabled_at < startup_at, "cron tasks were disabled after the server started: {}", run.describe());
   let mut names = Vec::new();
   for entry in fs::read_dir(&copied).expect("the copied cron tasks") {
     let path = entry.expect("a copied cron task").path();

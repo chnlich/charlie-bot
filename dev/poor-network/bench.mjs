@@ -347,14 +347,20 @@ function buildSide({
   return deriveSide(side);
 }
 
+// The served home must be the mock home. The check runs before the bench waits for the lock: the scheduler binds the
+// default cron rows at its first tick, 60 s after the server starts, and each row adds a session to the count the check
+// compares, so a check after a long lock wait would fail a correct home.
+function checkMockHome(args, api) {
+  const check = spawnSync(args.mockHomeBin, ['check', args.mockHome, api.base], { stdio: 'inherit' });
+  if (check.status !== 0) {
+    throw new Error(`mock-home check exited ${check.status}: the served home is not the mock home`);
+  }
+}
+
 // The preparation stage: the assets and the reply text, the sessions and the view, the TLS front, the CDN stand-in, and
 // the open scenario's warm builds, which the CPU probes need. Runs as one step, which is not retried, since a retry
 // would leave the first attempt's servers running.
 async function prepare(ctx, args, openResult) {
-  const check = spawnSync(args.mockHomeBin, ['check', args.mockHome, ctx.api.base], { stdio: 'inherit' });
-  if (check.status !== 0) {
-    throw new Error(`mock-home check exited ${check.status}: the served home is not the mock home`);
-  }
   ctx.assets = await loadAssets(args.assets);
   ctx.replyBytes = replyTextBytes(args.replyDir);
   ctx.sessions = await createSessions(ctx.api);
@@ -427,6 +433,7 @@ async function main() {
   let segments = null;
   try {
     trials.start();
+    checkMockHome(args, api);
     await gate.open();
     // The bench holds the lock one step at a time: it takes it here, gives it up after a step that a queued process
     // waits for, and takes it again. The probe that starts each segment is the first step after each take.

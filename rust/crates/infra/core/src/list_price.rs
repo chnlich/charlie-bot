@@ -63,6 +63,11 @@ pub fn lookup(model: &str) -> Option<&'static ListPrice> {
   LIST_PRICES.iter().find(|price| price.model == name)
 }
 
+/// The model names the price table lists, in table order. A tool that needs the names the ledger owns reads them here.
+pub fn price_models() -> impl Iterator<Item = &'static str> {
+  LIST_PRICES.iter().map(|price| price.model)
+}
+
 // These are model spellings, not prefix rules: a new version or effort name must be verified before it shares a rate.
 const ALIASES: &[(&str, &str)] = &[
   ("swe-2-max", "swe-2"),

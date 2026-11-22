@@ -10,6 +10,11 @@
 # swap. After the command ends the trial waits until every run of the trial home has ended, stops the server, asserts
 # that no process of the trial tree remains, cleans up and runs sweep-check on the server log.
 #
+# A side is ready only when the port's listener is this trial's server (or a process it started) and that server
+# answers its auth status with 200 after it logged server_ready. free-port picks the port before the server binds it,
+# so another process can take the port in between. Then the side fails at start: the FAIL and CAUSE lines name the
+# port and its holder, and no command runs.
+#
 # This host gives an unprivileged process no read-only view of /sys/fs/cgroup, so the preflight refuses (exit 2,
 # nothing started) a commit whose diff against its merge base with origin/main touches the cgroup code
 # (rust/crates/runtime/agents/src/transport/cgroup.rs, rust/crates/infra/core/src/cgroup.rs or
@@ -35,8 +40,8 @@
 # through the charliebot beside <server binary>: its `charliebot release-helper` verbs parse the responses, the logs
 # and the sessions this script gathers.
 #
-# Exit: the command's exit code; 1 a foreign cgroup removal, a remaining child process or a cleanup failure; 2 the
-# preflight failed, nothing started.
+# Exit: the command's exit code; 1 a foreign cgroup removal, a remaining child process, a cleanup failure or a server
+# that did not become ready on its own port; 2 the preflight failed, nothing started.
 # Evidence goes to $CHARLIEBOT_RELEASE_RUN_DIR/trial-<UTC>/ (or a directory under $CHARLIEBOT_RELEASE_LOG_DIR) and is
 # kept after a failure.
 set -uo pipefail
@@ -173,6 +178,9 @@ if ! LDD_OUTPUT=$(ldd "$BINARY" 2>&1); then
 fi
 if grep -Fq 'not found' <<<"$LDD_OUTPUT"; then
   preflight_fail 'ldd resolves every shared library for the result binary'
+fi
+if ! command -v ss >/dev/null 2>&1; then
+  preflight_fail 'ss resolves on PATH for the port-holder check'
 fi
 
 if ! CLC_PATH=$(command -v charlie-code 2>/dev/null) || [[ -z $CLC_PATH ]]; then
@@ -733,6 +741,58 @@ copy_seed_sessions() {
   fi
 }
 
+# startup_failed CAUSE: the FAIL line of a serve startup, then the cause, which names the port and any holder.
+startup_failed() {
+  printf 'FAIL serve Startup: the server did not become ready on 127.0.0.1:%s\n' "$CHOSEN_PORT"
+  printf 'CAUSE serve: %s\n' "$1"
+}
+
+# port_holders prints the `ss` line of each socket that listens on the trial's port, with its owning process.
+port_holders() {
+  ss -H -ltnp "sport = :$CHOSEN_PORT"
+}
+
+# holder_pid LINE prints the pid of the process in one `ss` line, or nothing when ss cannot name it.
+holder_pid() {
+  sed -n 's/.*pid=\([0-9]*\).*/\1/p' <<<"$1"
+}
+
+# holder_text LINE describes the process that holds one listening socket: its pid, command line and working directory.
+holder_text() {
+  local pid
+  pid=$(holder_pid "$1")
+  if [[ -z $pid ]]; then
+    printf 'a process this user cannot name (%s)' "$1"
+    return 0
+  fi
+  printf 'pid %s %s (cwd %s)' "$pid" "$({ tr '\0' ' ' <"/proc/$pid/cmdline"; } 2>/dev/null)" \
+    "$(readlink "/proc/$pid/cwd" 2>/dev/null)"
+}
+
+# pid_in_server_tree PID succeeds when PID is the trial's server process or one of its descendants.
+pid_in_server_tree() {
+  local pid=$1 parent
+  while [[ $pid =~ ^[0-9]+$ ]] && (( pid > 1 )); do
+    [[ $pid == "$SERVER_PID" ]] && return 0
+    parent=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]')
+    pid=$parent
+  done
+  return 1
+}
+
+# foreign_holders LINES prints the holder of each listening line that is not this trial's server or one of its
+# descendants. A line whose process ss cannot name counts as foreign.
+foreign_holders() {
+  local line pid
+  while IFS= read -r line; do
+    pid=$(holder_pid "$line")
+    if [[ -z $pid ]] || ! pid_in_server_tree "$pid"; then
+      holder_text "$line"
+      printf '\n'
+    fi
+  done <<<"$1"
+}
+
 start_server() {
   local server_number=$(( ${#SERVER_PIDS[@]} + 1 ))
   SERVER_LOG="$TREE/server-$server_number.log"
@@ -747,14 +807,42 @@ start_server() {
   fi
   SERVER_PID=$!
   SERVER_PIDS+=("$SERVER_PID")
+  # Each poll asks who listens on the port before it asks the port anything. A listener that is not this server's tree
+  # is another process's, and this server's bind fails behind it, so the side fails now with that holder named.
   for _ in $(seq 1 "$SERVE_READY_POLLS"); do
-    local status
-    status=$(http_get /api/auth/status "$AUTH_STATUS_FILE")
-    # The poll names this server's port, which another server may hold: this server is ready when its own log says so.
-    [[ $status == 200 ]] && grep -qE '[[:space:]]server_ready[[:space:]]' "$SERVER_LOG" && return 0
-    [[ -n $(process_state "$SERVER_PID") && $(process_state "$SERVER_PID") != *Z* ]] || return 1
+    local holders foreign status state holder
+    if ! holders=$(port_holders); then
+      startup_failed "ss cannot list the listeners on 127.0.0.1:$CHOSEN_PORT"
+      return 1
+    fi
+    if [[ -n $holders ]]; then
+      foreign=$(foreign_holders "$holders")
+      if [[ -n $foreign ]]; then
+        holder=$(paste -sd ';' <<<"$foreign")
+        startup_failed "port $CHOSEN_PORT is held by another process, so this trial's server cannot bind it: $holder"
+        return 1
+      fi
+      # Every listener on the port belongs to this trial's server, so the answer is this server's.
+      status=$(http_get /api/auth/status "$AUTH_STATUS_FILE")
+      [[ $status == 200 ]] && grep -qE '[[:space:]]server_ready[[:space:]]' "$SERVER_LOG" && return 0
+    fi
+    state=$(process_state "$SERVER_PID")
+    if [[ -z $state || $state == *Z* ]]; then
+      if ! holders=$(port_holders); then
+        startup_failed "the trial server exited before it became ready; ss cannot list the listeners"
+        return 1
+      fi
+      if [[ -n $holders ]]; then
+        holder=$(paste -sd ';' <<<"$(foreign_holders "$holders")")
+        startup_failed "the trial server exited before it became ready; port $CHOSEN_PORT is held by $holder"
+      else
+        startup_failed "the trial server exited before it became ready; port $CHOSEN_PORT has no listener"
+      fi
+      return 1
+    fi
     sleep 0.25
   done
+  startup_failed "this trial's server did not answer on 127.0.0.1:$CHOSEN_PORT within $SERVE_READY_POLLS polls"
   return 1
 }
 
@@ -844,11 +932,8 @@ run_serve_mode() {
     fi
     printf 'SERVE seed from=%s into=%s\n' "$SEED_HOME" "$SESSIONS_DIR"
   fi
-  if ! start_server; then
-    printf 'FAIL serve Startup: the server did not become ready on 127.0.0.1:%s\n' "$CHOSEN_PORT"
-    printf 'CAUSE serve: the trial server exited or did not bind the selected port\n'
-    return 1
-  fi
+  # start_server prints the FAIL and CAUSE lines; a side that did not start runs no command.
+  start_server || return 1
   if (( IN_CALLER_SCOPE == 1 )); then
     printf 'SERVE PASS Startup url=http://127.0.0.1:%s pid=%s scope=caller\n' "$CHOSEN_PORT" "$SERVER_PID"
   else

@@ -13,11 +13,11 @@ pub const SESSION_GROUP_PATH: &str = "/api/sessions/{session_id}/group";
 pub const SESSION_RUNS_PATH: &str = "/api/sessions/{session_id}/runs";
 pub const SESSION_PENDING_TRIGGERS_PATH: &str = "/api/sessions/{session_id}/pending-triggers";
 
-/// The session-tree query's keys: the parent to root the page at, the archived switch, the page size and the keyset
-/// cursor. `SESSION_TREE_PATH`'s route reads them and the CLI sends them, so each is spelled once.
+/// The session-tree query's keys: the parent to root the page at, the archived switch and the keyset cursor.
+/// `SESSION_TREE_PATH`'s route reads them and the CLI sends them, so each is spelled once. The page size is
+/// `charliebot_cli_common::fields::LIMIT`, which the session read routes and the CLI share.
 pub const SESSION_TREE_PARENT_ID_QUERY: &str = "parent_id";
 pub const SESSION_TREE_INCLUDE_ARCHIVED_QUERY: &str = "include_archived";
-pub const SESSION_TREE_LIMIT_QUERY: &str = "limit";
 pub const SESSION_TREE_CURSOR_QUERY: &str = "cursor";
 
 /// The fields that page a session response: the flag that older history remains, the cursor for the next older page,

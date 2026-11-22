@@ -57,7 +57,7 @@ else
   # A sizing turn advances the same rotation and prints the seed piece at its index (reply.mjs sets the seed events).
   kind=reply
   if [ -n "$task_file" ] && grep -q -e 'pn-seed-sized' -e 'pn-foryou size' "$task_file"; then kind=seed; fi
-  pieces=$(ls "$replies" | grep -c '^reply-')
+  pieces=$(ls "$replies" | grep -c "^$kind-")
   piece="$replies/$kind-$((next % pieces)).ndjson"
 fi
 while IFS= read -r line; do

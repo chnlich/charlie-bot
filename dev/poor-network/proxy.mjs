@@ -17,6 +17,7 @@
 import net from 'node:net';
 
 import { LINK } from './profile.mjs';
+import { trackLive } from './live.mjs';
 import { LoopbackSynDropper } from './syn-dropper.mjs';
 
 // The link starts one quantum at a time, so a hold stops it within one quantum's time.
@@ -58,6 +59,7 @@ export class ShapingProxy {
   #server = null;
   #synDropper;
   #synDropped = false;
+  #untrack = () => {};
   #dirs = { sent: new Direction('sent'), received: new Direction('received') };
   // The routes of the CONNECT authorities other than the target: `host:port` -> {host, port}. Each route shares the
   // link's budget, so a route's bytes cross the shaped link as the target's do.
@@ -94,6 +96,8 @@ export class ShapingProxy {
     this.#startedAt = performance.now();
     const port = this.#server.address().port;
     this.#synDropper = new LoopbackSynDropper(port);
+    // A running proxy registers itself, so a step that passes its cap can stop it and restore its SYN drop (live.mjs).
+    this.#untrack = trackLive('proxy', () => this.stop());
     return port;
   }
 
@@ -476,6 +480,7 @@ export class ShapingProxy {
 
   // Closes the proxy, every tunnel and every timer, so a stopped proxy holds no socket and no timer.
   async stop() {
+    this.#untrack();
     for (const timer of this.#timers) {
       clearTimeout(timer);
     }

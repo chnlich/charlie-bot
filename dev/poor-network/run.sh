@@ -2,51 +2,64 @@
 # The poor-network bench's entry command. It runs on the build host inside a synced tree, through
 # dev/remote-run/run.sh, and drives the scenarios of README.md against a trial server on the mock home.
 #
-#   dev/remote-run/run.sh dev/poor-network/run.sh --side both --out-dir <dir> --before-clone <clone>
+#   dev/remote-run/run.sh dev/poor-network/run.sh --side both --out-dir <dir> --before-rev <rev> --before-clone <clone>
+#   dev/remote-run/run.sh dev/poor-network/run.sh --side both --out-dir <dir> --before-clone <clone> \
+#     --change-patch <file>
 #   dev/remote-run/run.sh dev/poor-network/run.sh --side after --out-dir <dir>
 #
-# --side before  measures origin/main (--before-rev, default origin/main, a commit of --before-clone, which holds it);
+# --side before  measures --before-rev (default origin/main, a commit of --before-clone, which holds it);
 # --side after   measures this tree;
-# --side both    runs before, then after, back to back in one invocation. The open scenario runs both sides at one
-#                CPU rate: the after side runs at the rate the before side's reference cell derived, so the sides'
-#                numbers compare. If the before side measures the calibration
-#                reference (CALIBRATION_REFERENCE in profile.mjs) and does not reproduce the switch-during-refresh
-#                hold, it stops after before, prints its numbers, and exits 3. Any other before side runs ungated.
+# --side both    measures the before side, then the after side, back to back in one invocation.
+#                With --before-rev, the before side is that commit, measured now. Without it, the before side is the
+#                stored reference commit R (before-store.mjs): each row R holds is reused when its key matches and the
+#                A/A result marks it load-safe, and the rest are measured now. The after side is R with --change-patch
+#                applied, a patch of the change (git diff <merge-base> HEAD --binary); an empty file means no change. A
+#                patch that does not apply to R exits 2 and names --before-rev <merge-base>, which measures the change
+#                on its own base.
+#                The open scenario runs both sides at one CPU rate: the after side runs its open cells at the rate the
+#                before side's reference cell derived, or at the stored rows' rate, so the sides' numbers compare.
+#                If the before side measures the calibration reference (CALIBRATION_REFERENCE in profile.mjs) and does
+#                not reproduce the switch-during-refresh hold, it stops after before, prints its numbers, and exits 3.
+# --scenarios auto   the rows the change's files reach (scenario-map.mjs), with the default four always included. The
+#                files come from --change-patch in the stored mode, or from --change-files FILE (one path per line)
+#                with --before-rev.
 # --detach       starts the run as a transient systemd user unit and returns at once; the log is <out-dir>/pn-<id>.log.
+# --seed-only    sizes the sessions on each side the run names (bench --mode seed), writes each side's sizes to its
+#                JSON and stops: no scenario, no store update and no report. The sizing check takes minutes, so a
+#                sizing change is checked on both sides before a bench lock is taken for the measurement.
 # --scenario-repetitions NAME=N,...  gives the named scenarios their own repetition count; the rest take --repetitions.
-# --foryou-shots  after the after side's measurement, writes the For-you screenshots (switch, retry, offline reopen at
+# --foryou-shots  after the after side's measurement, writes the For-you screenshots (switch, retry and offline reopen at
 #                the three CSS sizes) into <run dir>/foryou-shots; needs the foryou scenario.
-# --seed-only    seeds the sized sessions and the For-you targets on each side, writes the turns and untrimmed bootstrap
-#                bytes each reached into the side's JSON, and stops: no scenarios and no report.
 # --seed-home DIR  the view home that the run copies as its seed (default: the shared home
 #                  ~/improve/mock-home/<version>-view-<sessions>). A run with a pinned home names it here, so a
 #                  rebuild of the shared home cannot change the run's seed; each side still checks the copy's
 #                  content hash, which the run records in seed.sha256.
 #
-# Every side holds the bench lock of lock.sh around its trial, not the builds, waiting up to 2 h for it, so two bench
-# runs on a host never measure side by side; no option chooses another lock or skips it. One hold covers one side
-# attempt; a side also ends once its JSON is 120 s old even if its bench hangs, and a retry re-queues.
-# --lock-wait SECONDS  how long each side waits for the bench lock (default 7200, the 2 h above). An improve round
-#                passes 900, its 15-minute wait.
+# The bench holds the host's bench lock one step at a time (bench.mjs, step-gate.mjs): it takes the lock for a
+# preparation stage, a probe or a measurement, gives it up after a step when another process is queued for it, and
+# takes it again behind that process. --lock-wait SECONDS is how long each take waits (default 7200; an improve round
+# passes 900). A side that cannot take the lock in time exits 75.
 # --open-conditions LIST  the open scenario's cells: any of
 #                         link,held,reset,flaps,offline,release,release-offline,replied-offline (default
 #                         link,held,reset,flaps,offline,release). The reference cell always runs, since the CPU rate
-#                is derived from it. Stored-copy rows are measured only on the after side because main has no
-#                offline-copy client.
+#                         is derived from it. Stored-copy rows are measured only on the after side because main has no
+#                         offline-copy client.
 # --open-cpu-rate RATE  every side runs the open scenario's cells at RATE instead of a rate its reference derives, so
 #                sides of separate invocations (two benches on one product) compare at one CPU speed. Each side's JSON
 #                still records the rate its own reference cell derives.
 #
 # Each side runs as the command of `scripts/release/trial.sh --serve`, so the trial starts, checks and stops the server
 # the bench measures, and proves that no process of the trial remains. The bench's own children (Chrome, the proxy, the
-# TLS front) end with the bench. The server's charlie-code backend is the scripted stub in dev/poor-network/stub.
+# TLS front) end with the bench. The server's charlie-code backend is the scripted stub in dev/poor-network/stub. The
+# trial's tree is unique to this invocation and side, so two invocations on one commit never share a tree.
 #
 # Each side's trial tree goes under TMPDIR when the caller sets it, and under /tmp otherwise, so a caller inside a
 # writable sandbox keeps the trees in its scratch.
 #
-# Exit: 0 both sides measured; 1 a measurement or build failed; 2 a precondition failed, nothing started; 3 the baseline
-# calibration did not reproduce, so the after side did not run; 4 a scenario that passed on the before side fails on the
-# after side; 75 a side's wait for the lock ran out.
+# Exit: 0 both sides measured; 1 a measurement or build failed; 2 a precondition failed, nothing started, or the change
+# does not apply to R; 3 the baseline calibration did not reproduce, so the after side did not run; 4 a scenario that
+# passed on the before side fails on the after side; 5 a segment's CPU probe failed the rate gate twice; 75 a side's
+# wait for the lock ran out.
 set -euo pipefail
 
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -54,11 +67,14 @@ readonly BENCH_DIR="$SCRIPT_DIR"
 source "$SCRIPT_DIR/lock.sh"
 # How long a side's written JSON may sit beside a bench that does not exit, before the runner ends the trial tree.
 readonly SIDE_EXIT_GRACE_SECONDS=120
+readonly RATE_GATE_EXIT=5
 
 side=both
 out_dir=
 before_clone=
-before_rev=origin/main
+before_rev=
+change_patch=
+change_files=
 repetitions=5
 scenarios=background,held,reset,stream
 open_conditions=link,held,reset,flaps,offline,release
@@ -94,7 +110,8 @@ while (($#)); do
     --out-dir) out_dir=${2:?--out-dir needs a value}; shift 2 ;;
     --before-clone) before_clone=${2:?--before-clone needs a value}; shift 2 ;;
     --before-rev) before_rev=${2:?--before-rev needs a value}; shift 2 ;;
-    --scenario-repetitions) scenario_repetitions=${2:?--scenario-repetitions needs a value}; shift 2 ;;
+    --change-patch) change_patch=${2:?--change-patch needs a value}; shift 2 ;;
+    --change-files) change_files=${2:?--change-files needs a value}; shift 2 ;;
     --repetitions) repetitions=${2:?--repetitions needs a value}; shift 2 ;;
     --scenarios) scenarios=${2:?--scenarios needs a value}; shift 2 ;;
     --open-conditions) open_conditions=${2:?--open-conditions needs a value}; shift 2 ;;
@@ -104,6 +121,7 @@ while (($#)); do
     --seed-home) seed_home=${2:?--seed-home needs a value}; shift 2 ;;
     --detach) detach=1; shift ;;
     --seed-only) seed_only=1; shift ;;
+    --scenario-repetitions) scenario_repetitions=${2:?--scenario-repetitions needs a value}; shift 2 ;;
     --foryou-shots) foryou_shots=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die 2 "unknown argument: $1" ;;
@@ -117,38 +135,24 @@ esac
 [[ -n $out_dir ]] || die 2 "--out-dir is required: the run's files go there, outside the tree"
 [[ $repetitions =~ ^[1-9][0-9]*$ ]] || die 2 "--repetitions must be a positive integer, got $repetitions"
 [[ $lock_wait =~ ^[1-9][0-9]*$ ]] || die 2 "--lock-wait must be a positive number of seconds, got $lock_wait"
-if [[ $side != after ]]; then
-  [[ -n $before_clone ]] || die 2 "--before-clone is required for --side $side"
-fi
-
 mode_args=()
 if ((seed_only)); then
   mode_args=(--mode seed)
 fi
-
-syn_drop_needed=0
-for scenario in ${scenarios//,/ }; do
-  case $scenario in
-    held|reset) syn_drop_needed=1 ;;
-    open)
-      for condition in ${open_conditions//,/ }; do
-        case $condition in
-          held|reset|flaps|release) syn_drop_needed=1 ;;
-        esac
-      done
-      ;;
-  esac
-done
-
-for tool in node cargo git openssl systemd-run flock; do
-  command -v "$tool" >/dev/null || die 2 "missing tool on this host: $tool"
-done
-if ((syn_drop_needed)); then
-  for tool in sudo iptables; do
-    command -v "$tool" >/dev/null || die 2 "blackout scenarios need $tool to drop loopback SYN packets"
-  done
-  sudo -n iptables -w -L OUTPUT -n >/dev/null 2>&1 \
-    || die 2 "blackout scenarios need noninteractive sudo access to iptables OUTPUT"
+if [[ $side != after ]]; then
+  [[ -n $before_clone ]] || die 2 "--before-clone is required for --side $side"
+fi
+# The stored mode: both sides without --before-rev. Its before side is the stored reference R and its after side is R
+# with the change's patch applied.
+mode=explicit
+if [[ $side == both && -z $before_rev ]]; then
+  mode=stored
+  [[ -n $change_patch ]] || die 2 "--side both without --before-rev measures the stored reference R and needs" \
+    "--change-patch FILE: the change as git diff <merge-base> HEAD --binary (an empty file for none)"
+  [[ -f $change_patch ]] || die 2 "--change-patch $change_patch is not a file"
+fi
+if [[ $side == before && -z $before_rev ]]; then
+  before_rev=origin/main
 fi
 
 tree=$(git -C "$BENCH_DIR" rev-parse --show-toplevel) || die 2 "$BENCH_DIR is not in a git tree"
@@ -168,16 +172,20 @@ if ((detach)); then
     mkdir -p "$TMPDIR"
     detached_env+=(--setenv="TMPDIR=$TMPDIR")
   fi
-  forwarded=(--side "$side" --out-dir "$out_dir" --before-rev "$before_rev" --repetitions "$repetitions"
+  forwarded=(--side "$side" --out-dir "$out_dir" --repetitions "$repetitions"
     --scenarios "$scenarios" --open-conditions "$open_conditions" --lock-wait "$lock_wait"
     ${open_rate_args+"${open_rate_args[@]}"})
+  [[ -n $before_rev ]] && forwarded+=(--before-rev "$before_rev")
   [[ -n $before_clone ]] && forwarded+=(--before-clone "$before_clone")
+  [[ -n $change_patch ]] && forwarded+=(--change-patch "$change_patch")
+  [[ -n $change_files ]] && forwarded+=(--change-files "$change_files")
+  [[ -n $assets_dir ]] && forwarded+=(--assets-dir "$assets_dir")
+  [[ -n $seed_home ]] && forwarded+=(--seed-home "$seed_home")
   if ((seed_only)); then
     forwarded+=(--seed-only)
   fi
-  [[ -n $assets_dir ]] && forwarded+=(--assets-dir "$assets_dir")
-  ((foryou_shots)) && forwarded+=(--foryou-shots)
   [[ -n $scenario_repetitions ]] && forwarded+=(--scenario-repetitions "$scenario_repetitions")
+  ((foryou_shots)) && forwarded+=(--foryou-shots)
   systemd-run --user --unit="pn-$run_id" --collect --working-directory="$tree" \
     --setenv=PATH="$PATH" --setenv=HOME="$HOME" \
     "${detached_env[@]}" \
@@ -194,6 +202,8 @@ if [[ -z $chrome ]]; then
 fi
 [[ -n $chrome && -x $chrome ]] || die 2 "no Chrome binary: set POOR_NETWORK_CHROME to one"
 export POOR_NETWORK_CHROME=$chrome
+chrome_version=$("$chrome" --version 2>/dev/null | head -1)
+[[ -n $chrome_version ]] || die 2 "$chrome --version printed nothing"
 
 run_dir="$out_dir/$run_id"
 mkdir -p "$run_dir"
@@ -201,43 +211,102 @@ readonly RUN_DIR=$run_dir
 export POOR_NETWORK_ASSETS=${assets_dir:-$out_dir/assets}
 mkdir -p "$POOR_NETWORK_ASSETS"
 
-# The after side is this tree. Its commit is the synced checkout's, which the remote runner makes a git commit.
+# The bench code is this tree's. The after side is this tree in the explicit mode, and R with the change in the stored
+# one.
+bench_tree=$(git -C "$tree" rev-parse 'HEAD:dev/poor-network')
 after_commit=$(git -C "$tree" rev-parse HEAD)
+after_src=$tree
 after_label="tree $(git -C "$tree" rev-parse 'HEAD^{tree}')"
 
 # The stub backend goes first on the server's PATH, so the charlie-code backend runs the scripted reply.
 export PATH="$BENCH_DIR/stub:$PATH"
 
-echo "poor-network: run $run_id side=$side chrome=$chrome"
+echo "poor-network: run $run_id side=$side mode=$mode chrome=$chrome"
 echo "poor-network: after tree $tree at $after_label"
 
-(cd "$tree/rust" && cargo build --release --locked -p charliebot-server -p charliebot-cli -p charliebot-mock-home)
-after_bin="$tree/rust/target/release/charliebot-server"
-mock_bin="$tree/rust/target/release/mock-home"
-[[ -x $after_bin && -x $mock_bin ]] || die 1 "the after build did not produce charliebot-server and mock-home"
+# The store's paths, and the stored reference R of this run when it has one.
+store_paths=$(node "$BENCH_DIR/before-store.mjs" paths)
+store_root=$(node -p "JSON.parse(process.argv[1]).root" "$store_paths")
+load_safe_file=$(node -p "JSON.parse(process.argv[1]).loadSafe" "$store_paths")
 
-before_commit=
-before_bin=
-if [[ $side != after ]]; then
-  before_commit=$(git -C "$before_clone" rev-parse --verify --quiet "$before_rev^{commit}") \
-    || die 2 "$before_rev does not name a commit in $before_clone; fetch it there first"
-  before_src="$run_dir/before-src"
-  mkdir -p "$before_src"
-  git -C "$before_clone" archive "$before_commit" | tar -x -C "$before_src"
-  echo "poor-network: before commit $before_commit from $before_clone"
-  (cd "$before_src/rust" && CARGO_TARGET_DIR="$out_dir/target-before" \
-    cargo build --release --locked -p charliebot-server -p charliebot-cli)
-  before_bin="$out_dir/target-before/release/charliebot-server"
-  [[ -x $before_bin ]] || die 1 "the before build did not produce charliebot-server"
+# The changed files: from the patch in the stored mode, or from the named list. `auto` reads them below.
+changed_files=()
+if [[ $mode == stored ]]; then
+  if [[ -s $change_patch ]]; then
+    while IFS=$'\t' read -r _added _removed path_name; do
+      changed_files+=("$path_name")
+    done < <(git apply --numstat "$change_patch")
+  fi
+elif [[ -n $change_files ]]; then
+  [[ -f $change_files ]] || die 2 "--change-files $change_files is not a file"
+  mapfile -t changed_files <"$change_files"
 fi
+if [[ $scenarios == auto ]]; then
+  [[ ${#changed_files[@]} -gt 0 || $mode == stored ]] \
+    || die 2 "--scenarios auto needs the changed files: --change-files FILE with --before-rev"
+  selection=$(node "$BENCH_DIR/scenario-map.mjs" ${changed_files[@]+"${changed_files[@]}"})
+  scenarios=$(node -p "JSON.parse(process.argv[1]).scenarios.join(',')" "$selection")
+  open_list=$(node -p "JSON.parse(process.argv[1]).openConditions.join(',')" "$selection")
+  [[ -z $open_list ]] || open_conditions=$open_list
+  echo "poor-network: --scenarios auto selected $scenarios; open conditions ${open_list:-none};" \
+    "from ${#changed_files[@]} changed file(s)"
+fi
+
+# The after tree's build. In the stored mode, R is the reference: its clone takes the change's patch.
+if [[ $mode == stored ]]; then
+  stored_rev=$(node "$BENCH_DIR/before-store.mjs" pick "$store_root" || true)
+  if [[ -n $stored_rev ]]; then
+    before_rev_resolved=$stored_rev
+  else
+    before_rev_resolved=$(git -C "$before_clone" rev-parse --verify --quiet 'origin/main^{commit}') \
+      || die 2 "origin/main does not name a commit in $before_clone; fetch it there first"
+  fi
+fi
+
+# Prepares the after tree: in the stored mode, a clone of the before clone at R, with the change applied. The rebase
+# that the stored mode asks for is a patch on R: a change that does not apply names the base to measure instead.
+prepare_after_src() {
+  local rev=$1
+  local after_repo="$run_dir/after-repo"
+  git clone -q --shared --no-checkout "$before_clone" "$after_repo"
+  git -C "$after_repo" checkout -q --detach "$rev"
+  if [[ -s $change_patch ]]; then
+    git -C "$after_repo" apply --whitespace=nowarn "$change_patch" \
+      || die 2 "the change in $change_patch does not apply to $rev; to measure the change on its own base," \
+        "run with --before-rev <merge-base of the change>"
+  fi
+  after_src=$after_repo
+  after_commit=$(git -C "$after_repo" rev-parse HEAD)
+  if [[ -s $change_patch ]]; then
+    after_label="$rev + change $(sha256sum "$change_patch" | cut -c1-12)"
+  else
+    after_label="$rev"
+  fi
+}
+
+# The stored plan of the run's rows against R: each row's decision, the stored files it reuses and the open rate they
+# ran at. $1 is the stale rule: report keeps a stale row's decision; measure measures it once R has moved to a newer
+# one.
+plan_stored_rows() {
+  node "$BENCH_DIR/before-store.mjs" plan --rev "$before_rev_resolved" --chrome "$chrome_version" \
+    --seed "$seed_hash" --tree "$bench_tree" --scenarios "$scenarios" --open-conditions "$open_csv" \
+    --root "$store_root" --loadsafe "$load_safe_file" --stale "$1"
+}
 
 # The mock home holds the view's rows that the bench's own sessions and the default cron tasks' sessions do not:
 # VIEW.rows less BENCH_SESSIONS less DEFAULT_CRON_ROWS, each one a session of the mock's active corpus, with a task spec
-# sized to the live view's rows (the view shape).
+# sized to the live view's rows (the view shape). The mock binary is the tree's own.
+(cd "$tree/rust" && cargo build --release --locked -p charliebot-mock-home)
+mock_bin="$tree/rust/target/release/mock-home"
+[[ -x $mock_bin ]] || die 1 "the build did not produce mock-home"
 mock_version=$("$mock_bin" version)
-mock_sessions=$(node -e 'import(process.argv[1]).then((profile) => process.stdout.write(String(profile.VIEW.rows - profile.BENCH_SESSIONS - profile.DEFAULT_CRON_ROWS)))' "file://$BENCH_DIR/profile.mjs")
-# A run that names the search scenario takes the search home instead: the view home's sessions plus the search view's match
-# sets (archived sessions named for each query). The default homes keep their own names and bytes.
+mock_sessions=$(node -e '
+  import(process.argv[1]).then((profile) => {
+    process.stdout.write(String(profile.VIEW.rows - profile.BENCH_SESSIONS - profile.DEFAULT_CRON_ROWS));
+  });
+' "file://$BENCH_DIR/profile.mjs")
+# A run that names the search scenario takes the search home instead: the view home's sessions plus the search view's
+# match sets (archived sessions named for each query). The default homes keep their own names and bytes.
 home_shape=view
 case ",$scenarios," in
   *,search,*) home_shape=search ;;
@@ -264,7 +333,7 @@ printf '%s  %s\n' "$seed_hash" "$seed_copy" > "$run_dir/seed.sha256"
 echo "poor-network: seed $mock_home copied to $seed_copy (content sha256 $seed_hash)"
 mock_home=$seed_copy
 
-node "$BENCH_DIR/reply.mjs" "$tree" "$run_dir/replies"
+node "$BENCH_DIR/reply.mjs" "$run_dir/replies"
 
 # A bench-owned home for the trial: its config names a stand-in endpoint the stub never calls, and holds no credential,
 # so the trial copies no live key and reaches no live model. The trial reads only this option's api_base; it writes its
@@ -281,11 +350,24 @@ backends:
       api_base: http://127.0.0.1:9/v1
 YAML
 
-# Runs one side as the command of a serve trial. $1 side, $2 trial script, $3 commit, $4 server binary.
+# Builds the server of a tree at a commit: $1 the source directory, $2 its target directory name under out_dir.
+build_server() {
+  local source_dir=$1 target=$2
+  (cd "$source_dir/rust" && CARGO_TARGET_DIR="$out_dir/$target" \
+    cargo build --release --locked -p charliebot-server -p charliebot-cli)
+  [[ -x $out_dir/$target/release/charliebot-server ]] \
+    || die 1 "the build of $source_dir did not produce charliebot-server"
+  printf '%s\n' "$out_dir/$target/release/charliebot-server"
+}
+
+# Runs one side as the command of a serve trial. $1 side, $2 trial script, $3 commit, $4 server binary, $5 the rows
+# the side measures (its scenarios and open conditions, as the bench reads them).
 run_side() {
   local name=$1 trial_script=$2 commit=$3 server_bin=$4 trial_root trial_status
-  # The host bench lock serializes sides, and the trial removes this tree before the next side starts.
-  trial_root="${TMPDIR:-/tmp}/pn-$name"
+  local side_scenarios=$5 side_conditions=${6:-$open_conditions}
+  # Each invocation and side owns its trial tree: the tree outlives a yield of the lock, so a second invocation on the
+  # same commit must not find it.
+  trial_root="${TMPDIR:-/tmp}/pn-$run_id-$name"
   mkdir -p "$trial_root"
   local label=$commit
   [[ $name == after ]] && label=$after_label
@@ -299,31 +381,32 @@ run_side() {
   [[ $(seed_content_hash "$mock_home") == "$seed_hash" ]] \
     || die 1 "the seed copy $mock_home changed since the run recorded $seed_hash; the $name side did not start"
   # The after side of one invocation checks its newest-row targets against the before side's JSON.
-  local expect_args=() shots_args=() reps_args=()
+  local expect_args=() reps_args=() shots_args=()
   [[ -z $scenario_repetitions ]] || reps_args=(--scenario-repetitions "$scenario_repetitions")
-  if [[ $name == after && $side == both && ",$scenarios," == *",open,"* ]]; then
-    expect_args=(--expect-targets "$run_dir/before.json")
-  fi
   if [[ $name == after ]] && ((foryou_shots)); then
     shots_args=(--foryou-shots-dir "$run_dir/foryou-shots")
   fi
-  # The bench lock (lock.sh) covers this side's trial, so no other bench run on the host measures beside it.
-  echo "poor-network: $name side queues for the bench lock"
+  if [[ $name == after && $mode == explicit && $side == both && $seed_only == 0 \
+    && ",$side_scenarios," == *",open,"* ]]; then
+    expect_args=(--expect-targets "$run_dir/before.json")
+  fi
+  # The trial starts and stops the server; the bench takes the lock one step at a time inside it (bench.mjs).
   set +e
-  bench_lock_within "$lock_wait" systemd-run --user --scope -p MemoryMax=16G -p MemorySwapMax=0 \
-    --unit="pn-$run_id-$name" "$trial_script" --serve --in-caller-scope --tree-root "$trial_root" --seed-home "$mock_home" \
+  systemd-run --user --scope -p MemoryMax=16G -p MemorySwapMax=0 \
+    --unit="pn-$run_id-$name" "$trial_script" --serve --in-caller-scope \
+    --tree-root "$trial_root" --seed-home "$mock_home" \
     "$commit" "$server_bin" -- \
     node "$BENCH_DIR/bench.mjs" --side "$name" --out "$run_dir/$name.json" \
       --mock-home "$mock_home" --mock-home-bin "$mock_bin" --reply-dir "$run_dir/replies" \
       --assets "$POOR_NETWORK_ASSETS" --commit "$label" \
-      --repetitions "$repetitions" --scenarios "$scenarios" --open-conditions "$open_conditions" \
+      --repetitions "$repetitions" --scenarios "$side_scenarios" --open-conditions "$side_conditions" \
+      --lock-wait "$lock_wait" \
       ${open_rate_args+"${open_rate_args[@]}"} ${expect_args+"${expect_args[@]}"} \
-      ${mode_args+"${mode_args[@]}"} ${shots_args+"${shots_args[@]}"} ${reps_args+"${reps_args[@]}"} &
+      ${mode_args+"${mode_args[@]}"} ${reps_args+"${reps_args[@]}"} ${shots_args+"${shots_args[@]}"} &
   trial_pid=$!
-  # The side JSON is the bench's last artifact, and a bench that has written it can still sit alive and hold the trial,
-  # and so the lock (this line's known defect). Once the JSON is SIDE_EXIT_GRACE_SECONDS old and the trial still runs,
-  # the runner ends the trial tree itself: the lock is released at that point, and the summary is reprinted from the
-  # JSON afterwards, so the kill loses nothing but the hang.
+  # The side JSON is the bench's last artifact, and a bench that has written it can still sit alive and hold the trial.
+  # Once the JSON is SIDE_EXIT_GRACE_SECONDS old and the trial still runs, the runner ends the trial tree itself, so the
+  # kill loses nothing but the hang.
   local json_seen_at="" ended_tree=0
   while :; do
     kill -0 "$trial_pid" 2>/dev/null || break
@@ -331,7 +414,8 @@ run_side() {
       [[ -n $json_seen_at ]] || json_seen_at=$(date +%s)
       if (( $(date +%s) - json_seen_at >= SIDE_EXIT_GRACE_SECONDS )) \
         && systemctl --user is-active --quiet "pn-$run_id-$name.scope"; then
-        echo "poor-network: the $name side's JSON is ${SIDE_EXIT_GRACE_SECONDS}s old and its bench is still running; ending the trial tree"
+        echo "poor-network: the $name side's JSON is ${SIDE_EXIT_GRACE_SECONDS}s old and its bench is still running;" \
+          "ending the trial tree"
         systemctl --user stop "pn-$run_id-$name.scope"
         ended_tree=1
       fi
@@ -345,60 +429,159 @@ run_side() {
     trial_status=0
   fi
   set -e
-  # The timeout keeps flock's own exit code, so a caller that retries can tell it from a failed measurement and take
-  # its place at the back of the queue again. One lock hold covers one side attempt; run.sh never retries inside it.
-  ((trial_status != BENCH_LOCK_TIMEOUT_EXIT)) || die "$BENCH_LOCK_TIMEOUT_EXIT" "the $name side did not get the bench lock within $lock_wait s"
+  if ((trial_status == BENCH_LOCK_TIMEOUT_EXIT)); then
+    die "$BENCH_LOCK_TIMEOUT_EXIT" "the $name side did not get the bench lock within $lock_wait s"
+  fi
   echo "poor-network: $name side exit $trial_status"
   [[ -f "$run_dir/$name.json" ]] || die 1 "the $name side wrote no JSON"
+  if ((trial_status == RATE_GATE_EXIT)); then
+    die "$RATE_GATE_EXIT" "the $name side's CPU probe failed the rate gate twice; see $run_dir/$name.json"
+  fi
   return "$trial_status"
 }
 
-if [[ $side == before || $side == both ]]; then
+# The before side: the commit `before_rev_resolved` (stored mode) or `before_rev` (explicit mode), measured for the rows
+# named below. Its server is built from that commit; its trial script is that commit's own.
+measure_before() {
+  local rev=$1 side_scenarios=$2 side_conditions=$3
+  local before_commit before_bin before_src before_repo
+  before_commit=$(git -C "$before_clone" rev-parse --verify --quiet "$rev^{commit}") \
+    || die 2 "$rev does not name a commit in $before_clone; fetch it there first"
+  before_src="$run_dir/before-src"
+  mkdir -p "$before_src"
+  git -C "$before_clone" archive "$before_commit" | tar -x -C "$before_src"
+  echo "poor-network: before commit $before_commit from $before_clone"
+  before_bin=$(build_server "$before_src" target-before)
   # The trial script is the measured commit's own. The clone at --before-clone may be on another commit, so a scratch
   # clone at the commit holds the script; its origin/main is the commit, which the trial's preflight reads.
   before_repo="$run_dir/before-repo"
   git clone -q --shared --no-checkout "$before_clone" "$before_repo"
   git -C "$before_repo" update-ref refs/remotes/origin/main "$before_commit"
   git -C "$before_repo" checkout -q --detach "$before_commit"
-  (cd "$before_repo" && run_side before "$before_repo/scripts/release/trial.sh" "$before_commit" "$before_bin") \
+  (cd "$before_repo" && run_side before "$before_repo/scripts/release/trial.sh" "$before_commit" "$before_bin" \
+    "$side_scenarios" "$side_conditions") \
     || die "$?" "the before side failed; see $run_dir/before.json"
-  # The gate reads one before side: the reference commit the plan's condition is checked on. A fix's own before side no
-  # longer holds the condition (the earlier fixes removed the bursts it lived on), so only a run whose before side is
-  # the reference stops on it.
-  calibration_reference=$(node -e 'import(process.argv[1]).then((profile) => process.stdout.write(String(profile.CALIBRATION_REFERENCE)))' "file://$BENCH_DIR/profile.mjs")
-  if [[ $side == both && $before_commit == "$calibration_reference" ]]; then
-    calibrated=$(node -e 'const s = require(process.argv[1]); process.stdout.write(s.calibration ? String(s.calibration.reproduced) : "none")' "$run_dir/before.json")
-    if [[ $calibrated != true ]]; then
-      node "$BENCH_DIR/report.mjs" "$run_dir/before.json"
-      die 3 "the reference baseline $calibration_reference did not reproduce the switch-during-refresh hold; the proxy does not model the link. The after side did not run."
-    fi
+}
+
+# The bench's rows: the scenarios and open conditions the run selected. Stored mode splits them into the rows it
+# measures on the before side and the rows it reuses.
+stored_files=()
+before_scenarios=
+before_conditions=
+stored_mode_before=0
+if [[ $mode == stored ]]; then
+  stored_mode_before=1
+  open_csv=
+  if [[ ",$scenarios," == *,open,* ]]; then
+    open_csv=$open_conditions
   fi
-  # One CPU rate per invocation: unless --open-cpu-rate pins one, the after side's open cells run at the rate the
-  # before side's reference cell derived, so the two sides' numbers compare at one CPU speed. bench.mjs records the
-  # rate it ran at beside the one its own reference would give. The before side has measured (its failure would have stopped above), so its
-  # JSON names the rate whenever the open scenario was selected.
-  if [[ $side == both && ",$scenarios," == *",open,"* && ${#open_rate_args[@]} -eq 0 ]]; then
-    open_cpu_rate=$(node -e '
-      const side = require(process.argv[1]);
-      const rate = side.open?.cpu?.rate;
-      if (typeof rate !== "number" || !(rate >= 1)) {
-        throw new Error(`before.json open.cpu.rate is ${JSON.stringify(rate)}`);
-      }
-      process.stdout.write(String(rate));
-    ' "$run_dir/before.json") || die 1 "could not read the open CPU rate to share from $run_dir/before.json"
-    open_rate_args=(--open-cpu-rate "$open_cpu_rate")
-    echo "poor-network: the after side runs the open scenario at the before side's CPU rate $open_cpu_rate"
+  plan=$(plan_stored_rows report)
+  stale=$(node -p "Object.values(JSON.parse(process.argv[1]).decisions).includes('stale')" "$plan")
+  if [[ $stale == true ]]; then
+    # A stored row that failed its target on R: the run takes the newest origin/main as its reference and measures
+    # every row there, so R's failing row is replaced by the newest main's measurement.
+    before_rev_resolved=$(git -C "$before_clone" rev-parse --verify --quiet 'origin/main^{commit}')
+    echo "poor-network: a stored row failed its target on the stored R;" \
+      "this run takes origin/main $before_rev_resolved as R"
+    plan=$(plan_stored_rows measure)
+  fi
+  echo "poor-network: stored plan for R $before_rev_resolved: $plan"
+  while IFS= read -r stored_file; do
+    [[ -z $stored_file ]] || stored_files+=("$stored_file")
+  done < <(node -p "JSON.parse(process.argv[1]).reuse.join('\\n')" "$plan")
+  stored_open_rate=$(node -p "JSON.parse(process.argv[1]).openRate ?? ''" "$plan")
+  measured_rows=$(node -p "Object.entries(JSON.parse(process.argv[1]).decisions)
+    .filter(([, d]) => d === 'measure').map(([r]) => r).join(',')" "$plan")
+  for row in ${measured_rows//,/ }; do
+    case $row in
+      open:reference) ;;
+      open:*) before_conditions+="${before_conditions:+,}${row#open:}" ;;
+      *) before_scenarios+="${before_scenarios:+,}$row" ;;
+    esac
+  done
+  # The search row is measured on every run, so both sides measure it whatever the store holds.
+  if [[ ",$scenarios," == *,search,* ]]; then
+    before_scenarios+="${before_scenarios:+,}search"
+  fi
+  # The open group is measured whole (before-store.mjs planRows), so the reference cell runs with the conditions.
+  if [[ -n $before_conditions ]]; then
+    before_scenarios+="${before_scenarios:+,}open"
+  fi
+  if [[ -n $stored_open_rate && ${#open_rate_args[@]} -eq 0 ]]; then
+    open_rate_args=(--open-cpu-rate "$stored_open_rate")
+    echo "poor-network: the open cells run at the stored rows' CPU rate $stored_open_rate"
+  fi
+fi
+
+if [[ $mode == stored ]]; then
+  prepare_after_src "$before_rev_resolved"
+fi
+after_bin=$(build_server "$after_src" target-after)
+
+
+# Shares the open CPU rate that the before side derived: the after side runs its open cells at that rate, so the two
+# sides' numbers compare at one CPU speed. The before side has measured (a failure would have stopped above), so its
+# JSON names the rate whenever the open scenario was selected.
+share_open_rate() {
+  local open_cpu_rate
+  open_cpu_rate=$(node -e '
+    const side = require(process.argv[1]);
+    const rate = side.open?.cpu?.rate;
+    if (typeof rate !== "number" || !(rate >= 1)) {
+      throw new Error(`before.json open.cpu.rate is ${JSON.stringify(rate)}`);
+    }
+    process.stdout.write(String(rate));
+  ' "$run_dir/before.json") || die 1 "could not read the open CPU rate to share from $run_dir/before.json"
+  open_rate_args=(--open-cpu-rate "$open_cpu_rate")
+  echo "poor-network: the after side runs the open scenario at the before side's CPU rate $open_cpu_rate"
+}
+
+if [[ $side == before || $side == both ]]; then
+  if ((seed_only)); then
+    # The sizing check measures and stores no row, so its before side sits at R whatever the store holds.
+    measure_before "${before_rev_resolved:-$before_rev}" "$scenarios" "$open_conditions"
+  elif [[ $mode == explicit || $side == before ]]; then
+    measure_before "$before_rev" "$scenarios" "$open_conditions"
+  elif [[ -n $before_scenarios || -n $before_conditions ]]; then
+    measure_before "$before_rev_resolved" "$before_scenarios" "$before_conditions"
+  fi
+  if [[ $side == both && ",$scenarios," == *",open,"* && ${#open_rate_args[@]} -eq 0 ]] && ((!seed_only)); then
+    share_open_rate
+  fi
+fi
+
+if [[ $stored_mode_before == 1 ]]; then
+  # The before side the report reads: the rows measured now, with the stored rows merged in, each row's source named.
+  measured_arg=()
+  [[ -f $run_dir/before.json ]] && measured_arg=(--measured "$run_dir/before.json")
+  stored_arg=()
+  ((${#stored_files[@]} == 0)) || stored_arg=(--stored "$(IFS=,; echo "${stored_files[*]}")")
+  if [[ $side == both ]]; then
+    template_arg=(--template "$run_dir/after.json")
   fi
 fi
 
 if [[ $side == after || $side == both ]]; then
-  (cd "$tree" && run_side after "$tree/scripts/release/trial.sh" "$after_commit" "$after_bin") \
+  (cd "$after_src" && run_side after "$after_src/scripts/release/trial.sh" "$after_commit" "$after_bin" \
+    "$scenarios" "$open_conditions") \
     || die "$?" "the after side failed; see $run_dir/after.json"
 fi
 
 if ((seed_only)); then
   echo "poor-network: seed-only sizes in $run_dir"
   exit 0
+fi
+
+if [[ $stored_mode_before == 1 ]]; then
+  node "$BENCH_DIR/before-store.mjs" assemble --out "$run_dir/before-assembled.json" \
+    ${measured_arg+"${measured_arg[@]}"} ${template_arg+"${template_arg[@]}"} ${stored_arg+"${stored_arg[@]}"}
+  # The rows measured now are stored when they are load-safe; the stored ones are already there.
+  if [[ -n ${measured_rows:-} && -f $run_dir/before.json ]]; then
+    node "$BENCH_DIR/before-store.mjs" save --rev "$before_rev_resolved" --chrome "$chrome_version" \
+      --seed "$seed_hash" --tree "$bench_tree" --rows "$measured_rows" \
+      --side "$run_dir/before.json" --root "$store_root" --loadsafe "$load_safe_file" >/dev/null
+  fi
+  mv "$run_dir/before-assembled.json" "$run_dir/before.json"
 fi
 
 echo "poor-network: JSON in $run_dir"

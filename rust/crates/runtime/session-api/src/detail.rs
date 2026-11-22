@@ -14,6 +14,7 @@ use axum::extract::{Path as AxumPath, State};
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use charliebot_agents::pool_display::session_detail_shown;
+use charliebot_cli_common::fields::LIMIT;
 use charliebot_compat::compression::{accepts_gzip, gzip_level_one};
 use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_compat::routing::get_only;
@@ -708,7 +709,7 @@ async fn session_events(
     Ok(before) => before,
     Err(response) => return *response,
   };
-  let raw_limit = match query.parse_int("limit", Some(40), None, None) {
+  let raw_limit = match query.parse_int(LIMIT, Some(40), None, None) {
     Ok(limit) => limit,
     Err(response) => return *response,
   };
@@ -1003,7 +1004,7 @@ async fn session_runs(
   request: Request<Body>,
 ) -> Response {
   let query = Query::new(&request);
-  let limit = match query.parse_int("limit", Some(100), Some(1), Some(500)) {
+  let limit = match query.parse_int(LIMIT, Some(100), Some(1), Some(500)) {
     Ok(limit) => limit as usize,
     Err(response) => return *response,
   };

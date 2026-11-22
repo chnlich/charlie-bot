@@ -9,10 +9,13 @@ mod release_lock;
 mod world;
 
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
+use std::process::{Child, Stdio};
 use std::sync::Mutex;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use charliebot_shell_harness::{self as harness, Env, Run, Sandbox};
@@ -737,6 +740,25 @@ impl ServeWorld {
     harness::run(&mut trial)
   }
 
+  /// One serve trial started without waiting for it: its port range is `port` alone, and `server` is its server binary,
+  /// with the CLI beside it. The caller reads the output once the trial ends.
+  fn spawn_serve_on_port(&self, tree_root: &Path, port: u16, server: &Path, command: &[&str]) -> Child {
+    let mut trial = harness::command("bash", &self.env);
+    trial
+      .env("TRIAL_PORT_MIN", port.to_string())
+      .env("TRIAL_PORT_MAX", port.to_string())
+      .arg(self.repo.join("scripts/release/trial.sh"))
+      .args(["--serve", "--in-caller-scope", "--tree-root"])
+      .arg(tree_root)
+      .arg(&self.commit)
+      .arg(server)
+      .arg("--")
+      .args(command)
+      .stdout(Stdio::piped())
+      .stderr(Stdio::piped());
+    harness::spawn(&mut trial)
+  }
+
   /// One serve trial without --tree-root: its tree goes under this world's TMPDIR.
   fn serve_default_tree(&self, command: &[&str]) -> Run {
     let _serial = TRIAL_RUNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -856,6 +878,70 @@ fn test_trial_serve_stops_the_tmux_server_it_started_and_removes_its_tree() {
     fs::read_to_string(&pid_file).expect("the tmux server pid").trim().parse().expect("a numeric tmux server pid");
   assert!(!process_is_running(tmux_pid), "the trial left tmux server {tmux_pid} running: {}", run.describe());
   assert_eq!(fs::read_dir(&tree_root).expect("the tree root").count(), 0, "{}", run.describe());
+}
+
+/// A serve trial whose chosen port another process takes after the trial picks it. The stand-in server logs
+/// `server_ready` and never binds, so the test takes the port once that line is in the trial's log, and answers the
+/// readiness probe with 200 as a foreign server would. The side fails at start, naming the port and the holder (this
+/// test process), and no command runs.
+#[test]
+#[ignore = "integration"]
+fn test_trial_serve_fails_the_side_when_another_process_holds_its_port() {
+  let _serial = TRIAL_RUNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+  let world = ServeWorld::new();
+  let tree_root = world.sandbox.dir("tree-root");
+  let stub_release = world.sandbox.dir("stub-release");
+  symlink(harness::built_binary("serve-stub"), stub_release.join("charliebot-server")).expect("the stub link");
+  symlink(world.release.join("charliebot"), stub_release.join("charliebot")).expect("the CLI link");
+  let port = TcpListener::bind(("127.0.0.1", 0)).expect("a free port").local_addr().expect("the port").port();
+  let marker = world.sandbox.root().join("command-ran");
+  let touch = format!("touch '{}'", marker.display());
+  let trial =
+    world.spawn_serve_on_port(&tree_root, port, &stub_release.join("charliebot-server"), &["sh", "-c", touch.as_str()]);
+
+  let server_log = tree_root.join(format!("trial-{}", &world.commit[..12])).join("server-1.log");
+  wait_for_server_ready(&server_log);
+  let holder = TcpListener::bind(("127.0.0.1", port)).expect("the test takes the port the trial picked");
+  thread::spawn(move || answer_probes(holder));
+
+  let output = trial.wait_with_output().expect("the trial ends");
+  let run = Run {
+    code: output.status.code().unwrap_or(-1),
+    stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+    stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+  };
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(run.stdout.contains("FAIL serve Startup"), "{}", run.describe());
+  assert!(run.stdout.contains(&format!("CAUSE serve: port {port} is held by another process")), "{}", run.describe());
+  assert!(
+    run.stdout.contains(&format!("pid {}", std::process::id())),
+    "the holder is this process: {}",
+    run.describe()
+  );
+  assert!(!run.stdout.contains("SERVE PASS Startup"), "{}", run.describe());
+  assert!(!marker.exists(), "a command ran on a side whose port another process holds: {}", run.describe());
+  assert_eq!(fs::read_dir(&tree_root).expect("the tree root").count(), 0, "{}", run.describe());
+}
+
+/// Waits until the trial's server log holds the stand-in's readiness line, which the trial reads before it checks the
+/// port.
+fn wait_for_server_ready(log: &Path) {
+  let deadline = Instant::now() + Duration::from_secs(60);
+  while !fs::read_to_string(log).is_ok_and(|text| text.contains(" server_ready ")) {
+    assert!(Instant::now() < deadline, "the trial's server log never logged server_ready: {}", log.display());
+    thread::sleep(Duration::from_millis(10));
+  }
+}
+
+/// Answers every connection with 200, as a foreign server answers the trial's readiness probe.
+fn answer_probes(listener: TcpListener) {
+  for stream in listener.incoming() {
+    let mut stream = stream.expect("a probe connection");
+    let mut request = [0u8; 1024];
+    let read = stream.read(&mut request).expect("the probe request");
+    assert!(read > 0, "the probe closed before it sent a request");
+    stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").expect("the probe answer");
+  }
 }
 
 /// Whether process `pid` runs, as /proc reports it: a zombie has ended.

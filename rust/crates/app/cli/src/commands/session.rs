@@ -17,6 +17,7 @@ use crate::commands::session_trigger;
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::client;
 use charliebot_cli_common::exit::CliExit;
+use charliebot_cli_common::fields::{LIMIT, SESSION_ID};
 use charliebot_cli_common::files;
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::resolve;
@@ -330,7 +331,7 @@ fn create(args: &CreateArgs) -> Result<(), CliExit> {
 
 fn tree(args: &TreeArgs) -> Result<(), CliExit> {
   let mut params = vec![
-    (session_routes::SESSION_TREE_LIMIT_QUERY.to_string(), args.limit.to_string()),
+    (LIMIT.to_string(), args.limit.to_string()),
     (session_routes::SESSION_TREE_INCLUDE_ARCHIVED_QUERY.to_string(), args.include_archived.to_string()),
   ];
   if let Some(root) = &args.root {
@@ -440,7 +441,7 @@ fn cancel(args: &CancelArgs) -> Result<(), CliExit> {
   let mut run_rows: Map<String, Value> = Map::new();
   let mut cursor: Option<String> = None;
   while run_ids.iter().any(|run_id| !run_rows.contains_key(*run_id)) {
-    let mut params = vec![("limit".to_string(), SESSION_PAGE_LIMIT_MAX.to_string())];
+    let mut params = vec![(LIMIT.to_string(), SESSION_PAGE_LIMIT_MAX.to_string())];
     if let Some(cursor) = &cursor {
       params.push(("cursor".to_string(), cursor.clone()));
     }
@@ -508,7 +509,7 @@ fn send(args: &SendArgs) -> Result<(), CliExit> {
   let result = client::post(
     task_routes::SESSION_MESSAGE_PATH,
     json!({
-      "session_id": session_id,
+      (SESSION_ID): session_id,
       (task_routes::SESSION_MESSAGE_TARGET_SESSION_ID_FIELD): args.target,
       "content": content,
     }),
@@ -652,7 +653,7 @@ fn dialog(args: &DialogArgs) -> Result<(), CliExit> {
   while has_more && turn_budget.is_none_or(|budget| (separators as i64) < budget) {
     let page = client::get(
       &route::fill(session_routes::SESSION_EVENTS_PATH, &[session_id.as_str()]),
-      Some(vec![("before".to_string(), cursor.to_string()), ("limit".to_string(), DIALOG_PAGE_LIMIT.to_string())]),
+      Some(vec![("before".to_string(), cursor.to_string()), (LIMIT.to_string(), DIALOG_PAGE_LIMIT.to_string())]),
     )?;
     let messages = field(&page, "messages")?.as_array().cloned().unwrap_or_default();
     separators += count_separators(&messages);

@@ -333,7 +333,7 @@ backends:
       model: bench/stub
       api_base: http://127.0.0.1:9/v1
 YAML
-node "$SCRIPT_DIR/../poor-network/reply.mjs" "$tree" "$run_dir/replies" >/dev/null
+node "$SCRIPT_DIR/../poor-network/reply.mjs" "$run_dir/replies" >/dev/null
 
 mock_bin="$after_target/release/mock-home"
 "$mock_bin" generate "$run_dir/homes/before-mock" --sessions "$mock_sessions" --seed 1 >/dev/null \

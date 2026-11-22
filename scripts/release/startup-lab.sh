@@ -317,7 +317,8 @@ cmd_fidelity() {
 # The run-queue wait is the time its threads were runnable but waited for a CPU, so it measures host contention.
 cmd_serve_snapshot() {
   local run=$1 commit=$2 pid=${CHARLIEBOT_SERVE_PID:?trial.sh exports CHARLIEBOT_SERVE_PID}
-  # trial.sh's readiness poll accepts any server on its port, so wait for this server's own server_ready line.
+  # trial.sh starts this command only after its readiness check found this server on the port. The wait here reads the
+  # server's own server_ready line, which the snapshot's counters follow.
   local log="$LAB/trials/trial-${commit:0:12}/server-1.log"
   until grep -qE '[[:space:]]server_ready[[:space:]]' "$log"; do
     kill -0 "$pid" 2>/dev/null || fail "the trial server $pid exited before server_ready"

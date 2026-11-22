@@ -9,6 +9,7 @@ use axum::body::Body;
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{Request, StatusCode};
 use axum::response::Response;
+use charliebot_cli_common::fields::SESSION_ID;
 use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, RequestBody, text_field};
 use charliebot_compat::responses;
 use charliebot_compat::routing::{get_only, post_only};
@@ -139,7 +140,7 @@ async fn plan_close(State(state): State<PlanRoutes>, request: Request<Body>) -> 
 
 /// The fields of `PlanPresentRequest`, in the model's order. The base fields default to `None`.
 const PRESENT_FIELDS: &[Field] = &[
-  Field::required("session_id", FieldType::String),
+  Field::required(SESSION_ID, FieldType::String),
   Field::required("file", FieldType::String),
   Field::required("title", FieldType::String),
   Field::optional("base_repo", FieldType::NullableString),
@@ -151,7 +152,7 @@ const PRESENT_BODY: BodyModel = BodyModel::required(PRESENT_FIELDS).forbid_extra
 /// The fields of `PlanAmendRequest`, in the model's order. `trigger` takes one of `PLAN_AMEND_TRIGGERS`, and
 /// `PLAN_AMEND_TRIGGER_DEFAULT` when it is absent. `note` is required, and the base fields default to `None`.
 const AMEND_FIELDS: &[Field] = &[
-  Field::required("session_id", FieldType::String),
+  Field::required(SESSION_ID, FieldType::String),
   Field::required("file", FieldType::String),
   Field::optional("plan_id", FieldType::NullableInteger),
   Field::optional("trigger", FieldType::Literal(&PLAN_AMEND_TRIGGERS)),
@@ -176,7 +177,7 @@ impl PresentRequest {
       unreachable!("a required model validates a body to its fields")
     };
     Ok(Self {
-      session_id: text_field(&fields, "session_id"),
+      session_id: text_field(&fields, SESSION_ID),
       file: text_field(&fields, "file"),
       title: text_field(&fields, "title"),
       base: build_base(&mut fields),
@@ -196,7 +197,7 @@ impl AmendRequest {
     let Some(Value::Object(mut fields)) = body.validate(&AMEND_BODY)? else {
       unreachable!("a required model validates a body to its fields")
     };
-    let session_id = text_field(&fields, "session_id");
+    let session_id = text_field(&fields, SESSION_ID);
     let file = text_field(&fields, "file");
     let plan_id = match fields.remove("plan_id") {
       None | Some(Value::Null) => None,
@@ -226,12 +227,12 @@ fn build_base(fields: &mut Map<String, Value>) -> Value {
 
 /// The fields of `PlanApproveRequest`, in the model's order. `plan_id` defaults to `None`.
 const APPROVE_FIELDS: &[Field] =
-  &[Field::required("session_id", FieldType::String), Field::optional("plan_id", FieldType::NullableInteger)];
+  &[Field::required(SESSION_ID, FieldType::String), Field::optional("plan_id", FieldType::NullableInteger)];
 const APPROVE_BODY: BodyModel = BodyModel::required(APPROVE_FIELDS).forbid_extra();
 
 /// The fields of `PlanCloseRequest`, in the model's order. `close_as` takes one of `PLAN_CLOSE_MODES`.
 const CLOSE_FIELDS: &[Field] = &[
-  Field::required("session_id", FieldType::String),
+  Field::required(SESSION_ID, FieldType::String),
   Field::required("plan_id", FieldType::Integer),
   Field::required("close_as", FieldType::Literal(&PLAN_CLOSE_MODES)),
 ];
@@ -252,7 +253,7 @@ impl ApproveRequest {
       None | Some(Value::Null) => None,
       Some(plan_id) => Some(plan_id),
     };
-    Ok(Self { session_id: text_field(&fields, "session_id"), plan_id })
+    Ok(Self { session_id: text_field(&fields, SESSION_ID), plan_id })
   }
 }
 
@@ -268,7 +269,7 @@ impl CloseRequest {
     let Some(Value::Object(mut fields)) = body.validate(&CLOSE_BODY)? else {
       unreachable!("a required model validates a body to its fields")
     };
-    let session_id = text_field(&fields, "session_id");
+    let session_id = text_field(&fields, SESSION_ID);
     let plan_id = fields.remove("plan_id").unwrap_or_else(|| unreachable!("a validated plan_id is present"));
     Ok(Self { session_id, plan_id, close_as: text_field(&fields, "close_as") })
   }

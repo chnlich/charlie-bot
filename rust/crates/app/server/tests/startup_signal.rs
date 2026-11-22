@@ -301,8 +301,8 @@ fn startup_seeds_the_missing_default_cron_files() {
   assert!(elapsed < BOOT_STOP_TIMEOUT, "the restarted server took {elapsed:?} to stop");
 }
 
-/// A port another listener holds: the bind fails after `server_ready`, so the server logs `bind_failed` as an error line
-/// that carries the address, and exits with the config status.
+/// A port another listener holds: the bind fails before `server_ready` is logged, so the server logs `bind_failed` as
+/// an error line that carries the address, logs no `server_ready`, and exits with the config status.
 #[test]
 #[ignore = "integration"]
 fn a_failed_bind_logs_an_error_line_and_exits_with_the_config_status() {
@@ -313,6 +313,10 @@ fn a_failed_bind_logs_an_error_line_and_exits_with_the_config_status() {
 
   let (mut server, receiver) = start_server(temporary.path(), &home, false, Cpus::All);
   let mut lines = wait_for_event(&mut server, &receiver, "bind_failed", Duration::from_secs(30));
+  assert!(
+    !lines.iter().any(|line| is_event(line, "server_ready")),
+    "server_ready is logged only after the bind succeeds: {lines:?}"
+  );
   let line = lines.last().expect("the bind failure line");
   let row = logline::parse(line).expect("the bind failure line is a log line");
   assert_eq!(row.event, "bind_failed");

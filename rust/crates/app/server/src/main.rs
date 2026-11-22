@@ -3,13 +3,13 @@
 //! Startup: replace the process environment with the agent environment before any thread starts, build the registry
 //! from the composition root, load and check the config, take the home writer fence (another holder exits 3 after
 //! logging `server_startup_refused_home_writer_fence`), capture the build identity, initialize the home, log
-//! `charliebot_home_ready`, run the lifespan's startup steps, log `server_ready`, then bind the configured host and
-//! port. SIGINT and SIGTERM are installed before startup. A boot stop waits for the current safe point, stops started
-//! services, closes shared clients, releases the fence and logs `charliebot_shutdown` with `boot=true`. After
+//! `charliebot_home_ready`, run the lifespan's startup steps, bind the configured host and port, then log
+//! `server_ready`. SIGINT and SIGTERM are installed before startup. A boot stop waits for the current safe point, stops
+//! started services, closes shared clients, releases the fence and logs `charliebot_shutdown` with `boot=true`. After
 //! `server_ready`, a stop signal drains requests for up to five seconds, stops services, closes shared clients,
 //! releases the fence and logs `charliebot_shutdown`. SIGTERM then restores its default disposition and raises SIGTERM
-//! without let-go steps. SIGINT runs let-go steps after the log and returns 0. A failed bind runs let-go steps after
-//! the log and returns 1.
+//! without let-go steps. SIGINT runs let-go steps after the log and returns 0. A failed bind logs `bind_failed` with no
+//! `server_ready`, runs let-go steps after its shutdown line and returns 1.
 //!
 //! Each startup phase ends one `startup_segment` line (`charliebot_registry::startup_timing`), and the segments of one
 //! start sum to its `server_ready` `ready_in_ms`.
@@ -329,7 +329,16 @@ async fn run(repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode 
   if !startup_stop.mark_ready() {
     return finish_boot_stop(Some(&mut lifespan), Some(&mut writer_fence), signal_receiver).await;
   }
-  // `server_ready` is logged after the ready-phase services start.
+  // The listener binds before `server_ready` is logged, so the line means the configured port answers. A failed bind
+  // logs `bind_failed` and stops without `server_ready`.
+  let listener = match bind(&cfg.server.host, cfg.server.port).await {
+    Ok(listener) => listener,
+    Err(message) => {
+      tracing::error!(error = %message, "bind_failed");
+      return finish_stop(&mut lifespan, &mut writer_fence, Instant::now(), StopReason::BindFailure).await;
+    }
+  };
+  // `server_ready` is logged after the ready-phase services start and after the bind.
   // The host_auth poller's 300 ms startup tail keeps its first state read after this line while preserving the stop
   // check: a boot stopped before readiness does not emit `server_ready`.
   // The boot's storage reads ride on the same line, so a slow boot states in one place what its disk wait cost.
@@ -341,14 +350,6 @@ async fn run(repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode 
     }
     None => tracing::info!(ready_in_ms, "{}", event_types::SERVER_READY_EVENT),
   }
-
-  let listener = match bind(&cfg.server.host, cfg.server.port).await {
-    Ok(listener) => listener,
-    Err(message) => {
-      tracing::error!(error = %message, "bind_failed");
-      return finish_stop(&mut lifespan, &mut writer_fence, Instant::now(), StopReason::BindFailure).await;
-    }
-  };
 
   let service = axum::ServiceExt::<axum::extract::Request>::into_make_service_with_connect_info::<ConnectionInfo>(
     app::build(state),

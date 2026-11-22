@@ -139,8 +139,9 @@ When a ruling's exceptions reveal its criterion, state that criterion; ask the u
 Keep each line that changes what a capable model does. Lead with the action, and retain its purpose and needed
 mechanism.
 Keep receipts, verification notes, and secondary effects in session reports and run directories.
-`rust/crates/features/memory/src/cli/proposal_check.rs` enforces 120 display columns per line and 12 lines per entry
-body.
+An entry body runs as long as its distinct durable facts require, judged by the admission test alone.
+`rust/crates/features/memory/src/cli/proposal_check.rs` enforces 120 display columns per line.
+`charliebot memory lint` and `charliebot memory proposal commit` report body line counts as advisory records.
 A measured figure lives in its canonical source (run dir, canon table, ticket); an entry states
 the rule and points there.
 Environment composition and version facts (package pins, toolchain and interpreter versions,

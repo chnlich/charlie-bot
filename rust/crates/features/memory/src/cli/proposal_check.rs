@@ -10,7 +10,6 @@ use regex::Regex;
 use super::store::{BODY_LINE_COLUMN_LIMIT, display_width, entry_body};
 
 const SENTENCE_WORD_LIMIT: usize = 25;
-const BODY_LINE_LIMIT: usize = 12;
 const NEGATION_ADVICE: &str = "state the standing reality or the action to take, and keep the fact it carried";
 
 /// Negation and contrast words, whole words, case-insensitive.
@@ -23,9 +22,8 @@ static NEGATION: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// The writing-rule violations of `text` over the same file's base version. A unit the base version holds verbatim
-/// escapes the sentence checks. The column limit binds every body line. `skip_body_line_limit` waives the line limit
-/// for a pure deletion.
-pub(super) fn prose_violations(text: &str, base_text: Option<&str>, skip_body_line_limit: bool) -> Vec<String> {
+/// escapes the sentence checks. The column limit binds every body line.
+pub(super) fn prose_violations(text: &str, base_text: Option<&str>) -> Vec<String> {
   let body = entry_body(text);
   let base_units = base_units(base_text);
   let mut violations = Vec::new();
@@ -50,9 +48,6 @@ pub(super) fn prose_violations(text: &str, base_text: Option<&str>, skip_body_li
       let preview: String = line.chars().take(60).collect();
       violations.push(format!("body line over {BODY_LINE_COLUMN_LIMIT} columns ({width}): {preview}"));
     }
-  }
-  if !skip_body_line_limit && body.len() > BODY_LINE_LIMIT {
-    violations.push(format!("body has {} lines (limit {BODY_LINE_LIMIT})", body.len()));
   }
   violations
 }

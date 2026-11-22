@@ -34,7 +34,7 @@ pub(super) fn lint_store(root: &Path) -> Result<(Vec<String>, Vec<String>), CliE
       Err(error) => return Err(CliExit::error(error.to_string())),
     }
   }
-  let warnings = width_warnings(root, &entry_files)?;
+  let warnings = entry_warnings(root, &entry_files)?;
   let staging_dir = root.join(STAGING_DIRNAME);
   if staging_dir.is_dir() {
     for path in sorted_markdown_files(&staging_dir)? {
@@ -65,18 +65,26 @@ pub(super) fn sorted_markdown_files(directory: &Path) -> Result<Vec<PathBuf>, Cl
   crate::memory::sorted_markdown_files(directory).map_err(|error| CliExit::error(format!("{error:#}")))
 }
 
-fn width_warnings(root: &Path, files: &[PathBuf]) -> Result<Vec<String>, CliExit> {
+fn entry_warnings(root: &Path, files: &[PathBuf]) -> Result<Vec<String>, CliExit> {
   let mut warnings = Vec::new();
+  let mut longest = None;
   for path in files {
     let text = read_text(path)?;
     let relative = path.strip_prefix(root).expect("entry files are under their store root").to_string_lossy();
-    for line in entry_body(&text) {
+    let body = entry_body(&text);
+    if longest.as_ref().is_none_or(|(count, _)| body.len() > *count) {
+      longest = Some((body.len(), relative.to_string()));
+    }
+    for line in body {
       let width = display_width(line);
       if width > BODY_LINE_COLUMN_LIMIT {
         let preview: String = line.chars().take(60).collect();
         warnings.push(format!("{relative}: body line over {BODY_LINE_COLUMN_LIMIT} columns ({width}): {preview}"));
       }
     }
+  }
+  if let Some((count, relative)) = longest {
+    warnings.push(format!("body_lines: {} entries, max {count} ({relative})", files.len()));
   }
   Ok(warnings)
 }

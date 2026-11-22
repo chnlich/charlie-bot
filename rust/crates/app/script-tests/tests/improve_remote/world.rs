@@ -41,14 +41,20 @@ pub const SESSION_ID: &str = "11111111-2222-3333-4444-555555555555";
 pub const PARENT_ID: &str = "99999999-8888-7777-6666-555555555555";
 /// The gateway token of a gateway member: the server's `ANTHROPIC_AUTH_TOKEN`.
 pub const GATEWAY_TOKEN: &str = "synthetic-gateway-token";
-/// The review option's key, which the profile home's credentials file holds under the review credential.
+/// The review backend's key, which the profile home's credentials file holds under the review credential.
 pub const REVIEW_KEY: &str = "synthetic-review-key";
-/// The review option's credential name, as `config.yaml` and `credentials.yaml` name it.
-pub const REVIEW_CREDENTIAL: &str = "aigw_charliebot_agents";
-/// The review option's model, API base and context window, as the profile home's `config.yaml` holds them.
-pub const REVIEW_MODEL: &str = "kimi-k3.1-pro";
+/// The review backend's credential name, as the resolve answer and `credentials.yaml` name it.
+pub const REVIEW_CREDENTIAL: &str = "synthetic-review-credential";
+/// The review option that `backends.calls.improve_review` resolves to: its id, model, API base and context window.
+pub const SYNTHETIC_REVIEW_ID: &str = "synthetic-review";
+pub const REVIEW_MODEL: &str = "synthetic-review-model";
 pub const REVIEW_API_BASE: &str = "https://aigw.example";
-pub const REVIEW_CONTEXT_WINDOW: &str = "409600";
+pub const REVIEW_CONTEXT_WINDOW: u64 = 409_600;
+/// The review option types of the gateway key and of the subscription account, whose logins the launcher reads.
+pub const GATEWAY_REVIEW_TYPE: &str = "cc-anthropic-compatible";
+pub const SUBSCRIPTION_REVIEW_TYPE: &str = "cc-claude";
+/// The access token of a subscription review's account: the `accessToken` of its login file.
+pub const REVIEW_LOGIN_TOKEN: &str = "synthetic-review-access-token";
 /// The access token of a subscription member: the `accessToken` of its login file.
 pub const LOGIN_TOKEN: &str = "synthetic-subscription-access-token";
 /// The refresh token of that login. It stays on the launching host, so no round may receive it.
@@ -151,17 +157,14 @@ fi
 printf '%s\n' "$@" >"$FAKE_CLAUDE_ARGV"
 # The record keeps every key out of the evidence: a real claude holds its environment in memory only, so the record
 # carries each key's digest in its place, and `unset` for a key that the environment does not hold.
-env | grep -v -e '^ANTHROPIC_AUTH_TOKEN=' -e '^CHARLIE_CODE_API_KEY=' -e '^CLAUDE_CODE_OAUTH_TOKEN=' >"$FAKE_CLAUDE_ENV"
-for name in ANTHROPIC_AUTH_TOKEN CHARLIE_CODE_API_KEY CLAUDE_CODE_OAUTH_TOKEN; do
+env | grep -v -e '^ANTHROPIC_AUTH_TOKEN=' -e '^CLAUDE_CODE_OAUTH_TOKEN=' >"$FAKE_CLAUDE_ENV"
+for name in ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN; do
   if [[ -n ${!name+x} ]]; then
     printf '%s_SHA256=%s\n' "$name" "$(printf '%s' "${!name}" | sha256sum | cut -d' ' -f1)"
   else
     printf '%s_SHA256=unset\n' "$name"
   fi
 done >>"$FAKE_CLAUDE_ENV"
-# A tool shell is a child of the member: its record shows whether the review key reaches it.
-printf 'TOOL_SHELL_CHARLIE_CODE_API_KEY=%s\n' \
-  "$(bash -c 'if [[ -n ${CHARLIE_CODE_API_KEY+x} ]]; then echo set; else echo unset; fi')" >>"$FAKE_CLAUDE_ENV"
 if [[ -n ${FAKE_CLAUDE_STDIN:-} ]]; then
   cat >"$FAKE_CLAUDE_STDIN"
 fi
@@ -174,10 +177,11 @@ if [[ -n ${FAKE_CLAUDE_WAIT_FOR:-} ]]; then
     sleep 0.1
   done
 fi
-# The round's review: the command the round's agent runs, with no model and no API base flag.
+# The round's review: the command the round's agent runs, from the review's scratch directory, with the launch's review
+# directory and no model, option or key.
 if [[ -n ${FAKE_CLAUDE_REVIEW_TASK:-} ]]; then
-  charlie-code --json --task-file "$FAKE_CLAUDE_REVIEW_TASK" \
-    --session-dir "$HOME/improve/$IMPROVE_DIRECTION/clc-sessions"
+  (cd "$FAKE_CLAUDE_REVIEW_DIR" && charliebot backend run --launch "$IMPROVE_LAUNCH_DIR/review" \
+    --task-file "$FAKE_CLAUDE_REVIEW_TASK")
 fi
 # One write of the round: the gh command a test sets, run in the round's environment, so the round's write checks
 # see it as the member's own call does.
@@ -188,19 +192,12 @@ fi
 exit "${FAKE_CLAUDE_EXIT:-0}"
 "#;
 
-/// Fake codex: record the `CODEX_HOME` it runs with, whether its environment holds the review key, its arguments, and
-/// the `auth.json` it finds there with that file's mode, outside the round's boundary.
-const CODEX: &str = r#"# Fake codex: record the CODEX_HOME it runs with, the arguments it receives and its login file.
+/// Fake codex: record the `CODEX_HOME` it runs with, its environment, its arguments, and the `auth.json` it finds there
+/// with that file's mode, outside the round's boundary.
+const CODEX: &str = r#"# Fake codex: record the CODEX_HOME it runs with, the environment and arguments it receives and its login file.
 printf '%s\n' "$0" >>"$FAKE_CLI_RUNS"
 printf 'CODEX_HOME=%s\n' "${CODEX_HOME-unset}" >"$FAKE_CODEX_ENV"
-if [[ -n ${CHARLIE_CODE_API_KEY+x} ]]; then
-  printf 'CHARLIE_CODE_API_KEY=set\n' >>"$FAKE_CODEX_ENV"
-else
-  printf 'CHARLIE_CODE_API_KEY=unset\n' >>"$FAKE_CODEX_ENV"
-fi
-# A tool shell is a child of the member: its record shows whether the review key reaches it.
-printf 'TOOL_SHELL_CHARLIE_CODE_API_KEY=%s\n' \
-  "$(bash -c 'if [[ -n ${CHARLIE_CODE_API_KEY+x} ]]; then echo set; else echo unset; fi')" >>"$FAKE_CODEX_ENV"
+env | grep -v -e '^CODEX_HOME=' >>"$FAKE_CODEX_ENV"
 printf '%s\n' "$@" >"$FAKE_CODEX_ARGV"
 if [[ -n ${CODEX_HOME-} && -f $CODEX_HOME/auth.json ]]; then
   cp -- "$CODEX_HOME/auth.json" "$FAKE_CODEX_AUTH"
@@ -276,15 +273,49 @@ fn sha256_file(path: &Path) -> String {
   format!("{:x}", Sha256::digest(bytes))
 }
 
-/// Fake charlie-code: record the arguments and environment it receives. The key goes in as its digest.
-const CHARLIE_CODE: &str = r#"# Fake charlie-code: record the arguments and environment it receives.
-printf '%s\n' "$@" >"$FAKE_CHARLIE_CODE_ARGV"
-env | grep -v -e '^CHARLIE_CODE_API_KEY=' >"$FAKE_CHARLIE_CODE_ENV"
-if [[ -n ${CHARLIE_CODE_API_KEY+x} ]]; then
-  printf 'CHARLIE_CODE_API_KEY_SHA256=%s\n' "$(printf '%s' "$CHARLIE_CODE_API_KEY" | sha256sum | cut -d' ' -f1)" \
-    >>"$FAKE_CHARLIE_CODE_ENV"
-else
-  printf 'CHARLIE_CODE_API_KEY_SHA256=unset\n' >>"$FAKE_CHARLIE_CODE_ENV"
+/// The launching host's `charliebot`: `backend resolve --call improve_review` prints the answer that FAKE_RESOLVE_ANSWER
+/// names. Without that file the call class is unset, and the command fails as the CLI fails for an unset key.
+const RESOLVE_CHARLIEBOT: &str = r#"# Fake charliebot on the launching host: answer the review resolve from its fixture, or refuse as an unset call class.
+if [[ ${1-} == backend && ${2-} == resolve && ${3-} == --call && ${4-} == improve_review ]]; then
+  if [[ -r $FAKE_RESOLVE_ANSWER ]]; then
+    cat -- "$FAKE_RESOLVE_ANSWER"
+    exit 0
+  fi
+  printf 'backend resolve: backends.calls.improve_review is not set in config.yaml\n' >&2
+  exit 1
+fi
+printf 'the launcher ran an unexpected charliebot command: %s\n' "$*" >&2
+exit 1
+"#;
+
+/// The improve host's `charliebot`: a `backend run` records its arguments, its working directory, the digest of each
+/// variable it holds and, with `--launch`, the mode and the digest of each value of the launch's login. Then it waits for
+/// FAKE_REVIEW_RELEASE when the test sets one, and records its process id first. Any other command exits 0, as the
+/// round's hooks expect. The digests keep every value out of the records.
+const REVIEW_CHARLIEBOT: &str = r#"# Fake charliebot on the improve host: record a backend run, then hold it when the test asks.
+if [[ ${1-} != backend || ${2-} != run ]]; then
+  exit 0
+fi
+printf '%s\n' "$@" >"$FAKE_REVIEW_ARGV"
+pwd >"$FAKE_REVIEW_CWD"
+while IFS= read -r name; do
+  printf '%s=%s\n' "$name" "$(printf '%s' "${!name}" | sha256sum | cut -d' ' -f1)"
+done < <(compgen -e) >"$FAKE_REVIEW_ENV"
+if [[ -n ${FAKE_REVIEW_LOGIN:-} ]]; then
+  {
+    printf 'mode=%s\n' "$(stat -c %a -- "$4/login")"
+    while IFS='=' read -r name value; do
+      printf '%s=%s\n' "$name" "$(printf '%s' "$value" | sha256sum | cut -d' ' -f1)"
+    done <"$4/login"
+  } >"$FAKE_REVIEW_LOGIN"
+fi
+if [[ -n ${FAKE_REVIEW_RELEASE:-} ]]; then
+  printf '%s\n' "$$" >"$FAKE_REVIEW_PID"
+  : >"$FAKE_REVIEW_STARTED"
+  for _ in $(seq 1 600); do
+    [[ -e $FAKE_REVIEW_RELEASE ]] && break
+    sleep 0.05
+  done
 fi
 exit 0
 "#;
@@ -499,9 +530,14 @@ pub struct World {
   pub claude_inflight: PathBuf,
   /// Where the fake claude copies its standard input when a test asks for it, inside the round's boundary.
   pub claude_stdin: PathBuf,
-  /// Where the fake charlie-code writes its arguments and environment, inside the round's boundary.
-  pub charlie_code_argv: PathBuf,
-  pub charlie_code_env: PathBuf,
+  /// Where the improve host's fake `charliebot backend run` writes its arguments, its directory and each variable's
+  /// digest, inside the round's boundary.
+  pub review_argv: PathBuf,
+  pub review_cwd: PathBuf,
+  pub review_env: PathBuf,
+  /// The answer that the launching host's fake `backend resolve --call improve_review` prints. The file's absence
+  /// makes the call class unset.
+  pub resolve_answer: PathBuf,
   /// Where the fake codex writes its `CODEX_HOME` and its arguments: this host's records, outside the round's boundary.
   pub codex_env: PathBuf,
   pub codex_argv: PathBuf,
@@ -535,15 +571,9 @@ impl World {
     let sandbox = Sandbox::new();
     let repo = sandbox.dir("repo");
     let scripts = sandbox.dir("repo/dev/improve");
-    for name in [
-      "remote-launch.sh",
-      "remote-runner.sh",
-      "review-charlie-code.sh",
-      "inflight-files.sh",
-      "clone-check.sh",
-      "member_kinds.txt",
-      "gh-shim.sh",
-    ] {
+    for name in
+      ["remote-launch.sh", "remote-runner.sh", "inflight-files.sh", "clone-check.sh", "member_kinds.txt", "gh-shim.sh"]
+    {
       harness::copy_file(&harness::repo_root().join("dev/improve").join(name), &scripts.join(name));
     }
     // The runner installs the round's gh shim and its scanner from the commit's objects, and its clone check requires
@@ -580,6 +610,7 @@ impl World {
 
     sandbox.stub("gh", GH);
     sandbox.stub("ssh", SSH);
+    sandbox.stub("charliebot", RESOLVE_CHARLIEBOT);
 
     let instructions = sandbox.root().join("harness_instructions.md");
     fs::write(&instructions, INSTRUCTIONS).expect("the instructions file");
@@ -600,16 +631,6 @@ impl World {
     .expect("the cron task file");
     fs::write(profile_home.join("skills_leak_patterns.local.txt"), "# local patterns\nfictionalmarker\n")
       .expect("the leak pattern file");
-    // The review option as this host's config.yaml lists it: a list item whose fields sit four spaces in.
-    fs::write(
-      profile_home.join("config.yaml"),
-      format!(
-        "backends:\n  options:\n  - api_base: {REVIEW_API_BASE}\n    context_window: {REVIEW_CONTEXT_WINDOW}\n    \
-         credential: {REVIEW_CREDENTIAL}\n    id: claude-code-kimi-k3.1-pro\n    model: {REVIEW_MODEL}\n    \
-         type: cc-anthropic-compatible\n  - effort: high\n    id: claude-fable-5\n    model: claude-fable-5-1\n"
-      ),
-    )
-    .expect("the profile home's config.yaml");
     // A section before the review credential, so a test that reads the first api_key line reads the wrong key.
     fs::write(
       profile_home.join("credentials.yaml"),
@@ -645,18 +666,12 @@ impl World {
     let vendor_root = sandbox.dir("vendor");
     let curl_log = sandbox.root().join("curl.log");
     let cli_runs = sandbox.root().join("cli-runs.log");
-    for (name, body) in [
-      ("curl", CURL),
-      ("charlie-code", CHARLIE_CODE),
-      ("systemd-run", SYSTEMD_RUN),
-      ("systemctl", SYSTEMCTL),
-      ("cargo", CARGO),
-    ] {
+    for (name, body) in [("curl", CURL), ("systemd-run", SYSTEMD_RUN), ("systemctl", SYSTEMCTL), ("cargo", CARGO)] {
       write_executable(&remote_bin.join(name), format!("#!/usr/bin/env bash\n{body}"));
     }
     // The round tools of this commit are already built, so the runner skips its build for them.
     let runner_bin = sandbox.dir("remote/improve/runner/bin");
-    for (name, body) in [("charliebot", "exit 0\n"), ("improve-sandbox", SANDBOX), ("mock-home", MOCK_HOME)] {
+    for (name, body) in [("charliebot", REVIEW_CHARLIEBOT), ("improve-sandbox", SANDBOX), ("mock-home", MOCK_HOME)] {
       write_executable(&runner_bin.join(format!("{name}-{commit}")), format!("#!/usr/bin/env bash\n{body}"));
     }
 
@@ -668,8 +683,10 @@ impl World {
       claude_env: evidence.join("claude-env.txt"),
       claude_inflight: evidence.join("claude-inflight.txt"),
       claude_stdin: evidence.join("claude-stdin.txt"),
-      charlie_code_argv: evidence.join("charlie-code-argv.txt"),
-      charlie_code_env: evidence.join("charlie-code-env.txt"),
+      review_argv: evidence.join("review-argv.txt"),
+      review_cwd: evidence.join("review-cwd.txt"),
+      review_env: evidence.join("review-env.txt"),
+      resolve_answer: sandbox.root().join("resolve-answer.json"),
       codex_env: sandbox.root().join("codex-env.txt"),
       codex_argv: sandbox.root().join("codex-argv.txt"),
       codex_auth: sandbox.root().join("codex-auth.json"),
@@ -695,7 +712,36 @@ impl World {
     // The vendor publishes the defaults that the launcher's CLIs report, so a round installs them as the host would.
     world.publish_member_cli("claude", LOCAL_CLAUDE_VERSION, LOCAL_CLAUDE_LINE);
     world.publish_member_cli("codex", LOCAL_CODEX_VERSION, LOCAL_CODEX_LINE);
+    world.write_review_answer(GATEWAY_REVIEW_TYPE, 0);
     world
+  }
+
+  /// Write the answer that `backends.calls.improve_review` resolves to, for a review option of `option_type`, as the server
+  /// prints it: the option's record with no key. A subscription option also names its account directory, and that
+  /// directory's login file carries `REVIEW_LOGIN_TOKEN`, expiring at `expires_at_ms` (milliseconds since the epoch).
+  pub fn write_review_answer(&self, option_type: &str, expires_at_ms: i64) {
+    let mut option = serde_json::json!({"id": SYNTHETIC_REVIEW_ID, "type": option_type, "model": REVIEW_MODEL});
+    let mut answer = serde_json::json!({});
+    if option_type == GATEWAY_REVIEW_TYPE {
+      option["api_base"] = REVIEW_API_BASE.into();
+      option["context_window"] = REVIEW_CONTEXT_WINDOW.into();
+      option["credential"] = REVIEW_CREDENTIAL.into();
+    }
+    answer["option"] = option;
+    if option_type == SUBSCRIPTION_REVIEW_TYPE {
+      let account = self.sandbox.dir("login/review-account");
+      let login = serde_json::json!({
+        "claudeAiOauth": {
+          "accessToken": REVIEW_LOGIN_TOKEN,
+          "refreshToken": LOGIN_REFRESH_TOKEN,
+          "expiresAt": expires_at_ms,
+          "scopes": ["user:inference"],
+        }
+      });
+      fs::write(account.join(".credentials.json"), login.to_string()).expect("the review account's login file");
+      answer["claude_config_dir"] = account.display().to_string().into();
+    }
+    fs::write(&self.resolve_answer, answer.to_string()).expect("the resolve answer");
   }
 
   /// Publish one member CLI version on the fake vendor, as the vendor publishes it. Codex: the package asset of its
@@ -838,8 +884,10 @@ impl World {
     env.insert("FAKE_CODEX_AUTH".to_string(), self.codex_auth.display().to_string());
     env.insert("FAKE_CODEX_AUTH_MODE".to_string(), self.codex_auth_mode.display().to_string());
     env.insert("IMPROVE_TOKEN_MIN_SECONDS".to_string(), TOKEN_MIN_SECONDS.to_string());
-    env.insert("FAKE_CHARLIE_CODE_ARGV".to_string(), self.charlie_code_argv.display().to_string());
-    env.insert("FAKE_CHARLIE_CODE_ENV".to_string(), self.charlie_code_env.display().to_string());
+    env.insert("FAKE_RESOLVE_ANSWER".to_string(), self.resolve_answer.display().to_string());
+    env.insert("FAKE_REVIEW_ARGV".to_string(), self.review_argv.display().to_string());
+    env.insert("FAKE_REVIEW_CWD".to_string(), self.review_cwd.display().to_string());
+    env.insert("FAKE_REVIEW_ENV".to_string(), self.review_env.display().to_string());
     env.insert("FAKE_SYSTEMCTL_LOG".to_string(), self.systemctl_log.display().to_string());
     env.insert("FAKE_SYSTEMD_RUN_LOG".to_string(), self.systemd_run_log.display().to_string());
     env.insert("FAKE_SCOPE_STOPPED".to_string(), self.scope_stopped.display().to_string());
@@ -936,17 +984,23 @@ impl World {
     record_environment(&self.claude_env)
   }
 
-  /// Whether the fake charlie-code ran at all.
-  pub fn charlie_code_ran(&self) -> bool {
-    self.charlie_code_argv.exists()
+  /// Whether the improve host's fake `charliebot backend run` ran at all.
+  pub fn review_ran(&self) -> bool {
+    self.review_argv.exists()
   }
 
-  pub fn charlie_code_arguments_received(&self) -> Vec<String> {
-    record_lines(&self.charlie_code_argv)
+  pub fn review_arguments_received(&self) -> Vec<String> {
+    record_lines(&self.review_argv)
   }
 
-  pub fn charlie_code_environment(&self) -> Env {
-    record_environment(&self.charlie_code_env)
+  /// The working directory that the review ran in.
+  pub fn review_directory_received(&self) -> String {
+    fs::read_to_string(&self.review_cwd).expect("the fake review recorded its directory").trim_end().to_string()
+  }
+
+  /// The digest of each variable that the review's environment holds, by name. A value is never in the record.
+  pub fn review_environment(&self) -> Env {
+    record_environment(&self.review_env)
   }
 
   /// Whether the fake codex ran at all.
@@ -1016,13 +1070,14 @@ impl World {
     PathBuf::from(format!("/tmp/improve-{}/codex-home", self.direction))
   }
 
-  /// A launch directory the runner reads, created as the launcher's payload creates it: the member kind list and the
-  /// clone check that the payload carries sit beside the runner.
+  /// A launch directory the runner reads, created as the launcher's payload creates it: the member kind list, the clone
+  /// check and the review backend's answer sit in it.
   pub fn stage_launch(&self, launch_id: &str) -> PathBuf {
     let launch = self.remote_home.join("improve/launch").join(launch_id);
-    fs::create_dir_all(&launch).expect("the launch directory");
+    fs::create_dir_all(launch.join("review")).expect("the launch's review directory");
     harness::copy_file(&self.repo.join("dev/improve/member_kinds.txt"), &launch.join("member_kinds.txt"));
     harness::copy_file(&self.repo.join("dev/improve/clone-check.sh"), &launch.join("clone-check.sh"));
+    harness::copy_file(&self.resolve_answer, &launch.join("review/option.json"));
     launch
   }
 

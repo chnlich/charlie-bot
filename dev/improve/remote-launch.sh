@@ -17,8 +17,9 @@
 #   - for claude, the instructions file that --append-system-prompt-file names (codex carries its instructions in its
 #     arguments);
 #   - the agent binary's `--version` output, which names the member CLI version that the round runs on the host;
-#   - the review option's credential name, model and API base in $CHARLIEBOT_HOME/config.yaml, and that
-#     credential's api_key in $CHARLIEBOT_HOME/credentials.yaml;
+#   - the review backend that `backends.calls.improve_review` selects, as `charliebot backend resolve` answers it,
+#     and its login: a gateway option's api_key in $CHARLIEBOT_HOME/credentials.yaml, a subscription account's access
+#     token, or a codex login in ~/.codex/auth.json;
 #   - the member's login: the gateway token in the environment, or a subscription member's access token in
 #     $CLAUDE_CONFIG_DIR/.credentials.json, or a codex member's login in ~/.codex/auth.json;
 #   - the leak pattern file $CHARLIEBOT_HOME/skills_leak_patterns.local.txt;
@@ -33,14 +34,17 @@
 # work that blocks its checkout of origin/main; 5 the previous round of this direction still runs; 6 the round's
 # direction cannot be read; 7 a round dependency is missing, and stderr names it; 8 the member's login has less
 # access-token life than a round needs, and stderr names the login and its minutes left. Codes 3 to 8 start no agent
-# and no scope, and codes 7 and 8 send nothing to the host. A code 7 for the member CLI means this host's `--version`
-# output names no version; the install and its check are the runner's.
+# and no scope, and codes 7 and 8 send nothing to the host. Code 7 also covers the review backend: an unresolved
+# `backends.calls.improve_review`, a missing key or login, or a login with too little life. The review never exits 8,
+# because the server reads 8 as a member's short token and swaps the member. A code 7 for a member or review CLI means
+# this host's `--version` output names no version; the install and its check are the runner's.
 #
 # The member's login is forwarded for one round: a subscription member sends its access token, the one the Claude CLI
 # or Codex reads, and the refresh token stays on this host. The token reaches the host on ssh's standard input only, so
 # no token value appears in any process command line or in an input file. The runner writes it into the launch's
 # member-credential file (mode 600), which the runner removes when the round ends. CHARLIEBOT_RUN_TOKEN stays here:
-# the remote host has no server that it could call.
+# the remote host has no server that it could call. The review backend's login travels the same way, and the runner
+# writes it into the launch's review directory for the review's own process; the round's environment never holds it.
 set -euo pipefail
 
 readonly STDERR_PREFIX='improve launch:'
@@ -53,9 +57,6 @@ readonly EVIDENCE_COPY_SECONDS=${IMPROVE_EVIDENCE_COPY_SECONDS:-60}
 # carries the round's prompt, and the remote command drops what it does not read. Only the main run passes that
 # standard input on to the remote agent.
 readonly SSH=(ssh -T -o BatchMode=yes -o ConnectTimeout=10)
-# The review option: the backend option whose model, API base and credential the round's review uses.
-# This script is the only place that names it.
-readonly REVIEW_OPTION='claude-code-kimi-k3.1-pro'
 
 fail() {
   local code=$1
@@ -162,33 +163,6 @@ copy_evidence() {
   fi
 }
 
-# The review option's fields from config.yaml, one `name<TAB>value` line each for the names in `names`. The options
-# are list items: an item starts at a `  - ` line and its fields sit four spaces in. A top-level key or a two-space key
-# ends the item before it.
-review_option_fields() {
-  awk -v id="$REVIEW_OPTION" -v names='model api_base credential' '
-    function take(text,   key, value) {
-      if (current == 0 || !match(text, /^[A-Za-z_]+:/)) return
-      key = substr(text, 1, RLENGTH - 1)
-      value = substr(text, RLENGTH + 1)
-      sub(/^[ \t]+/, "", value)
-      sub(/[ \t]+#.*$/, "", value)
-      field[current, key] = value
-    }
-    BEGIN { wanted_count = split(names, wanted, " ") }
-    /^  - / { items++; current = items; take(substr($0, 5)); next }
-    /^    / { take(substr($0, 5)); next }
-    /^[^ ]/ || /^  [^ ]/ { current = 0 }
-    END {
-      for (item = 1; item <= items; item++) {
-        if (field[item, "id"] != id) continue
-        for (i = 1; i <= wanted_count; i++)
-          if ((item, wanted[i]) in field) print wanted[i] "\t" field[item, wanted[i]]
-      }
-    }
-  ' "$PROFILE_HOME/config.yaml"
-}
-
 # The api_key under one top-level section of a credentials file, found by the section's name.
 section_api_key() {
   awk -v section="$2" '
@@ -197,12 +171,65 @@ section_api_key() {
   ' "$1"
 }
 
-# Exit 8 when a subscription login's access token lives fewer seconds than a round needs. The first argument is the
-# token's remaining life in seconds, the second names the login file. The message gives whole minutes and no token.
+# The version a member CLI reports for `--version`, from the binary on this host: claude prints `X.Y.Z (Claude Code)`
+# and codex prints `codex-cli X.Y.Z`. The binary gets /dev/null as standard input, because the round's prompt is on that
+# one. Sets cli_version_result; exits 7 when the binary fails or names no version.
+cli_version_of() {
+  local kind=$1 binary=$2 output line version_pattern
+  case $kind in
+    claude) version_pattern='^([0-9]+\.[0-9]+\.[0-9]+) \(Claude Code\)$' ;;
+    codex) version_pattern='^codex-cli ([0-9]+\.[0-9]+\.[0-9]+)$' ;;
+    *) fail 7 "the member kind '$kind' has no version format in this launcher" ;;
+  esac
+  output=$("$binary" --version </dev/null) \
+    || fail 7 "cannot run $binary --version on this host, so the round's $kind CLI version is unknown"
+  line=${output%%$'\n'*}
+  [[ $line =~ $version_pattern ]] || fail 7 "$binary --version names no version: '$line'"
+  cli_version_result=${BASH_REMATCH[1]}
+}
+
+# The Codex login file as a round forwards it: the four fields the CLI reads, with an empty refresh token, so the refresh
+# token stays on this host. Sets codex_record to that JSON and codex_seconds_left to the access token's remaining life.
+read_codex_login() {
+  local login=$1 expiry
+  [[ -f $login ]] || fail 7 "the Codex login is missing: $login"
+  codex_record=$(jq -ce '
+    if ([.auth_mode, .last_refresh, .tokens.access_token, .tokens.id_token, .tokens.account_id]
+        | all(type == "string" and length > 0))
+    then {auth_mode, last_refresh,
+          tokens: {access_token: .tokens.access_token, id_token: .tokens.id_token,
+                   account_id: .tokens.account_id, refresh_token: ""}}
+    else error("the login lacks a field") end' "$login" 2>/dev/null) \
+    || fail 7 "the Codex login is not a complete auth.json: $login"
+  expiry=$(jq -r '.tokens.access_token | split(".")[1] | @base64d | fromjson | .exp' "$login" 2>/dev/null) \
+    || expiry=
+  [[ $expiry =~ ^[0-9]+$ ]] || fail 7 "the Codex access token names no numeric exp: $login"
+  codex_seconds_left=$(( expiry - $(date +%s) ))
+}
+
+# A subscription login file of a Claude account: its access token and the token's remaining life in seconds. Sets
+# subscription_token and subscription_seconds_left; exits 7 when the file names no token or no whole-number expiry.
+read_subscription_login() {
+  local login=$1 fields expires_ms
+  [[ -f $login ]] || fail 7 "the Claude login is missing: $login"
+  fields=$(jq -r '
+    .claudeAiOauth
+    | select((.accessToken | type) == "string" and (.accessToken | length) > 0 and (.expiresAt | type) == "number")
+    | [.accessToken, (.expiresAt | tostring)] | @tsv' "$login" 2>/dev/null) \
+    || fail 7 "the Claude login is not readable JSON: $login"
+  [[ -n $fields ]] || fail 7 "the Claude login names no access token or no numeric expiresAt: $login"
+  subscription_token=${fields%%$'\t'*}
+  expires_ms=${fields#*$'\t'}
+  [[ $expires_ms =~ ^[0-9]+$ ]] || fail 7 "the Claude login names no whole-number expiresAt: $login"
+  subscription_seconds_left=$(( expires_ms / 1000 - $(date +%s) ))
+}
+
+# Exit with `code` when a login's access token lives fewer seconds than a round needs. The arguments are the seconds left,
+# the login file, the exit code and the login's name. The message gives whole minutes and no token.
 check_token_life() {
-  local seconds_left=$1 login_file=$2
+  local seconds_left=$1 login_file=$2 code=$3 name=$4
   if (( seconds_left < TOKEN_MIN_SECONDS )); then
-    fail 8 "token-short: the $kind login in $login_file has $(( seconds_left > 0 ? seconds_left / 60 : 0 )) min of access-token" \
+    fail "$code" "token-short: the $name login in $login_file has $(( seconds_left > 0 ? seconds_left / 60 : 0 )) min of access-token" \
       "life left; a round needs $(( TOKEN_MIN_SECONDS / 60 )) min. No round started."
   fi
 }
@@ -236,20 +263,10 @@ if [[ $kind == claude ]]; then
 fi
 
 # ---------- 1a. The member CLI version ----------
-# The round runs the version of this member CLI that this host runs: the agent binary's own `--version` output. claude
-# prints `X.Y.Z (Claude Code)` and codex prints `codex-cli X.Y.Z`. The runner installs that version on the improve host
-# and runs no other CLI there. The binary gets /dev/null as standard input, because the round's prompt is on this one.
-case $kind in
-  claude) version_pattern='^([0-9]+\.[0-9]+\.[0-9]+) \(Claude Code\)$' ;;
-  codex) version_pattern='^codex-cli ([0-9]+\.[0-9]+\.[0-9]+)$' ;;
-  *) fail 7 "the member kind '$kind' has no version format in this launcher" ;;
-esac
-cli_output=$("$agent_binary" --version </dev/null) \
-  || fail 7 "cannot run $agent_binary --version on this host, so the round's member CLI version is unknown"
-cli_line=${cli_output%%$'\n'*}
-[[ $cli_line =~ $version_pattern ]] \
-  || fail 7 "$agent_binary --version names no version: '$cli_line'"
-member_version=${BASH_REMATCH[1]}
+# The round runs the version of this member CLI that this host runs: the agent binary's own `--version` output. The
+# runner installs that version on the improve host and runs no other CLI there.
+cli_version_of "$kind" "$agent_binary"
+member_version=$cli_version_result
 
 # The member token is the gateway token that the server put in the environment. A claude member whose environment
 # names a gateway (ANTHROPIC_BASE_URL) must carry it. A subscription member carries none: section 1b reads its login.
@@ -258,59 +275,70 @@ if [[ $kind == claude && -n ${ANTHROPIC_BASE_URL-} && -z $member_token ]]; then
   fail 7 'the round has no member token: the gateway member sent no ANTHROPIC_AUTH_TOKEN'
 fi
 
-declare -A review=()
-[[ -r $PROFILE_HOME/config.yaml ]] || fail 7 "the review option's config.yaml is missing: $PROFILE_HOME/config.yaml"
-while IFS=$'\t' read -r field value; do
-  review[$field]=$value
-done < <(review_option_fields)
-for field in model api_base credential; do
-  [[ -n ${review[$field]-} ]] || fail 7 "the review option $REVIEW_OPTION names no $field in $PROFILE_HOME/config.yaml"
-done
-[[ -r $PROFILE_HOME/credentials.yaml ]] || fail 7 "the review credential's file is missing: $PROFILE_HOME/credentials.yaml"
-review_key=$(section_api_key "$PROFILE_HOME/credentials.yaml" "${review[credential]}")
-[[ -n $review_key ]] || fail 7 "credentials.yaml holds no api_key for the review credential ${review[credential]}"
-
 # ---------- 1b. The member's login ----------
 # The member's record goes to the host on the prepare channel. A gateway member sends its token. A subscription member
 # sends its access token, which the host's round uses for its own life only: this section reads it once here, and checks
 # its life before the first ssh call. A login with less life than IMPROVE_TOKEN_MIN_SECONDS exits 8 and sends nothing.
-now=$(date +%s)
 if [[ $kind == codex ]]; then
-  codex_login="$HOME_DIR/.codex/auth.json"
-  [[ -f $codex_login ]] || fail 7 "the round has no Codex login: $codex_login is missing"
-  codex_record=$(jq -ce '
-    if ([.auth_mode, .last_refresh, .tokens.access_token, .tokens.id_token, .tokens.account_id]
-        | all(type == "string" and length > 0))
-    then {auth_mode, last_refresh,
-          tokens: {access_token: .tokens.access_token, id_token: .tokens.id_token,
-                   account_id: .tokens.account_id, refresh_token: ""}}
-    else error("the login lacks a field") end' "$codex_login" 2>/dev/null) \
-    || fail 7 "the round's Codex login is not a complete auth.json: $codex_login"
-  codex_expiry=$(jq -r '.tokens.access_token | split(".")[1] | @base64d | fromjson | .exp' "$codex_login" 2>/dev/null) \
-    || codex_expiry=
-  [[ $codex_expiry =~ ^[0-9]+$ ]] || fail 7 "the round's Codex access token names no numeric exp: $codex_login"
-  check_token_life $(( codex_expiry - now )) "$codex_login"
+  read_codex_login "$HOME_DIR/.codex/auth.json"
+  check_token_life "$codex_seconds_left" "$HOME_DIR/.codex/auth.json" 8 codex
   member_record="IMPROVE_CODEX_AUTH=$codex_record"
 elif [[ -n $member_token ]]; then
   member_record="ANTHROPIC_AUTH_TOKEN=$member_token"
 else
   [[ -n ${CLAUDE_CONFIG_DIR-} ]] \
     || fail 7 'the round has no Claude login: the subscription member names no CLAUDE_CONFIG_DIR'
-  claude_login="$CLAUDE_CONFIG_DIR/.credentials.json"
-  [[ -f $claude_login ]] || fail 7 "the round has no Claude login: $claude_login is missing"
-  claude_login_fields=$(jq -r '
-    .claudeAiOauth
-    | select((.accessToken | type) == "string" and (.accessToken | length) > 0 and (.expiresAt | type) == "number")
-    | [.accessToken, (.expiresAt | tostring)] | @tsv' "$claude_login" 2>/dev/null) \
-    || fail 7 "the round's Claude login is not readable JSON: $claude_login"
-  [[ -n $claude_login_fields ]] \
-    || fail 7 "the round's Claude login names no access token or no numeric expiresAt: $claude_login"
-  access_token=${claude_login_fields%%$'\t'*}
-  expires_ms=${claude_login_fields#*$'\t'}
-  [[ $expires_ms =~ ^[0-9]+$ ]] || fail 7 "the round's Claude login names no whole-number expiresAt: $claude_login"
-  check_token_life $(( expires_ms / 1000 - now )) "$claude_login"
-  member_record="CLAUDE_CODE_OAUTH_TOKEN=$access_token"
+  read_subscription_login "$CLAUDE_CONFIG_DIR/.credentials.json"
+  check_token_life "$subscription_seconds_left" "$CLAUDE_CONFIG_DIR/.credentials.json" 8 claude
+  member_record="CLAUDE_CODE_OAUTH_TOKEN=$subscription_token"
 fi
+
+# ---------- 1c. The review backend and its login ----------
+# `backends.calls.improve_review` names the review backend. The server resolves it here, before the first ssh call, and
+# the answer goes to the host as the launch's review/option.json. An unset call class exits 7 and the message names it.
+if ! review_answer=$(charliebot backend resolve --call improve_review 2>&1); then
+  fail 7 "cannot resolve the review backend of backends.calls.improve_review: $review_answer"
+fi
+review_id=$(jq -er '.option.id' <<<"$review_answer") \
+  || fail 7 "the resolve answer of backends.calls.improve_review names no option id: $review_answer"
+review_type=$(jq -er '.option.type' <<<"$review_answer") \
+  || fail 7 "the resolve answer of backends.calls.improve_review names no option type: $review_answer"
+review_account_dir=$(jq -r '.claude_config_dir // empty' <<<"$review_answer")
+case $review_type in
+  cc-anthropic-compatible)
+    # The gateway key is the review's login. The host's round reads it from its credentials file, which the runner
+    # writes from this record.
+    review_kind=claude
+    [[ -r $PROFILE_HOME/credentials.yaml ]] \
+      || fail 7 "the review credential's file is missing: $PROFILE_HOME/credentials.yaml"
+    review_credential=$(jq -er '.option.credential' <<<"$review_answer") \
+      || fail 7 "the review backend $review_id names no credential"
+    review_key=$(section_api_key "$PROFILE_HOME/credentials.yaml" "$review_credential")
+    [[ -n $review_key ]] || fail 7 "credentials.yaml holds no api_key for the review credential $review_credential"
+    review_record="REVIEW_ANTHROPIC_AUTH_TOKEN=$review_key"
+    ;;
+  cc-claude)
+    review_kind=claude
+    [[ -n $review_account_dir ]] || fail 7 "the review backend $review_id names no account directory"
+    read_subscription_login "$review_account_dir/.credentials.json"
+    check_token_life "$subscription_seconds_left" "$review_account_dir/.credentials.json" 7 'review claude'
+    review_record="REVIEW_CLAUDE_CODE_OAUTH_TOKEN=$subscription_token"
+    ;;
+  codex)
+    review_kind=codex
+    read_codex_login "$HOME_DIR/.codex/auth.json"
+    check_token_life "$codex_seconds_left" "$HOME_DIR/.codex/auth.json" 7 'review codex'
+    review_record="REVIEW_CODEX_AUTH=$codex_record"
+    ;;
+  *)
+    fail 7 "the review backend $review_id has type $review_type, which the improve host has no login form for"
+    ;;
+esac
+review_binary=$(command -v "$review_kind") \
+  || fail 7 "the review's $review_kind CLI is not on this host's PATH, so its version is unknown"
+cli_version_of "$review_kind" "$review_binary"
+review_version=$cli_version_result
+printf '%s review backend %s (%s)\n' "$STDERR_PREFIX" "$review_id" "$review_type" >&2
 
 # ---------- 2. Round preflight ----------
 set +e
@@ -352,8 +380,9 @@ pattern_file="$PROFILE_HOME/skills_leak_patterns.local.txt"
 [[ -r $pattern_file ]] || fail 1 "the leak pattern file is missing: $pattern_file"
 cp -- "$pattern_file" "$payload/skills_leak_patterns.local.txt"
 cp -- "$SCRIPT_DIR/remote-runner.sh" "$payload/remote-runner.sh"
-# The runner installs the review's charlie-code from this copy and sources its credential_key.
-cp -- "$SCRIPT_DIR/review-charlie-code.sh" "$payload/review-charlie-code.sh"
+# The review backend's answer: the runner reads the review's backend record from it, and the answer holds no key.
+mkdir -- "$payload/review"
+printf '%s\n' "$review_answer" >"$payload/review/option.json"
 cp -- "$member_kinds_file" "$payload/member_kinds.txt"
 # The runner sources the in-flight rule from this copy, so its clone scan uses
 # the same claimant and path functions as the list above.
@@ -416,16 +445,12 @@ mkfifo "$payload/heartbeat"
 heartbeat_pid=$!
 exec 3>"$payload/heartbeat"
 
-# The review key, the review option's settings and the member's record from section 1b go to the host on this
-# channel's standard input alone. The runner selects each value by its name: the review key goes into the round's
-# credentials file, and the member's record into the launch's member-credential file. The launching shell holds them
-# in memory until this call sends them.
+# The member's record and the review's record from sections 1b and 1c go to the host on this channel's standard input
+# alone. The runner selects each record by its name and writes both into the launch's member-credential file. The
+# launching shell holds them in memory until this call sends them.
 records=(
-  "CHARLIE_CODE_API_KEY=$review_key"
-  "IMPROVE_REVIEW_CREDENTIAL=${review[credential]}"
-  "IMPROVE_REVIEW_MODEL=${review[model]}"
-  "IMPROVE_REVIEW_API_BASE=${review[api_base]}"
   "$member_record"
+  "$review_record"
 )
 set +e
 printf '%s\0' "${records[@]}" |
@@ -440,7 +465,7 @@ fi
 # ---------- 5. Start ----------
 set +e
 "${SSH[@]}" "$REMOTE_HOST" \
-  "bash \$HOME/improve/launch/$launch_id/remote-runner.sh $launch_id $direction $cli_commit $kind $member_version" 3>&-
+  "bash \$HOME/improve/launch/$launch_id/remote-runner.sh $launch_id $direction $cli_commit $kind $member_version $review_kind $review_version" 3>&-
 run_status=$?
 set -e
 

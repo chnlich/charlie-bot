@@ -64,8 +64,9 @@ dev/release-lab/run.sh --teardown
 `release.sh` and stage scripts run. The lab runs either shape of the flow, and the line's `model_stages` says which one
 ran. A `--flow-ref` whose `release.sh` runs the trial and the rehearsal runs that ref's own copies of them, staged beside
 the flow's scripts as `trial-lab.sh` and `rehearsal-lab.sh` with the override patch in `dev/release-lab/overrides/`
-applied when the ref predates the lab's marker; the patch must apply, or the run stops, so a copy differs from its
-flow-ref by the override alone. A `--flow-ref` whose `release.sh` runs neither stage gets neither copy, and the run
+applied when the ref predates the lab's marker and the stage still has the behavior the patch overrides. A needed patch
+must apply, or the run stops, so a copy differs from its flow-ref by the override alone. A trial without a live-version
+probe needs no live-server URL override. A `--flow-ref` whose `release.sh` runs neither stage gets neither copy, and the run
 removes a stale one an earlier leg left behind: untracked files survive the checkout's `git reset --hard`.
 
 The switch is timed from mark lines that `switch-server.sh` logs only when `CHARLIEBOT_SWITCH_LAB_MARKS` is 1. A

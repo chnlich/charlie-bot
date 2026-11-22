@@ -345,15 +345,28 @@ require_tools() {
     || fail 'charlie-code is on PATH; the flow runs its model checks with it'
 }
 
-# lab_stage_copy SOURCE DEST MARK PATCH: DEST, in the flow checkout, is the flow-ref's stage script SOURCE. A flow-ref that
-# predates the lab's overrides lacks MARK, so PATCH, the lab's override delta, applies to the copy. A PATCH that does not
-# apply stops the run, so a copy differs from its flow-ref's script by the override alone.
+# lab_stage_copy SOURCE DEST MARK PATCH: DEST, in the flow checkout, is the flow-ref's stage script SOURCE. A flow-ref
+# that predates the lab's overrides lacks MARK, so PATCH, the lab's override delta, applies to the copy when the script
+# still has the behavior it changes. A needed patch that does not apply stops the run.
 lab_stage_copy() {
-  local source=$1 dest=$2 mark=$3 patch=$4
+  local source=$1 dest=$2 mark=$3 patch=$4 grep_status
   cp "$FLOW/$source" "$FLOW/$dest" || fail "the flow-ref's $source copies to $dest"
-  if ! grep -q -- "$mark" "$FLOW/$dest"; then
-    patch --batch --quiet "$FLOW/$dest" "$patch" || fail "the lab override $patch applies to $FLOW_REF's $source"
+  if grep -q -- "$mark" "$FLOW/$dest"; then
+    return 0
+  else
+    grep_status=$?
+    (( grep_status == 1 )) || fail "the flow-ref's $source can be read"
   fi
+  if [[ $mark == CHARLIEBOT_TRIAL_LIVE_URL ]]; then
+    if grep -q 'live_version_probe()' "$FLOW/$dest"; then
+      :
+    else
+      grep_status=$?
+      (( grep_status == 1 )) || fail "the flow-ref's $source live-version probe can be read"
+      return 0
+    fi
+  fi
+  patch --batch --quiet "$FLOW/$dest" "$patch" || fail "the lab override $patch applies to $FLOW_REF's $source"
 }
 
 # reset_flow_checkout: the flow checkout at --flow-ref, clean in its tracked files. A flow ref whose release.sh runs the

@@ -24,6 +24,7 @@ dev/remote-run/run.sh dev/poor-network/run.sh --side both --before-clone "$CLONE
 | `--scenarios LIST` | Any of `background,held,reset,stream,tools,starred,threads,foryou,open,search` (default the first four). `open` and `foryou` run their own cells, see below. `search` runs its own repetitions and variants, see "Search view". |
 | `--open-conditions LIST` | Open cells: any of `link,held,reset,flaps,offline,release,release-offline,replied-offline`; default all. |
 | `--open-cpu-rate RATE` | Run every side's open cells at `RATE` instead of a derived rate (see CPU rate below). |
+| `--foryou-shots` | After the after side's measurement, write the For-you screenshots (switch, retry and offline reopen, at the three CSS sizes) to `DIR/<run>/foryou-shots`. Needs the `foryou` scenario. |
 | `--assets-dir DIR` | Where the CDN copies are kept (default `DIR/assets`). |
 | `--lock-wait SECONDS` | How long each side waits for the bench lock (default 7200). An improve round passes 900. |
 | `--seed-home DIR` | The view home that the run copies as its seed (default: the shared home under `~/improve/mock-home`). A run with a pinned home names it here; each side still checks the copy's content hash. |

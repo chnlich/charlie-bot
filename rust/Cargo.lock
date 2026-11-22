@@ -813,7 +813,6 @@ dependencies = [
  "charliebot-core",
  "charliebot-registry",
  "charliebot-store",
- "charliebot-tasks",
  "charliebot-triggers",
  "clap",
  "futures-util",

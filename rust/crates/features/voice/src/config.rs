@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use charliebot_core::config::{ConfigSection, SectionValue};
+use charliebot_core::config::{CREDENTIAL_KEY, ConfigSection, SectionValue};
 use charliebot_core::credentials::Credentials;
 use charliebot_core::text_repr;
 use charliebot_registry::FeatureContext;
@@ -75,7 +75,7 @@ fn backend_entry(id: &str, raw: RawBackendEntry) -> Result<BackendEntry, String>
   let label = required("label", raw.label)?;
   let model = required("model", raw.model)?;
   let endpoint = required("endpoint", raw.endpoint)?;
-  let credential = required("credential", raw.credential)?;
+  let credential = required(CREDENTIAL_KEY, raw.credential)?;
   let credential = CredentialRef::parse(&credential).ok_or_else(|| {
     format!("voice.backends.{id}.credential must be section.field, got {}", text_repr::str_repr(&credential))
   })?;

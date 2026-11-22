@@ -27,7 +27,7 @@ use charliebot_store::control_events;
 use charliebot_store::metadata::{
   BACKEND_FIELD, BASE_BRANCH_FIELD, COLD_READ_FIELD, COLD_READ_GENRE_FIELD, COLD_READ_PAGE_PATH_FIELD,
   COLD_READ_TRIGGER_FIELD, ColdReadSpec, KEEP_WORKTREE_FIELD, PARENT_SESSION_ID, REPO_PATH_FIELD, SessionMetadata,
-  TASK_TYPE_FIELD, TaskProfile, TaskSpec, TaskType,
+  TASK_TYPE_FIELD, TaskApprover, TaskProfile, TaskSpec, TaskType,
 };
 use charliebot_store::run_records::RunOutcomeKind;
 use charliebot_store::{CreateTask, SESSION_NOT_FOUND_DETAIL, StoreError};
@@ -302,7 +302,8 @@ fn delegate_task_spec(request: &DelegateRequest) -> TaskSpec {
     task_type: Some(request.task_type),
     keep_worktree: request.keep_worktree,
     cold_read: request.cold_read.clone(),
-    ..TaskSpec::default()
+    approver: TaskApprover::User,
+    improve_host: None,
   }
 }
 
@@ -1266,7 +1267,8 @@ async fn archive_task(State(features): State<Arc<FeatureContext>>, request: Requ
     summary: optional_validated_string(&fields, "summary"),
     result_refs: optional_validated_string_list(&fields, event_types::RESULT_REFS),
     run_ids: optional_validated_string_list(&fields, "run_ids"),
-    ..CompletionEvidence::default()
+    review_run_ids: Vec::new(),
+    landing: None,
   };
   let non_child = fields.get(ARCHIVE_NON_CHILD_FIELD).and_then(Value::as_bool).unwrap_or(false);
   let (status, payload) = match completion

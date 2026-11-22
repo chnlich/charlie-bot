@@ -620,13 +620,16 @@ impl Worker {
   fn build_backend(&self, launch: Option<&Launch>, launcher: bool) -> anyhow::Result<BuiltBackend> {
     let registry = Arc::clone(&self.features.registry);
     let base = LaunchArgs {
+      extra_flags: Vec::new(),
       buffer_limit: Some(subprocess_buffer_bytes(&self.cfg)?),
       instructions_content: self.instructions_content.clone(),
       instructions_file: Some(self.data_dir.join(HARNESS_INSTRUCTIONS_NAME)),
+      resume_session_id: None,
       log_dir: Some(self.data_dir.clone()),
       cgroup_session_id: Some(self.session_id.clone()),
       remote_launch: self.remote_launch()?,
-      ..LaunchArgs::default()
+      backend_kwargs: Map::new(),
+      manager_turn: false,
     };
     if let Some(option) = &self.backend_option {
       let mut backend_kwargs = launch.map(|launch| launch.backend_kwargs.clone()).unwrap_or_default();

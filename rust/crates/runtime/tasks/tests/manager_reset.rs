@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use charliebot_core::event_types;
 use charliebot_registry::RegisterFn;
-use charliebot_store::metadata::{TaskProfile, TaskSpec, TaskType};
+use charliebot_store::metadata::{TaskApprover, TaskProfile, TaskSpec, TaskType};
 use charliebot_tasks::prompts::{LAUNCH_TEXT_FILENAME, SNAPSHOT_FILENAME};
 use charliebot_tasks::test_support::recovery_support::{BACKEND_ID, Stack, result_script, script_option};
 use charliebot_web_reply::status::set_status;
@@ -22,7 +22,16 @@ const TASK_GOAL: &str = "Deliver the synthetic release";
 const TEST_DEADLINE: Duration = Duration::from_secs(120);
 
 fn manager_task() -> TaskSpec {
-  TaskSpec { goal: TASK_GOAL.to_string(), task_type: Some(TaskType::Implement), ..TaskSpec::default() }
+  TaskSpec {
+    goal: TASK_GOAL.to_string(),
+    repo_path: None,
+    base_branch: None,
+    task_type: Some(TaskType::Implement),
+    keep_worktree: false,
+    cold_read: None,
+    approver: TaskApprover::User,
+    improve_host: None,
+  }
 }
 
 /// Hold a native id recorded under `prompt_hash`, so a turn whose prompt hashes differently starts a fresh native

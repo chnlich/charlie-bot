@@ -26,7 +26,7 @@ use charliebot_core::config::{
 use charliebot_core::event_types;
 use charliebot_registry::Registry;
 use charliebot_registry::caller::CallerIdentity;
-use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, TaskType, UtcDateTime};
+use charliebot_store::metadata::{SessionMetadata, TaskApprover, TaskProfile, TaskSpec, TaskType, UtcDateTime};
 use charliebot_store::run_records::{self, RunKind, RunOutcome, RunOutcomeKind, RunRecord};
 use charliebot_store::write_faults::{self, Hit};
 use charliebot_store::{ChatEvent, CreateTask, PatchTask, TaskCaller};
@@ -118,7 +118,16 @@ impl Drop for StackProcessGuard<'_> {
 
 /// The task spec shape: a goal and a task type, no repository.
 fn spec(goal: &str, task_type: Option<TaskType>) -> TaskSpec {
-  TaskSpec { goal: goal.to_string(), task_type, ..TaskSpec::default() }
+  TaskSpec {
+    goal: goal.to_string(),
+    repo_path: None,
+    base_branch: None,
+    task_type,
+    keep_worktree: false,
+    cold_read: None,
+    approver: TaskApprover::User,
+    improve_host: None,
+  }
 }
 
 /// The implement task of the repository cases: a goal and the repository's base branch.
@@ -128,7 +137,10 @@ fn implement_task(repo: &Path, goal: &str) -> TaskSpec {
     repo_path: Some(repo.display().to_string()),
     base_branch: Some("main".to_string()),
     task_type: Some(TaskType::Implement),
-    ..TaskSpec::default()
+    keep_worktree: false,
+    cold_read: None,
+    approver: TaskApprover::User,
+    improve_host: None,
   }
 }
 
@@ -550,8 +562,12 @@ async fn worker_run_kinds_deliver_snapshot_bytes_and_task_context() -> anyhow::R
   let script_task = TaskSpec {
     goal: "ship it".to_string(),
     repo_path: Some(repo.display().to_string()),
+    base_branch: None,
     task_type: Some(TaskType::ScriptRun),
-    ..TaskSpec::default()
+    keep_worktree: false,
+    cold_read: None,
+    approver: TaskApprover::User,
+    improve_host: None,
   };
   let worker = stack.node("w", Some(&manager.id), TaskProfile::Worker, Some(script_task)).await?;
 
@@ -588,8 +604,16 @@ async fn worker_run_kinds_deliver_snapshot_bytes_and_task_context() -> anyhow::R
   assert!(record.branch_name.is_some(), "the sandbox branch is recorded");
 
   // The verify contract: the verify task's managed block, and no worker contract.
-  let verify_task =
-    TaskSpec { goal: "verify it".to_string(), task_type: Some(TaskType::Verify), ..TaskSpec::default() };
+  let verify_task = TaskSpec {
+    goal: "verify it".to_string(),
+    repo_path: None,
+    base_branch: None,
+    task_type: Some(TaskType::Verify),
+    keep_worktree: false,
+    cold_read: None,
+    approver: TaskApprover::User,
+    improve_host: None,
+  };
   let verify = stack.node("v", Some(&manager.id), TaskProfile::Worker, Some(verify_task)).await?;
   stack.dispatch.admit_input(&verify.id, event_types::USER, "verify the result", "user", json!({})).await?;
   let verify_run = launched_run_id(&stack.dispatch.dispatch_pending(&verify.id).await?)?;
@@ -681,7 +705,15 @@ async fn recovery_after_rule_deletion_uses_the_original_snapshot() -> anyhow::Re
   stack.write_access_key()?;
   let guard = ProcessGroupGuard::new();
   let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
-  let rule = PatchTask { node_prompt: Some(Some("original rule\n".to_string())), ..PatchTask::default() };
+  let rule = PatchTask {
+    name: None,
+    task_parent_id: None,
+    profile: None,
+    task: None,
+    subtree_prompt: None,
+    node_prompt: Some(Some("original rule\n".to_string())),
+    approver: None,
+  };
   stack.store().patch_task(&manager.id, rule, TaskCaller::Operator, &*stack.dispatch).await?;
   stack.dispatch.admit_input(&manager.id, event_types::USER, "go", "user", json!({})).await?;
   let run = launched_run_id(&stack.dispatch.dispatch_pending(&manager.id).await?)?;
@@ -2709,7 +2741,9 @@ async fn launch_error_event_worker_on(first_events: &[Value], pool: ErrorEventPo
     base_branch: Some("main".to_string()),
     task_type: Some(TaskType::Implement),
     keep_worktree: true,
-    ..TaskSpec::default()
+    cold_read: None,
+    approver: TaskApprover::User,
+    improve_host: None,
   };
   let worker = stack
     .store()
@@ -3144,7 +3178,9 @@ async fn refused_worker_run(backend: &str) -> anyhow::Result<Stack> {
     base_branch: Some("main".to_string()),
     task_type: Some(TaskType::Implement),
     keep_worktree: true,
-    ..TaskSpec::default()
+    cold_read: None,
+    approver: TaskApprover::User,
+    improve_host: None,
   };
   let worker = stack
     .store()
@@ -3737,7 +3773,9 @@ async fn launch_devin_error_worker(
     base_branch: Some("main".to_string()),
     task_type: Some(TaskType::Implement),
     keep_worktree: true,
-    ..TaskSpec::default()
+    cold_read: None,
+    approver: TaskApprover::User,
+    improve_host: None,
   };
   let worker = stack
     .store()

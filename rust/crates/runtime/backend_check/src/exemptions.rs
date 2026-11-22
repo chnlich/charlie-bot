@@ -83,34 +83,73 @@ impl Values {
 mod tests {
   use super::*;
 
-  /// Each row exempts its registered value in its file, and a neighbouring value in the same file still refuses.
+  /// The row for `path` exempts `value` of `class` in its file, and each refused site of the same file stays a hit.
+  fn assert_row(path: &str, class: Class, value: &str, refused: &[(Class, &str)]) {
+    assert!(find(path, class, value).is_some(), "{path} should exempt {value}");
+    for (refused_class, refused_value) in refused {
+      assert!(find(path, *refused_class, refused_value).is_none(), "{path} must still refuse {refused_value}");
+    }
+  }
+
   #[test]
-  fn each_row_exempts_its_value_and_nothing_else_in_its_file() {
-    let cases = [
-      ("scripts/sync-skills.sh", Class::FixedCommand, "claude -p"),
-      ("scripts/host-auth/claude_host2_readback.py", Class::FixedCommand, "claude -p"),
-      ("rust/crates/infra/core/src/backend_types.rs", Class::FixedCommand, "charlie-code"),
-      ("rust/crates/infra/core/src/backend_types.rs", Class::FixedCommand, "codex"),
-      ("rust/crates/infra/core/src/home.rs", Class::FixedCommand, "opencode"),
-      ("rust/crates/runtime/registry/src/usage.rs", Class::FixedCommand, "claude"),
-      ("rust/crates/infra/core/src/list_price.rs", Class::ModelId, "gemini-4-argon-high"),
-    ];
-    for (path, class, value) in cases {
-      assert!(find(path, class, value).is_some(), "{path} should exempt {value}");
-    }
-    let refused = [
-      ("scripts/sync-skills.sh", Class::FixedCommand, "claude -p --model claude-opus-5"),
-      ("scripts/sync-skills.sh", Class::ModelId, "claude-opus-5"),
-      ("scripts/sync-skills.sh", Class::FixedCommand, "codex"),
-      ("rust/crates/infra/core/src/backend_types.rs", Class::FixedCommand, "claude"),
-      ("rust/crates/infra/core/src/home.rs", Class::FixedCommand, "claude"),
-      ("rust/crates/runtime/registry/src/usage.rs", Class::FixedCommand, "claude -p"),
-      ("rust/crates/infra/core/src/list_price.rs", Class::FixedCommand, "claude"),
-      ("rust/crates/infra/core/src/home.rs", Class::Gateway, "opencode"),
-    ];
-    for (path, class, value) in refused {
-      assert!(find(path, class, value).is_none(), "{path} must still refuse {value}");
-    }
+  fn sync_skills_probe_row_exempts_its_invocation_only() {
+    assert_row(
+      "scripts/sync-skills.sh",
+      Class::FixedCommand,
+      "claude -p",
+      &[
+        (Class::FixedCommand, "claude -p --model claude-opus-5"),
+        (Class::ModelId, "claude-opus-5"),
+        (Class::FixedCommand, "codex"),
+      ],
+    );
+  }
+
+  #[test]
+  fn host_login_readback_row_exempts_its_invocation_only() {
+    assert_row(
+      "scripts/host-auth/claude_host2_readback.py",
+      Class::FixedCommand,
+      "claude -p",
+      &[(Class::FixedCommand, "claude -p --model claude-opus-5"), (Class::FixedCommand, "codex")],
+    );
+  }
+
+  #[test]
+  fn backend_type_names_row_exempts_each_type_name() {
+    let path = "rust/crates/infra/core/src/backend_types.rs";
+    assert_row(path, Class::FixedCommand, "charlie-code", &[(Class::FixedCommand, "claude")]);
+    assert_row(path, Class::FixedCommand, "codex", &[(Class::FixedCommand, "claude")]);
+  }
+
+  #[test]
+  fn profile_directory_name_row_exempts_its_word_only() {
+    assert_row(
+      "rust/crates/infra/core/src/home.rs",
+      Class::FixedCommand,
+      "opencode",
+      &[(Class::FixedCommand, "claude"), (Class::Gateway, "opencode")],
+    );
+  }
+
+  #[test]
+  fn usage_kind_row_exempts_the_claude_word_only() {
+    assert_row(
+      "rust/crates/runtime/registry/src/usage.rs",
+      Class::FixedCommand,
+      "claude",
+      &[(Class::FixedCommand, "claude -p")],
+    );
+  }
+
+  #[test]
+  fn price_table_row_exempts_any_model_only() {
+    assert_row(
+      "rust/crates/infra/core/src/list_price.rs",
+      Class::ModelId,
+      "gemini-4-argon-high",
+      &[(Class::FixedCommand, "claude")],
+    );
   }
 
   /// Every row names an owner, and the six rows are the reviewed set.

@@ -8,8 +8,8 @@
 # skipped and the results page and the JSON report both counts.
 #
 # Every model call runs with the repo's one-shot argv (tools disabled, no session persistence) in a new empty
-# directory, so the model sees only its prompt. The model is the manager default backend's model:
-# `backends.options[0].model` from `charliebot config get backends`.
+# directory, so the model sees only its prompt. The model is the one `backends.calls.new_session` selects, read through
+# `charliebot backend resolve --call new_session`; that option must be a cc-claude option, which the one-shot runs.
 #
 # Each answer is appended to <output-dir>/answers.jsonl as its call returns. A rerun with the same output
 # directory continues from the answered row and condition pairs, so a failed call in a long run loses no
@@ -61,7 +61,7 @@ def domain_block($answers; $domain):
 . as $answers
 | {
     model: $model,
-    model_source: "backends.options[0].model from `charliebot config get backends`",
+    model_source: "backends.calls.new_session via `charliebot backend resolve --call new_session`",
     generated_at: $generated,
     isolation: $isolation,
     as_of_rule: $as_of,
@@ -80,8 +80,8 @@ PAGE_BODY_PROGRAM='
 def pct: if . == null then "n/a" else (((. * 1000) | round) / 10 | tostring) + "%" end;
 def cell($stats): "<td>\($stats.matches)/\($stats.total)</td><td>\($stats.rate | pct)</td>";
 "<h1>Taste replay</h1>\n"
-+ "<p class=\"note\">Model: <code>\(.model | @html)</code> (the manager default backend'"'"'s model, "
-+ "<code>backends.options[0]</code>). Rows held out: \(.held_out). Skipped because the chosen is not one "
++ "<p class=\"note\">Model: <code>\(.model | @html)</code> (the model of "
++ "<code>backends.calls.new_session</code>). Rows held out: \(.held_out). Skipped because the chosen is not one "
 + "of the row'"'"'s options under the answer normalization: \(.skipped_chosen_not_an_option). Rows replayed: "
 + "\(.rows).</p>\n"
 + "<table>\n<tr><th>Condition</th><th>Matches</th><th>Agreement</th></tr>\n"
@@ -181,8 +181,13 @@ main() {
   command -v jq > /dev/null || die "jq is required on PATH"
   command -v claude > /dev/null || die "claude is required on PATH"
   CLI=$(resolve_cli)
-  MODEL=$("$CLI" config get backends | jq -r '.options[0].model // empty') || die "charliebot config get backends failed"
-  [[ -n "$MODEL" ]] || die "backends.options[0] names no model"
+  NEW_SESSION=$("$CLI" backend resolve --call new_session) \
+    || die "backends.calls.new_session does not resolve; the reason is printed above"
+  MODEL=$(jq -r '.option.model // empty' <<< "$NEW_SESSION")
+  OPTION_TYPE=$(jq -r '.option.type // empty' <<< "$NEW_SESSION")
+  [[ $OPTION_TYPE == cc-claude ]] \
+    || die "backends.calls.new_session selects a $OPTION_TYPE option; the one-shot runs cc-claude options only"
+  [[ -n "$MODEL" ]] || die "the option backends.calls.new_session selects names no model"
 
   echo "taste-replay: preflight model call" >&2
   preflight

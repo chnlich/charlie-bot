@@ -482,28 +482,23 @@ dependencies = [
  "anyhow",
  "axum",
  "charliebot-agents",
+ "charliebot-chat-threads",
  "charliebot-cli-common",
  "charliebot-compat",
  "charliebot-core",
- "charliebot-discord",
- "charliebot-feishu",
  "charliebot-registry",
  "charliebot-session-api",
- "charliebot-slack",
  "charliebot-store",
  "charliebot-tasks",
  "charliebot-triggers",
- "charliebot-web-reply",
  "chrono",
  "chrono-tz",
- "flate2",
  "futures-util",
  "regex",
  "serde_json",
  "tempfile",
  "time",
  "tokio",
- "tower",
  "tracing",
  "uuid",
 ]
@@ -1159,6 +1154,7 @@ dependencies = [
 name = "charliebot-packages"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "charliebot-agents",
  "charliebot-anthropic-compatible",
  "charliebot-antigravity",
@@ -1192,6 +1188,7 @@ dependencies = [
  "charliebot-run-log-compaction",
  "charliebot-session-api",
  "charliebot-slack",
+ "charliebot-store",
  "charliebot-tasks",
  "charliebot-taste",
  "charliebot-terminal",
@@ -1203,7 +1200,11 @@ dependencies = [
  "charliebot-voice",
  "charliebot-web-reply",
  "charliebot-web-search",
+ "flate2",
+ "serde_json",
  "tempfile",
+ "tokio",
+ "tower",
 ]
 
 [[package]]

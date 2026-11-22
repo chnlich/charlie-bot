@@ -31,11 +31,7 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+# Turns on this crate's test-support, which gates the refused-notice test in `thread_entry/tests.rs`.
+charliebot-chat-threads = { path = ".", features = ["test-support"] }
 charliebot-core = { workspace = true, features = ["test-support"] }
-charliebot-discord.workspace = true
-charliebot-feishu.workspace = true
-charliebot-slack.workspace = true
-charliebot-web-reply.workspace = true
-flate2.workspace = true
 tempfile.workspace = true
-tower.workspace = true

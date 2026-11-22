@@ -52,4 +52,13 @@ charliebot-web-reply.workspace = true
 charliebot-web-search.workspace = true
 
 [dev-dependencies]
+# The chat-thread route tests and the instruction golden register the listed feature packages and open a Store over a
+# temporary home.
+axum.workspace = true
+charliebot-core = { workspace = true, features = ["test-support"] }
+charliebot-store.workspace = true
+flate2.workspace = true
+serde_json.workspace = true
 tempfile.workspace = true
+tokio.workspace = true
+tower.workspace = true

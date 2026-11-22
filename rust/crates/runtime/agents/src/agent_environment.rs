@@ -78,8 +78,8 @@ fn require_agent_cli(server_bin_dir: &Path) -> anyhow::Result<()> {
 /// Build the agent environment from the server's process environment without changing that environment.
 ///
 /// Only an agent spawn receives this value. The server's own environment keeps the operator's PATH and GitHub
-/// credentials, and so does every child that is not an agent run: the web terminal's tmux shell resolves `gh` to the
-/// real gh as the operator's stored login, and the usage panel's `claude --version` probe inherits the same.
+/// credentials, and so does every child that is not an agent run. The web terminal's tmux shell resolves `gh` to the
+/// real gh as the operator's stored login. The usage panel's `claude --version` probe inherits the same environment.
 ///
 /// The startup value carries no App token command: [`spawn_base_environment`] adds the command the live config holds
 /// when it builds each spawn's environment.
@@ -94,9 +94,9 @@ pub fn agent_base_environment(
 /// The agent environment of one spawn: the startup environment plus the App token command the live config holds.
 ///
 /// The token command is read from the hot-reloaded config handle per spawn and written by
-/// [`gh_wrapper::apply_token_command`], so `github.app_token_command` added, changed or removed after startup reaches
-/// the next agent process without a server restart. A config the spawn cannot read fails the spawn, the way the other
-/// spawn-time config reads do.
+/// [`gh_wrapper::apply_token_command`]. A `github.app_token_command` that is added, changed or removed after startup
+/// reaches the next agent process without a server restart. A config the spawn cannot read fails the spawn, the way the
+/// other spawn-time config reads do.
 pub fn spawn_base_environment(features: &FeatureContext) -> anyhow::Result<AgentBaseEnvironment> {
   spawn_base_environment_from(&features.startup, &features.config)
 }
@@ -469,8 +469,8 @@ mod tests {
     }
   }
 
-  /// Run this test again in a child process with the environment the server starts with, then read both the
-  /// environment the child's non-agent grandchild inherited and the agent environment the server builds.
+  /// Run this test again in a child process with the environment the server starts with. The test then reads the
+  /// environment that the child's non-agent grandchild inherited and the agent environment that the server builds.
   fn startup_parent() {
     let root = tempfile::tempdir().unwrap();
     let venv_bin = root.path().join("venv/bin");

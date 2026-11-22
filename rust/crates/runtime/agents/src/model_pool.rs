@@ -3,16 +3,15 @@
 //! A pool names `backends.options` ids and a rule. A priority pool takes its subscription members in turn, and takes
 //! its pay-as-you-go members in turn only when no subscription member is selectable. A rotate pool takes its members in
 //! turn. Both rules skip a member the caller excludes, that [`BackendAvailability`] holds out, or whose usage reading
-//! says it is exhausted. A priority pool also skips a subscription member whose reading says it is fully reserved —
-//! every login that has headroom has all of it reserved by the runs placed on it — when a pay-as-you-go member is
-//! selectable, so the pool runs those runs on the pay-as-you-go member instead. A member one pool recorded out is
-//! skipped by every pool that names it. A session whose backend
-//! is a pool id runs each turn on the member this module picks, and records that member in its `pool_member` slot.
+//! says it is exhausted. A priority pool also skips a fully reserved subscription member while a pay-as-you-go member
+//! is selectable. A fully reserved member is one whose every login with headroom has all of it reserved by the runs
+//! placed on it. The pool then runs those runs on the pay-as-you-go member instead. A member one pool recorded out is
+//! skipped by every pool that names it. A session whose backend is a pool id runs each turn on the member this module
+//! picks, and records that member in its `pool_member` slot.
 //!
-//! Terms: a *member* is a `backends.options` id that a pool names. *Out* is the "out until" record that
-//! [`BackendAvailability`] keeps per member. A *lane* is one track of a pool's turns: a rotate pool has one, and a
-//! priority pool has one per billing tier. A *position* is a lane's place in its pool's member list, kept in process
-//! memory, one per pool id and lane.
+//! Terms: a *member* is a `backends.options` id a pool names. *Out* is the "out until" record [`BackendAvailability`]
+//! keeps per member. A *lane* is one track of a pool's turns: a rotate pool has one, and a priority pool has one per
+//! billing tier. A *position* is a lane's place in its pool member list, kept in memory per pool id and lane.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -253,7 +252,7 @@ impl RotationPositions {
 ///
 /// A selectable member is one `excluded` does not name, that is not out per [`BackendAvailability`], and whose usage
 /// reading does not say it is exhausted. A member whose backend type exposes no reading is selectable. `position` reads
-/// the position of a lane; the pick names the lane it belongs to and the position that lane moves to.
+/// the position of a lane. The pick names the lane it belongs to and the position that lane moves to.
 pub(crate) fn select(selection: &Selection<'_>, position: impl FnOnce(Lane) -> usize) -> anyhow::Result<Option<Pick>> {
   let Selection { cfg, registry, availability, pool, excluded, now } = *selection;
   match pool.rule {
@@ -325,7 +324,8 @@ fn select_priority(
   let subscriptions = selectable(PoolBilling::Subscription);
   let payg = selectable(PoolBilling::Payg);
   // A subscription whose every login with headroom has all of it reserved by the runs placed on it yields to the
-  // pay-as-you-go tier, but only while a pay-as-you-go member can take the run: the reservation never refuses one.
+  // pay-as-you-go tier. It yields only while a pay-as-you-go member can take the run.
+  // The reservation never refuses a run.
   let reserved = subscriptions
     .iter()
     .copied()
@@ -415,7 +415,7 @@ pub struct MemberChange {
 }
 
 impl MemberChange {
-  /// A turn-start change, which starts no retry; its handoff summary is recorded in its event, not in this struct.
+  /// A turn-start change starts no retry. Its handoff summary is recorded in its event, not in this struct.
   fn at_turn_start(pool: &str, from: String, to: String, reason: String, recovers_at: Option<String>) -> Self {
     Self { pool: pool.to_string(), from, to, reason, recovers_at, summary: None }
   }
@@ -623,7 +623,7 @@ fn decide_fresh(
 }
 
 /// Apply the priority turn-start rules to a session whose current member is selectable. The rules compare the member
-/// `peek` names. A move takes its new member through `select` when the turn advances the rotation, so each session that
+/// `peek` names. A move takes its new member through `select` when the turn advances the rotation. So each session that
 /// moves at one turn start takes the next member in its tier.
 fn decide_keep_or_switch(
   features: &FeatureContext,
@@ -1003,9 +1003,9 @@ backends:
       members: [chatgpt, claude-sub, near, spent, payg-a, payg-b, payg-c]
 ";
 
-  /// A priority pool over an open subscription, a subscription whose logins' headroom is all reserved (`test_reading`
-  /// reads `reserved` fully reserved, `claude-res` reserved until `RESERVED_RELEASE` is set), and one pay-as-you-go
-  /// member.
+  /// A priority pool over an open subscription, a subscription whose logins' headroom is all reserved, and one
+  /// pay-as-you-go member. `test_reading` reads `reserved` as fully reserved, and `claude-res` stays reserved until
+  /// `RESERVED_RELEASE` is set.
   const RESERVED_CONFIG: &str = "\
 backends:
   options:
@@ -1173,7 +1173,7 @@ backends:
   #[tokio::test]
   async fn a_fully_reserved_subscription_yields_to_pay_as_you_go_and_leaves_its_cursor() {
     let (_home, features) = fixture_with(RESERVED_CONFIG);
-    // The open subscription contends first; the reserved one is skipped while the payg member is selectable.
+    // The open subscription contends first. The reserved one is skipped while the payg member is selectable.
     assert_eq!(pick(&features, "cheap", &[]), Some("claude-sub".to_string()));
     assert_eq!(pick(&features, "cheap", &["claude-sub"]), Some("payg-a".to_string()));
     // The payg pick moved no subscription position: with the payg member out, the walk resumes at `reserved`.
@@ -1181,15 +1181,15 @@ backends:
     assert_eq!(pick(&features, "cheap", &[]), Some("claude-sub".to_string()));
   }
 
-  /// A reservation never refuses a run: with no payg member to yield to, the fully reserved subscription and the
-  /// model id that forms its one-member pool still take the run.
+  /// A reservation never refuses a run. With no payg member to yield to, the fully reserved subscription and the model
+  /// id that forms its one-member pool still take the run.
   #[tokio::test]
   async fn a_fully_reserved_subscription_takes_the_run_when_no_payg_member_is_selectable() {
     let (_home, features) = fixture_with(RESERVED_CONFIG);
     assert_eq!(pick(&features, "reserved-only", &[]), Some("reserved".to_string()));
     let cfg = loaded_cfg(&features);
     let selector = Selector::from_features(&features, &cfg).unwrap();
-    // The model id's one-member pool is the option id here; the same filter picks the reserved member through it.
+    // The model id's one-member pool is the option id here. The same filter picks the reserved member through it.
     assert_eq!(selector.peek("reserved", &[]).unwrap().map(|option| option.id), Some("reserved".to_string()));
   }
 

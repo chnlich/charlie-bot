@@ -29,6 +29,12 @@ const APPROVED_STATE: &str = "approved";
 pub(crate) const PLAN_CLOSE_SUPERSEDED: &str = "superseded";
 pub(crate) const PLAN_CLOSE_ABANDONED: &str = "abandoned";
 pub(crate) const PLAN_CLOSE_COMPLETED: &str = "completed";
+/// The revision triggers that `plan amend` accepts.
+pub(crate) const PLAN_AMEND_TRIGGERS: [&str; 2] = ["auto_amend", "feedback"];
+/// The revision trigger that a request uses when it names none.
+pub(crate) const PLAN_AMEND_TRIGGER_DEFAULT: &str = "feedback";
+/// The close modes that `plan close` accepts.
+pub(crate) const PLAN_CLOSE_MODES: [&str; 3] = [PLAN_CLOSE_SUPERSEDED, PLAN_CLOSE_ABANDONED, PLAN_CLOSE_COMPLETED];
 
 /// The plan fields the registry persists, in the order it emits them.
 const PLAN_FIELDS: [&str; 5] = ["id", "title", "versions", "takeoff", "closed"];

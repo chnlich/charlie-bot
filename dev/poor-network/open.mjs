@@ -408,16 +408,39 @@ export function failIfNavigatedAfter(tab, sentAt) {
   }
 }
 
+// Waits until the page's warm report says the worker stored the release's shell: the warm stores the page's
+// first-screen copies in the same step (`storePageCopies`, offline-shell-worker.js), so the session's copy exists
+// when this returns.
+async function waitForWarmStoredCopy(tab) {
+  const deadline = Date.now() + WARM_REPORT_TIMEOUT_MS;
+  for (;;) {
+    const report = await tab.evaluate('window.__warmReport ?? null');
+    if (report !== null && report.stored === true) {
+      return;
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`the online open's warm reported ${JSON.stringify(report)}, not a stored shell and copies`);
+    }
+    await sleep(500);
+  }
+}
+
 // One reply the socket delivered, sent from a page of the measured browser's profile: the page shows the reply
 // streaming, and the stored-copy refresh it asks for completes. The reply is the session's newest message when the
 // measured open fetches its first screen, so the offline open must show it from the stored copy.
-export async function deliverReplyOnline(tabs, session, repetition) {
+//
+// `waitForStoredCopy` waits for the page's warm report before sending. A fresh profile's warm is what stores the
+// session's first-screen copy, and the refresh after the reply only re-stores a copy the cache already holds
+// (`refreshCopies` skips a URL with no copy). The open scenario's reply runs on a profile copied from a warm browser,
+// where the copy is already there; the For-you offline cell starts fresh and passes the flag.
+export async function deliverReplyOnline(tabs, session, repetition, {waitForStoredCopy = false} = {}) {
   const tab = await tabs.open('reply-send', PREP_INIT);
   try {
     await tabs.navigate(tab, `/?session=${session.id}`);
     await tab.ready();
     await tabs.show(tab);
     await tabs.waitIdle(SETTLE_MS);
+    if (waitForStoredCopy) await waitForWarmStoredCopy(tab);
     const echo = `pn-reply ${repetition} ${randomTag()}`;
     const sentAt = await tab.sendText(`${echo} answer with the reply`);
     const deadline = Date.now() + REPLY_TIMEOUT_MS;

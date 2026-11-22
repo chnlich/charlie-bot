@@ -337,7 +337,9 @@ function firstForYouReport(tab, documentPattern) {
 async function offlineReopenCell(ctx, target, name, repetition) {
   const documentPattern = new RegExp(`\\?session=${target.id}$`);
   return withLink(ctx, name, [], async ({ tabs }) => {
-    await deliverReplyOnline(tabs, target, repetition);
+    // The fresh profile's warm stores the target's first-screen copy; the reply's refresh re-stores only a copy that
+    // already exists, so the reply waits for that warm.
+    await deliverReplyOnline(tabs, target, repetition, {waitForStoredCopy: true});
 
     const measured = await tabs.open(name, forYouInitScript(target.marker));
     await measured.page.send('Runtime.addBinding', { name: PAGE_REPORT_BINDING });

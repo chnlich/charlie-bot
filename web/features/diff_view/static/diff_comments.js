@@ -20,12 +20,15 @@
   let querySessionId = new URLSearchParams(window.location.search).get('session');
   querySessionId = querySessionId ? querySessionId.trim() : null;
   let querySessionStatus = querySessionId ? 'loading' : 'none';
+  let querySession = null;
   let dropdownSessionId = null;
   let sessions = [];
   let sessionLoadError = '';
   let sessionNotice = '';
-  let sessionsLoad = null;
+  let targetLoad = null;
+  let sessionListLoad = null;
   let sessionsLoaded = false;
+  let pickerLoading = false;
 
   let tray;
   let trayHeader;
@@ -40,6 +43,7 @@
   window.__cbdcBuildBatchMessage = buildBatchMessage;
   window.__cbdcResolveTargetSession = resolveTargetSession;
   window.__cbdcMostRecentSessionId = mostRecentSessionId;
+  window.__cbdcLoadTarget = loadSessionsOnce;
 
   installStyles();
   installTray();
@@ -599,6 +603,7 @@
     target.className = `${PREFIX}-target`;
     target.appendChild(document.createTextNode('Target session'));
     targetSelect = document.createElement('select');
+    targetSelect.addEventListener('focus', openPicker);
     targetSelect.addEventListener('change', () => {
       querySessionId = null;
       querySessionStatus = 'none';
@@ -653,36 +658,69 @@
     return { status: 'found', session: await response.json() };
   }
 
-  async function initializeSessions() {
-    const [listed, queryResult] = await Promise.all([
-      fetchSessions(),
-      querySessionId ? fetchQuerySession(querySessionId) : Promise.resolve(null),
-    ]);
-    sessions = listed.slice();
-    dropdownSessionId = mostRecentSessionId(sessions);
-
-    if (queryResult && queryResult.status === 'found') {
-      querySessionStatus = 'found';
-      if (!sessions.some((session) => session.id === queryResult.session.id)) sessions.push(queryResult.session);
-    } else if (queryResult && queryResult.status === 'missing') {
-      querySessionStatus = 'missing';
-      sessionNotice = `Target session ${querySessionId} was not found. Choose another session.`;
-    }
-    populateSessionSelect();
-    sessionsLoaded = true;
-    refreshTray();
-  }
-
-  // The target list and the query session load once, on the first pending comment: the first moment the tray needs a
-  // target. A visit that comments nothing never fetches the session corpus.
+  // The target loads once, on the first pending comment: the first moment the tray needs a target. A URL that names a
+  // session resolves it by its single-session route, and Send enables when that answers. The full list loads only when
+  // the URL names no session, when the named session is missing, or when the picker opens.
   function loadSessionsOnce() {
-    if (sessionsLoad) return;
-    sessionsLoad = initializeSessions().catch((error) => {
+    if (targetLoad) return targetLoad;
+    targetLoad = resolveTarget().catch((error) => {
       console.error('Diff comment session loading failed:', error);
       sessionLoadError = error.message;
       querySessionStatus = 'error';
       refreshTray();
     });
+    return targetLoad;
+  }
+
+  async function resolveTarget() {
+    if (querySessionId) {
+      const queryResult = await fetchQuerySession(querySessionId);
+      if (queryResult.status === 'found') {
+        querySessionStatus = 'found';
+        querySession = queryResult.session;
+        sessions = [querySession];
+        sessionsLoaded = true;
+        populateSessionSelect();
+        refreshTray();
+        return;
+      }
+      querySessionStatus = 'missing';
+      sessionNotice = `Target session ${querySessionId} was not found. Choose another session.`;
+    }
+    await loadSessionList();
+    sessionsLoaded = true;
+    refreshTray();
+  }
+
+  // The full list loads once, for the target or when the picker opens. The URL's session row stays in it, so the
+  // picker names the session that the target resolved.
+  function loadSessionList() {
+    if (!sessionListLoad) {
+      sessionListLoad = fetchSessions().then((listed) => {
+        sessions = listed.slice();
+        if (querySession && !sessions.some((session) => session.id === querySession.id)) sessions.push(querySession);
+        if (!dropdownSessionId) dropdownSessionId = mostRecentSessionId(sessions);
+        populateSessionSelect();
+      });
+    }
+    return sessionListLoad;
+  }
+
+  // The picker's list loads when the picker opens. A failed load clears its promise, so the next open retries it.
+  function openPicker() {
+    if (sessionListLoad) return;
+    pickerLoading = true;
+    refreshTray();
+    loadSessionList()
+      .catch((error) => {
+        console.error('Diff comment session list failed:', error);
+        sessionListLoad = null;
+        sessionNotice = `Unable to load the session list: ${error.message}`;
+      })
+      .finally(() => {
+        pickerLoading = false;
+        refreshTray();
+      });
   }
 
   function populateSessionSelect() {
@@ -704,7 +742,7 @@
   }
 
   function targetReason(target) {
-    if (target) return '';
+    if (target) return pickerLoading ? 'Loading sessions…' : '';
     if (sessionLoadError) return `Unable to load target sessions: ${sessionLoadError}`;
     if (querySessionStatus === 'loading' || !sessionsLoaded) return 'Loading target session…';
     return 'No target session is available.';

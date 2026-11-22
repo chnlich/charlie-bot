@@ -196,6 +196,7 @@ const EXCEPTIONS = [
     ["lines.push('   ↳ suggested replacement:');", CHAT_TEXT_REASON],
     ["lines.push(`   ↳ ${commentLines[0]}`);", CHAT_TEXT_REASON],
     ["uerySessionStatus === 'loading' || !sessionsLoaded) return 'Loading target session…';", PROSE_REASON],
+    ["if (target) return pickerLoading ? 'Loading sessions…' : '';", PROSE_REASON],
     ["const suffix = target ? ` → ${target.name}` : '';", PROSE_REASON],
   ]),
   ...byFile('web/features/diff_view/static/diff_page.js', [

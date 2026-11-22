@@ -405,7 +405,7 @@ fn codex_windows(rate_limits: &Map<String, Value>, account: &str) -> anyhow::Res
     };
     let window_minutes = match limit.get("window_minutes") {
       Some(Value::Number(number)) if number.is_i64() => number.as_i64().unwrap_or(0),
-      _ => {
+      Some(_) | None => {
         warn_unknown_limit_shape(account, slot, "missing window_minutes");
         continue;
       }
@@ -416,7 +416,7 @@ fn codex_windows(rate_limits: &Map<String, Value>, account: &str) -> anyhow::Res
     }
     let resets_at = match limit.get("resets_at") {
       Some(Value::Number(number)) => utc_isoformat(number.as_f64().context("resets_at is not a finite number")?)?,
-      _ => String::new(),
+      Some(_) | None => String::new(),
     };
     windows.push((
       window_minutes,
@@ -460,7 +460,7 @@ fn float_value(value: Option<&Value>) -> Option<f64> {
     Value::Number(number) => number.as_f64(),
     Value::Bool(flag) => Some(f64::from(u8::from(*flag))),
     Value::String(text) => str_methods::strip(text).parse::<f64>().ok(),
-    _ => None,
+    Value::Null | Value::Array(_) | Value::Object(_) => None,
   }
 }
 

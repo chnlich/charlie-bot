@@ -478,6 +478,69 @@ fn the_stdin_mode_exit_codes() {
   assert_eq!(clean.code, 0, "{}", clean.describe());
 }
 
+/// Fake session ids. The built-in UUID rule matches each, so one passes only as the session value of a View line.
+const SESSION_ID: &str = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+const OTHER_ID: &str = "ffffffff-0000-4111-8222-333333333333";
+
+#[test]
+#[ignore = "integration"]
+fn a_session_id_passes_only_as_the_session_value_of_a_view_line() {
+  let sandbox = Sandbox::new();
+  let (env, _gh_log, _home) = post(&sandbox);
+  let mut scan = harness::command("bash", &env);
+  scan.arg(leak_scanner()).arg("--stdin");
+
+  for admitted in [
+    format!("View: /?session={SESSION_ID}"),
+    format!("View: /?session={SESSION_ID}&tab=status"),
+    format!("View: /?tab=status&session={SESSION_ID}"),
+  ] {
+    let run = run_with_stdin(&mut scan, sandbox.root(), &format!("## Evidence\n{admitted}\n"));
+    assert_eq!(run.code, 0, "{admitted}: {}", run.describe());
+  }
+
+  for (refused, why) in [
+    (format!("View: /?session={SESSION_ID}\nEvidence {SESSION_ID}\n"), "the same id on another line"),
+    (format!("View: /?ref={SESSION_ID}\n"), "a View parameter other than session"),
+    (format!("View: /{SESSION_ID}\n"), "the path outside the query"),
+    (format!("View: https://example.invalid/?session={SESSION_ID}\n"), "a URL with a host"),
+    (format!("View: /?session={SESSION_ID}&other={OTHER_ID}\n"), "a second UUID on the same View line"),
+    (
+      format!("View: /?session={SESSION_ID}\nView: /?ref={OTHER_ID}\n"),
+      "a UUID outside the session of a second View line",
+    ),
+    (format!("  View: /?session={SESSION_ID}\n"), "an indented View line"),
+    (format!("{SESSION_ID}\n"), "the id on a line of its own"),
+  ] {
+    let run = run_with_stdin(&mut scan, sandbox.root(), &refused);
+    assert_eq!(run.code, 1, "{why}: {}", run.describe());
+  }
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_comment_admits_a_session_view_body_and_refuses_the_id_elsewhere() {
+  let sandbox = Sandbox::new();
+  let (env, gh_log, _home) = post(&sandbox);
+  let admitted = body_file(
+    &sandbox,
+    "admitted.md",
+    &format!("## Evidence\nbefore and after.\n\nView: /?tab=status&session={SESSION_ID}\n"),
+  );
+  let mut command = harness::command("bash", &env);
+  command.arg(github_post()).args(["pr-comment", "--body-file"]).arg(&admitted).arg("123");
+  let run = run_in(&mut command, sandbox.root());
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert_eq!(gh_log_lines(&gh_log).len(), 1, "the admitted body is sent");
+
+  let refused = body_file(&sandbox, "refused.md", &format!("View: /?session={SESSION_ID}\nEvidence {SESSION_ID}\n"));
+  let mut command = harness::command("bash", &env);
+  command.arg(github_post()).args(["pr-comment", "--body-file"]).arg(&refused).arg("123");
+  let run = run_in(&mut command, sandbox.root());
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert_eq!(gh_log_lines(&gh_log).len(), 1, "the refused body sends nothing");
+}
+
 // -- the git hooks and the host scan --
 
 /// The leak tools and the two hooks copied into `checkout`, at the paths a real checkout uses.

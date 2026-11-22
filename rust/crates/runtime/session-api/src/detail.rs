@@ -2547,6 +2547,34 @@ backends:
     body
   }
 
+  /// A first screen whose cursor lands inside its newest turn pages back from that cursor with no gap and no duplicate:
+  /// the older page holds the events before the cursor, and the first screen holds the events from it on.
+  #[tokio::test]
+  async fn an_events_page_before_a_mid_turn_cursor_joins_the_first_screen_with_no_gap() {
+    let (_home, features) = feature_context();
+    let meta = crate::test_support::create_node(&features.store, "mid-cursor-join", None, TaskProfile::Manager).await;
+    append_fixture_turn(&features.store, &meta.id, 1, 700, true).await;
+    let turn_users: Vec<String> = (0..10).map(|index| fixture_text(300 + index, 1_600)).collect();
+    for user in &turn_users {
+      features.store.append_chat_event(&meta.id, json!({"type": "user", "content": user})).await.unwrap();
+    }
+    features.store.append_chat_event(&meta.id, json!({"type": "master_done"})).await.unwrap();
+    features.store.append_chat_event(&meta.id, json!({"type": "run_finished", "run_id": "run-2"})).await.unwrap();
+    let bootstrap = build_bootstrap_payload(&features.store, &cfg_of(&features), &meta).unwrap();
+    let cursor = bootstrap.value["oldest_message_ordinal"].as_u64().unwrap() as usize;
+    let first_screen = bootstrap.value["messages"].as_array().unwrap();
+    assert!(!renders(first_screen, &turn_users[0]), "the cursor lands inside the newest turn");
+    assert!(renders(first_screen, &turn_users[9]), "the newest turn's last user message renders");
+    let page = events_page_body(&features, &meta.id, &format!("before={cursor}&limit=40")).await;
+    let older = page["messages"].as_array().unwrap();
+    assert_eq!(page["next_before"], json!(cursor.saturating_sub(40)), "the page starts 40 events before the cursor");
+    let mut all_users = vec![fixture_text(1, 700)];
+    all_users.extend(turn_users.iter().cloned());
+    for user in &all_users {
+      assert!(renders(older, user) ^ renders(first_screen, user), "a user message sits on exactly one page");
+    }
+  }
+
   /// The events page memo: a repeat request serves the body it built until the live log grows past what the page
   /// covers, then the page rebuilds. A `before` past the log's end names the newest page, so an appended event lands
   /// in it.

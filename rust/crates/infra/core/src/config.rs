@@ -821,8 +821,18 @@ fn legacy_destination(key: &str, schema: &ConfigSchema) -> Option<String> {
 /// missing or empty file loads as the schema defaults. Each registered section is parsed; a parse error
 /// fails the load.
 pub fn load_config(home: &Path, schema: &ConfigSchema) -> Result<CharlieBotConfig, ConfigError> {
-  let config_path = home.join(CONFIG_FILENAME);
-  let config_path_text = paths::display(&config_path);
+  load_config_file(home, &home.join(CONFIG_FILENAME), schema)
+}
+
+/// Load the config file at `config_path` as the config of the profile home `home`, against the registered packages'
+/// `schema`. [`load_config`] reads `<home>/config.yaml`; a tool that reads a config file outside a profile home, such
+/// as the repository's configuration example, loads it through this entry with the same checks.
+pub fn load_config_file(
+  home: &Path,
+  config_path: &Path,
+  schema: &ConfigSchema,
+) -> Result<CharlieBotConfig, ConfigError> {
+  let config_path_text = paths::display(config_path);
 
   let config_d = home.join(CONFIG_D_DIR_NAME);
   if config_d.is_dir() {
@@ -843,7 +853,7 @@ pub fn load_config(home: &Path, schema: &ConfigSchema) -> Result<CharlieBotConfi
     }
   }
 
-  let data = read_yaml_mapping(&config_path)?;
+  let data = read_yaml_mapping(config_path)?;
 
   let legacy_hits: Vec<(String, String)> = data
     .keys()

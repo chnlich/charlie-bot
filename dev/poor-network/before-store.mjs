@@ -266,7 +266,7 @@ function readJson(file) {
 }
 
 // The flags a command takes: `--name value` pairs, each named once.
-function flagsOf(argv) {
+export function flagsOf(argv) {
   const flags = {};
   for (let index = 0; index < argv.length; index += 2) {
     const name = argv[index];

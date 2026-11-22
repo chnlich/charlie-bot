@@ -73,6 +73,12 @@ A stored row that failed its target on R is stale. The run then takes the newest
 stale rows there; the other rows are reused only when they match the new R's key. The open group (the reference cell
 and the open conditions) is measured or reused as one, since the bench runs its reference cell with every open cell.
 
+The A/A decides which rows are load-safe (`aa.mjs`, which writes `~/pn-runs/aa/load-safe.json`). The same commit is
+measured on both sides in quiet windows and in loaded windows, six samples per row each. A metric's load effect is its
+loaded median minus its quiet median; its 90 % bootstrap interval must lie inside ±5 % of the quiet median. A row is
+load-safe when every one of its metrics passes. The A/A covers the metric rows (background, held, reset, stream,
+tools); starred, threads and the open cells have no metric here, so they are measured on both sides on every run.
+
 The after side is R with the change applied. The reply text the bench sends is the fixed fixture `reply-fixture.txt`,
 so a change to the repository docs cannot change what the bench sends; the fixture's bytes are part of the tree key.
 

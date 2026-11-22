@@ -2,6 +2,8 @@
 //! `backend run --resume <option>:<session>` continues the session a failed run named, on that option.
 //! `backend run --one-shot <system-file>` answers the task file's prompt through the option's one-shot. It serves only
 //! the backend types whose one-shot runs without tools, and refuses every other type by name.
+//! `backend check` scans text source files for a hardcoded backend choice; the match definition is in
+//! `charliebot-backend-check`.
 //!
 //! The server picks the option through `POST /api/backends/resolve`. `backend run --launch <dir>` takes an option a
 //! launcher resolved earlier, from `<dir>/option.json`, for a host that runs no server; its `<dir>/login` holds the
@@ -9,16 +11,19 @@
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::process::Command as ProcessCommand;
 
 use charliebot_agents::backend_run::{self, RunIdentity, RunStart};
 use charliebot_agents::call_resolve::RESOLVE_PATH;
 use charliebot_agents::cli_host::{CliHost, LazyHost};
+use charliebot_backend_check::{Hit, Roots, Vocabulary};
 use charliebot_cli_common::args as cli_args;
 use charliebot_cli_common::client;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::files;
 use charliebot_cli_common::json_out;
 use charliebot_core::config::{self, BackendOption};
+use charliebot_core::home;
 use charliebot_registry::backend::Env;
 use clap::{Args, Parser, Subcommand};
 use serde_json::{Value, json};
@@ -38,6 +43,15 @@ enum BackendCommand {
   /// session with `--resume`, or, with `--one-shot`, answer the prompt once instead, for the backend types whose
   /// one-shot runs without tools.
   Run(RunArgs),
+  /// Scan the repository, or the given paths, for a hardcoded backend choice. Each unexempt site prints on one line.
+  Check(CheckArgs),
+}
+
+#[derive(Args)]
+struct CheckArgs {
+  /// The files or directories to scan. With none, the git repository the working directory is in.
+  #[arg(value_name = "PATH")]
+  paths: Vec<PathBuf>,
 }
 
 #[derive(Args)]
@@ -95,7 +109,55 @@ pub fn main(args: &[OsString], lazy_host: &LazyHost) -> Result<(), CliExit> {
       Ok(())
     }
     BackendCommand::Run(args) => run_command(args, lazy_host),
+    BackendCommand::Check(args) => check_command(args),
   }
+}
+
+/// `backend check`: print each site that no exemption keeps, one per line, and exit 1 when one is printed. The
+/// vocabulary is the registered packages' plus the profile's `config.yaml` and the repository's configuration example.
+fn check_command(args: CheckArgs) -> Result<(), CliExit> {
+  let registry = charliebot_packages::registry().map_err(|error| CliExit::error(format!("{error:#}")))?;
+  let home = home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
+  let repo = git_toplevel()?;
+  let paths = match (args.paths.is_empty(), &repo) {
+    (true, Some(repo)) => vec![repo.clone()],
+    (true, None) => return Err(CliExit::usage("not in a git repository; name the paths to scan")),
+    (false, _) => args.paths,
+  };
+  let vocab =
+    Vocabulary::load(&registry, &home, repo.as_deref()).map_err(|error| CliExit::error(format!("{error:#}")))?;
+  let roots = Roots { repo, home };
+  let hits =
+    charliebot_backend_check::scan(&vocab, &roots, &paths).map_err(|error| CliExit::error(format!("{error:#}")))?;
+  let open: Vec<&Hit> = hits.iter().filter(|hit| hit.exempt.is_none()).collect();
+  for hit in &open {
+    let place = roots.repo.as_deref().and_then(|repo| hit.path.strip_prefix(repo).ok()).unwrap_or(&hit.path);
+    println!(
+      "{}:{} {} {}  -> backends.calls.<class> via charliebot backend resolve",
+      place.display(),
+      hit.line,
+      hit.class.label(),
+      hit.value
+    );
+  }
+  if !open.is_empty() {
+    std::process::exit(1);
+  }
+  Ok(())
+}
+
+/// The root of the git repository that the working directory is in, or `None` outside one.
+fn git_toplevel() -> Result<Option<PathBuf>, CliExit> {
+  let output = ProcessCommand::new("git")
+    .args(["rev-parse", "--show-toplevel"])
+    .output()
+    .map_err(|error| CliExit::error(format!("cannot run git: {error}")))?;
+  if !output.status.success() {
+    return Ok(None);
+  }
+  let root = String::from_utf8(output.stdout)
+    .map_err(|error| CliExit::error(format!("the git repository root is not UTF-8: {error}")))?;
+  Ok(Some(PathBuf::from(root.trim_end())))
 }
 
 /// The resolve answer the server returns: `{"option": <record>, "claude_config_dir"?: <dir>}`.

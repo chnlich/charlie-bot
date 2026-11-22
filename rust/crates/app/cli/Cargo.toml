@@ -15,6 +15,7 @@ charliebot-agents.workspace = true
 charliebot-artifacts.workspace = true
 charliebot-backup.workspace = true
 charliebot-charlie-code.workspace = true
+charliebot-backend-check.workspace = true
 charliebot-cli-common.workspace = true
 charliebot-claude-code.workspace = true
 charliebot-compat.workspace = true

@@ -231,3 +231,8 @@ jobs:
       - name: Format
         working-directory: rust
         run: cargo fmt --check
+
+      # Fails on a hardcoded backend choice in the repository's text source files, naming each file:line.
+      - name: Backend check
+        working-directory: rust
+        run: cargo run --locked -p charliebot-cli --bin charliebot -- backend check

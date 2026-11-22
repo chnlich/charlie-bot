@@ -445,6 +445,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "charliebot-backend-check"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "charliebot-compat",
+ "charliebot-core",
+ "charliebot-registry",
+ "ignore",
+ "proc-macro2",
+ "syn 2.0.119",
+ "tempfile",
+]
+
+[[package]]
 name = "charliebot-backup"
 version = "0.1.0"
 dependencies = [
@@ -539,6 +553,7 @@ dependencies = [
  "anyhow",
  "charliebot-agents",
  "charliebot-artifacts",
+ "charliebot-backend-check",
  "charliebot-backup",
  "charliebot-charlie-code",
  "charliebot-claude-code",

@@ -53,6 +53,7 @@ members = [
     "crates/features/voice",
     "crates/features/web_reply",
     "crates/features/web_search",
+    "crates/runtime/backend_check",
     "crates/runtime/store",
     "crates/runtime/registry",
     "crates/runtime/session-api",
@@ -169,6 +170,7 @@ charliebot-code-server = { path = "crates/features/code_server" }
 charliebot-codex = { path = "crates/backends/codex" }
 charliebot-devin = { path = "crates/backends/devin" }
 charliebot-cron = { path = "crates/features/cron" }
+charliebot-backend-check = { path = "crates/runtime/backend_check" }
 charliebot-compat = { path = "crates/infra/compat" }
 charliebot-core = { path = "crates/infra/core" }
 charliebot-diag = { path = "crates/features/diag" }

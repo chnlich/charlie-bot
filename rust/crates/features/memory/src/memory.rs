@@ -421,8 +421,9 @@ pub fn full_text(entry: &Entry) -> String {
   if body.starts_with("# ") { body.to_string() } else { format!("# {}\n\n{body}", entry.title) }
 }
 
-/// The index line of one entry: `<topic>/<slug> · <title>`.
-fn index_line(entry: &Entry) -> String {
+/// The index line of one entry: `<topic>/<slug> · <title>`. The injected prompt index and `memory query --index`
+/// both render their lines through this function.
+pub fn index_line(entry: &Entry) -> String {
   format!("{} · {}", entry.id(), entry.title)
 }
 

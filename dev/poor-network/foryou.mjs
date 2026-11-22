@@ -5,16 +5,18 @@
 //
 // The targets are seeded once per side (`seedForYouTargets`): the large target also carries a bootstrap sized to the
 // live view's, and both targets end in a tail of scheduled-trigger turns. A trigger turn carries no For-you row (its
-// message is a trigger, its reply the backend's assistant text), so the newest 40 messages hold none and the newest
-// For-you row — the tail's last human turn — sits a few hundred event lines back, inside the bootstrap's 2,000-line
-// For-you scan. The seed asserts that shape, so a stub or a scan-bound change fails the seed instead of measuring a
-// different defect.
+// message is a trigger, its reply the backend's assistant text, and its turn-end checks show agent messages), so the
+// newest 40 messages hold none and the newest For-you row — the tail's last human turn — sits a few hundred event
+// lines back, inside the bootstrap's 2,000-line For-you scan. The seed counts rows with the page's own For-you rule
+// (`paintsInForYou`) and asserts the marker is among the newest rows the first paint carries, so a stub or a
+// scan-bound change fails the seed instead of measuring a different defect.
 //
 // Every repetition runs in a fresh browser profile behind a fresh proxy. The switch cells run under the background
 // load of scenarios 1 to 3, as the diagnostic run they replace did; the first-open cells run on another fresh
 // profile, whose browser has opened a chat page before, but never the target (the open scenario's case B).
 
 import { VIEW } from './profile.mjs';
+import { paintsInForYou } from './newest-row.mjs';
 import { PAGE_REPORT_BINDING, pollFor, sleep } from './tabs.mjs';
 
 import { deliverReplyOnline } from './open.mjs';
@@ -48,9 +50,12 @@ const FAIL_OBSERVE_TIMEOUT_MS = 30000;
 const PHASE_OBSERVE_TIMEOUT_MS = 10000;
 
 const SHOW_TIMEOUT_MS = 180000;
-
-// The For-you roles, as the page's FOR_YOU_RULE carries them without the draft: a row the first screen must not hold.
-const FOR_YOU_ROW_ROLES = Object.freeze(['user', 'web_reply', 'web_reply_notice']);
+// The newest For-you rows a bootstrap carries before its first screen (store/for_you.rs FOR_YOU_MAX_ROWS). A marker
+// within them is painted with the view's first rows.
+const FOR_YOU_HEAD_ROWS = 10;
+// The event lines one marker walk may read back: the seed keeps the tail under TAIL_MAX_EVENT_LINES, so this is the
+// 2,000-line scan bound's page count with margin.
+const MARKER_WALK_MAX_PAGES = 60;
 
 function randomTag() {
   return Math.random().toString(16).slice(2, 10);
@@ -94,6 +99,30 @@ async function addTriggerTail(api, session) {
   }
 }
 
+// The painted rows the page's For-you rule shows before the first screen, counted from `oldest` back until `marker`
+// is found: `newer` is how many the view paints above the marker. The walk reads the event pages the page's own
+// older-page request reads, so a row the page cannot reach is not counted.
+async function forYouRowsAbove(api, sessionId, oldest, marker) {
+  let cursor = oldest;
+  let newer = 0;
+  for (let page = 0; page < MARKER_WALK_MAX_PAGES; page++) {
+    const answer = await api.json('GET', `/api/sessions/${sessionId}/events?before=${cursor}&limit=40`);
+    const messages = answer.messages ?? [];
+    for (let index = messages.length - 1; index >= 0; index--) {
+      const message = messages[index];
+      if (message.role === 'user' && message.content === marker) {
+        return {found: true, newer};
+      }
+      if (paintsInForYou(message)) newer++;
+    }
+    if (!answer.has_more) {
+      return {found: false, newer};
+    }
+    cursor = answer.next_before;
+  }
+  return {found: false, newer};
+}
+
 // Seeds the two For-you targets once per side, after the bench's own sessions exist. The large target is sized
 // first, both targets get the marker turn (the newest human turn, the newest For-you row), then the trigger tail.
 // Returns the two targets with their marker text, and asserts each one's shape from its bootstrap.
@@ -114,11 +143,25 @@ export async function seedForYouTargets(api, sessions) {
     const markerBootstrap = await bootstrapOf(api, target.id);
     await addTriggerTail(api, target);
     const bootstrap = await bootstrapOf(api, target.id);
-    const forYouRows = bootstrap.messages.filter((message) => FOR_YOU_ROW_ROLES.includes(message.role));
+    const forYouRows = bootstrap.messages.filter(paintsInForYou);
     if (forYouRows.length > 0) {
       throw new Error(
         `the For-you target ${target.id}'s first screen holds ${forYouRows.length} For-you rows, ` +
           `so its switch has no older row to reach`,
+      );
+    }
+    // The marker is the newest For-you row before the first screen, so the view paints it with its first rows: the
+    // bootstrap's head carries the newest ten painted rows, and the marker must be one of them.
+    const above = await forYouRowsAbove(api, target.id, bootstrap.oldest_message_ordinal, marker);
+    if (!above.found) {
+      throw new Error(
+        `the For-you target ${target.id}'s marker is not among the painted rows behind its first screen`,
+      );
+    }
+    if (above.newer >= FOR_YOU_HEAD_ROWS) {
+      throw new Error(
+        `the For-you target ${target.id}'s marker sits behind ${above.newer} painted rows, past the newest ` +
+          `${FOR_YOU_HEAD_ROWS} a bootstrap carries`,
       );
     }
     // The marker turn's own events stand between the count its turn reported and the tail's first event, so the

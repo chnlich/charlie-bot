@@ -1,39 +1,60 @@
-// The For-you scenario's seed, against a scripted api: the shape it requires, and the two ways a target can fall
-// out of that shape.
+// The For-you scenario's seed, against a scripted api: the shape it requires, the page's For-you rule it counts
+// with, and the ways a target can fall out of that shape.
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { seedForYouTargets } from './foryou.mjs';
 
-// An api whose session carries `roles` in its first screen and adds `tailLines` event lines with the tail. The large
-// target's sizing reads a bootstrap already over the view's bytes, so one turn sizes it.
-function fakeApi({ roles, tailLines }) {
+// An api whose session log ends with the marker turn and `above` (the painted rows that turn leaves, one notice by
+// default), followed by the trigger tail's rows (none painted). The bootstrap's first screen carries `firstScreen`
+// (the tail's newest rows in a real run) and its `oldest_message_ordinal` is where the log ends. A bootstrap read
+// after the first reports `tailLines` more event lines than the marker turn's read.
+function fakeApi({
+  firstScreen = [], above = [{role: 'web_reply_notice', content: 'notice'}], tailLines = 10, recordMarker = true,
+} = {}) {
   const calls = [];
-  const markerCounts = new Map();
-  let eventCount = 100;
+  const logs = new Map();
+  const bootstrapReads = new Map();
+  const logOf = (id) => {
+    if (!logs.has(id)) logs.set(id, []);
+    return logs.get(id);
+  };
+  const bootstrapOf = (id) => {
+    const reads = (bootstrapReads.get(id) ?? 0) + 1;
+    bootstrapReads.set(id, reads);
+    return {
+      event_count: reads === 1 ? 100 : 100 + tailLines,
+      oldest_message_ordinal: logOf(id).length,
+      messages: firstScreen,
+    };
+  };
   return {
     calls,
     async sendMessage(id, content) {
       calls.push(['send', id, content]);
+      logOf(id).push({role: 'user', content: recordMarker ? content : 'another message'}, ...above);
     },
     async waitForIdle() {},
     async scheduleTrigger(id, _delay, message) {
       calls.push(['trigger', id, message]);
+      logOf(id).push({role: 'scheduled_trigger', content: message}, {role: 'assistant', content: 'tail reply'});
       return `trigger-${calls.length}`;
     },
-    async bootstrapWireBytes(id) {
-      return { wireBytes: 10, untrimmedBytes: 999999 };
+    async bootstrapWireBytes() {
+      return {wireBytes: 10, untrimmedBytes: 999999};
     },
     async json(_method, path) {
       calls.push(['get', path]);
-      // The marker's bootstrap is the first read of a target; the second carries the tail's lines on top of it.
-      const id = path.match(/api\/sessions\/([^/]+)\/bootstrap/)[1];
-      if (!markerCounts.has(id)) {
-        markerCounts.set(id, eventCount);
-        return { event_count: eventCount, messages: roles.map((role) => ({ role })) };
+      const events = path.match(/api\/sessions\/([^/]+)\/events\?before=(\d+)&limit=40/);
+      if (events) {
+        const log = logOf(events[1]);
+        const before = Number(events[2]);
+        const start = Math.max(0, before - 40);
+        return {has_more: start > 0, next_before: start, messages: log.slice(start, before)};
       }
-      return { event_count: markerCounts.get(id) + tailLines, messages: roles.map((role) => ({ role })) };
+      const id = path.match(/api\/sessions\/([^/]+)\/bootstrap$/)[1];
+      return bootstrapOf(id);
     },
   };
 }
@@ -41,7 +62,7 @@ function fakeApi({ roles, tailLines }) {
 const SESSIONS = { foryouLarge: { id: 'large', group: 'g' }, foryouTypical: { id: 'typical', group: 'g' } };
 
 test('the seed gives both targets the marker turn and the trigger tail, and returns their markers', async () => {
-  const api = fakeApi({ roles: ['assistant', 'scheduled_trigger'], tailLines: 10 });
+  const api = fakeApi();
   const targets = await seedForYouTargets(api, SESSIONS);
   // Each target's marker names it, so a cell's marker is on no other target's page.
   assert.notEqual(targets.large.marker, targets.typical.marker);
@@ -57,12 +78,28 @@ test('the seed gives both targets the marker turn and the trigger tail, and retu
   assert.equal(api.calls.filter((call) => call[0] === 'trigger' && call[1] === 'typical').length, 23);
 });
 
-test('a first screen that already holds a For-you row fails the seed', async () => {
-  const api = fakeApi({ roles: ['assistant', 'user'], tailLines: 10 });
-  await assert.rejects(seedForYouTargets(api, SESSIONS), /first screen holds .* For-you rows/);
+test('a first screen that holds a For-you row by the page rule fails the seed', async () => {
+  // A painted row of each kind the page's rule counts: a reply role and an error row (a system row with the prefix).
+  for (const painted of [{role: 'user', content: 'unexpected'}, {role: 'system', content: 'Error: blocked'}]) {
+    const api = fakeApi({firstScreen: [painted]});
+    await assert.rejects(seedForYouTargets(api, SESSIONS), /first screen holds 1 For-you rows/);
+  }
+});
+
+test('a marker behind the newest ten painted rows fails the seed', async () => {
+  const notices = Array.from({length: 10}, (_, index) => ({role: 'web_reply_notice', content: `notice ${index}`}));
+  const api = fakeApi({above: notices});
+  await assert.rejects(seedForYouTargets(api, SESSIONS), /marker sits behind 10 painted rows/);
+});
+
+test('a marker the walk never finds fails the seed', async () => {
+  // The log holds a different user message where the marker should be, so the walk ends at the log's start without
+  // meeting the marker: the seed fails rather than timing another row.
+  const api = fakeApi({recordMarker: false});
+  await assert.rejects(seedForYouTargets(api, SESSIONS), /marker is not among the painted rows/);
 });
 
 test('a trigger tail that reaches past the For-you scan bound fails the seed', async () => {
-  const api = fakeApi({ roles: ['assistant', 'scheduled_trigger'], tailLines: 1600 });
+  const api = fakeApi({tailLines: 1600});
   await assert.rejects(seedForYouTargets(api, SESSIONS), /trigger tail spans 1600 event lines/);
 });

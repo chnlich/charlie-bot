@@ -11,6 +11,7 @@ use charliebot_agents::cli_host::LazyHost;
 use charliebot_cli_common::args as cli_args;
 use charliebot_cli_common::client;
 use charliebot_cli_common::exit::CliExit;
+use charliebot_cli_common::fields::SESSION_ID;
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::resolve;
 use charliebot_cli_common::route;
@@ -203,7 +204,7 @@ enum Verb {
 
 fn present_payload(session_id: &str, args: &PresentArgs) -> Value {
   json!({
-    "session_id": session_id,
+    (SESSION_ID): session_id,
     "file": args.file,
     "title": args.title,
     "base_repo": args.base.base_repo,
@@ -214,7 +215,7 @@ fn present_payload(session_id: &str, args: &PresentArgs) -> Value {
 
 fn amend_payload(session_id: &str, args: &AmendArgs) -> Value {
   json!({
-    "session_id": session_id,
+    (SESSION_ID): session_id,
     "file": args.file,
     "plan_id": args.plan,
     "trigger": args.trigger,
@@ -226,11 +227,11 @@ fn amend_payload(session_id: &str, args: &AmendArgs) -> Value {
 }
 
 fn approve_payload(session_id: &str, args: &ApproveArgs) -> Value {
-  json!({ "session_id": session_id, "plan_id": args.plan })
+  json!({ (SESSION_ID): session_id, "plan_id": args.plan })
 }
 
 fn close_payload(session_id: &str, args: &CloseArgs) -> Value {
-  json!({ "session_id": session_id, "plan_id": args.plan, "close_as": args.close_as })
+  json!({ (SESSION_ID): session_id, "plan_id": args.plan, "close_as": args.close_as })
 }
 
 /// The post of one registering verb, answering a sent-but-lost call from the session's own registry and adding the

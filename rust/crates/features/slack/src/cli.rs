@@ -17,6 +17,7 @@ use charliebot_cli_common::channel_verb::{ReplyArgs, post_reply};
 use charliebot_cli_common::client;
 use charliebot_cli_common::credentials::unavailable;
 use charliebot_cli_common::exit::CliExit;
+use charliebot_cli_common::fields::SESSION_ID;
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::request::{self, RequestArgs};
 use charliebot_cli_common::{draft as draft_register, files, resolve};
@@ -199,7 +200,7 @@ fn reply(args: &ReplyArgs) -> Result<(), CliExit> {
 
 fn ack(args: &AckArgs) -> Result<(), CliExit> {
   let session_id = resolve::resolve_from_env(args.session.as_deref())?;
-  let result = client::post(ACK_PATH, json!({ "session_id": session_id, (MESSAGE_IDS): args.message_id }), None, &[])?;
+  let result = client::post(ACK_PATH, json!({ (SESSION_ID): session_id, (MESSAGE_IDS): args.message_id }), None, &[])?;
   print!("{}", json_out::render(&result, None));
   Ok(())
 }

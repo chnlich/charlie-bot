@@ -1,4 +1,4 @@
-//! Cold-cache Sonnet compaction of an account's Claude transcript.
+//! Cold-cache compaction of an account's Claude transcript, on the model of the `backends.calls.compaction` option.
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -7,7 +7,7 @@ use std::path::Path;
 use std::time::Duration as StdDuration;
 
 use anyhow::Context;
-use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::config::{BackendOption, CallClass, CharlieBotConfig};
 use charliebot_core::event_types::{
   COMPACT_BOUNDARY, COMPACT_POST_TOKENS, COMPACT_PRE_TOKENS, EDIT_TOOL, GLOB_TOOL, GREP_TOOL, IS_ERROR, MODEL_USAGE,
   NOTEBOOK_EDIT_TOOL, READ_TOOL, SKILL_TOOL, WRITE_TOOL,
@@ -33,9 +33,6 @@ use super::{
 
 pub const CACHE_TTL: StdDuration = StdDuration::from_secs(60 * 60);
 pub const CLAUDE_COMPACTION_TIMEOUT: StdDuration = StdDuration::from_secs(900);
-pub const COMPACTION_MODEL: &str = "claude-sonnet-5";
-pub const FABLE_FAMILY: &str = "fable";
-const COMPACTION_FAMILY: &str = "sonnet";
 const COMPACT_PROMPT: &[u8] = b"/compact\n";
 const COST_STATE_MARKER: &str = "\"cost-state\"";
 const USAGE_COUNTERS: [&str; 4] = ["inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens"];
@@ -68,8 +65,26 @@ fn extra_compaction_tools() -> String {
 
 pub use charliebot_registry::backend::{CompactionOutcome, CompactionRun};
 
-pub fn is_fable(model: Option<&str>) -> bool {
-  model_family(model) == FABLE_FAMILY
+/// The option `backends.calls.compaction` names, or `None` when the key is unset: an unset key compacts nothing.
+fn compaction_option(cfg: &CharlieBotConfig) -> Option<&BackendOption> {
+  cfg.backends.call_option(CallClass::Compaction)
+}
+
+/// Whether the model's family is one `accounts.claude_compaction.families` lists. A configured compaction with no
+/// families list is an error that names the key, so no session is compacted on a guessed family.
+fn family_is_compacted(cfg: &CharlieBotConfig, model: Option<&str>) -> anyhow::Result<bool> {
+  let families = cfg
+    .section::<claude_config::AccountsConfig>("accounts")
+    .claude_compaction
+    .families
+    .as_ref()
+    .context("accounts.claude_compaction.families is unset while backends.calls.compaction is set")?;
+  Ok(families.contains(&model_family(model)))
+}
+
+/// Whether a session on `model` may compact at all: `backends.calls.compaction` is set and the family is listed.
+fn compaction_applies(cfg: &CharlieBotConfig, model: Option<&str>) -> anyhow::Result<bool> {
+  Ok(compaction_option(cfg).is_some() && family_is_compacted(cfg, model)?)
 }
 
 pub fn cache_expired(last_request_at: Option<UtcDateTime>, now: Option<UtcDateTime>) -> bool {
@@ -86,23 +101,32 @@ pub fn expired_cache_compaction_wanted(
   context_tokens: Option<i64>,
   last_request_at: Option<UtcDateTime>,
   now: Option<UtcDateTime>,
-) -> bool {
-  is_fable(model)
-    && context_tokens.is_some_and(|tokens| {
+) -> anyhow::Result<bool> {
+  if !compaction_applies(cfg, model)? {
+    return Ok(false);
+  }
+  Ok(
+    context_tokens.is_some_and(|tokens| {
       u64::try_from(tokens).is_ok_and(|tokens| {
         tokens >= cfg.section::<claude_config::AccountsConfig>("accounts").claude_compaction.expired_cache_tokens
       })
-    })
-    && cache_expired(last_request_at, now)
+    }) && cache_expired(last_request_at, now),
+  )
 }
 
-pub fn relay_compaction_wanted(cfg: &CharlieBotConfig, model: Option<&str>, context_tokens: Option<i64>) -> bool {
-  is_fable(model)
-    && context_tokens.is_some_and(|tokens| {
-      u64::try_from(tokens).is_ok_and(|tokens| {
-        tokens >= cfg.section::<claude_config::AccountsConfig>("accounts").claude_compaction.relay_tokens
-      })
+pub fn relay_compaction_wanted(
+  cfg: &CharlieBotConfig,
+  model: Option<&str>,
+  context_tokens: Option<i64>,
+) -> anyhow::Result<bool> {
+  if !compaction_applies(cfg, model)? {
+    return Ok(false);
+  }
+  Ok(context_tokens.is_some_and(|tokens| {
+    u64::try_from(tokens).is_ok_and(|tokens| {
+      tokens >= cfg.section::<claude_config::AccountsConfig>("accounts").claude_compaction.relay_tokens
     })
+  }))
 }
 
 pub fn model_family(model: Option<&str>) -> String {
@@ -188,7 +212,7 @@ fn newest_boundary_compact_metadata(path: &Path) -> anyhow::Result<Option<Value>
   Ok(row.get("compactMetadata").and_then(Value::as_object).map(|meta| Value::Object(snake_case_keys(meta))))
 }
 
-pub fn compaction_command(session_id: &str, charliebot_session_id: &str) -> Vec<String> {
+pub fn compaction_command(session_id: &str, charliebot_session_id: &str, model: &str) -> Vec<String> {
   let mut settings = Map::new();
   settings.insert(claude_launch::DISABLE_CONNECTOR_SETTINGS_KEY.to_string(), Value::Bool(true));
   settings.extend(claude_launch::compaction_context_hook_settings(charliebot_session_id, None));
@@ -198,7 +222,7 @@ pub fn compaction_command(session_id: &str, charliebot_session_id: &str) -> Vec<
     "--resume".to_string(),
     session_id.to_string(),
     "--model".to_string(),
-    COMPACTION_MODEL.to_string(),
+    model.to_string(),
     "--output-format".to_string(),
     "json".to_string(),
     DISALLOWED_TOOLS_FLAG.to_string(),
@@ -392,15 +416,19 @@ async fn compact_with_sonnet_inner(
     trigger,
     timeout_duration,
   } = input;
+  let Some(option) = compaction_option(cfg) else {
+    return Ok(false);
+  };
   let env = make_env(config_dir)?;
+  let family = model_family(Some(&option.model));
   let outcome = run_compaction_inner(CompactionRun {
-    argv: compaction_command(session_id, session_cgroup_id),
+    argv: compaction_command(session_id, session_cgroup_id, &option.model),
     env,
     cwd,
     config_dir,
     session_id,
-    family: COMPACTION_FAMILY,
-    model: COMPACTION_MODEL,
+    family: &family,
+    model: &option.model,
     trigger: "manual",
     failure_trigger: None,
     pre_tokens,
@@ -580,7 +608,7 @@ mod tests {
 
   #[test]
   fn compaction_command_disables_skills_and_installs_the_compaction_context_hook() {
-    let command = compaction_command("claude-session", "charlie-session");
+    let command = compaction_command("claude-session", "charlie-session", "claude-sonnet-5");
     let disallowed_index = command.iter().position(|value| *value == DISALLOWED_TOOLS_FLAG).unwrap();
     assert_eq!(
       command[disallowed_index + 1],
@@ -618,12 +646,43 @@ mod tests {
     assert_eq!(commands, expected);
   }
 
-  fn config(home: &Path) -> CharlieBotConfig {
+  const SONNET_OPTION: &str = "  - {id: claude-sonnet, label: Sonnet, type: cc-claude, model: claude-sonnet-5}\n";
+
+  fn load(home: &Path, yaml: &str) -> CharlieBotConfig {
     fs::create_dir_all(home).unwrap();
-    fs::write(home.join("config.yaml"), "server:\n  session_memory_max_mb: 0\n").unwrap();
+    fs::write(home.join("config.yaml"), yaml).unwrap();
     let mut registry = Registry::new();
     registry.register_package("backends.claude_code", crate::register).unwrap();
     registry.load_config(home).unwrap()
+  }
+
+  /// A home whose compaction runs on the Sonnet option, for the families that Fable sessions name.
+  fn config(home: &Path) -> CharlieBotConfig {
+    load(
+      home,
+      &format!(
+        "server:\n  session_memory_max_mb: 0\naccounts:\n  claude: []\n  claude_compaction:\n    families: [fable]\n\
+         backends:\n  options:\n{SONNET_OPTION}  calls:\n    compaction: claude-sonnet\n"
+      ),
+    )
+  }
+
+  #[test]
+  fn an_unset_compaction_key_compacts_nothing_and_an_unset_families_list_names_its_key() {
+    let root = tempfile::tempdir().unwrap();
+    let fable = Some("claude-fable-5-2");
+    let unset = load(&root.path().join("unset"), "server:\n  session_memory_max_mb: 0\naccounts:\n  claude: []\n");
+    assert!(!relay_compaction_wanted(&unset, fable, Some(200_000)).unwrap());
+    assert!(!expired_cache_compaction_wanted(&unset, fable, Some(200_000), None, None).unwrap());
+
+    let no_families = load(
+      &root.path().join("families"),
+      &format!(
+        "server:\n  session_memory_max_mb: 0\nbackends:\n  options:\n{SONNET_OPTION}  calls:\n    compaction: claude-sonnet\n"
+      ),
+    );
+    let error = relay_compaction_wanted(&no_families, fable, Some(200_000)).unwrap_err();
+    assert!(error.to_string().contains("accounts.claude_compaction.families"), "{error}");
   }
 
   fn fake_env(bin: &Path, home: &Path, config_dir: &Path) -> Env {

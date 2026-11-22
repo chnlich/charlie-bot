@@ -10,7 +10,7 @@ use axum::extract::{Path as AxumPath, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri, header, request::Parts};
 use axum::response::Response;
 use bytes::Bytes;
-use charliebot_agents::model_pool::POOL_MEMBER_FIELD;
+use charliebot_agents::model_pool::{MISSING_BACKEND_OPTION, POOL_MEMBER_FIELD};
 use charliebot_agents::pool_display::session_metadata_shown;
 use charliebot_cli_common::route;
 use charliebot_compat::compression::{PageTail, gzip_memoized_body, zstd_memoized_body};
@@ -644,7 +644,10 @@ fn index_answer(
       bootstrap_text = Some(Arc::clone(&bootstrap.text));
     }
   }
-  let default_backend_id = cfg.backends.new_session_backend().unwrap_or_else(|| "claude".to_string());
+  let default_backend_id = cfg
+    .backends
+    .new_session_backend()
+    .ok_or_else(|| Failure::new(responses::CONFIG_ERROR_CLASS, MISSING_BACKEND_OPTION))?;
   let active_backend = active_backend_id(cfg, &active_session, &default_backend_id);
   let active_option = cfg.get_backend_option(active_backend);
   let backend_pools =
@@ -1682,7 +1685,7 @@ mod tests {
       .expect("the credentials file");
     std::fs::write(
       home.path().join("config.yaml"),
-      "backends:\n  options:\n    - {id: synthetic-claude, label: Synthetic, type: cc-claude, model: claude-opus-5}\n",
+      "backends:\n  options:\n    - {id: synthetic-claude, label: Synthetic, type: cc-claude, model: claude-opus-5}\n  calls:\n    new_session: synthetic-claude\n",
     )
     .expect("the config file");
     let (app, features) = composed_app(home.path());

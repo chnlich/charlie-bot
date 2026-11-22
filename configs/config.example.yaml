@@ -207,6 +207,9 @@ accounts:
   claude_compaction:
     relay_tokens: 100000
     expired_cache_tokens: 50000
+    # The model families the relay and cold-cache compactions apply to. Unset with backends.calls.compaction set, the
+    # compaction fails and names this key.
+    families: [fable]
 
 # Claude Code: the backend package's own switches.
 claude_code:

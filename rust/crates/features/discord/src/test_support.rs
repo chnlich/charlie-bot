@@ -300,6 +300,12 @@ impl Home {
       type_fields: Default::default(),
       visible: true,
     });
+    loaded.backends.calls = [(
+      charliebot_core::config::CallClass::NewSession,
+      charliebot_core::config::CallTarget::Backend(FIXTURE_BACKEND.to_string()),
+    )]
+    .into_iter()
+    .collect();
     fs::create_dir_all(loaded.sessions_dir()).expect("the synthetic sessions directory exists");
     let store = Arc::new(
       Store::new(loaded, registry.metadata_slots(), store_hooks(Arc::clone(&registry))).expect("the store opens"),

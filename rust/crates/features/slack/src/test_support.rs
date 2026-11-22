@@ -95,6 +95,12 @@ impl Home {
       type_fields: Default::default(),
       visible: true,
     });
+    loaded.backends.calls = [(
+      charliebot_core::config::CallClass::NewSession,
+      charliebot_core::config::CallTarget::Backend("synthetic-slack".to_string()),
+    )]
+    .into_iter()
+    .collect();
     let config_reload = loaded.clone();
     let config = Arc::new(HotReload::new(
       loaded.config_file(),

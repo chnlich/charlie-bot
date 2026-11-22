@@ -30,7 +30,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::route_support::store_error;
-use crate::write_routes::{config, default_backend_id, resolve_requested_backend, typed};
+use crate::write_routes::{config, resolve_requested_backend, typed};
 
 /// `models.ForkSessionRequest`: the fork body is optional, and each field has a default.
 const FORK_FIELDS: &[Field] = &[
@@ -96,7 +96,7 @@ async fn fork_session(
     fields.backend.as_deref(),
     &cfg,
     &features.registry,
-    &parent_backend_or_default(&parent, &cfg),
+    parent_backend_or_default(&parent, &cfg).as_deref(),
   ) {
     Ok(backend) => backend,
     Err(error) => return task_http_error(error),
@@ -156,7 +156,7 @@ async fn elone_session(
     fields.backend.as_deref(),
     &cfg,
     &features.registry,
-    &parent_backend_or_default(&parent, &cfg),
+    parent_backend_or_default(&parent, &cfg).as_deref(),
   ) {
     Ok(backend) => backend,
     Err(error) => return task_http_error(error),
@@ -209,8 +209,8 @@ fn elone_fields(body: &RequestBody) -> Result<EloneFields, Box<Response>> {
 }
 
 /// The backend a successor inherits when the request names none: the parent's, or the default when it has none.
-fn parent_backend_or_default(parent: &SessionMetadata, cfg: &CharlieBotConfig) -> String {
-  if parent.backend.is_empty() { default_backend_id(cfg) } else { parent.backend.clone() }
+fn parent_backend_or_default(parent: &SessionMetadata, cfg: &CharlieBotConfig) -> Option<String> {
+  if parent.backend.is_empty() { cfg.backends.new_session_backend() } else { Some(parent.backend.clone()) }
 }
 
 /// `_successor_tree_note`: the two tree sentences that every fork and elone bootstrap appends.

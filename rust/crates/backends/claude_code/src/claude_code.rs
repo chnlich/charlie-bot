@@ -1452,7 +1452,7 @@ mod tests {
   fn only_the_manager_work_and_iteration_lists_lose_agent_with_the_switch_on() {
     let one_shot = one_shot_argv(&[], "/synthetic/system.txt");
     assert!(disallowed_tools_value(&one_shot).split(',').any(|tool| tool == AGENT_TOOL), "the one-shot list");
-    let compaction = crate::claude_compaction::compaction_command("cc-session", "charlie-session");
+    let compaction = crate::claude_compaction::compaction_command("cc-session", "charlie-session", "claude-sonnet-5");
     assert!(disallowed_tools_value(&compaction).split(',').any(|tool| tool == AGENT_TOOL), "the compaction list");
 
     let run_kinds = [RunKind::ManagerTurn, RunKind::Work, RunKind::Review, RunKind::Iteration, RunKind::ScheduledStep];

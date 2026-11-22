@@ -627,14 +627,25 @@ impl BackendsConfig {
   }
 
   /// The backend a new session takes when its request names none, the session the scheduler creates for a task
-  /// included: the `backends.calls.new_session` target, else the first `backends.options` id, else `None` when neither
-  /// is configured.
+  /// included: the `backends.calls.new_session` target, or `None` when that key is unset.
   pub fn new_session_backend(&self) -> Option<String> {
-    match self.calls.get(CallClass::NewSession) {
-      Some(CallTarget::Backend(backend_id)) => Some(backend_id.clone()),
-      Some(CallTarget::Session) => unreachable!("the config loader refuses session on backends.calls.new_session"),
-      None => self.options.first().map(|option| option.id.clone()),
-    }
+    self.calls.get(CallClass::NewSession).map(|target| match target {
+      CallTarget::Backend(backend_id) => backend_id.clone(),
+      CallTarget::Session => unreachable!("the config loader refuses session on backends.calls.new_session"),
+    })
+  }
+
+  /// The option a single-option call class names (`web_search`, `compaction`), or `None` when its key is unset. The
+  /// loader has refused a pool for these classes, so the target is always a `backends.options` id.
+  pub fn call_option(&self, class: CallClass) -> Option<&BackendOption> {
+    self.calls.get(class).map(|target| match target {
+      CallTarget::Backend(option_id) => self
+        .options
+        .iter()
+        .find(|option| &option.id == option_id)
+        .unwrap_or_else(|| unreachable!("the config loader names an option for backends.calls.{}", class.key())),
+      CallTarget::Session => unreachable!("the config loader refuses session on backends.calls.{}", class.key()),
+    })
   }
 }
 

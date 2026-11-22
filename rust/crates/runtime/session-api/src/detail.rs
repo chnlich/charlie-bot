@@ -13,6 +13,7 @@ use axum::body::{Body, Bytes};
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
+use charliebot_agents::model_pool::MISSING_BACKEND_OPTION;
 use charliebot_agents::pool_display::session_detail_shown;
 use charliebot_cli_common::fields::LIMIT;
 use charliebot_compat::compression::{accepts_gzip, gzip_level_one};
@@ -1136,11 +1137,10 @@ fn active_backend_payload(
   cfg: &CharlieBotConfig,
 ) -> StoreResult<Map<String, Value>> {
   let live_run_backend = (meta.profile == TaskProfile::Worker).then(|| store.run_backend(&meta.id)).flatten();
-  let active_backend = displayed_backend_id(
-    meta,
-    live_run_backend.as_deref(),
-    cfg.backends.options.first().map_or("claude", |option| option.id.as_str()),
-  );
+  let active_backend = match displayed_backend_id(meta, live_run_backend.as_deref()) {
+    Some(backend) => backend,
+    None => cfg.backends.new_session_backend().ok_or_else(|| StoreError::invalid(MISSING_BACKEND_OPTION))?,
+  };
   let active_option = cfg.get_backend_option(&active_backend);
   let known_active = cfg.backends.pool(&active_backend).is_some() || active_option.is_some();
   // A session whose backend names no configured id keeps that id first, marked "(not in config)" by the page.
@@ -1163,7 +1163,7 @@ fn active_backend_payload(
 }
 
 /// The displayed backend: only a worker's in-memory run backend overrides its metadata backend.
-fn displayed_backend_id(meta: &SessionMetadata, run_backend: Option<&str>, default_backend: &str) -> String {
+fn displayed_backend_id(meta: &SessionMetadata, run_backend: Option<&str>) -> Option<String> {
   let active_backend = if meta.profile == TaskProfile::Worker {
     run_backend
       .filter(|backend| !backend.is_empty())
@@ -1171,7 +1171,7 @@ fn displayed_backend_id(meta: &SessionMetadata, run_backend: Option<&str>, defau
   } else {
     (!meta.backend.is_empty()).then_some(meta.backend.as_str())
   };
-  active_backend.unwrap_or(default_backend).to_string()
+  active_backend.map(str::to_string)
 }
 
 fn listed_session_metadata(store: &Store, meta: &SessionMetadata) -> StoreResult<Value> {
@@ -2137,15 +2137,18 @@ backends:
     manager.backend = "synthetic-configured-backend".to_string();
     manager.run_backend = Some("synthetic-retired-backend".to_string());
     assert_eq!(
-      displayed_backend_id(&manager, Some("synthetic-retired-backend"), "claude"),
-      "synthetic-configured-backend"
+      displayed_backend_id(&manager, Some("synthetic-retired-backend")).as_deref(),
+      Some("synthetic-configured-backend")
     );
 
     let mut worker = SessionMetadata::new("synthetic-worker", "Synthetic worker", TaskProfile::Worker);
     worker.backend = "synthetic-configured-backend".to_string();
     worker.run_backend = Some("synthetic-retired-backend".to_string());
-    assert_eq!(displayed_backend_id(&worker, None, "claude"), "synthetic-configured-backend");
-    assert_eq!(displayed_backend_id(&worker, Some("synthetic-retired-backend"), "claude"), "synthetic-retired-backend");
+    assert_eq!(displayed_backend_id(&worker, None).as_deref(), Some("synthetic-configured-backend"));
+    assert_eq!(
+      displayed_backend_id(&worker, Some("synthetic-retired-backend")).as_deref(),
+      Some("synthetic-retired-backend")
+    );
 
     let (_home, features) = feature_context();
     features.store.note_run_backend(&worker.id, "synthetic-retired-backend");

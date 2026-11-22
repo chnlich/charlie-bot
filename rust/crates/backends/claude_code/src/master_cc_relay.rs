@@ -246,6 +246,7 @@ where
       last_request_at,
       now,
     )
+    .map_err(|error| refusal(error, MemberFailure::Other, None))?
   {
     compact_session_transcript(
       ctx,
@@ -365,6 +366,7 @@ pub async fn prepare_relay(
   let (context_tokens, _) = (ctx.context_state)().await.map_err(|error| refusal(error, MemberFailure::Other, None))?;
   if ctx.kind == LaunchKind::Turn
     && claude_compaction::relay_compaction_wanted(&ctx.cfg, Some(&ctx.option.model), context_tokens)
+      .map_err(|error| refusal(error, MemberFailure::Other, None))?
   {
     let session_id = session_id.expect("a successful relay has a session id");
     compact_session_transcript(ctx, session_id, &next, "relay", context_tokens)

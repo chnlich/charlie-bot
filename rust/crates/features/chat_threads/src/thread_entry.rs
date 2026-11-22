@@ -1632,7 +1632,7 @@ async fn route_thread_session(
 }
 
 /// The backend a thread session takes when the router does not route it: the `backends.calls.thread` target, else the
-/// `backends.calls.new_session` target, else `None`, which resolves to the first option when the session runs.
+/// `backends.calls.new_session` target, else `None`, which the session's create refuses.
 fn unrouted_backend(cfg: &CharlieBotConfig) -> Option<String> {
   match cfg.backends.calls.get(CallClass::Thread).or_else(|| cfg.backends.calls.get(CallClass::NewSession)) {
     None => None,

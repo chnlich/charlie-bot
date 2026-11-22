@@ -2,9 +2,10 @@
 //! one tool, `web_search`.
 //!
 //! The endpoint backends disallow Claude Code's built-in web search, because their endpoint either refuses it or
-//! answers without a search. This endpoint serves the search instead: Google's `google_search` grounding over
-//! `gemini-4-hydrogen`, with each grounding redirect resolved to its real URL. The endpoint sits under the server's
-//! access gate, and the `--mcp-config` that mounts it carries a run token, so no credential travels in an argument.
+//! answers without a search. This endpoint serves the search instead: Google's `google_search` grounding on the model
+//! and endpoint of the `backends.calls.web_search` option, with each grounding redirect resolved to its real URL. The
+//! endpoint sits under the server's access gate, and the `--mcp-config` that mounts it carries a run token, so no
+//! credential travels in an argument.
 
 mod endpoint;
 mod mcp;
@@ -28,7 +29,9 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
 }
 
 fn routes(features: &Arc<FeatureContext>) -> Router {
-  Router::new().route(MCP_PATH, post_only(mcp::post)).with_state(WebSearch::new(features.credentials.clone()))
+  Router::new()
+    .route(MCP_PATH, post_only(mcp::post))
+    .with_state(WebSearch::new(features.config.clone(), features.credentials.clone()))
 }
 
 /// Whether a path is the MCP endpoint, whatever the method.

@@ -9,6 +9,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use charliebot_compat::responses;
+use charliebot_core::config::CallClass;
 use charliebot_core::web_search::MCP_SERVER_NAME;
 use serde_json::{Value, json};
 
@@ -96,6 +97,20 @@ async fn call_tool(server: WebSearch, params: Option<&Value>) -> Value {
   if query.is_empty() {
     return tool_result("the web_search tool needs a non-empty query argument".to_string(), ToolOutcome::Failure);
   }
+  let config = match server.config.get() {
+    Ok(config) => config,
+    Err(error) => return tool_result(format!("reading config.yaml failed: {error}"), ToolOutcome::Failure),
+  };
+  let Some(option) = config.backends.call_option(CallClass::WebSearch) else {
+    return tool_result(
+      concat!(
+        "web search is not configured: backends.calls.web_search is unset; ",
+        "name a backends.options id for it in config.yaml"
+      )
+      .to_string(),
+      ToolOutcome::Failure,
+    );
+  };
   let credentials = match server.credentials.get() {
     Ok(credentials) => credentials,
     Err(error) => return tool_result(format!("reading credentials.yaml failed: {error}"), ToolOutcome::Failure),
@@ -104,7 +119,7 @@ async fn call_tool(server: WebSearch, params: Option<&Value>) -> Value {
     Ok(client) => client,
     Err(error) => return tool_result(error, ToolOutcome::Failure),
   };
-  match search::search(&credentials, &client, &server.endpoint, query).await {
+  match search::search(&credentials, &client, option, query).await {
     Ok(found) => tool_result(found.render(), ToolOutcome::Success),
     Err(error) => tool_result(error, ToolOutcome::Failure),
   }

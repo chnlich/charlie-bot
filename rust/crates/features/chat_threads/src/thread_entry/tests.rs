@@ -223,6 +223,15 @@ impl Home {
   }
 
   fn build_with(command: Option<Vec<String>>, auto: bool) -> Self {
+    Self::build_home(command, auto, true)
+  }
+
+  /// A home whose config names no `backends.calls` target, so an unrouted thread session has no backend.
+  fn without_calls() -> Self {
+    Self::build_home(None, false, false)
+  }
+
+  fn build_home(command: Option<Vec<String>>, auto: bool, new_session: bool) -> Self {
     let dir = tempfile::tempdir().expect("temporary directory exists");
     let mut registry = Registry::new();
     registry.register_package("tests.fakechat", register_fakechat).expect("the fakechat slot registers");
@@ -231,7 +240,7 @@ impl Home {
       .expect("the backend pool metadata slot registers");
     let registry = Arc::new(registry);
     let mut loaded = registry.load_config(dir.path()).expect("an empty home loads with the defaults");
-    // Task creation takes the first configured backend when a create names none.
+    // Task creation takes the `backends.calls.new_session` target when a create names none.
     loaded.backends.options.push(BackendOption {
       id: "synthetic-fakechat".to_string(),
       label: "Synthetic fakechat".to_string(),
@@ -260,6 +269,14 @@ impl Home {
       visible: true,
     });
     loaded.backends.routing = command.map(|command| charliebot_core::config::RoutingConfig { command });
+    if new_session {
+      loaded.backends.calls = [(
+        charliebot_core::config::CallClass::NewSession,
+        charliebot_core::config::CallTarget::Backend("synthetic-fakechat".to_string()),
+      )]
+      .into_iter()
+      .collect();
+    }
     if auto {
       loaded.backends.pools.push(charliebot_core::config::PoolConfig {
         id: "auto".to_string(),
@@ -271,10 +288,13 @@ impl Home {
         ],
         visible: true,
       });
-      loaded.backends.calls = [(
-        charliebot_core::config::CallClass::Thread,
-        charliebot_core::config::CallTarget::Backend("auto".to_string()),
-      )]
+      loaded.backends.calls = [
+        (charliebot_core::config::CallClass::Thread, charliebot_core::config::CallTarget::Backend("auto".to_string())),
+        (
+          charliebot_core::config::CallClass::NewSession,
+          charliebot_core::config::CallTarget::Backend("synthetic-fakechat".to_string()),
+        ),
+      ]
       .into_iter()
       .collect();
     }
@@ -1510,7 +1530,7 @@ async fn a_thread_session_without_routing_configured_defaults_to_auto() {
 
 #[tokio::test]
 async fn a_thread_session_without_backends_auto_keeps_the_empty_default_backend() {
-  let home = Home::new();
+  let home = Home::without_calls();
   let adapter: Arc<dyn ThreadAdapter> = FakeAdapter::with_thread(&[]);
 
   let (backend, route) = route_thread_session(&adapter, &home.features, "s1", &origin()).await.unwrap();

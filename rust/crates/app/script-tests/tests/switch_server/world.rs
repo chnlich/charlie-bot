@@ -403,6 +403,8 @@ impl World {
     env.insert("NEW_OFFSET".to_string(), "0".to_string());
     env.insert("WORK".to_string(), work.display().to_string());
     env.insert("LOG".to_string(), self.logs.join("switch_test.log").display().to_string());
+    // The preflight reads the access key from the home's credentials; the forward path here starts below it.
+    env.insert("KEY".to_string(), ACCESS_KEY.to_string());
     env.insert("DELEGATION".to_string(), delegation.to_string());
     env.insert("SYSTEMCTL_RECORDS".to_string(), self.sandbox.bin().join("systemctl.records").display().to_string());
     for (key, value) in extra_env {

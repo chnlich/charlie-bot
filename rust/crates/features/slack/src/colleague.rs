@@ -394,6 +394,23 @@ mod tests {
     );
   }
 
+  #[tokio::test]
+  async fn a_follow_wake_rechecks_membership_after_the_operator_leaves() {
+    let api = FakeApi::start(&[]).await;
+    api.set_member_pages(&[&["U_ALLOWED"]]);
+    let (home, session_id) = thread_home(
+      &api,
+      vec![message(THREAD, "U_ALLOWED", "status?"), message("1700000000.000200", "U_COLLEAGUE", "why?")],
+    )
+    .await;
+    let label = format!("slack-thread-follow floor={THREAD}");
+    let gate = home.features.startup.get::<Arc<dyn ColleagueGate>>().unwrap();
+    assert!(gate.admits_wake(&home.features, &session_id, &label).await);
+
+    api.set_member_pages(&[&["U_OTHER"]]);
+    assert!(!gate.admits_wake(&home.features, &session_id, &label).await);
+  }
+
   /// Records a run of `session_id` whose inputs are the events `input_ids`, and returns the caller that run's token names.
   fn run_caller(home: &Home, session_id: &str, input_ids: &[&str]) -> CallerIdentity {
     let run_id = "run-synthetic";

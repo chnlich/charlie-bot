@@ -23,6 +23,8 @@ dev/remote-run/run.sh dev/poor-network/run.sh --side both --before-clone "$CLONE
 | `--side both` | Measure the before side, then the after side. Without `--before-rev` the before side is the stored reference R (see "Stored reference"). If the before side is the reference commit (`CALIBRATION_REFERENCE`) and its calibration does not reproduce, stop with exit 3 and do not run the after side. |
 | `--before-clone DIR` | The clone that holds the before side's commit; required for `before` and `both`. |
 | `--before-rev REV` | With `--side both`, the before side is `REV`, measured now (the explicit mode). |
+| `--before-run DIR` | With `--side after`, reuse the stored `before.json` and `seed.sha256` in `DIR` and pass `--expect-targets` from `DIR/before.json`. Refuses unless seed checksum, Chrome version, and non-launcher/test/README bench code match `--before-bench-rev`. |
+| `--before-bench-rev REV` | With `--before-run`, the git commit whose `dev/poor-network` measurement code the stored before side ran. |
 | `--change-patch FILE` | With `--side both` and no `--before-rev`: the change as `git diff <merge-base> HEAD --binary` (an empty file for none). The after side is R with the patch applied. A patch that does not apply to R exits 2 and names the merge-base to pass as `--before-rev`, which measures the change on its own base. |
 | `--change-files FILE` | The changed paths, one per line; `--scenarios auto` reads them with `--before-rev`. |
 | `--out-dir DIR` | Where the run's files go, outside the tree. |

@@ -1,6 +1,6 @@
 //! The remote runner: `dev/remote-run/run.sh` reads the build host and its state base from `config.yaml` on each
 //! run. It stops with exit 2 while the host is unset. It starts every run with a connectivity check whose Tailscale
-//! login link exits 86 and whose other failures and time limit exit 87. The check's stop text names the `/host-auth`
+//! login link exits 86 and whose other failures and time limit exit 87. The exit 86 stop text names the `/host-auth`
 //! page. After the check, the command's exit code comes back unchanged, 255 included. Owner records identify the
 //! caller host and local root; a sweep removes only records for its own host. `remote-exec.pl` stops processes with a
 //! cwd or executable path inside a tree before syncing or deleting it. For commands, it uses a short TMPDIR on the
@@ -133,7 +133,15 @@ fn run_runner(env: &Env, project: &Path, arguments: &[&str]) -> harness::Run {
 
 fn stop_text_is_printed(run: &harness::Run) {
   assert!(run.stderr.contains("End this run and report the blocker"), "{}", run.describe());
+  assert!(run.stderr.contains("Do not retry the command"), "{}", run.describe());
+}
+
+fn host_auth_page_is_printed(run: &harness::Run) {
   assert!(run.stderr.contains(PAGE_URL), "{}", run.describe());
+}
+
+fn host_auth_page_is_not_printed(run: &harness::Run) {
+  assert!(!run.stderr.contains("/host-auth"), "{}", run.describe());
 }
 
 fn ssh_log(sandbox: &Sandbox) -> String {
@@ -152,6 +160,7 @@ fn a_login_link_in_the_check_gives_86_and_the_stop_text() {
   let run = run_runner(&env, &project, &["echo", "remote"]);
   assert_eq!(run.code, 86, "{}", run.describe());
   stop_text_is_printed(&run);
+  host_auth_page_is_printed(&run);
   assert!(run.stderr.contains("Tailscale needs an SSH approval"), "{}", run.describe());
 }
 
@@ -167,6 +176,7 @@ fn a_check_failure_gives_87_and_the_stop_text() {
   let run = run_runner(&env, &project, &["echo", "remote"]);
   assert_eq!(run.code, 87, "{}", run.describe());
   stop_text_is_printed(&run);
+  host_auth_page_is_not_printed(&run);
 }
 
 #[test]
@@ -182,6 +192,7 @@ fn a_check_past_its_limit_gives_87() {
   let run = run_runner(&env, &project, &["echo", "remote"]);
   assert_eq!(run.code, 87, "{}", run.describe());
   stop_text_is_printed(&run);
+  host_auth_page_is_not_printed(&run);
 }
 
 #[test]

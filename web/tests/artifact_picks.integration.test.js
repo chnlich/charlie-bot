@@ -65,8 +65,11 @@ const PICKABLE_FORKS = '(() => Array.from(document.querySelectorAll(".fork"))' +
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// `reply` is the status and body the fake server answers each message post with.
-function serve(sent, sourcePath, reply = {status: 202, body: {status: 'accepted'}}) {
+// `reply` is the status and body the fake server answers each message post with. `pagePath` names the
+// address the page is served at, so a genre's own file name reaches the page's pick pattern. `sessionDetail`
+// is the body the fake server answers each session fetch with.
+function serve(sent, sourcePath, reply = {status: 202, body: {status: 'accepted'}}, pagePath = PAGE_PATH,
+  sessionDetail = {name: 'Viewing session'}) {
   const template = fs.readFileSync(sourcePath, 'utf8');
   const tags = `<script>window.__cbcServerSessionId=${JSON.stringify(OWNER)};</script>\n` +
     `<script>${iconTableScript()}</script>\n` +
@@ -93,7 +96,7 @@ function serve(sent, sourcePath, reply = {status: 202, body: {status: 'accepted'
       '/static/features/artifacts/artifact-comments.js':
         path.join(WEB_DIR, 'features', 'artifacts', 'static', 'artifact-comments.js'),
     };
-    if (req.method === 'GET' && url.pathname === PAGE_PATH) {
+    if (req.method === 'GET' && url.pathname === pagePath) {
       res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
       res.end(page);
       return;
@@ -106,7 +109,7 @@ function serve(sent, sourcePath, reply = {status: 202, body: {status: 'accepted'
     // The tray names its target session; a name the server does not answer would fall back to the page owner.
     if (req.method === 'GET' && url.pathname.startsWith('/api/sessions/')) {
       res.writeHead(200, {'Content-Type': 'application/json; charset=utf-8'});
-      res.end(JSON.stringify({name: 'Viewing session'}));
+      res.end(JSON.stringify(sessionDetail));
       return;
     }
     if (req.method === 'GET' && statics[url.pathname]) {
@@ -176,7 +179,8 @@ function inPanelFrame(page) {
 
 // Runs one check against a served page, then tears everything down. The page is the template unless `source` names
 // another file, and the browser opens `url`: by default the plan page opened from the viewing session. `inFrame` gives
-// the check the plan page inside the plan panel. A viewport, when given, is set before the page loads.
+// the check the plan page inside the plan panel. A viewport, when given, is set before the page loads. `pagePath`
+// moves the address the page is served at, and `sessionDetail` the body each session fetch is answered with.
 async function withPlanPage(check, {
   viewport,
   source = TEMPLATE_PATH,
@@ -184,9 +188,11 @@ async function withPlanPage(check, {
   ready = PAGE_READY,
   inFrame = false,
   reply,
+  pagePath = PAGE_PATH,
+  sessionDetail,
 } = {}) {
   const sent = [];
-  const {server, base} = await serve(sent, source, reply);
+  const {server, base} = await serve(sent, source, reply, pagePath, sessionDetail);
   const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'artifact-picks-chrome-'));
   let chrome = null;
   try {
@@ -215,6 +221,14 @@ test('the icon table the page embeds is the Rust table for the parity keys', () 
   for (const key of Object.keys(expected)) assert.deepEqual(table[key], expected[key], `icon ${key}`);
 });
 
+// The not-a-question option: its button label, and the prefix of the answer its pick sends.
+const NAQ_LABEL = 'This should not be a question';
+const NAQ_PREFIX = `${NAQ_LABEL} → `;
+// The fixture's recommended option, the one the not-a-question button names.
+function recommendedOptionOf(fixture) {
+  return fixture[0].options.find((option) => option.name === fixture[0].rec);
+}
+
 test('the browser parser reads the shared fixture and offers a button per option, no text box', async () => {
   await withPlanPage(async (page) => {
     const fixture = JSON.parse(fs.readFileSync(FIXTURE_PATH, 'utf8'));
@@ -222,7 +236,10 @@ test('the browser parser reads the shared fixture and offers a button per option
 
     const buttons = await page.evaluate(
       'Array.from(document.querySelectorAll(".__cbc-picks button")).map((button) => button.textContent)');
-    assert.deepEqual(buttons, fixture[0].options.map((option) => option.name));
+    assert.deepEqual(buttons, [
+      ...fixture[0].options.map((option) => option.name),
+      `${NAQ_LABEL}推荐：${recommendedOptionOf(fixture).text}`,
+    ]);
     assert.equal(await page.evaluate('document.querySelectorAll(".__cbc-picks textarea, .__cbc-picks input").length'), 0);
   });
 });
@@ -239,7 +256,7 @@ test('a diff-view plan page offers one button per named fork option, and an open
     assert.equal(await page.evaluate('document.querySelectorAll("details[open]").length > 0'), true,
       'the fixture carries the opened fold the diff view renders');
     assert.equal(await page.evaluate('document.querySelectorAll(".__cbc-picks button").length'),
-      fixture[0].options.length, 'one button per named fork option');
+      fixture[0].options.length + 1, 'one button per named fork option, plus the not-a-question button');
     assert.equal(await page.evaluate('document.querySelectorAll("details .__cbc-pick").length'), 0,
       'the opened fold holds no option button');
   }, {source: DIFF_VIEW_PATH});
@@ -554,6 +571,127 @@ test('Rest as recommended picks only the questions that have no pick', async () 
     true, 'no question is left without a pick');
     assert.equal(sent.length, 0);
   });
+});
+
+// ---- The not-a-question option ----
+
+// Every registered genre serves the same template under its own file name, so the pick pattern reads
+// the genre from the page's address alone.
+const NAQ_GENRES = ['plan', 'understanding', 'waiting', 'debug', 'explain', 'sitrep'];
+for (const genre of NAQ_GENRES) {
+  test(`the ${genre} page offers the not-a-question button with the recommendation beneath the label`, async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'artifact-picks-genre-'));
+    try {
+      const source = path.join(directory, `${genre}_picks.html`);
+      fs.copyFileSync(TEMPLATE_PATH, source);
+      await withPlanPage(async (page) => {
+        const fixture = JSON.parse(fs.readFileSync(FIXTURE_PATH, 'utf8'));
+        assert.equal(await page.evaluate('document.querySelectorAll(".__cbc-pick-naq").length'), 1,
+          'one not-a-question button on the recommended question');
+        const lines = await page.evaluate('Array.from(document.querySelector(".__cbc-pick-naq")' +
+          '.querySelectorAll("span")).map((span) => span.textContent)');
+        assert.deepEqual(lines.slice(-2), [NAQ_LABEL, `推荐：${recommendedOptionOf(fixture).text}`],
+          'the label line, then the recommendation line');
+      }, {source, pagePath: `/sessions/${OWNER}/artifacts/${genre}_picks.html`,
+        url: `/sessions/${OWNER}/artifacts/${genre}_picks.html#cbsession=${VIEWER}`});
+    } finally {
+      fs.rmSync(directory, {recursive: true, force: true});
+    }
+  });
+}
+
+test('a not-a-question pick sends its question and the full recommendation line as one answer', async () => {
+  await withPlanPage(async (page, sent) => {
+    const fixture = JSON.parse(fs.readFileSync(FIXTURE_PATH, 'utf8'));
+    await page.evaluate('document.querySelector(".__cbc-pick-naq").click()');
+    await sleep(FRAME_WAIT_MS);
+    await page.evaluate(CLICK_SEND);
+    await sleep(SEND_WAIT_MS);
+
+    assert.equal(sent.length, 1, 'one message for the page');
+    assert.equal(sent[0].session, VIEWER, 'the message goes to the comment target');
+    const lines = sent[0].body.content.split('\n');
+    assert.equal(lines[0], `[Artifact comments · ${PAGE_PATH}] (1)`, 'one header line for the batch');
+    assert.ok(lines.includes(`1. ▸ Q${fixture[0].n}`), 'the pick names its question');
+    assert.ok(lines.includes(`   ↳ ${NAQ_PREFIX}${recommendedOptionOf(fixture).text}`),
+      'the answer is the prefix plus the full recommendation line');
+  });
+});
+
+test('the not-a-question pick is mutually exclusive with an option pick and toggles off on a second click',
+  async () => {
+    await withPlanPage(async (page) => {
+      const fixture = JSON.parse(fs.readFileSync(FIXTURE_PATH, 'utf8'));
+      const comment = 'document.querySelector(".__cbc-tray-item-comment").textContent';
+      const naqPressed = 'document.querySelector(".__cbc-pick-naq").getAttribute("aria-pressed")';
+      await page.evaluate('document.querySelector(".__cbc-pick-naq").click()');
+      await sleep(FRAME_WAIT_MS);
+      assert.equal(await page.evaluate(TRAY_ITEMS), 1);
+      assert.equal(await page.evaluate(comment), `${NAQ_PREFIX}${recommendedOptionOf(fixture).text}`);
+      assert.equal(await page.evaluate(naqPressed), 'true');
+
+      await page.evaluate('document.querySelectorAll(".__cbc-picks button")[0].click()');
+      await sleep(FRAME_WAIT_MS);
+      assert.equal(await page.evaluate(TRAY_ITEMS), 1, 'the option pick replaces the not-a-question pick');
+      assert.equal(await page.evaluate(comment), fixture[0].options[0].text);
+      assert.equal(await page.evaluate(naqPressed), 'false');
+
+      await page.evaluate('document.querySelector(".__cbc-pick-naq").click()');
+      await sleep(FRAME_WAIT_MS);
+      assert.equal(await page.evaluate(comment), `${NAQ_PREFIX}${recommendedOptionOf(fixture).text}`);
+      assert.equal(await page.evaluate(naqPressed), 'true');
+
+      await page.evaluate('document.querySelector(".__cbc-pick-naq").click()');
+      await sleep(FRAME_WAIT_MS);
+      assert.equal(await page.evaluate(TRAY_ITEMS), 0, 'the second click takes the pick back');
+    });
+  });
+
+// A question whose recommendation names a high-consequence step: the sent answer must write the whole
+// recommendation line out, the step included, because only a pick whose text names the step takes off.
+const HIGH_CONSEQUENCE_NUMBER = '5';
+const HIGH_CONSEQUENCE_OPTION = '「不保留」: writes the answer into the IT-read table and retires the key.';
+const HIGH_CONSEQUENCE_QUESTION = `    <section class="plan-section">
+      <h2><span class="n">8</span> Old key</h2>
+      <div class="fork">
+        <p class="q"><span class="fn">${HIGH_CONSEQUENCE_NUMBER}</span> How should the old key be filled?</p>
+        <ul>
+          <li>${HIGH_CONSEQUENCE_OPTION}
+          <li>「保留」: leave the key in place.
+        </ul>
+        <p class="rec"><b>Recommendation:</b> 「不保留」, because the key has had no use since April.</p>
+      </div>
+    </section>
+`;
+
+test('a not-a-question pick on a high-consequence recommendation carries the full recommendation text', async () => {
+  await withExtraQuestion(HIGH_CONSEQUENCE_QUESTION, async (page, sent) => {
+    await page.evaluate(`(() => { const buttons = document.querySelectorAll(".__cbc-pick-naq");` +
+      ' buttons[buttons.length - 1].click(); })()');
+    await sleep(FRAME_WAIT_MS);
+    await page.evaluate(CLICK_SEND);
+    await sleep(SEND_WAIT_MS);
+
+    assert.equal(sent.length, 1, 'one message for the page');
+    const lines = sent[0].body.content.split('\n');
+    assert.ok(lines.includes(`1. ▸ Q${HIGH_CONSEQUENCE_NUMBER}`), 'the pick names its question');
+    assert.ok(lines.includes(`   ↳ ${NAQ_PREFIX}${HIGH_CONSEQUENCE_OPTION}`),
+      'the sent answer writes the full recommendation line out, the high-consequence step included');
+  });
+});
+
+test('a send to an archived primary session is refused and the tray reports the reason', async () => {
+  await withPlanPage(async (page, sent) => {
+    await page.evaluate(ONE_PICK);
+    await sleep(FRAME_WAIT_MS);
+    await page.evaluate(CLICK_SEND);
+    await sleep(SEND_WAIT_MS);
+
+    assert.deepEqual(sent, [], 'nothing is posted to the archived session');
+    assert.equal(await page.evaluate(TRAY_ITEMS), 1, 'the pick stays pending');
+    assert.equal(await page.evaluate(TRAY_STATUS_IS_ERROR), true);
+    assert.match(await page.evaluate(TRAY_STATUS), /archived/);
+  }, {sessionDetail: {name: 'Viewing session', archived: true}});
 });
 
 test('picks and a comment from a page in the plan panel reach the session the app shows, not the page owner', async () => {

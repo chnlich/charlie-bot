@@ -79,6 +79,10 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     var artifactPath = artifactPathFromPath(window.location.pathname);
     var sessionNameCache = {};
     var sessionNameRequests = {};
+    // The archived refusal the target session's detail carries, cached by the name fetch: the refusal
+    // message, or null while the session can take a send. An id the cache lacks is one whose detail
+    // fetch has not answered yet.
+    var sessionRoutableCache = {};
     var hovered = null;
     var hideTimer = null;
     var trigger = null;
@@ -101,10 +105,18 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     var cardHeights = null;
     var reflowScheduled = false;
     var trayModeScheduled = false;
-    // Picks on the questions of plan, understanding and waiting pages only. A pick is an entry of `pending`,
-    // so the one tray holds picks and comments and one Send sends both.
-    var PICK_PAGE_PATTERN = /(^|\/)(plan|understanding|waiting)_[^/]*$/;
+    // Picks on the questions of every registered artifact page genre: plan, understanding, waiting,
+    // debug, explain and sitrep. A pick is an entry of `pending`, so the one tray holds picks and
+    // comments and one Send sends both.
+    var PICK_PAGE_PATTERN = /(^|\/)(plan|understanding|waiting|debug|explain|sitrep)_[^/]*$/;
     var QUOTE_CLOSERS = {'「': '」', '“': '”', '"': '"'};
+    // The not-a-question option. The button's first line is the label; its second line states the
+    // recommendation it goes with, and never promises what the session does with it. The sent answer
+    // is the prefix plus the recommendation's full option line, so the text the session reads names
+    // the recommendation and every step the recommendation line writes out.
+    var NOT_A_QUESTION_LABEL = 'This should not be a question';
+    var NOT_A_QUESTION_ANSWER_PREFIX = NOT_A_QUESTION_LABEL + ' → ';
+    var NOT_A_QUESTION_REC_LABEL = '推荐：';
     // The tray stage names each step of a send. Editing changes the pending list. In sending the post is in flight,
     // retried on a network error or 5xx. Entries leave the list when the post lands.
     var trayStage = 'editing';
@@ -410,6 +422,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       }).then(function(data) {
         var name = data && data.name ? String(data.name).trim() : '';
         sessionNameCache[id] = name || fallbackSessionLabel(id);
+        sessionRoutableCache[id] = archivedRefusalOf(data);
         delete sessionNameRequests[id];
         return sessionNameCache[id];
       }).catch(function(err) {
@@ -419,6 +432,14 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
 
       sessionNameRequests[id] = request;
       return request;
+    }
+
+    // The refusal for the session detail the server answers a session fetch with, or null when the
+    // session can take a send. An archived session with no successor is unroutable: the questions on
+    // its page belong to a line that no live session owns, so a send would only reopen the stale one.
+    function archivedRefusalOf(detail) {
+      if (!detail || !detail.archived || detail.successor_session_id) return null;
+      return 'Cannot send: this page\'s primary session is archived and no successor session can take the message.';
     }
 
     function ensureTargetSessionName() {
@@ -538,6 +559,10 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         '.' + GLOBAL_PREFIX + '-pick{border:1px solid #d0d7de;border-radius:6px;padding:4px 9px;background:#f6f8fa;color:#1b2430;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;cursor:pointer}' +
         '.' + GLOBAL_PREFIX + '-pick[aria-pressed="true"]{background:#1163c0;border-color:#1163c0;color:#fff}' +
         '.' + GLOBAL_PREFIX + '-pick:disabled{cursor:not-allowed;opacity:.64}' +
+        // The not-a-question button takes its own full-width row under the option buttons; its second
+        // line states the recommendation and wraps under the first.
+        '.' + GLOBAL_PREFIX + '-pick-naq{flex-basis:100%;text-align:left}' +
+        '.' + GLOBAL_PREFIX + '-pick-naq-rec{display:block;font-size:11px;opacity:.78;overflow-wrap:anywhere}' +
         '.' + GLOBAL_PREFIX + '-gutter{position:fixed;top:0;left:0;width:300px;overflow-x:hidden;'
           + 'overflow-y:hidden;z-index:2147483644}' +
         '.' + GLOBAL_PREFIX + '-gutter .' + GLOBAL_PREFIX + '-tray-item{position:absolute;left:0;right:0;box-sizing:border-box}';
@@ -1033,10 +1058,12 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       return blocks;
     }
 
-    // The pick record a restored pick entry belongs to: the question it names, with the option it carries.
+    // The pick record a restored pick entry belongs to: the question it names, with the option it
+    // carries — or the not-a-question answer, whose prefix names no option.
     function pickRecordFor(entry) {
       for (var i = 0; i < picks.length; i++) {
-        if (entry.context === 'Q' + picks[i].n && optionIndexOf(picks[i], entry.comment) !== -1) return picks[i];
+        if (entry.context !== 'Q' + picks[i].n) continue;
+        if (answerIsNotAQuestion(entry.comment) || optionIndexOf(picks[i], entry.comment) !== -1) return picks[i];
       }
       return null;
     }
@@ -1565,6 +1592,16 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     function sendBatch() {
       var target = resolveTargetSessionId();
       if (!target || pending.length === 0 || trayStage !== 'editing') return;
+      var refusal = sessionRoutableCache[target];
+      if (refusal) {
+        trayNotice = {text: refusal, error: true};
+        refreshTray();
+        return;
+      }
+      startSend(target);
+    }
+
+    function startSend(target) {
       var batch = batchOrder(pending);
       var message = buildBatchMessage(batch);
       var count = batch.length;
@@ -1769,15 +1806,30 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       return -1;
     }
 
-    function pickEntry(record, option) {
+    // True when a pick's answer is a not-a-question answer: the prefix, then the recommendation's
+    // full option line.
+    function answerIsNotAQuestion(comment) {
+      return String(comment == null ? '' : comment).indexOf(NOT_A_QUESTION_ANSWER_PREFIX) === 0;
+    }
+
+    // The answer a not-a-question pick sends: the prefix, then the recommendation's full option line.
+    function notAQuestionAnswerOf(record) {
+      return NOT_A_QUESTION_ANSWER_PREFIX + record.options[record.rec].text;
+    }
+
+    function pickEntryWith(record, comment) {
       return {
         kind: ENTRY_KIND.PICK,
         el: record.fork,
         quote: '',
         context: 'Q' + record.n,
-        comment: option.text,
+        comment: comment,
         occurrence: 0,
       };
+    }
+
+    function pickEntry(record, option) {
+      return pickEntryWith(record, option.text);
     }
 
     // The questions with neither a pending pick nor an answer that landed.
@@ -1793,19 +1845,27 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       return unpickedRecords().filter(function(record) { return record.rec !== -1; }).length;
     }
 
-    // Clicking an option picks it; clicking the picked option again takes the pick back.
-    function togglePick(record, index) {
-      var option = record.options[index];
+    // Clicking an option or the not-a-question button picks it; one question holds at most one pick,
+    // so a pick replaces the pick there, and clicking the picked control again takes the pick back.
+    function togglePickComment(record, comment) {
       var entry = pickEntryOf(record);
       if (!entry) {
-        pending.push(pickEntry(record, option));
-      } else if (entry.comment === option.text) {
+        pending.push(pickEntryWith(record, comment));
+      } else if (entry.comment === comment) {
         pending.splice(pending.indexOf(entry), 1);
       } else {
-        entry.comment = option.text;
+        entry.comment = comment;
       }
       saveDraft(pending, artifactPath);
       refreshTray();
+    }
+
+    function togglePick(record, index) {
+      togglePickComment(record, record.options[index].text);
+    }
+
+    function toggleNotAQuestion(record) {
+      togglePickComment(record, notAQuestionAnswerOf(record));
     }
 
     // Each question that has no pick yet takes its recommended option.
@@ -1819,18 +1879,26 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     }
 
     // Each option button shows its question's pick: the pending entry's option, or the answer that landed. The
-    // buttons are off outside the editing stage, and on a question that has been answered.
+    // not-a-question button shows a pick whose answer carries its prefix. The buttons are off outside the editing
+    // stage, and on a question that has been answered.
     function renderPicks() {
       var idle = trayStage === 'editing';
       for (var i = 0; i < picks.length; i++) {
         var record = picks[i];
         var entry = pickEntryOf(record);
-        var picked = optionIndexOf(record, entry ? entry.comment : record.answered);
+        var answer = entry ? entry.comment : record.answered;
+        var picked = optionIndexOf(record, answer);
+        var naqPicked = answerIsNotAQuestion(answer);
         for (var j = 0; j < record.options.length; j++) {
           var option = record.options[j];
           option.button.disabled = !idle || record.answered !== null;
-          option.button.setAttribute('aria-pressed', picked === j ? 'true' : 'false');
-          setIcon(option.mark, picked === j ? 'done' : null, 12);
+          option.button.setAttribute('aria-pressed', !naqPicked && picked === j ? 'true' : 'false');
+          setIcon(option.mark, !naqPicked && picked === j ? 'done' : null, 12);
+        }
+        if (record.naq) {
+          record.naq.button.disabled = !idle || record.answered !== null;
+          record.naq.button.setAttribute('aria-pressed', naqPicked ? 'true' : 'false');
+          setIcon(record.naq.mark, naqPicked ? 'done' : null, 12);
         }
       }
     }
@@ -1881,9 +1949,32 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         option.button = button;
         row.appendChild(button);
       });
+      if (record.rec !== -1) installNotAQuestionButton(record, row);
       var last = record.options[record.options.length - 1].line;
       var anchor = last.parentElement === record.fork ? last : last.parentElement;
       anchor.parentNode.insertBefore(row, anchor.nextSibling);
+    }
+
+    // The not-a-question button, last in the row and full-width: its first line is the label, its
+    // second line the recommendation the option goes with. The recommendation exists on every pickable
+    // question — the page checker refuses a fork whose p.rec quotes no option name — so a question
+    // without one never reaches this button.
+    function installNotAQuestionButton(record, row) {
+      var mark = makeIconSlot();
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.className = GLOBAL_PREFIX + '-pick ' + GLOBAL_PREFIX + '-pick-naq';
+      var label = document.createElement('span');
+      label.textContent = NOT_A_QUESTION_LABEL;
+      var rec = document.createElement('span');
+      rec.className = GLOBAL_PREFIX + '-pick-naq-rec';
+      rec.textContent = NOT_A_QUESTION_REC_LABEL + record.options[record.rec].text;
+      button.appendChild(mark);
+      button.appendChild(label);
+      button.appendChild(rec);
+      button.addEventListener('click', function() { toggleNotAQuestion(record); });
+      record.naq = {button: button, mark: mark};
+      row.appendChild(button);
     }
 
     function installPicks() {

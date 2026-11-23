@@ -174,9 +174,12 @@ const IDLE_LOGIN = loginRow('aws', {label: 'AWS CLI SSO', expiry_text: 'Expires 
 
 // ---------------------------------------------------------------------------
 // The stub server: the page, and the row routes. A check holds its row busy for `state.checkMs`, as the server does.
+// `close` releases the server on every path: the check timers still pending, the responses still open and the
+// listening socket.
 // ---------------------------------------------------------------------------
 function startServer(rows, checkMs) {
   const state = {rows: new Map(rows.map((row) => [row.id, row])), checking: new Set(), checks: 0, polls: 0, checkMs};
+  const timers = new Set();
   const pageHtml = renderPage({rows, last_probe: 'Nov 21, 2026 09:30', interval_label: '27 min', backoff_label: '6 h'});
   const reply = (res, status, type, body) => {
     res.writeHead(status, {'Content-Type': type});
@@ -197,11 +200,13 @@ function startServer(rows, checkMs) {
     if (req.method === 'POST' && check) {
       const id = check[1];
       state.checking.add(id);
-      setTimeout(() => {
+      const timer = setTimeout(() => {
+        timers.delete(timer);
         state.checking.delete(id);
         state.checks += 1;
         answer(res, id);
       }, state.checkMs);
+      timers.add(timer);
       return;
     }
     const row = url.pathname.match(/^\/api\/host-auth\/rows\/([^/]+)$/);
@@ -212,9 +217,15 @@ function startServer(rows, checkMs) {
     }
     reply(res, 404, 'text/plain; charset=utf-8', 'not found');
   });
+  const close = () => {
+    for (const timer of timers) clearTimeout(timer);
+    timers.clear();
+    server.closeAllConnections();
+    server.close();
+  };
   return new Promise((resolve) => {
     server.listen(0, '127.0.0.1', () => {
-      resolve({server, state, url: `http://127.0.0.1:${server.address().port}/`});
+      resolve({state, close, url: `http://127.0.0.1:${server.address().port}/`});
     });
   });
 }
@@ -229,21 +240,31 @@ async function awaitLoadCheck(page, state, after) {
   );
 }
 
-// One page in Chrome at `size`, loaded from the stub, with the load-time check of the idle login finished.
-async function withPage({checkMs = 50}, body) {
+// The stub server, a Chrome profile directory and Chrome, released together on every path: a launch that throws, a
+// failed assertion and a passing run alike. A server or a profile directory that was made is always released.
+async function withChrome(body, {checkMs = 50} = {}) {
   const fixture = await startServer([ACTIVE_LOGIN, IDLE_LOGIN], checkMs);
-  const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'host-auth-poll-'));
-  const chrome = await launchChrome(profileDir);
+  let profileDir = null;
+  let chrome = null;
   try {
+    profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'host-auth-poll-'));
+    chrome = await launchChrome(profileDir);
+    await body(chrome, fixture);
+  } finally {
+    if (chrome) stopChrome(chrome);
+    fixture.close();
+    if (profileDir) fs.rmSync(profileDir, {recursive: true, force: true});
+  }
+}
+
+// One page in Chrome at 1280x900, loaded from the stub, with the load-time check of the idle login finished.
+async function withPage({checkMs = 50}, body) {
+  await withChrome(async (chrome, fixture) => {
     const page = await openPage(chrome.cdp, fixture.url, {width: 1280, height: 900});
     await page.send('Emulation.setFocusEmulationEnabled', {enabled: true});
     await awaitLoadCheck(page, fixture.state, 0);
     await body(page, fixture.state);
-  } finally {
-    stopChrome(chrome);
-    fixture.server.close();
-    fs.rmSync(profileDir, {recursive: true, force: true});
-  }
+  }, {checkMs});
 }
 
 async function waitForPolls(state, count) {
@@ -423,10 +444,7 @@ test('a check keeps its row controls in place and reads Checking. on its button 
 });
 
 test('the active login and a running check fit each window size the landing captures', async () => {
-  const fixture = await startServer([ACTIVE_LOGIN, IDLE_LOGIN], 50);
-  const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'host-auth-poll-'));
-  const chrome = await launchChrome(profileDir);
-  try {
+  await withChrome(async (chrome, fixture) => {
     for (const size of WINDOW_SIZES) {
       const label = `${size.width}x${size.height}`;
       const loadChecks = fixture.state.checks;
@@ -462,9 +480,5 @@ test('the active login and a running check fit each window size the landing capt
       await until(async () => fixture.state.checking.size === 0, `${label}: the check to end`);
       fixture.state.checkMs = 50;
     }
-  } finally {
-    stopChrome(chrome);
-    fixture.server.close();
-    fs.rmSync(profileDir, {recursive: true, force: true});
-  }
+  });
 });

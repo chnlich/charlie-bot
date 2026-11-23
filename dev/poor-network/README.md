@@ -670,7 +670,7 @@ search view's arithmetic (see "Search view").
 The step-gate tests check the yield rule (a process queued behind the lock gets it after the step it waits for, and
 nothing yields when nothing waits), the cap kill (a capped step's browsers and proxies stop, and the step runs once
 more), the descriptor's close-on-exec, and that closing the gate releases the lock. The segment tests check the rate
-gate: a probe outside 3.0 to 4.5, or outside the 10 % band of the cells' rate, is discarded and rerun once, and a second
+gate: a probe outside 3.0 to 10.0, or outside the 10 % band of the cells' rate, is discarded and rerun once; a second
 failure is exit 5 with the discarded segments kept in `units[]`. They also check which unit starts each segment. The
 store tests check the reuse rule (R, Chrome, seed and tree all equal, and load-safe), the stale rule, the open group,
 the 24 h window, the saving of load-safe rows only, and the assembly of a before side from stored and measured rows.

@@ -482,7 +482,7 @@ For file sharing, see the `file-server` skill.
 Default to HTML for response output. Read the file-server skill before writing an HTML
 artifact — it defines the HTML requirements and the page quality bar; write
 `artifacts/<name>.html` and share it via the file-server link. Use markdown only when
-the user opts out or the response is a brief acknowledgment. As a lead, put the page in your worker's task spec, as Direct Work states.
+the user opts out or the response is a brief acknowledgment.
 
 When the user asks to understand something, answer with an explain page, even for a one-sentence answer.
 The explain row of Artifact Genres in `prompts/manager_workflows.md` defines that request.

@@ -111,6 +111,9 @@ remote_run_parse_owner_record() {
   REMOTE_RUN_OWNER_ROOT=''
   REMOTE_RUN_OWNER_FORMAT=''
   if [[ "$record" != *$'\n'* ]]; then
+    if [[ "$record" != /* ]]; then
+      return 2
+    fi
     REMOTE_RUN_OWNER_FORMAT=legacy
     REMOTE_RUN_OWNER_ROOT=$record
     return 0

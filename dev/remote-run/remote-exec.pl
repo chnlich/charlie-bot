@@ -22,7 +22,7 @@ use warnings;
 
 use Fcntl qw(:flock O_RDWR O_WRONLY O_CREAT O_APPEND);
 use Cwd qw(abs_path);
-use Errno qw(EINTR ENOENT ESRCH);
+use Errno qw(EACCES EINTR ENOENT ESRCH);
 use File::Path qw(rmtree remove_tree);
 use IO::Poll qw(POLLERR POLLHUP POLLNVAL POLLOUT);
 use MIME::Base64 qw(decode_base64);
@@ -140,7 +140,10 @@ sub direct_children {
     if (open my $children_file, '<', "/proc/$pid/task/$task/children") {
       local $! = 0;
       my $line = <$children_file>;
-      fail(2, "cannot read child list for process $pid task $task: $!") if !defined($line) && $!;
+      if (!defined($line) && $!) {
+        next if $!{ENOENT} || $!{ESRCH};
+        fail(2, "cannot read child list for process $pid task $task: $!");
+      }
       $line //= '';
       $children{$_} = 1 for split ' ', $line;
     } elsif (!$!{ENOENT} && !$!{ESRCH}) {
@@ -212,9 +215,18 @@ sub process_start_ticks {
   my ($pid) = @_;
   open my $file, '<', "/proc/$pid/stat" or return;
   local $/;
-  my $stat = <$file> // return;
+  my $stat = <$file>;
+  if (!defined $stat) {
+    $! = ESRCH unless $!;
+    return;
+  }
+  if ($stat eq '') {
+    $! = ESRCH;
+    return;
+  }
   # The fields after the parenthesised command name start at field 3, so field 22 is index 19.
   my @fields = split ' ', ($stat =~ s/.*\)//r);
+  $! = ESRCH unless defined $fields[19];
   return $fields[19];
 }
 
@@ -237,7 +249,7 @@ sub processes_in_tree {
     my $pid = 0 + $entry;
     my @proc_stat = stat "/proc/$pid";
     if (!@proc_stat) {
-      next if $!{ENOENT} || $!{ESRCH};
+      next if $!{ENOENT} || $!{ESRCH} || $!{EACCES};
       fail(2, "cannot inspect process $pid while checking $tree: $!");
     }
     next if $proc_stat[4] != $tree_uid;
@@ -250,7 +262,7 @@ sub processes_in_tree {
     for my $name (qw(cwd exe)) {
       my $path = readlink "/proc/$pid/$name";
       if (!defined $path) {
-        next if $!{ENOENT} || $!{ESRCH};
+        next if $!{ENOENT} || $!{ESRCH} || $!{EACCES};
         fail(2, "cannot inspect process $pid $name while checking $tree: $!");
       }
       if (path_is_inside_tree($path, $tree)) {
@@ -366,8 +378,9 @@ sub build_tree_for_caller {
 sub stop_build_tree {
   my ($caller_host, $requested_tree) = @_;
   my ($tree, $name, $owner_path, $tree_uid) = build_tree_for_caller($caller_host, $requested_tree, 1);
-  return unless defined $tree;
+  return 0 unless defined $tree;
   stop_tree_processes($tree, $tree_uid);
+  return 0;
 }
 
 sub remove_build_tree {
@@ -376,13 +389,14 @@ sub remove_build_tree {
   stop_tree_processes($tree, $tree_uid);
 
   my $errors = [];
-  remove_tree($tree, { error => $errors });
+  remove_tree($tree, { error => \$errors });
   if (@$errors || -e $tree) {
     my @details = map { my ($path, $message) = %$_; "$path: $message" } @$errors;
     push @details, "$tree still exists" if -e $tree;
     fail(2, "cannot remove build host tree $tree after stopping its processes: " . join('; ', @details));
   }
   unlink $owner_path or fail(2, "cannot remove tree owner record $owner_path after removing $tree: $!");
+  return 0;
 }
 
 sub caller_output_channel_closed {

@@ -374,6 +374,7 @@ fn group_of_dir(dir_rel: &str) -> Option<String> {
   match parts[1] {
     "infra" | "runtime" | "app" => Some(parts[1].to_string()),
     "backends" | "features" => Some(format!("{}.{}", parts[1], parts[2])),
+    // `group_failures` reports a crate that no group names, so None is that error path.
     _ => None,
   }
 }
@@ -2301,12 +2302,13 @@ fn collect_macro_statics(tokens: TokenStream, statics: &mut Vec<StaticRecord>) {
 fn has_visibility_before(trees: &[TokenTree], index: usize) -> bool {
   let before = index.checked_sub(1).and_then(|position| trees.get(position));
   let group_before = index.checked_sub(2).and_then(|position| trees.get(position));
-  match (before, group_before) {
-    (Some(TokenTree::Ident(ident)), _) => ident == "pub",
-    (Some(TokenTree::Group(group)), Some(TokenTree::Ident(ident))) => {
-      group.delimiter() == Delimiter::Parenthesis && ident == "pub"
+  match before {
+    Some(TokenTree::Ident(ident)) => ident == "pub",
+    Some(TokenTree::Group(group)) => {
+      matches!(group_before, Some(TokenTree::Ident(ident)) if ident == "pub")
+        && group.delimiter() == Delimiter::Parenthesis
     }
-    _ => false,
+    Some(TokenTree::Punct(_) | TokenTree::Literal(_)) | None => false,
   }
 }
 
@@ -3779,7 +3781,7 @@ fn scan_tokens(tokens: &TokenStream, line: usize, paths: &mut Vec<PathRecord>, i
         }
       }
       TokenTree::Group(group) => scan_tokens(&group.stream(), line, paths, idents),
-      _ => {}
+      TokenTree::Punct(_) | TokenTree::Literal(_) => {}
     }
     index += 1;
   }
@@ -3795,7 +3797,7 @@ fn is_cfg_test(attrs: &[Attribute]) -> bool {
     attr.path().is_ident("cfg")
       && match &attr.meta {
         Meta::List(list) => list.tokens.to_string().replace(' ', "") == "test",
-        _ => false,
+        Meta::Path(_) | Meta::NameValue(_) => false,
       }
   })
 }
@@ -3971,7 +3973,7 @@ fn collect_token_literals(tokens: TokenStream, literals: &mut Vec<Literal>) {
 fn is_path_constructor(path: &syn::Path) -> bool {
   match path_segments(path).as_slice() {
     [.., owner, function] => matches!((owner.as_str(), function.as_str()), ("Path", "new") | ("PathBuf", "from")),
-    _ => false,
+    [] | [_] => false,
   }
 }
 

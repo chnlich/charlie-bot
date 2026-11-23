@@ -5,7 +5,7 @@
 //! syntax tree holds none and a comment chooses nothing that runs. Every string literal is read as text (`text_scan`).
 //! The positions that select a backend are read from the expression that holds them: a program's arguments, a
 //! constant's value, the operand of a default method, the value of a `backend` field, and a `--backend` pair in a list.
-//! A macro whose body is a list of expressions is visited as those expressions; any other macro body is read as its
+//! A macro whose body is a list of expressions is visited as those expressions. Any other macro body is read as its
 //! tokens.
 
 use proc_macro2::{Span, TokenStream, TokenTree};
@@ -434,7 +434,8 @@ mod tests {
     assert!(found(source).is_empty(), "{:?}", found(source));
   }
 
-  /// A backend CLI that the program runs with a call marker is a fixed command; the same program with `--version` is not.
+  /// A backend CLI that the program runs with a call marker is a fixed command. The same program with `--version` is
+  /// not.
   #[test]
   fn a_command_argument_chain_is_a_fixed_command_only_with_a_call_marker() {
     let call = "fn f() { std::process::Command::new(\"claude\").arg(\"-p\"); }";
@@ -450,7 +451,7 @@ mod tests {
     assert!(has(source, Class::FixedCommand, "claude -p"));
   }
 
-  /// A constant whose value is a backend CLI name is a fixed command; an array constant of the names is not.
+  /// A constant whose value is a backend CLI name is a fixed command. An array constant of the names is not.
   #[test]
   fn a_constant_value_is_a_fixed_command_and_a_list_constant_is_not() {
     assert!(has("const BINARY: &str = \"charlie-code\";", Class::FixedCommand, "charlie-code"));

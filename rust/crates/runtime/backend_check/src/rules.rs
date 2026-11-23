@@ -1,7 +1,7 @@
 //! The match definition: the classes of a hardcoded backend choice, and the words that name each class.
 //!
 //! The Rust scan (`rust_scan`) and the text scan (`text_scan`) both ask this module whether a word names a backend, so
-//! the two scans share one definition. The ids and hosts come from the loaded configuration (`vocabulary`); the family
+//! the two scans share one definition. The ids and hosts come from the loaded configuration (`vocabulary`). The family
 //! words and the command names are the constants below.
 
 use std::collections::BTreeSet;

@@ -26,7 +26,7 @@ struct Syntax {
   triple_quotes: bool,
 }
 
-/// A shell `#` starts a comment at a token boundary; inside a word it is literal text.
+/// A shell `#` starts a comment at a token boundary. Inside a word it is literal text.
 const SHELL_HASH: Syntax = Syntax {
   line: "#",
   block: None,
@@ -119,7 +119,8 @@ struct LexState {
   escaped: bool,
 }
 
-/// Scan a whole text file. A code file's code is read as code, with its comments left out; any other text file is prose.
+/// Scan a whole text file. A code file's code is read as code, with its comments left out. Any other text file is
+/// prose.
 pub fn scan_file(vocab: &Vocabulary, text: &str, path: &Path) -> Vec<Found> {
   let ext = path.extension().and_then(|ext| ext.to_str()).unwrap_or_default();
   let code = CODE_EXTENSIONS.iter().find(|(name, _)| *name == ext).map(|(_, syntax)| *syntax);
@@ -139,8 +140,8 @@ pub fn scan_file(vocab: &Vocabulary, text: &str, path: &Path) -> Vec<Found> {
 }
 
 /// The code of a line, with each comment blanked to a space so that the words on either side of it stay apart. A line
-/// comment starts at its marker outside a string; a shell comment also needs a token boundary. A block comment starts at
-/// its opening delimiter. Strings and block comments that span lines keep their state for the next line.
+/// comment starts at its marker outside a string. A shell comment also needs a token boundary. A block comment starts
+/// at its opening delimiter. Strings and block comments that span lines keep their state for the next line.
 fn strip_comments(line: &str, syntax: Syntax, state: &mut LexState) -> String {
   let mut code = String::with_capacity(line.len());
   let mut resume = 0;
@@ -322,8 +323,8 @@ fn only(gap: &str, allowed: &str) -> bool {
   gap.chars().all(|ch| allowed.contains(ch))
 }
 
-/// The single-word operands after a default operator, and the defaults of a Python `def`. Code reads every operator;
-/// protocol text reads only the symbol operators, since ` or ` is an English word. A shell `:-` operand may be
+/// The single-word operands after a default operator, and the defaults of a Python `def`. Code reads every operator.
+/// Protocol text reads only the symbol operators, since ` or ` is an English word. A shell `:-` operand may be
 /// unquoted, as in `${VAR:-operand}`.
 fn default_operands(mode: Mode, line: &str) -> Vec<&str> {
   let operators: &[&str] = match mode {
@@ -441,7 +442,8 @@ mod tests {
     assert!(shell_word.contains(&(1, Class::OptionId, "claude-opus".to_string())), "{shell_word:?}");
   }
 
-  /// Escaped quotes and JavaScript template strings keep comment markers inside the string; code after them is scanned.
+  /// Escaped quotes and JavaScript template strings keep comment markers inside the string. Code after them is
+  /// scanned.
   #[test]
   fn quoted_comment_markers_do_not_hide_later_code() {
     let escaped = r#"const text = "escaped \" // still string"; const model = "claude-opus-5-5";"#;
@@ -491,7 +493,7 @@ mod tests {
     );
   }
 
-  /// A command string assigned to a variable is a fixed command; a command name in a sentence string is not.
+  /// A command string assigned to a variable is a fixed command. A command name in a sentence string is not.
   #[test]
   fn a_command_constant_value_is_a_fixed_command() {
     let assigned = classes("const cli = \"claude\";\n", "run.mjs");
@@ -503,7 +505,7 @@ mod tests {
     assert!(punctuation.is_empty(), "{punctuation:?}");
   }
 
-  /// A pool id names a backend only after a `--backend` flag or a `backend` key; the same word in prose names none.
+  /// A pool id names a backend only after a `--backend` flag or a `backend` key. The same word in prose names none.
   #[test]
   fn a_pool_id_names_a_backend_only_in_a_selecting_position() {
     let found = classes("charlie --backend cheap\n\"backend\": \"cheap\"\nthe cheap pool\n", "x.sh");

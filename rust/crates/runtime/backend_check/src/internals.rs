@@ -18,7 +18,7 @@ use crate::vocabulary::Vocabulary;
 /// The directories the walk never enters: version control, build output and environments.
 const SKIPPED_DIRS: [&str; 5] = [".git", "target", "node_modules", ".venv", "__pycache__"];
 
-/// The text files under `dir`, in walk order. Hidden files count; ignored files and the skipped directories do not.
+/// The text files under `dir`, in walk order. Hidden files count. Ignored files and the skipped directories do not.
 pub(crate) fn walk(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
   let walker = ignore::WalkBuilder::new(dir)
     .hidden(false)
@@ -135,7 +135,7 @@ pub(crate) fn test_only_files(files: &[PathBuf]) -> anyhow::Result<HashSet<PathB
 }
 
 /// The modules a file declares out of line, with the file each names and whether a `cfg(test)` gate covers it. A
-/// `#[path]` attribute names the file relative to `path_dir`; every other module is found under `base`.
+/// `#[path]` attribute names the file relative to `path_dir`. Every other module is found under `base`.
 fn declared_modules(
   items: &[syn::Item],
   base: &Path,

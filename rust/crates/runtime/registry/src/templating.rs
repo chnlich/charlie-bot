@@ -26,7 +26,9 @@ use axum::http::StatusCode;
 use axum::http::header;
 use axum::http::request::Parts;
 use axum::response::Response;
-use charliebot_compat::compression::{MINIMUM_DEFLATE_BYTES, accepts_gzip, gzip_memoized_body};
+use charliebot_compat::compression::{
+  CompressedEncoding, MINIMUM_DEFLATE_BYTES, ResponseEncoding, gzip_memoized_body, zstd_memoized_body,
+};
 use charliebot_compat::mimetypes;
 use charliebot_compat::mimetypes_table::TEXT_HTML;
 use charliebot_compat::{jinja, responses};
@@ -102,8 +104,8 @@ pub struct Templating {
   render_memo: Mutex<Vec<RenderMemo>>,
   /// The stable globals one config and credentials version produced.
   globals_memo: Mutex<Option<StableGlobalsMemo>>,
-  /// The compressed forms of the last eight page bodies deflated, the oldest first.
-  page_gzips: Mutex<Vec<PageGzip>>,
+  /// The compressed forms of the last eight page bodies compressed, the oldest first.
+  page_gzips: Mutex<Vec<PageCompressed>>,
   /// The icon data the current static-tree revision supplied to Rust and template callers.
   icons: Mutex<Option<IconSnapshot>>,
   /// The served form of each static page tail, kept while the watch revision holds it.
@@ -191,15 +193,16 @@ struct StableGlobalsMemo {
   values: Arc<HashMap<&'static str, Value>>,
 }
 
-/// One page's finished body and its compressed form.
+/// One page's finished body and its compressed forms.
 ///
-/// A page load deflates its body on every request the transport compresses, and deflating costs far more than
+/// A page load compresses its body on every request the transport encodes, and compressing costs far more than
 /// comparing a body with the one served last. The bodies a page serves in a burst repeat, so the first request of
-/// a body builds its compressed form and the next ones reuse those bytes.
-struct PageGzip {
+/// a body builds its compressed form for that encoding and the next ones reuse those bytes.
+struct PageCompressed {
   name: String,
   html: Vec<u8>,
-  gzip: Vec<u8>,
+  gzip: Option<Vec<u8>>,
+  zstd: Option<Vec<u8>>,
 }
 
 /// How many page bodies the compressed forms are kept for. A new body past this count drops the body deflated
@@ -357,13 +360,16 @@ impl Templating {
   /// The response of a page body the caller already holds, with the headers and the compressed form
   /// [`Self::render_page`] serves for it.
   pub fn page_response(&self, name: &str, html: String, request: &Parts) -> Response {
-    let deflate = accepts_gzip(&request.headers) && html.len() >= MINIMUM_DEFLATE_BYTES;
+    let coding =
+      ResponseEncoding::for_request(&request.headers).compressed().filter(|_| html.len() >= MINIMUM_DEFLATE_BYTES);
     // `no-store` names this body as a page: a page must never come out of a cache, because it names the static asset
     // version it was built against and an older body runs an older script. The transport's entity-tag layer, outside
     // this one, replaces the marker with `no-cache` and the body's tag, so every navigation still reaches the server
     // and an unchanged body costs a `304` instead of a transfer.
-    let mut response =
-      if deflate { compressed_html(self.page_gzip(name, html.as_bytes())) } else { responses::html(html) };
+    let mut response = match coding {
+      Some(coding) => compressed_html(coding.content_encoding(), self.page_compressed(name, html.as_bytes(), coding)),
+      None => responses::html(html),
+    };
     response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response
   }
@@ -380,19 +386,35 @@ impl Templating {
     self.globals(features)
   }
 
-  /// The gzip form of one page body: the bytes kept for this body, or a fresh deflate that is kept for the next
-  /// request of it.
-  fn page_gzip(&self, name: &str, html: &[u8]) -> Vec<u8> {
+  /// The compressed form of one page body for `coding`: the bytes kept for this body, or a fresh compression kept for
+  /// the next request of it.
+  fn page_compressed(&self, name: &str, html: &[u8], coding: CompressedEncoding) -> Vec<u8> {
     let mut kept = self.page_gzips.lock().expect("the page gzip mutex is not poisoned");
-    if let Some(entry) = kept.iter().find(|entry| entry.name == name && entry.html == html) {
-      return entry.gzip.clone();
+    if let Some(entry) = kept.iter_mut().find(|entry| entry.name == name && entry.html == html) {
+      let slot = match coding {
+        CompressedEncoding::Gzip => &mut entry.gzip,
+        CompressedEncoding::Zstd => &mut entry.zstd,
+      };
+      return slot
+        .get_or_insert_with(|| match coding {
+          CompressedEncoding::Gzip => gzip_memoized_body(html),
+          CompressedEncoding::Zstd => zstd_memoized_body(html),
+        })
+        .clone();
     }
-    let gzip = gzip_memoized_body(html);
-    kept.push(PageGzip { name: name.to_string(), html: html.to_vec(), gzip: gzip.clone() });
+    let bytes = match coding {
+      CompressedEncoding::Gzip => gzip_memoized_body(html),
+      CompressedEncoding::Zstd => zstd_memoized_body(html),
+    };
+    let (gzip, zstd) = match coding {
+      CompressedEncoding::Gzip => (Some(bytes.clone()), None),
+      CompressedEncoding::Zstd => (None, Some(bytes.clone())),
+    };
+    kept.push(PageCompressed { name: name.to_string(), html: html.to_vec(), gzip, zstd });
     if kept.len() > PAGE_GZIP_ENTRIES {
       kept.remove(0);
     }
-    gzip
+    bytes
   }
 
   /// The rendered page and each `(placeholder, text)` substitution, as the finished HTML.
@@ -908,15 +930,15 @@ fn request_context(request: &Parts) -> serde_json::Value {
   json!({"method": request.method.as_str(), "path": request.uri.path(), "query": request.uri.query().unwrap_or("")})
 }
 
-/// The page response carrying a body this layer deflated. The transport gzip layer passes a response that already
-/// sets `Content-Encoding` through, so this response names its encoding, its compressed length and the header its
-/// bytes vary on.
-fn compressed_html(body: Vec<u8>) -> Response {
+/// The page response carrying a body this layer compressed. The transport compression layer passes a response that
+/// already sets `Content-Encoding` through, so this response names its encoding, its compressed length and the header
+/// its bytes vary on.
+fn compressed_html(encoding: &'static str, body: Vec<u8>) -> Response {
   Response::builder()
     .status(StatusCode::OK)
     .header(header::CONTENT_TYPE, mimetypes::with_utf8_charset(TEXT_HTML))
     .header(header::CONTENT_LENGTH, body.len())
-    .header(header::CONTENT_ENCODING, "gzip")
+    .header(header::CONTENT_ENCODING, encoding)
     .header(header::VARY, ACCEPT_ENCODING)
     .body(Body::from(body))
     .expect("a page response builds")
@@ -1431,6 +1453,13 @@ mod tests {
     let second_body = axum::body::to_bytes(second.into_body(), usize::MAX).await.unwrap();
     assert_eq!(second_body, first_body);
     assert_eq!(templating.page_gzips.lock().unwrap().len(), 1, "the repeat served the body it kept");
+
+    let zstd = templating.render_page(&features, "bulk.html", &json!({}), &parts(Some("gzip, zstd"))).unwrap();
+    assert_eq!(zstd.headers()[header::CONTENT_ENCODING], "zstd");
+    assert_eq!(zstd.headers()[header::VARY], "Accept-Encoding");
+    let zstd_body = axum::body::to_bytes(zstd.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(zstd_body.as_ref(), zstd_memoized_body(page.as_bytes()));
+    assert_eq!(templating.page_gzips.lock().unwrap().len(), 1, "zstd shares the body's memo entry");
 
     let plain = templating.render_page(&features, "bulk.html", &json!({}), &parts(None)).unwrap();
     assert!(plain.headers().get(header::CONTENT_ENCODING).is_none());

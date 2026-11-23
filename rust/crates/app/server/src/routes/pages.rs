@@ -13,7 +13,7 @@ use bytes::Bytes;
 use charliebot_agents::model_pool::{MISSING_BACKEND_OPTION, POOL_MEMBER_FIELD};
 use charliebot_agents::pool_display::session_metadata_shown;
 use charliebot_cli_common::route;
-use charliebot_compat::compression::{PageTail, gzip_memoized_body, zstd_memoized_body};
+use charliebot_compat::compression::{PageTail, ResponseEncoding, gzip_memoized_body, zstd_memoized_body};
 use charliebot_compat::mimetypes;
 use charliebot_compat::mimetypes_table::TEXT_HTML;
 use charliebot_compat::responses::{self, Failure};
@@ -130,41 +130,8 @@ struct PageTailEntry {
   tail: PageTail,
 }
 
-/// The encoding a page body travels in: the smallest form of the body the request names as acceptable.
-///
-/// A client that accepts zstd takes it, because zstd's form of a page is smaller than gzip's; the page's gzip form is
-/// unchanged for every other client.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PageEncoding {
-  Identity,
-  Gzip,
-  Zstd,
-}
-
-impl PageEncoding {
-  /// The encoding a request's `Accept-Encoding` prefers among the forms a page body keeps.
-  ///
-  /// A form with a higher weight wins, and equal weights take the smaller form. A form the request does not name, or
-  /// names with `q=0`, is not acceptable. The transport reads the same weights through [`gzip::accepted_weight`], so a
-  /// client that forbids gzip takes the identity body from both.
-  fn for_request(headers: &HeaderMap) -> PageEncoding {
-    match (gzip::accepted_weight(headers, "zstd"), gzip::accepted_weight(headers, "gzip")) {
-      (Some(zstd), Some(gzip)) if zstd >= gzip => PageEncoding::Zstd,
-      (_, Some(_)) => PageEncoding::Gzip,
-      (Some(_), None) => PageEncoding::Zstd,
-      (None, None) => PageEncoding::Identity,
-    }
-  }
-
-  /// The `Content-Encoding` this encoding names, for the forms a body travels compressed in.
-  fn content_encoding(self) -> &'static str {
-    match self {
-      PageEncoding::Gzip => "gzip",
-      PageEncoding::Zstd => "zstd",
-      PageEncoding::Identity => unreachable!("an identity page body travels whole"),
-    }
-  }
-}
+/// The encoding a page body travels in: the shared response-encoding negotiation.
+type PageEncoding = ResponseEncoding;
 
 /// A page body's compressed form and the `Content-Encoding` it names.
 #[derive(Clone)]
@@ -324,14 +291,16 @@ impl PageBodyMemo {
     let entry = entries.get_mut(index).expect("the page body entry matched or was built");
     let body = entry.body.clone();
     let tail = entry.tail.clone();
-    let compressed = if encoding != PageEncoding::Identity && body.len() >= gzip::MINIMUM_SIZE {
+    let compressed = if let Some(coding) = encoding.compressed()
+      && body.len() >= gzip::MINIMUM_SIZE
+    {
       let slot = match encoding {
         PageEncoding::Gzip => &mut entry.gzip,
         PageEncoding::Zstd => &mut entry.zstd,
         PageEncoding::Identity => unreachable!("an identity page body travels whole"),
       };
       let bytes = slot.get_or_insert_with(|| compressed_page(name, &body, &tail, encoding, tails)).clone();
-      Some(PageCompressed { encoding: encoding.content_encoding(), bytes })
+      Some(PageCompressed { encoding: coding.content_encoding(), bytes })
     } else {
       None
     };
@@ -1606,9 +1575,9 @@ mod tests {
       headers
     };
     assert_eq!(PageEncoding::for_request(&headers("gzip;q=0")), PageEncoding::Identity);
-    assert_eq!(gzip::Responder::for_request(&headers("gzip;q=0")), gzip::Responder::Identity);
+    assert_eq!(ResponseEncoding::for_request(&headers("gzip;q=0")), ResponseEncoding::Identity);
     assert_eq!(PageEncoding::for_request(&headers("gzip")), PageEncoding::Gzip);
-    assert_eq!(gzip::Responder::for_request(&headers("gzip")), gzip::Responder::Gzip);
+    assert_eq!(ResponseEncoding::for_request(&headers("gzip")), ResponseEncoding::Gzip);
   }
 
   #[tokio::test]

@@ -788,7 +788,7 @@ impl ServeWorld {
           "      effort: xhigh\n",
           "    - id: claude-fable\n      label: Fable\n      type: cc-claude\n      model: claude-fable-5-1\n",
           "      effort: xhigh\n",
-          "  calls:\n    probe: charlie-code-serve-test\n",
+          "  calls:\n    new_session: charlie-code-serve-test\n    probe: charlie-code-serve-test\n",
         ),
         port = live_port,
       ),

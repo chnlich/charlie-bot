@@ -18,13 +18,12 @@ use std::ffi::OsString;
 use charliebot_cli_common::args as cli_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::json_out;
-use charliebot_core::config::{
-  self, BackendOption, CallClass, CallTarget, CharlieBotConfig, OptionFieldKind, PoolConfig, PoolRule,
-};
+use charliebot_core::config::{self, BackendOption, CharlieBotConfig, OptionFieldKind};
 use charliebot_core::home;
 use charliebot_core::paths;
 use charliebot_registry::Registry;
 use clap::{Parser, Subcommand};
+use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 #[derive(Parser)]
@@ -145,23 +144,23 @@ fn render(key: &str, value: Option<Rendered>) -> Result<String, Failure> {
 /// Resolve one key to its value. An unknown key is a usage error; a null value is unset.
 fn value(key: &str, cfg: &CharlieBotConfig, registry: &Registry) -> Result<Option<Rendered>, Failure> {
   let rendered = match key {
-    "charliebot_home" => Rendered::Scalar(paths::display(&cfg.charliebot_home)),
-    "default_charliebot_home" => Rendered::Scalar(paths::display(&home::default_charliebot_home())),
-    "headless_chrome_bin" => Rendered::Scalar(cfg.headless_chrome_bin.clone()),
-    "server" => Rendered::Json(server_json(cfg)),
+    config::CHARLIEBOT_HOME_KEY => Rendered::Scalar(paths::display(&cfg.charliebot_home)),
+    DEFAULT_HOME_KEY => Rendered::Scalar(paths::display(&home::default_charliebot_home())),
+    config::HEADLESS_CHROME_BIN_KEY => Rendered::Scalar(cfg.headless_chrome_bin.clone()),
+    config::SERVER_KEY => Rendered::Json(cfg.server.dump_json()),
     PUBLIC_URL_KEY => match &cfg.server.public_url {
       Some(url) => Rendered::Scalar(url.clone()),
       None => Rendered::Json(Value::Null),
     },
     GUARD_SWITCH_KEY => Rendered::Scalar(cfg.server.enable_local_work_guard.to_string()),
-    "remote_run" => Rendered::Json(remote_run_json(cfg)),
+    config::REMOTE_RUN_KEY => Rendered::Json(serialize_section(&cfg.remote_run)?),
     RUNNER_HOST_KEY => optional_text(&cfg.remote_run.host),
     RUNNER_BASE_KEY => Rendered::Scalar(cfg.remote_run.remote_base.clone()),
-    "paths" => Rendered::Json(paths_json(cfg)),
-    "backends" => Rendered::Json(backends_json(cfg, registry).map_err(Failure::value)?),
-    "ui" => Rendered::Json(ui_json(cfg)),
-    "telegram" => Rendered::Json(telegram_json(cfg)),
-    "github" => Rendered::Json(github_json(cfg)),
+    config::PATHS_KEY => Rendered::Json(serialize_section(&cfg.paths)?),
+    config::BACKENDS_KEY => Rendered::Json(backends_json(cfg, registry).map_err(Failure::value)?),
+    config::UI_KEY => Rendered::Json(serialize_section(&cfg.ui)?),
+    config::TELEGRAM_KEY => Rendered::Json(serialize_section(&cfg.telegram)?),
+    config::GITHUB_KEY => Rendered::Json(serialize_section(&cfg.github)?),
     _ => {
       let Some(section) = registry.config_sections().find(|section| section.key == key) else {
         return Err(Failure::unknown_key(key));
@@ -178,31 +177,8 @@ fn value(key: &str, cfg: &CharlieBotConfig, registry: &Registry) -> Result<Optio
   })
 }
 
-fn server_json(cfg: &CharlieBotConfig) -> Value {
-  let server = &cfg.server;
-  json!({
-    "host": server.host,
-    "port": server.port,
-    "subprocess_buffer_limit_mb": server.subprocess_buffer_limit_mb,
-    "session_memory_max_mb": server.session_memory_max_mb,
-    "session_swap_max_mb": server.session_swap_max_mb,
-    "session_tasks_max": server.session_tasks_max,
-    "min_free_disk_gib": server.min_free_disk_gib,
-    "public_url": server.public_url,
-  })
-}
-
-fn paths_json(cfg: &CharlieBotConfig) -> Value {
-  let paths = &cfg.paths;
-  json!({
-    "workspace_dirs": paths.workspace_dirs,
-    "worktree_dir": paths.worktree_dir,
-    "scratch_dir": paths.scratch_dir,
-  })
-}
-
-fn remote_run_json(cfg: &CharlieBotConfig) -> Value {
-  json!({ "host": cfg.remote_run.host, "remote_base": cfg.remote_run.remote_base })
+fn serialize_section<T: Serialize>(section: &T) -> Result<Value, Failure> {
+  serde_json::to_value(section).map_err(|error| Failure::value(error.to_string()))
 }
 
 /// A set option as its text, an unset one as null: the caller reads the null as "unset".
@@ -213,58 +189,12 @@ fn optional_text(value: &Option<String>) -> Rendered {
   }
 }
 
-fn ui_json(cfg: &CharlieBotConfig) -> Value {
-  let services: Vec<Value> = cfg
-    .ui
-    .home_services
-    .iter()
-    .map(|service| json!({ "name": service.name, "description": service.description, "url": service.url }))
-    .collect();
-  json!({ "home_services": services })
-}
-
-fn telegram_json(cfg: &CharlieBotConfig) -> Value {
-  json!({ "chat_id": cfg.telegram.chat_id })
-}
-
-fn github_json(cfg: &CharlieBotConfig) -> Value {
-  json!({
-    "user_token_command": cfg.github.user_token_command,
-    "app_token_command": cfg.github.app_token_command,
-  })
-}
-
 /// `backends`, with each option rendered from its registered schema: the shared fields, then the type's own
 /// fields in declaration order, each present whether the entry set it or takes the field's default.
 fn backends_json(cfg: &CharlieBotConfig, registry: &Registry) -> Result<Value, String> {
-  let backends = &cfg.backends;
-  let routing = match &backends.routing {
-    None => Value::Null,
-    Some(routing) => json!({ "command": routing.command }),
-  };
-  let options = backends.options.iter().map(|option| option_json(option, registry)).collect::<Result<Vec<_>, _>>()?;
-  let pools = backends.pools.iter().map(pool_json).collect::<Vec<_>>();
-  let calls = CallClass::ALL
-    .iter()
-    .map(|class| {
-      let target = match backends.calls.get(*class) {
-        None => Value::Null,
-        Some(CallTarget::Session) => json!(config::SESSION_CALL_TARGET),
-        Some(CallTarget::Backend(id)) => json!(id),
-      };
-      (class.key().to_string(), target)
-    })
-    .collect::<Map<_, _>>();
-  Ok(json!({ "routing": routing, "options": options, "pools": pools, "calls": calls }))
-}
-
-fn pool_json(pool: &PoolConfig) -> Value {
-  let rule = match pool.rule {
-    PoolRule::Priority => "priority",
-    PoolRule::Rotate => "rotate",
-  };
-  let members = pool.members.iter().map(|member| member.backend.as_str()).collect::<Vec<_>>();
-  json!({ "id": pool.id, "label": pool.label, "rule": rule, "members": members })
+  let options =
+    cfg.backends.options.iter().map(|option| option_json(option, registry)).collect::<Result<Vec<_>, _>>()?;
+  cfg.backends.dump_json(options).map_err(|error| error.to_string())
 }
 
 fn option_json(option: &BackendOption, registry: &Registry) -> Result<Value, String> {
@@ -442,5 +372,43 @@ mod tests {
     let failure = render("telegram", None).expect_err("an unset value is refused");
     assert_eq!(failure.code, 1);
     assert_eq!(failure.message, "error: config key telegram is unset");
+  }
+
+  #[test]
+  fn server_paths_and_ui_print_their_core_fields() {
+    let yaml = concat!(
+      "server:\n  port: 18499\n",
+      "paths:\n  workspace_dirs: [/synthetic/repo]\n  worktree_dir: /synthetic/worktrees\n  scratch_dir: /synthetic/scripts\n",
+      "ui:\n  home_services:\n    - name: Svc\n      description: Desc\n      url: https://synthetic.example\n",
+    );
+    let (_home, registry, cfg) = load_yaml(yaml);
+    let server: Value = serde_json::from_str(get("server", &cfg, &registry).unwrap().trim_end()).unwrap();
+    assert_eq!(
+      server,
+      json!({
+        "host": "127.0.0.1",
+        "port": 18499,
+        "subprocess_buffer_limit_mb": 1024,
+        "session_memory_max_mb": 12288,
+        "session_swap_max_mb": 0,
+        "session_tasks_max": 4096,
+        "min_free_disk_gib": 10,
+        "public_url": null,
+      })
+    );
+    let paths_val: Value = serde_json::from_str(get("paths", &cfg, &registry).unwrap().trim_end()).unwrap();
+    assert_eq!(
+      paths_val,
+      json!({
+        "workspace_dirs": ["/synthetic/repo"],
+        "worktree_dir": "/synthetic/worktrees",
+        "scratch_dir": "/synthetic/scripts",
+      })
+    );
+    let ui: Value = serde_json::from_str(get("ui", &cfg, &registry).unwrap().trim_end()).unwrap();
+    assert_eq!(
+      ui,
+      json!({ "home_services": [{ "name": "Svc", "description": "Desc", "url": "https://synthetic.example" }] })
+    );
   }
 }

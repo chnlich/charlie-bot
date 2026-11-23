@@ -77,12 +77,42 @@ pub const OPTION_BILLING_KEY: &str = "billing";
 /// The `visible` key of a `backends.options[]` entry: whether the web pickers list the entry, true by default.
 pub const OPTION_VISIBLE_KEY: &str = "visible";
 
+/// The `rule` and `members` keys of a `backends.pools[]` entry.
+pub const POOL_RULE_KEY: &str = "rule";
+pub const POOL_MEMBERS_KEY: &str = "members";
+
+/// The keys of the `backends:` mapping: `routing`, `options`, `pools`, `calls`.
+pub const BACKENDS_ROUTING_KEY: &str = "routing";
+pub const BACKENDS_OPTIONS_KEY: &str = "options";
+pub const BACKENDS_POOLS_KEY: &str = "pools";
+pub const BACKENDS_CALLS_KEY: &str = "calls";
+
 /// Retired keys under `backends:`, replaced by `backends.pools` and `backends.calls`.
 const RETIRED_BACKENDS_KEYS: &[&str] = &["preference", "worker_default", "auto", "pool"];
 
 /// The top-level names `CharlieBotConfig` declares as fields.
-pub const TOP_LEVEL_CONFIG_FIELD_NAMES: &[&str] =
-  &["charliebot_home", "headless_chrome_bin", "server", "paths", "backends", "ui", "telegram", "remote_run", "github"];
+pub const CHARLIEBOT_HOME_KEY: &str = "charliebot_home";
+pub const HEADLESS_CHROME_BIN_KEY: &str = "headless_chrome_bin";
+pub const SERVER_KEY: &str = "server";
+pub const PATHS_KEY: &str = "paths";
+pub const BACKENDS_KEY: &str = "backends";
+pub const UI_KEY: &str = "ui";
+pub const TELEGRAM_KEY: &str = "telegram";
+pub const REMOTE_RUN_KEY: &str = "remote_run";
+pub const GITHUB_KEY: &str = "github";
+
+/// The top-level names `CharlieBotConfig` declares as fields.
+pub const TOP_LEVEL_CONFIG_FIELD_NAMES: &[&str] = &[
+  CHARLIEBOT_HOME_KEY,
+  HEADLESS_CHROME_BIN_KEY,
+  SERVER_KEY,
+  PATHS_KEY,
+  BACKENDS_KEY,
+  UI_KEY,
+  TELEGRAM_KEY,
+  REMOTE_RUN_KEY,
+  GITHUB_KEY,
+];
 
 /// `CORE_LEGACY_KEYS`: the retired top-level keys the core config names, each with its new location.
 const CORE_LEGACY_KEYS: &[(&str, &str)] = &[
@@ -288,11 +318,27 @@ pub struct ServerConfig {
   pub public_url: Option<String>,
 }
 
+impl ServerConfig {
+  /// Renders the server fields printed by `charliebot config get server`.
+  pub fn dump_json(&self) -> serde_json::Value {
+    serde_json::json!({
+      "host": self.host,
+      "port": self.port,
+      "subprocess_buffer_limit_mb": self.subprocess_buffer_limit_mb,
+      "session_memory_max_mb": self.session_memory_max_mb,
+      "session_swap_max_mb": self.session_swap_max_mb,
+      "session_tasks_max": self.session_tasks_max,
+      "min_free_disk_gib": self.min_free_disk_gib,
+      "public_url": self.public_url,
+    })
+  }
+}
+
 /// `remote_run:` section: the build host that `dev/remote-run` sends runs to, and the state directory it uses there. A
 /// top-level section, not `server:` keys, because a live release refuses unknown `server:` keys: a host sets this
 /// section while the previous release still runs. The runner and the local work guard's refusal read these keys on
 /// each run, so an edit reaches the next run without a server restart.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RemoteRunConfig {
   /// The ssh alias of the build host, as `~/.ssh/config` names it. It has no default: until the host sets it, the
@@ -340,7 +386,7 @@ fn default_switch_off() -> bool {
 /// The two session-weight switches of a parsed `config.yaml` as `(cpu, io)`. An absent switch reads as its
 /// `ServerConfig` default, the value the server starts with, so every reader of a home's switches goes through here.
 pub fn session_weight_switches(document: &serde_json::Value) -> Result<(bool, bool), serde_json::Error> {
-  let server = document.get("server").cloned().unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
+  let server = document.get(SERVER_KEY).cloned().unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
   let server: ServerConfig = serde_json::from_value(server)?;
   Ok((server.enable_session_cpu_weight, server.enable_session_io_weight))
 }
@@ -350,7 +396,7 @@ fn default_min_free_disk_gib() -> i64 {
 }
 
 /// `paths:` section: the repos to scan and where worker worktrees live, `~` expanded.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PathsConfig {
   #[serde(default = "default_workspace_dirs")]
@@ -431,7 +477,7 @@ pub fn parse_backend_record(record: &Value, backend_types: &[&str]) -> Result<Ba
 }
 
 /// `backends.routing:` section: the host command that orders unpinned backend candidates.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RoutingConfig {
   pub command: Vec<String>,
@@ -451,6 +497,16 @@ pub enum PoolRule {
   Priority,
   /// The first selectable member after the pool's rotation position, which then moves past the chosen member.
   Rotate,
+}
+
+impl PoolRule {
+  /// The value the config writes for this rule.
+  pub const fn key(self) -> &'static str {
+    match self {
+      PoolRule::Priority => "priority",
+      PoolRule::Rotate => "rotate",
+    }
+  }
 }
 
 /// How a `backends.options` entry is paid for: `billing: subscription | payg`.
@@ -490,6 +546,20 @@ pub struct PoolConfig {
   pub members: Vec<PoolMember>,
   /// Whether the web pickers list the pool (`visible: true`, the default). See [`BackendOption::visible`].
   pub visible: bool,
+}
+
+impl PoolConfig {
+  /// Renders the pool summary printed by `charliebot config get backends`.
+  pub fn dump_json(&self) -> serde_json::Value {
+    let members: Vec<serde_json::Value> =
+      self.members.iter().map(|member| serde_json::Value::String(member.backend.clone())).collect();
+    let mut object = serde_json::Map::new();
+    object.insert(OPTION_ID_KEY.to_string(), serde_json::Value::String(self.id.clone()));
+    object.insert(OPTION_LABEL_KEY.to_string(), serde_json::Value::String(self.label.clone()));
+    object.insert(POOL_RULE_KEY.to_string(), serde_json::Value::String(self.rule.key().to_string()));
+    object.insert(POOL_MEMBERS_KEY.to_string(), serde_json::Value::Array(members));
+    serde_json::Value::Object(object)
+  }
 }
 
 /// One internal call class that `backends.calls` configures.
@@ -674,10 +744,33 @@ impl BackendsConfig {
       CallTarget::Session => unreachable!("the config loader refuses session on backends.calls.{}", class.key()),
     })
   }
+
+  /// Renders `backends:` as `charliebot config get backends` prints it, given the schema-rendered options list.
+  pub fn dump_json(&self, options: Vec<serde_json::Value>) -> Result<serde_json::Value, serde_json::Error> {
+    let routing = serde_json::to_value(&self.routing)?;
+    let pools: Vec<serde_json::Value> = self.pools.iter().map(PoolConfig::dump_json).collect();
+    let calls: serde_json::Map<String, serde_json::Value> = CallClass::ALL
+      .iter()
+      .map(|class| {
+        let target = match self.calls.get(*class) {
+          None => serde_json::Value::Null,
+          Some(CallTarget::Session) => serde_json::Value::String(SESSION_CALL_TARGET.to_string()),
+          Some(CallTarget::Backend(id)) => serde_json::Value::String(id.clone()),
+        };
+        (class.key().to_string(), target)
+      })
+      .collect();
+    let mut object = serde_json::Map::new();
+    object.insert(BACKENDS_ROUTING_KEY.to_string(), routing);
+    object.insert(BACKENDS_OPTIONS_KEY.to_string(), serde_json::Value::Array(options));
+    object.insert(BACKENDS_POOLS_KEY.to_string(), serde_json::Value::Array(pools));
+    object.insert(BACKENDS_CALLS_KEY.to_string(), serde_json::Value::Object(calls));
+    Ok(serde_json::Value::Object(object))
+  }
 }
 
 /// One `/home` page service card.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct HomeService {
   pub name: String,
@@ -686,7 +779,7 @@ pub struct HomeService {
 }
 
 /// `ui:` section: the `/home` page service cards.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct UiConfig {
   #[serde(default)]
@@ -694,7 +787,7 @@ pub struct UiConfig {
 }
 
 /// `telegram:` section: the notification target.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TelegramConfig {
   #[serde(default)]
@@ -703,7 +796,7 @@ pub struct TelegramConfig {
 
 /// `github:` section: the operator's own GitHub token command and the agent `gh` wrapper's App token command, `~`
 /// expanded.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct GithubConfig {
   /// The command line whose standard output is the operator's own GitHub token. The draft sender runs it without a
@@ -895,11 +988,11 @@ pub fn load_config_file(
     )));
   }
 
-  if let Some(Value::Mapping(backends)) = data.get("backends") {
+  if let Some(Value::Mapping(backends)) = data.get(BACKENDS_KEY) {
     let retired: Vec<String> = RETIRED_BACKENDS_KEYS
       .iter()
       .filter(|key| backends.contains_key(**key))
-      .map(|key| format!("backends.{key}"))
+      .map(|key| format!("{BACKENDS_KEY}.{key}"))
       .collect();
     if !retired.is_empty() {
       return Err(ConfigError(format!(
@@ -910,9 +1003,9 @@ pub fn load_config_file(
     }
   }
 
-  if data.contains_key("charliebot_home") {
+  if data.contains_key(CHARLIEBOT_HOME_KEY) {
     return Err(ConfigError(format!(
-      "{config_path_text} sets 'charliebot_home'; that path is chosen by the {} environment variable. Remove the key.",
+      "{config_path_text} sets '{CHARLIEBOT_HOME_KEY}'; that path is chosen by the {} environment variable. Remove the key.",
       crate::home::CHARLIEBOT_HOME_ENV
     )));
   }
@@ -935,17 +1028,17 @@ pub fn load_config_file(
   }
 
   let section = |name: &str| data.get(name).cloned();
-  let mut paths_config: PathsConfig = typed_section(&config_path_text, "paths", section("paths"), default_paths)?;
+  let mut paths_config: PathsConfig = typed_section(&config_path_text, PATHS_KEY, section(PATHS_KEY), default_paths)?;
   paths_config.workspace_dirs = paths_config.workspace_dirs.iter().map(|dir| paths::expanduser(dir)).collect();
   paths_config.worktree_dir = paths::expanduser(&paths_config.worktree_dir);
   paths_config.scratch_dir = paths::expanduser(&paths_config.scratch_dir);
 
-  let headless_chrome_bin = match data.get("headless_chrome_bin") {
+  let headless_chrome_bin = match data.get(HEADLESS_CHROME_BIN_KEY) {
     None => String::new(),
     Some(Value::String(text)) => text.clone(),
     Some(other) => {
       return Err(ConfigError(format!(
-        "{config_path_text}: headless_chrome_bin: expected a string, got {}",
+        "{config_path_text}: {HEADLESS_CHROME_BIN_KEY}: expected a string, got {}",
         yaml_value_kind(other)
       )));
     }
@@ -960,19 +1053,22 @@ pub fn load_config_file(
     sections.insert(package_section.key, parsed);
   }
 
-  let mut github: GithubConfig = typed_section(&config_path_text, "github", section("github"), GithubConfig::default)?;
+  let mut github: GithubConfig =
+    typed_section(&config_path_text, GITHUB_KEY, section(GITHUB_KEY), GithubConfig::default)?;
   github.user_token_command = github.user_token_command.as_deref().map(paths::expanduser);
   github.app_token_command = github.app_token_command.as_deref().map(paths::expanduser);
 
   Ok(CharlieBotConfig {
     charliebot_home: home.to_path_buf(),
     headless_chrome_bin,
-    server: typed_section(&config_path_text, "server", section("server"), default_server)?,
+    server: typed_section(&config_path_text, SERVER_KEY, section(SERVER_KEY), default_server)?,
     paths: paths_config,
-    backends: parse_backends(&config_path_text, section("backends"), &schema.backend_types)?,
-    ui: typed_section(&config_path_text, "ui", section("ui"), || UiConfig { home_services: Vec::new() })?,
-    telegram: typed_section(&config_path_text, "telegram", section("telegram"), || TelegramConfig { chat_id: None })?,
-    remote_run: typed_section(&config_path_text, "remote_run", section("remote_run"), RemoteRunConfig::default)?,
+    backends: parse_backends(&config_path_text, section(BACKENDS_KEY), &schema.backend_types)?,
+    ui: typed_section(&config_path_text, UI_KEY, section(UI_KEY), || UiConfig { home_services: Vec::new() })?,
+    telegram: typed_section(&config_path_text, TELEGRAM_KEY, section(TELEGRAM_KEY), || TelegramConfig {
+      chat_id: None,
+    })?,
+    remote_run: typed_section(&config_path_text, REMOTE_RUN_KEY, section(REMOTE_RUN_KEY), RemoteRunConfig::default)?,
     github,
     sections: Sections(sections),
   })
@@ -1099,14 +1195,21 @@ fn parse_backends(
     }
   };
   for key in mapping.keys() {
-    if !matches!(key.as_str(), Some("routing" | "options" | "pools" | "calls")) {
+    if !matches!(
+      key.as_str(),
+      Some(k) if k == BACKENDS_ROUTING_KEY || k == BACKENDS_OPTIONS_KEY || k == BACKENDS_POOLS_KEY || k == BACKENDS_CALLS_KEY
+    ) {
       let shown = key.as_str().map_or_else(|| yaml_key_repr(key), str::to_string);
-      return Err(ConfigError(format!("{config_path}: invalid config key backends.{shown}: unknown field")));
+      return Err(ConfigError(format!("{config_path}: invalid config key {BACKENDS_KEY}.{shown}: unknown field")));
     }
   }
-  let routing: Option<RoutingConfig> =
-    typed_section(config_path, "backends.routing", mapping.get("routing").cloned(), || None)?;
-  let options = match mapping.get("options") {
+  let routing: Option<RoutingConfig> = typed_section(
+    config_path,
+    &format!("{BACKENDS_KEY}.{BACKENDS_ROUTING_KEY}"),
+    mapping.get(BACKENDS_ROUTING_KEY).cloned(),
+    || None,
+  )?;
+  let options = match mapping.get(BACKENDS_OPTIONS_KEY) {
     None => Vec::new(),
     Some(Value::Sequence(entries)) => entries
       .iter()
@@ -1115,15 +1218,15 @@ fn parse_backends(
       .collect::<Result<_, _>>()?,
     Some(other) => {
       return Err(ConfigError(format!(
-        "{config_path}: invalid config key backends.options: expected a list, got {}",
+        "{config_path}: invalid config key {BACKENDS_KEY}.{BACKENDS_OPTIONS_KEY}: expected a list, got {}",
         yaml_value_kind(other)
       )));
     }
   };
-  let pools = parse_pools(config_path, mapping.get("pools"))?;
+  let pools = parse_pools(config_path, mapping.get(BACKENDS_POOLS_KEY))?;
   check_pools(config_path, &pools, &options)?;
   let mut backends = BackendsConfig { routing, options, pools, calls: CallsConfig::default() };
-  backends.calls = parse_calls(config_path, mapping.get("calls"), &backends)?;
+  backends.calls = parse_calls(config_path, mapping.get(BACKENDS_CALLS_KEY), &backends)?;
   Ok(backends)
 }
 

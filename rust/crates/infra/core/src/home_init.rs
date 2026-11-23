@@ -7,7 +7,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use crate::config::CharlieBotConfig;
-use crate::repo_root::CONFIGS_DIR_NAME;
+use crate::repo_root::{CONFIG_EXAMPLE_FILE_NAME, CONFIGS_DIR_NAME, CREDENTIALS_EXAMPLE_FILE_NAME};
 use crate::str_methods::universal_newlines;
 
 /// The default `config.yaml` for a checkout without the template.
@@ -28,7 +28,7 @@ pub fn init_charliebot_home(cfg: &CharlieBotConfig, repo_root: &Path) -> io::Res
   }
   let config_file = cfg.config_file();
   if !config_file.exists() {
-    let template = repo_root.join(CONFIGS_DIR_NAME).join("config.example.yaml");
+    let template = repo_root.join(CONFIGS_DIR_NAME).join(CONFIG_EXAMPLE_FILE_NAME);
     let text = if template.exists() {
       universal_newlines(&fs::read_to_string(&template)?)
     } else {
@@ -38,7 +38,7 @@ pub fn init_charliebot_home(cfg: &CharlieBotConfig, repo_root: &Path) -> io::Res
   }
   let credentials_file = cfg.credentials_file();
   if !credentials_file.exists() {
-    fs::copy(repo_root.join(CONFIGS_DIR_NAME).join("credentials.example.yaml"), &credentials_file)?;
+    fs::copy(repo_root.join(CONFIGS_DIR_NAME).join(CREDENTIALS_EXAMPLE_FILE_NAME), &credentials_file)?;
     fs::set_permissions(&credentials_file, fs::Permissions::from_mode(0o600))?;
   }
   Ok(())

@@ -946,6 +946,17 @@ const OWNER_TABLE: &[OwnerRow] = &[
   OwnerRow { name: "config.d", owner: "infra/core", hint: "Use `charliebot_core::config::CONFIG_D_DIR_NAME`." },
   OwnerRow { name: "cron.d", owner: "infra/core", hint: "Use `charliebot_core::config::CRON_D_DIR_NAME`." },
   OwnerRow { name: "configs", owner: "infra/core", hint: "Use `charliebot_core::repo_root::CONFIGS_DIR_NAME`." },
+  OwnerRow {
+    name: "config.example.yaml",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::repo_root::CONFIG_EXAMPLE_FILE_NAME`; home provisioning seeds it and the backend \
+           check reads its ids.",
+  },
+  OwnerRow {
+    name: "credentials.example.yaml",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::repo_root::CREDENTIALS_EXAMPLE_FILE_NAME`; home provisioning seeds it.",
+  },
   OwnerRow { name: "sessions", owner: "infra/core", hint: "Use `charliebot_core::config::sessions_dir_in`." },
   OwnerRow { name: ".charliebot", owner: "infra/core", hint: "Use `charliebot_core::home::DEFAULT_HOME_DIR_NAME`." },
   OwnerRow { name: "prompt_bodies", owner: "infra/core", hint: "Use `charliebot_core::home::PROMPT_BODIES_DIR_NAME`." },

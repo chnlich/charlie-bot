@@ -653,7 +653,8 @@ rows, gone}`. A poll that finishes after the window is not counted, and its unre
 poll that finishes inside the window with no body read does. The tab tests check the switch's row handling against a
 stub sidebar that keeps rows back: a row absent from the document or hidden in it is clicked only after its group's
 Show all paints it, and a row that no toggle reaches fails the step. They also check that showing a tab waits for the
-other tabs to report hidden, and that an idle wait leaves out the requests its caller matches. The open tests check the
+other tabs to report hidden, that an idle wait leaves out the requests its caller matches, and that a background tab
+opens hidden. The open tests check the
 CPU rate's sharing (a shared rate stands, beside the one the side's own reference derives), the reference's document (a
 reference repetition whose document crossed the link gives no rate) and
 the host interference (a dropped request, a failed navigation or a release open the host pushed past `OPEN.openByMs`

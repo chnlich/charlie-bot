@@ -154,9 +154,11 @@ export class Browser {
     this.#logFd = logFd;
   }
 
-  // Opens a page target. Its network and page events go to the listener that the page's owner registers.
-  async newPage() {
-    const { targetId } = await this.#cdp.send('Target.createTarget', { url: 'about:blank' });
+  // Opens a page target. Its network and page events go to the listener that the page's owner registers. A background
+  // target opens hidden, so the visible tab keeps its active state without an activation that has to reach this
+  // target's document.
+  async newPage({ background = false } = {}) {
+    const { targetId } = await this.#cdp.send('Target.createTarget', { url: 'about:blank', background });
     const { sessionId } = await this.#cdp.send('Target.attachToTarget', { targetId, flatten: true });
     const page = new Page(this.#cdp, sessionId, targetId);
     await page.send('Page.enable');

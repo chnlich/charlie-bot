@@ -670,9 +670,10 @@ export class Tabs {
   }
 
   // Opens a tab, with the access key on every request and, for `local` CDN files, the intercepted CDN patterns.
-  // `initScript`, when given, runs in each document of the tab before the page's own scripts.
-  async open(name, initScript = null) {
-    const page = await this.#browser.newPage();
+  // `initScript`, when given, runs in each document of the tab before the page's own scripts. A background tab opens
+  // hidden, so a scenario's other tabs never take the active state from the tab it shows.
+  async open(name, initScript = null, { background = false } = {}) {
+    const page = await this.#browser.newPage({ background });
     const tab = new Tab(name, page);
     this.#tabs.push(tab);
     if (this.#cdn === 'local') {

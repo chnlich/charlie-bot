@@ -232,3 +232,19 @@ test('show waits for a background tab whose hidden state follows the activation'
   assert.equal(browser.pages[0].state, 'visible');
   assert.deepEqual(browser.pages.slice(1).map((page) => page.state), ['hidden', 'hidden']);
 });
+
+test('a background tab opens hidden, and the first tab of a link opens visible', async () => {
+  const options = [];
+  const browser = {
+    send: async () => ({}),
+    onMessage: () => {},
+    newPage: async (given) => {
+      options.push(given);
+      return {targetId: `page-${options.length}`, send: async () => ({})};
+    },
+  };
+  const tabs = new Tabs({browser, assets: new Map(), accessKey: 'k', origin: 'https://front.test', cdn: 'link'});
+  await tabs.open('visible');
+  await tabs.open('hidden', null, {background: true});
+  assert.deepEqual(options, [{background: false}, {background: true}]);
+});

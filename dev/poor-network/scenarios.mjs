@@ -105,8 +105,10 @@ export async function withLink(ctx, label, tabNames, body) {
       browser, assets: ctx.assets, accessKey: ctx.api.accessKey, origin: ctx.origin, cdn: 'local',
     });
     const opened = [];
-    for (const name of tabNames) {
-      opened.push(await tabs.open(name));
+    for (const [index, name] of tabNames.entries()) {
+      // The first tab is the one the scenario shows. The others open in the background, so showing the first needs
+      // no visibility change to reach them.
+      opened.push(await tabs.open(name, null, { background: index > 0 }));
     }
     return await body({ proxy, tabs, tab: opened[0], hidden: opened.slice(1) });
   } finally {

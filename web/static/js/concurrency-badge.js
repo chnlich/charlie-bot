@@ -2,8 +2,9 @@
 //
 // One template fragment (web/templates/partials/concurrency_badge.html) includes this script in every app page's
 // document. A page that sets `defer_concurrency_badge_poll` gets it as a request after the document parses; the other
-// pages carry it inline, so it runs while the document parses. The badge's at-rest rules ride the fragment. The open panel's rules style the chart and the ranges, nothing the badge paints at rest, so the module
-// fetches that stylesheet on the panel's first open. The server owns the counting
+// pages carry it inline, so it runs while the document parses. The badge's at-rest rules ride the fragment. The open
+// panel's rules style the chart and the ranges, nothing the badge paints at rest, so the module fetches that stylesheet
+// on the panel's first open. The server owns the counting
 // (rust/crates/runtime/session-api/src/concurrency.rs): this module only displays /api/concurrency/now and
 // /api/concurrency/history. Listeners are delegated from the document, because the page may replace its content — a
 // session switch back to the welcome view replaces <main> — without reloading this script.

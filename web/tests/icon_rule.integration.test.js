@@ -105,6 +105,9 @@ const EXCEPTIONS = [
     ["Ok(format!(\"{} → {}\", self.monday, last_day))", PROSE_REASON],
     ["t.label().expect(\"the label formats\"), \"2026-10-19 → 2026-10-25\");", PROSE_REASON],
   ]),
+  ...byFile('rust/crates/features/usage/src/page.rs', [
+    ["format!(\"{} → {end}\", pacific::stamp(read.to_date.start)?)", PROSE_REASON],
+  ]),
   ...byFile('rust/crates/features/usage/src/page_memo.rs', [
     ["week: \"2026-11-02 → 2026-11-08\".to_string(),", PROSE_REASON],
   ]),

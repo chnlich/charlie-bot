@@ -929,6 +929,10 @@ check_clone
 # come the round tools of this commit, the runner's bin with the charliebot CLI that the hooks and the review
 # call, and cargo from ~/.cargo/bin.
 export CHARLIEBOT_HOME="$ROUND_HOME"
+# The CLI reads its checkout (prompts, gh wrapper, ssh guard) from this variable and fails without it. The round's clone
+# is that checkout at origin/main. The launcher forwards no such variable: the launching host's checkout path does not
+# exist on the improve host.
+export CHARLIEBOT_REPO_ROOT="$ROUND_ROOT/charlie-bot"
 export CLAUDE_CONFIG_DIR="$HOME_DIR/.claude-improve"
 export TMPDIR="$ROUND_TMPDIR"
 export IMPROVE_LAUNCH_DIR="$LAUNCH_DIR"

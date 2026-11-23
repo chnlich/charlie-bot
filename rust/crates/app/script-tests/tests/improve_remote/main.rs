@@ -281,6 +281,26 @@ fn the_review_runs_backend_run_on_the_launch_review_directory_from_its_scratch_d
 
 #[test]
 #[ignore = "integration"]
+fn the_review_runs_with_the_round_clone_as_its_repo_root() {
+  let world = World::new();
+  let task = world.sandbox.root().join("review-task.md");
+  fs::write(&task, "Review the diff.\nPR: 1 https://example.invalid/pull/1\n").expect("the review task file");
+  let scratch = world.sandbox.dir("review-scratch");
+  let mut env = world.env();
+  env.insert("FAKE_CLAUDE_REVIEW_TASK".to_string(), task.display().to_string());
+  env.insert("FAKE_CLAUDE_REVIEW_DIR".to_string(), scratch.display().to_string());
+  let run = world.run(&env);
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(world.review_ran(), "the round's review did not run backend run:\n{}", run.describe());
+
+  // The CLI composes its checkout from CHARLIEBOT_REPO_ROOT, so the review names the round's own clone.
+  let clone = world.remote_home.join("improve").join(DIRECTION).join("charlie-bot");
+  let env = world.review_environment();
+  assert_eq!(env.get("CHARLIEBOT_REPO_ROOT"), Some(&digest(&clone.display().to_string())), "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
 fn a_subscription_review_gets_its_account_login_in_its_own_process_only() {
   let world = World::new();
   world.write_review_answer(SUBSCRIPTION_REVIEW_TYPE, expiry_ms(10));

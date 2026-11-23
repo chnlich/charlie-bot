@@ -314,7 +314,9 @@ Each step either clears the failure or names the main run that blocks the merge.
 
 Main's CI state is the newest CI run on `main`:
 
-    gh run list --branch main --workflow CI --limit 1 --json databaseId,status,conclusion,headSha
+    gh run list --branch main --workflow ci.yml --limit 1 --json databaseId,status,conclusion,headSha
+
+`--workflow` takes the workflow's file name: `ci.yml` resolves, and the display name `CI` does not.
 
 When that run is in progress, wait for it with `gh run watch <run-id>`.
 

@@ -16,6 +16,7 @@ use axum::{Json, serve};
 use charliebot_core::config::BackendOption;
 use charliebot_core::credentials::load_credentials;
 use charliebot_core::hot_reload::HotReload;
+use charliebot_registry::colleague_gate::ColleagueGate;
 use charliebot_registry::store_hooks::store_hooks;
 use charliebot_registry::{FeatureContext, StartupState};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
@@ -30,6 +31,32 @@ use tokio::net::TcpListener;
 use tokio::sync::Notify;
 
 use crate::slack_client::SlackClient;
+
+/// A gate that reads Slack through the given fake client, so the production wake and refusal checks run against the
+/// fake. Its wake check applies the same follow-label test as the production gate.
+pub(crate) struct FixedClientGate(pub(crate) Arc<SlackClient>);
+
+impl ColleagueGate for FixedClientGate {
+  fn refuse_agent_work<'a>(
+    &'a self,
+    features: &'a FeatureContext,
+    caller: &'a charliebot_registry::caller::CallerIdentity,
+  ) -> BoxFuture<'a, Option<&'static str>> {
+    Box::pin(async move { crate::colleague::refuse_work_with(features, &self.0, caller).await })
+  }
+
+  fn admits_wake<'a>(
+    &'a self,
+    features: &'a FeatureContext,
+    session_id: &'a str,
+    label: &'a str,
+  ) -> BoxFuture<'a, bool> {
+    Box::pin(async move {
+      !label.starts_with(crate::thread_contract::SLACK.follow_trigger_prefix)
+        || crate::colleague::admit_follow_wake_with(features, &self.0, session_id).await
+    })
+  }
+}
 
 /// The pending inputs that every manager wake hands to an agent executor.
 #[derive(Default)]
@@ -73,8 +100,11 @@ impl Home {
 
   fn build(with_dispatch: bool) -> Self {
     let dir = tempfile::tempdir().expect("the synthetic home exists");
-    std::fs::write(dir.path().join("config.yaml"), "slack:\n  allowed_user_ids:\n    - U_ALLOWED\n")
-      .expect("the synthetic config writes");
+    std::fs::write(
+      dir.path().join("config.yaml"),
+      "slack:\n  allowed_user_ids:\n    - U_ALLOWED\n  colleague_user_ids:\n    - U_COLLEAGUE\n",
+    )
+    .expect("the synthetic config writes");
     std::fs::write(
       dir.path().join("credentials.yaml"),
       "slack:\n  bot_token: synthetic-bot\n  app_token: synthetic-app\n",
@@ -172,6 +202,8 @@ pub(crate) enum SocketPlan {
 pub(crate) struct FakeState {
   calls: Mutex<Vec<(String, String, Value)>>,
   thread_messages: Mutex<Vec<Value>>,
+  member_pages: Mutex<Vec<Vec<String>>>,
+  members_unreadable: AtomicBool,
   posts: Mutex<Vec<Value>>,
   plans: Mutex<VecDeque<SocketPlan>>,
   open_failures: AtomicUsize,
@@ -207,6 +239,7 @@ impl FakeApi {
       .route("/api/reactions.add", post(reaction))
       .route("/api/reactions.remove", post(reaction))
       .route("/api/conversations.replies", get(thread_replies))
+      .route("/api/conversations.members", get(channel_members))
       .route("/api/conversations.info", get(channel_info))
       .route("/socket", get(socket))
       .with_state(Arc::clone(&state));
@@ -239,6 +272,17 @@ impl FakeApi {
 
   pub(crate) fn set_thread_messages(&self, messages: Vec<Value>) {
     *self.state.thread_messages.lock().expect("the fake thread is never poisoned") = messages;
+  }
+
+  /// The channel's member pages, read in cursor order. Page `n` answers the cursor `page-n`.
+  pub(crate) fn set_member_pages(&self, pages: &[&[&str]]) {
+    *self.state.member_pages.lock().expect("the fake member pages are never poisoned") =
+      pages.iter().map(|page| page.iter().map(|id| id.to_string()).collect()).collect();
+  }
+
+  /// Makes every `conversations.members` call fail as a channel the bot cannot read does (`channel_not_found`).
+  pub(crate) fn set_members_unreadable(&self) {
+    self.state.members_unreadable.store(true, Ordering::SeqCst);
   }
 
   pub(crate) fn calls(&self) -> Vec<(String, String, Value)> {
@@ -344,6 +388,21 @@ async fn thread_replies(
   state.record("GET", "/api/conversations.replies", json!(query));
   let messages = state.thread_messages.lock().expect("the fake thread is never poisoned").clone();
   Json(json!({"ok": true, "messages": messages, "has_more": false}))
+}
+
+async fn channel_members(
+  State(state): State<Arc<FakeState>>,
+  Query(query): Query<std::collections::HashMap<String, String>>,
+) -> Json<Value> {
+  state.record("GET", "/api/conversations.members", json!(query));
+  if state.members_unreadable.load(Ordering::SeqCst) {
+    return Json(json!({"ok": false, "error": "channel_not_found"}));
+  }
+  let pages = state.member_pages.lock().expect("the fake member pages are never poisoned").clone();
+  let index = query.get("cursor").and_then(|cursor| cursor.strip_prefix("page-")?.parse::<usize>().ok()).unwrap_or(0);
+  let members = pages.get(index).cloned().unwrap_or_default();
+  let next_cursor = if index + 1 < pages.len() { format!("page-{}", index + 1) } else { String::new() };
+  Json(json!({"ok": true, "members": members, "response_metadata": {"next_cursor": next_cursor}}))
 }
 
 async fn channel_info(

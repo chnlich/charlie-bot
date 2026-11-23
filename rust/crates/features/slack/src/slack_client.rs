@@ -26,6 +26,7 @@ pub(crate) const CHAT_POST_MESSAGE: &str = "chat.postMessage";
 pub(crate) const CONVERSATIONS_HISTORY: &str = "conversations.history";
 pub(crate) const CONVERSATIONS_INFO: &str = "conversations.info";
 pub(crate) const CONVERSATIONS_LIST: &str = "conversations.list";
+pub(crate) const CONVERSATIONS_MEMBERS: &str = "conversations.members";
 pub(crate) const CONVERSATIONS_OPEN: &str = "conversations.open";
 pub(crate) const CONVERSATIONS_REPLIES: &str = "conversations.replies";
 pub(crate) const REACTIONS_ADD: &str = "reactions.add";
@@ -173,6 +174,39 @@ impl SlackClient {
         .map(str::to_string);
       if cursor.is_none() {
         return Ok(messages);
+      }
+    }
+  }
+
+  /// Whether one of `ids` is a member of `channel`. The member pages are read in cursor order until one is found or
+  /// the pages end (`conversations.members`).
+  pub(crate) async fn channel_has_member(&self, channel: &str, ids: &[String]) -> Result<bool> {
+    let mut cursor = None;
+    loop {
+      let mut url = reqwest::Url::parse(&format!("{}{CONVERSATIONS_MEMBERS}", self.api_base))?;
+      {
+        let mut query = url.query_pairs_mut();
+        query.append_pair(CHANNEL, channel).append_pair("limit", "100");
+        if let Some(cursor) = cursor.as_deref() {
+          query.append_pair("cursor", cursor);
+        }
+      }
+      let response = self.request_url(Method::GET, url.as_str(), &self.bot_token).send().await?;
+      let payload = checked_payload(response, CONVERSATIONS_MEMBERS).await?;
+      let members = payload
+        .get("members")
+        .and_then(Value::as_array)
+        .context(format!("{CONVERSATIONS_MEMBERS} response has no members list"))?;
+      if members.iter().filter_map(Value::as_str).any(|member| ids.iter().any(|id| id == member)) {
+        return Ok(true);
+      }
+      cursor = payload
+        .pointer("/response_metadata/next_cursor")
+        .and_then(Value::as_str)
+        .filter(|cursor| !cursor.is_empty())
+        .map(str::to_string);
+      if cursor.is_none() {
+        return Ok(false);
       }
     }
   }

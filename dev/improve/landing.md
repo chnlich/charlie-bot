@@ -218,7 +218,9 @@ The round passes this launch's review directory, `$IMPROVE_LAUNCH_DIR/review`, a
 The review receives `dev/improve/code_review_prompt.md` and the pull request reference.
 When the pull request names screenshots, the review also receives the round's evidence directory.
 The review's credential reaches only the review process.
-The review runs in a scratch directory outside the clone, so the reviewer's git checkouts stay away from the clone's HEAD.
+The review's working directory is a scratch directory outside the clone, and it is not a git checkout.
+The review prompt has the reviewer clone the repository into that directory, and the reviewer's git commands run only in that clone.
+The review's `gh` calls name the repository, because gh cannot resolve it from the scratch directory.
 The round makes the scratch directory with `mktemp -d` under its TMPDIR.
 The write boundary allows the scratch directory and the session directory, and denies every other write.
 The verdict is the review's final text on stdout.

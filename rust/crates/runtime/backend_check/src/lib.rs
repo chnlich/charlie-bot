@@ -63,7 +63,7 @@ pub fn scan(vocab: &Vocabulary, roots: &Roots, paths: &[PathBuf]) -> anyhow::Res
       files.push(path);
     }
   }
-  files.retain(|file| !is_configuration(roots, file) && !is_skipped_path(file));
+  files.retain(|file| !is_configuration(roots, file) && !is_skipped_path(roots, file));
   let test_only = test_only_files(&files)?;
   let mut hits = Vec::new();
   for file in files.iter().filter(|file| !test_only.contains(*file)) {
@@ -122,10 +122,15 @@ fn is_skipped_file(path: &Path) -> bool {
   name == config::CONFIG_FILENAME || name.ends_with(".pyc") || is_mock_or_fixture(name)
 }
 
-/// Whether a path is a skipped file or sits under a directory the tree walk skips. Explicit file and directory
-/// arguments keep the same test and fixture boundary as a repository-root scan.
-fn is_skipped_path(path: &Path) -> bool {
-  is_skipped_file(path) || path.parent().is_some_and(|parent| parent.ancestors().any(is_skipped_dir))
+/// Whether a path is a skipped file, or sits under a directory that a scan of its root skips. The root is the repository
+/// or the profile home that holds the path, so a directory above that root never skips a file beneath it. A path under
+/// neither root is judged by its file name alone.
+fn is_skipped_path(roots: &Roots, path: &Path) -> bool {
+  if is_skipped_file(path) {
+    return true;
+  }
+  let relative = roots.repo.iter().chain(std::iter::once(&roots.home)).find_map(|root| path.strip_prefix(root).ok());
+  relative.and_then(Path::parent).is_some_and(|parent| parent.ancestors().any(is_skipped_dir))
 }
 
 /// Whether a file lies in the repository's `configs/` directory: the example and default configuration that a host copies
@@ -361,5 +366,18 @@ mod tests {
       scan(&vocab(), &roots, &[repo_root.join("app/mock-home/src/lib.rs"), repo_root.join("app/cli/tests/cli.rs")])
         .unwrap();
     assert!(explicit.is_empty(), "{explicit:?}");
+  }
+
+  /// A directory above the scanned root is not part of the scan: a repository under a `mock-` directory still has its
+  /// files read, both in a walk and as an explicit file argument.
+  #[test]
+  fn a_directory_above_the_root_skips_nothing() {
+    let base = tempfile::Builder::new().prefix("mock-").tempdir().unwrap();
+    let repo_root = fs::canonicalize(base.path()).unwrap();
+    fs::write(repo_root.join("notes.md"), "model claude-opus\n").unwrap();
+    let roots = Roots { repo: Some(repo_root.clone()), home: repo_root.join("home") };
+    let walked = scan(&vocab(), &roots, std::slice::from_ref(&repo_root)).unwrap();
+    let explicit = scan(&vocab(), &roots, &[repo_root.join("notes.md")]).unwrap();
+    assert_eq!((walked.len(), explicit.len()), (1, 1), "walked {walked:?}, explicit {explicit:?}");
   }
 }

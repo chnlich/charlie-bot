@@ -2335,6 +2335,7 @@ fn registration_keeps_traits_attribution_and_snapshot_limits() {
   let mut registry = Registry::new();
   registry.register_package("backends.opencode", super::tests::register_synthetic).unwrap();
   let backend_type = registry.backend_type_of("opencode").unwrap();
+  assert!(registry.backend_type_has_tool_less_one_shot("opencode"));
   assert_eq!(backend_type.traits.resume, charliebot_registry::backend::ResumeStyle::NativeId);
   assert!(backend_type.traits.restart_reattach);
   assert!(!backend_type.traits.preassigned_session_id);

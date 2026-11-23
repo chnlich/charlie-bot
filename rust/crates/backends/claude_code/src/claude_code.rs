@@ -21,7 +21,7 @@ use charliebot_agents::cli_base::{CapturedEvents, SKIP_PERMISSIONS_FLAG};
 use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_agents::transport::kill::kill_process_group;
 use charliebot_agents::transport::spawn::{ChildStdin, SpawnSetup, SpawnSpec, spawn_with_setup};
-use charliebot_core::event_types::{self, EDIT_TOOL, GLOB_TOOL, GREP_TOOL, READ_TOOL, SKILL_TOOL, WRITE_TOOL};
+use charliebot_core::event_types::{self, SKILL_TOOL};
 use charliebot_core::headers::AUTHORIZATION;
 use charliebot_core::int_text;
 use charliebot_core::proc_status;
@@ -423,9 +423,9 @@ async fn run_one_shot_process(
   Ok(String::from_utf8(output.stdout)?.trim().to_string())
 }
 
-/// The `--disallowed-tools` value of a text one-shot: every file tool, a shell, and the subagent tool.
+/// The `--disallowed-tools` value of a text one-shot: every built-in tool.
 fn one_shot_disallowed_tools() -> String {
-  ["Bash", READ_TOOL, WRITE_TOOL, EDIT_TOOL, GLOB_TOOL, GREP_TOOL, AGENT_TOOL].join(",")
+  "*".to_string()
 }
 
 /// The argv of a `claude -p` text one-shot: no session persistence, no built-in or inherited MCP tools, the caller's
@@ -538,10 +538,6 @@ impl AgentBackend for ClaudeCodeBackend {
     timeout: Option<Duration>,
   ) -> Option<BoxFuture<'a, anyhow::Result<String>>> {
     Some(Box::pin(async move { self.run_one_shot(base_env, prompt, system, timeout).await }))
-  }
-
-  fn one_shot_is_tool_less(&self) -> bool {
-    true
   }
 }
 
@@ -776,10 +772,6 @@ impl AgentBackend for AnthropicEndpointBackend {
       )
       .await
     }))
-  }
-
-  fn one_shot_is_tool_less(&self) -> bool {
-    true
   }
 }
 
@@ -1486,6 +1478,9 @@ mod tests {
         "--no-session-persistence",
         "--system-prompt-file",
         "/synthetic/system.txt",
+        "--tools",
+        "",
+        "--strict-mcp-config",
         "--disallowed-tools",
         disallowed.as_str()
       ]
@@ -1497,7 +1492,7 @@ mod tests {
   #[test]
   fn only_the_manager_work_and_iteration_lists_lose_agent_with_the_switch_on() {
     let one_shot = one_shot_argv(&[], "/synthetic/system.txt");
-    assert!(disallowed_tools_value(&one_shot).split(',').any(|tool| tool == AGENT_TOOL), "the one-shot list");
+    assert_eq!(disallowed_tools_value(&one_shot), "*", "the one-shot list");
     let compaction = crate::claude_compaction::compaction_command("cc-session", "charlie-session", "claude-sonnet-5");
     assert!(disallowed_tools_value(&compaction).split(',').any(|tool| tool == AGENT_TOOL), "the compaction list");
 

@@ -760,6 +760,12 @@ pub trait BackendFactory: Send + Sync {
     cfg: &CharlieBotConfig,
     launch: LaunchArgs,
   ) -> anyhow::Result<Box<dyn AgentBackend>>;
+
+  /// Whether this backend type has a native one-shot that runs without tools. The CLI checks this before building the
+  /// backend, so an unsupported type is refused even when its executable is unavailable.
+  fn one_shot_is_tool_less(&self) -> bool {
+    false
+  }
 }
 
 /// How the runner reads a process's output.
@@ -850,7 +856,7 @@ pub trait AgentBackend: Send {
   fn finish_final_stdout(&mut self, _stdout: &str, _stderr: &str, _exit_code: i32) -> FinalStdoutOutcome {
     panic!("finish_final_stdout is called only for a FinalStdout transport")
   }
-  /// The CLI-native one-shot, tool-less, or `None` when the backend has none. The dispatcher
+  /// The CLI-native one-shot, or `None` when the backend has none. The dispatcher
   /// `charliebot_agents::one_shot_text` runs the tool-capable one-shot for `None`.
   fn one_shot_text<'a>(
     &'a mut self,
@@ -860,11 +866,6 @@ pub trait AgentBackend: Send {
     _timeout: Option<Duration>,
   ) -> Option<BoxFuture<'a, anyhow::Result<String>>> {
     None
-  }
-  /// Whether the one-shot that `one_shot_text` returns runs without tools. The one-shot mode of `charliebot backend
-  /// run` answers only through such a one-shot, so it refuses a backend for which this is false.
-  fn one_shot_is_tool_less(&self) -> bool {
-    false
   }
 }
 
@@ -1323,6 +1324,11 @@ impl Registry {
         bail!("backend type {backend_type} has no resume path, so it cannot continue session {session_id}")
       }
     }
+  }
+
+  /// True when a registered backend type has a native one-shot that runs without tools.
+  pub fn backend_type_has_tool_less_one_shot(&self, backend_type: &str) -> bool {
+    self.backend_types.get(backend_type).is_some_and(|registration| registration.factory.one_shot_is_tool_less())
   }
 
   /// The lifecycle of `backend_type`: its registered lifecycle, or the default one. An unregistered type fails.

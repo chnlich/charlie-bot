@@ -12,6 +12,10 @@ use super::{claude_config, options};
 pub struct ClaudeCodeFactory;
 
 impl BackendFactory for ClaudeCodeFactory {
+  fn one_shot_is_tool_less(&self) -> bool {
+    true
+  }
+
   fn build(
     &self,
     option: Option<&BackendOption>,
@@ -72,5 +76,15 @@ pub fn launch_config_dir(launch: &LaunchArgs) -> anyhow::Result<Option<String>> 
     None | Some(serde_json::Value::Null) => Ok(None),
     Some(serde_json::Value::String(value)) => Ok(Some(value.clone())),
     Some(_) => bail!("claude_config_dir must be a string"),
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn factory_declares_its_native_one_shot_tool_less() {
+    assert!(ClaudeCodeFactory.one_shot_is_tool_less());
   }
 }

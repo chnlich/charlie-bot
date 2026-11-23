@@ -2,7 +2,7 @@
 //!
 //! The option's backend comes from the registry's factory, and `AgentRunner` runs it once in the given working
 //! directory. The report carries the final text, the exit code and the stderr of the process. The one-shot answers
-//! one prompt through `one_shot_text` instead, and only for a backend whose one-shot runs without tools.
+//! one prompt through the backend's native method and only when that method runs without tools.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -18,7 +18,7 @@ use crate::agent_environment::AgentBaseEnvironment;
 use crate::backend_types::{self, BuiltBackend};
 use crate::cli_host::CliHost;
 use crate::launch_loop::ChildEnvPolicy;
-use crate::one_shot::{FinalText, one_shot_text};
+use crate::one_shot::FinalText;
 use crate::runner::{AgentRunner, RunRequest};
 
 /// What one run reports.
@@ -180,29 +180,40 @@ pub async fn one_shot_once(
   identity: RunIdentity,
   claude_config_dir: Option<&str>,
 ) -> anyhow::Result<String> {
+  require_tool_less_one_shot(&host.registry, &option.id, &option.backend_type)?;
   let (_, launch) = launch_for_option(option, &RunStart::New(identity), claude_config_dir);
   let built = backend_types::build_backend(Arc::clone(&host.registry), option, &host.cfg, launch)?;
   one_shot_built(&option.id, built, &host.base_env.values, prompt, system).await
 }
 
-/// The answer of a built backend's one-shot, for the option `option_id`. A backend whose one-shot does not run without
-/// tools is refused, naming the option and its type, because the one-shot mode promises that the model sees only its
-/// prompt.
-pub async fn one_shot_built(
+/// Refuses a backend type without a native tool-less one-shot before its factory runs.
+fn require_tool_less_one_shot(
+  registry: &charliebot_registry::Registry,
   option_id: &str,
-  built: BuiltBackend,
+  backend_type: &str,
+) -> anyhow::Result<()> {
+  if !registry.backend_type_has_tool_less_one_shot(backend_type) {
+    bail!(
+      "option {option_id} ({backend_type}) has no one-shot without tools, so backend run --one-shot refuses it: it \
+       serves only cc-claude, cc-anthropic-compatible, and opencode"
+    );
+  }
+  Ok(())
+}
+
+/// The answer of a built backend's native one-shot, for the option `option_id`. It never falls back to a tool-capable
+/// runner when the native method is absent.
+async fn one_shot_built(
+  option_id: &str,
+  mut built: BuiltBackend,
   base_env: &Env,
   prompt: &str,
   system: &str,
 ) -> anyhow::Result<String> {
-  if !built.backend.one_shot_is_tool_less() {
-    bail!(
-      "option {option_id} ({}) has no one-shot without tools, so backend run --one-shot refuses it: it serves only \
-       cc-claude, cc-anthropic-compatible, and opencode",
-      built.backend_type
-    );
-  }
-  one_shot_text(built, base_env, prompt, system, None).await
+  let Some(native) = built.backend.one_shot_text(base_env, prompt, system, None) else {
+    bail!("option {option_id} ({}) has no native one-shot path", built.backend_type);
+  };
+  native.await
 }
 
 #[cfg(test)]
@@ -211,7 +222,8 @@ mod tests {
   use std::sync::{Arc, Mutex};
 
   use anyhow::bail;
-  use charliebot_core::config::CharlieBotConfig;
+  use charliebot_core::config::{BackendOption, CharlieBotConfig};
+  use charliebot_registry::Registry;
   use charliebot_registry::RegistryError;
   use charliebot_registry::backend::{
     AgentBackend, BackendFactory, BackendTraits, BackendTypeRegistration, LaunchArgs, ResumeStyle,
@@ -220,6 +232,37 @@ mod tests {
   use super::*;
   use crate::backend_types::BuiltBackend;
   use crate::one_shot::tests::ScriptedBackend;
+
+  struct UnsupportedFactory;
+
+  impl BackendFactory for UnsupportedFactory {
+    fn build(
+      &self,
+      _option: Option<&BackendOption>,
+      _cfg: &CharlieBotConfig,
+      _launch: LaunchArgs,
+    ) -> anyhow::Result<Box<dyn AgentBackend>> {
+      unreachable!("an unsupported one-shot type is refused before its factory runs")
+    }
+  }
+
+  fn register_unsupported_backend(registry: &mut Registry) -> Result<(), RegistryError> {
+    registry.backend_type(BackendTypeRegistration {
+      type_name: "codex",
+      traits: BackendTraits {
+        resume: ResumeStyle::CliFlag,
+        restart_reattach: false,
+        preassigned_session_id: false,
+        family_prefix: None,
+        manual_compact: false,
+        compact_hint: None,
+      },
+      option_model: |_| Ok(()),
+      factory: Arc::new(UnsupportedFactory),
+      lifecycle: None,
+      translate_fallback: false,
+    })
+  }
 
   fn scripted(script: &str) -> BuiltBackend {
     BuiltBackend {
@@ -386,10 +429,21 @@ mod tests {
     assert_eq!(launch.resume_session_id, None);
   }
 
-  /// The one-shot mode answers through a tool-less one-shot, and refuses a backend without one, naming its option and
-  /// type.
+  /// The type refusal names both option and type before a factory can fail for another reason.
+  #[test]
+  fn a_backend_type_without_a_tool_less_one_shot_names_its_option_and_type() {
+    let mut registry = Registry::new();
+    registry.register_package("test.unsupported_backend", register_unsupported_backend).unwrap();
+    let error = require_tool_less_one_shot(&registry, "codex-option", "codex").unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("codex-option"), "{message}");
+    assert!(message.contains("(codex)"), "{message}");
+    assert!(message.contains("backend run --one-shot refuses it"), "{message}");
+  }
+
+  /// The one-shot uses a native method and fails instead of reaching the generic tool-capable fallback.
   #[tokio::test]
-  async fn the_one_shot_answers_only_through_a_tool_less_one_shot() {
+  async fn the_one_shot_answers_only_through_a_native_method() {
     let root = tempfile::tempdir().unwrap();
     let base_env = crate::gh_wrapper::stub_environment(root.path(), "/bin:/usr/bin");
     let tool_less = BuiltBackend {
@@ -407,11 +461,20 @@ mod tests {
       "the answer"
     );
 
+    let seen_log_dir = Arc::new(Mutex::new(None));
+    let missing_native = BuiltBackend {
+      backend: Box::new(ScriptedBackend {
+        script: "exit 1".to_string(),
+        native_answer: None,
+        seen_log_dir: Arc::clone(&seen_log_dir),
+      }),
+      launch: LaunchArgs::default(),
+      backend_type: "scripted".to_string(),
+      registry: Arc::new(Registry::new()),
+    };
     let error =
-      one_shot_built("tool-capable-option", scripted("exit 1"), &base_env, "prompt", "system").await.unwrap_err();
-    let message = error.to_string();
-    assert!(message.contains("tool-capable-option"), "{message}");
-    assert!(message.contains("(scripted)"), "{message}");
-    assert!(message.contains("backend run --one-shot refuses it"), "{message}");
+      one_shot_built("missing-native-option", missing_native, &base_env, "prompt", "system").await.unwrap_err();
+    assert!(error.to_string().contains("has no native one-shot path"), "{error:#}");
+    assert!(seen_log_dir.lock().unwrap().is_none(), "the tool-capable runner was not started");
   }
 }

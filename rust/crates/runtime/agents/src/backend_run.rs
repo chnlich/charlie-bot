@@ -11,7 +11,7 @@ use anyhow::{Context, bail};
 use charliebot_core::backend_types as type_names;
 use charliebot_core::config::BackendOption;
 use charliebot_registry::Registry;
-use charliebot_registry::backend::{Env, LaunchArgs};
+use charliebot_registry::backend::{CLAUDE_CONFIG_DIR_FIELD, Env, LaunchArgs};
 use charliebot_store::run_records::RAW_LOG_NAME;
 
 use crate::agent_environment::AgentBaseEnvironment;
@@ -95,7 +95,7 @@ fn launch_for_option(
     RunStart::Resume { session_id, .. } => Some(session_id.clone()),
   };
   if let Some(dir) = claude_config_dir {
-    launch.backend_kwargs.insert("claude_config_dir".to_string(), dir.into());
+    launch.backend_kwargs.insert(CLAUDE_CONFIG_DIR_FIELD.to_string(), dir.into());
   }
   (known_session, launch)
 }

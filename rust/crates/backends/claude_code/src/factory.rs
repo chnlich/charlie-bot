@@ -2,7 +2,9 @@
 
 use anyhow::{Context, bail};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
-use charliebot_registry::backend::{AgentBackend, BackendFactory, EXTRA_FLAGS_BACKEND_KWARG, LaunchArgs};
+use charliebot_registry::backend::{
+  AgentBackend, BackendFactory, CLAUDE_CONFIG_DIR_FIELD, EXTRA_FLAGS_BACKEND_KWARG, LaunchArgs,
+};
 
 use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 
@@ -70,12 +72,12 @@ pub fn launch_with_kwargs(launch: LaunchArgs) -> anyhow::Result<LaunchArgs> {
 pub fn launch_config_dir(launch: &LaunchArgs) -> anyhow::Result<Option<String>> {
   let value = launch
     .backend_kwargs
-    .get("claude_config_dir")
+    .get(CLAUDE_CONFIG_DIR_FIELD)
     .or_else(|| launch.backend_kwargs.get("claude_account").and_then(|account| account.get("config_dir")));
   match value {
     None | Some(serde_json::Value::Null) => Ok(None),
     Some(serde_json::Value::String(value)) => Ok(Some(value.clone())),
-    Some(_) => bail!("claude_config_dir must be a string"),
+    Some(_) => bail!("{CLAUDE_CONFIG_DIR_FIELD} must be a string"),
   }
 }
 

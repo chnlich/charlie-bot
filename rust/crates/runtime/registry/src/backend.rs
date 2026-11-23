@@ -15,6 +15,10 @@ pub use crate::registry::{
   SessionContextStateFn, Translate, TransportKind, UsageResolver, UsageResolverConstructor, UsageResolverHost,
 };
 
+/// The Claude account config directory: the `backend_kwargs` key the option launch writes and the Claude factory
+/// reads, and the field the resolve answer carries the same directory under.
+pub const CLAUDE_CONFIG_DIR_FIELD: &str = "claude_config_dir";
+
 /// The lifecycle of a backend type that registered none.
 pub struct DefaultLifecycle;
 

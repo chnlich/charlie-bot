@@ -259,6 +259,7 @@ pub(crate) fn gate_step(features: Arc<FeatureContext>) -> BoxFuture<'static, any
 mod tests {
   use std::sync::Arc;
 
+  use charliebot_core::run_token::RunTokenClaims;
   use charliebot_registry::colleague_gate::ColleagueGate;
   use serde_json::{Value, json};
 
@@ -385,5 +386,97 @@ mod tests {
         .admits_wake(&home.features, &session_id, &label)
         .await
     );
+  }
+
+  /// Records a run of `session_id` whose inputs are the events `input_ids`, and returns the caller that run's token names.
+  fn run_caller(home: &Home, session_id: &str, input_ids: &[&str]) -> CallerIdentity {
+    let run_id = "run-synthetic";
+    let run_path = home.features.store.run_metadata_path(session_id, run_id);
+    std::fs::create_dir_all(run_path.parent().expect("a run directory has a parent")).expect("the run directory");
+    let record = json!({"id": run_id, "session_id": session_id, "kind": "manager_turn", "input_event_ids": input_ids});
+    std::fs::write(&run_path, record.to_string()).expect("the run record");
+    let claims =
+      RunTokenClaims { session_id: session_id.to_string(), run_id: run_id.to_string(), agent: "synthetic".to_string() };
+    CallerIdentity::Agent { claims }
+  }
+
+  async fn append(home: &Home, session_id: &str, event: Value) {
+    home.features.store.append_chat_event(session_id, event).await.expect("the event appends");
+  }
+
+  fn operator_web_message() -> Value {
+    json!({"id": "evt-operator-web", "type": "user", "text": "status?"})
+  }
+
+  fn summon(id: &str, sender: &str) -> Value {
+    json!({"id": id, "type": "agent_message", "slack": {"sender_user_id": sender}})
+  }
+
+  #[tokio::test]
+  async fn a_run_fed_by_a_colleague_summon_in_a_colleague_thread_is_refused() {
+    let api = FakeApi::start(&[]).await;
+    let (home, session_id) = thread_home(
+      &api,
+      vec![message(THREAD, "U_ALLOWED", "status?"), message("1700000000.000200", "U_COLLEAGUE", "help")],
+    )
+    .await;
+    append(&home, &session_id, summon("evt-colleague-summon", "U_COLLEAGUE")).await;
+    let caller = run_caller(&home, &session_id, &["evt-colleague-summon"]);
+    assert_eq!(refuse_work_with(&home.features, &api.client, &caller).await, Some(COLLEAGUE_REFUSAL));
+  }
+
+  #[tokio::test]
+  async fn a_run_fed_only_by_the_operator_passes_in_a_colleague_thread() {
+    let api = FakeApi::start(&[]).await;
+    let (home, session_id) = thread_home(
+      &api,
+      vec![message(THREAD, "U_ALLOWED", "status?"), message("1700000000.000200", "U_COLLEAGUE", "help")],
+    )
+    .await;
+    append(&home, &session_id, operator_web_message()).await;
+    append(&home, &session_id, summon("evt-operator-summon", "U_ALLOWED")).await;
+    let caller = run_caller(&home, &session_id, &["evt-operator-web", "evt-operator-summon"]);
+    assert_eq!(refuse_work_with(&home.features, &api.client, &caller).await, None);
+  }
+
+  #[tokio::test]
+  async fn a_run_mixing_an_operator_input_with_a_colleague_summon_is_refused() {
+    let api = FakeApi::start(&[]).await;
+    let (home, session_id) = thread_home(
+      &api,
+      vec![message(THREAD, "U_ALLOWED", "status?"), message("1700000000.000200", "U_COLLEAGUE", "help")],
+    )
+    .await;
+    append(&home, &session_id, operator_web_message()).await;
+    append(&home, &session_id, summon("evt-colleague-summon", "U_COLLEAGUE")).await;
+    let caller = run_caller(&home, &session_id, &["evt-operator-web", "evt-colleague-summon"]);
+    assert_eq!(refuse_work_with(&home.features, &api.client, &caller).await, Some(COLLEAGUE_REFUSAL));
+  }
+
+  #[tokio::test]
+  async fn a_run_with_a_non_operator_input_passes_when_the_thread_holds_no_colleague_message() {
+    let api = FakeApi::start(&[]).await;
+    let (home, session_id) = thread_home(&api, vec![message(THREAD, "U_ALLOWED", "status?")]).await;
+    append(&home, &session_id, summon("evt-stranger-summon", "U_STRANGER")).await;
+    let caller = run_caller(&home, &session_id, &["evt-stranger-summon"]);
+    assert_eq!(refuse_work_with(&home.features, &api.client, &caller).await, None);
+  }
+
+  #[tokio::test]
+  async fn a_failed_thread_read_refuses_a_run_that_is_not_fed_only_by_the_operator() {
+    let api = FakeApi::start(&[]).await;
+    let (home, session_id) = thread_home(&api, vec![message(THREAD, "U_ALLOWED", "status?")]).await;
+    api.set_replies_unreadable();
+    append(&home, &session_id, summon("evt-colleague-summon", "U_COLLEAGUE")).await;
+    let caller = run_caller(&home, &session_id, &["evt-colleague-summon"]);
+    assert_eq!(refuse_work_with(&home.features, &api.client, &caller).await, Some(COLLEAGUE_REFUSAL));
+  }
+
+  #[tokio::test]
+  async fn an_operator_caller_is_never_refused() {
+    let api = FakeApi::start(&[]).await;
+    let home = Home::new();
+    let caller = CallerIdentity::Operator { session_id: None };
+    assert_eq!(refuse_work_with(&home.features, &api.client, &caller).await, None);
   }
 }

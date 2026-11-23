@@ -12,8 +12,10 @@
 # decompressed blobs and docs — and the pre-push hook of the clone (dev/git-hooks/pre-push) applies the same
 # checks inside git push, so a clone without the hooks path is still covered.
 #
-# Calls that carry no round-written text stay bare gh: gh pr update-branch,
-# gh run rerun, and the read-only calls. A merge goes through pr-merge, which
+# Calls that carry no round-written text stay bare gh: gh api -X PUT
+# "repos/{owner}/{repo}/pulls/<PR>/update-branch", gh run rerun, and the read-only calls.
+# The gh shim checks their arguments. gh 2.45 has no gh pr update-branch command,
+# so branch updates use the REST endpoint. A merge goes through pr-merge, which
 # refuses a draft pull request, a web page change whose evidence directory fails
 # the screenshot check, whose body lacks a full-URL View line, or whose View value
 # does not start with `/`, and carries the View lines into the squash commit message.

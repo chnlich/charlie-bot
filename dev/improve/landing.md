@@ -26,7 +26,11 @@ A credential hit stops the round. The kind that the check names is the round's s
 A merge goes through the posting script's `pr-merge`, which refuses a web page change whose evidence directory fails
 the screenshot check or whose pull request body names no `View:` line, and carries the `View:` lines into the squash
 commit message. Each `View:` line follows the View contract of the Web UI Screenshots rule in `prompts/task_base.md`.
-`gh pr update-branch`, `gh run rerun` and the read-only calls stay bare: they carry no text of the round, and the `gh` shim still checks their arguments.
+Calls that carry no round-written text stay bare `gh` calls through `gh-shim.sh`, which checks their arguments. This includes:
+
+- `gh api -X PUT "repos/{owner}/{repo}/pulls/<PR>/update-branch"`;
+- `gh run rerun`;
+- the read-only calls.
 
 ## The round's login and the launch's exit codes
 
@@ -218,7 +222,9 @@ One pull request per round is the unit that CI and the reviewer check.
 The review is an independent check that the topic is complete and correct.
 The review runs on the backend that `backends.calls.improve_review` selects in the host's `config.yaml`.
 The round runs the review through `charliebot backend run`, and names no model, option or agent CLI for the review.
-The round passes this launch's review directory, `$IMPROVE_LAUNCH_DIR/review`, as the `--launch` directory.
+`option.json` in the review launch directory already holds the resolved backend for `backends.calls.improve_review`; its
+`login` variables carry that backend's login.
+Pass `--launch "$IMPROVE_LAUNCH_DIR/review"` without `--call` or `--backend`.
 The review receives `dev/improve/code_review_prompt.md` and the pull request reference.
 When the pull request names screenshots, the review also receives the round's evidence directory.
 The review's credential reaches only the review process.
@@ -306,8 +312,10 @@ Name the topic in the comment, because Step 3 reads it to skip the topic on the 
 A failure outside this diff takes these steps.
 Each step either clears the failure or names the main run that blocks the merge.
 
-1. Update the branch from `main` with `gh pr update-branch <PR>`, and watch the new checks.
-2. When `gh pr update-branch` reports no change, rerun the failed jobs with
+1. Update the branch from `main` with `gh api -X PUT "repos/{owner}/{repo}/pulls/<PR>/update-branch"`, and watch the new
+   checks. `gh 2.45` has no `pr update-branch` command, so use the REST endpoint. It merges `main` into the pull request
+   branch and keeps its existing commits in the review scope.
+2. When the endpoint reports that no update is needed, rerun the failed jobs with
    `gh run rerun <run-id> --failed`, and watch again.
 3. When the checks pass, go to the merge above.
 4. When the check is red again, read main's CI state.

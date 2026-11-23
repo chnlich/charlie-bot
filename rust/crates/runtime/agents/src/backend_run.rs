@@ -9,6 +9,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use charliebot_core::backend_types as type_names;
 use charliebot_core::config::BackendOption;
+use charliebot_registry::Registry;
 use charliebot_registry::backend::{Env, LaunchArgs};
 use charliebot_store::run_records::RAW_LOG_NAME;
 
@@ -40,29 +41,71 @@ pub struct RunIdentity {
   pub run_id: String,
 }
 
+/// The session a run starts or continues: a new session under the identity's ids, or the continuation of `session_id`,
+/// the session a failed run of the option named, under a new run id.
+#[derive(Clone, Debug)]
+pub enum RunStart {
+  New(RunIdentity),
+  Resume { session_id: String, run_id: String },
+}
+
+impl RunStart {
+  /// The session id and the run id the run carries.
+  fn ids(&self) -> (&str, &str) {
+    match self {
+      Self::New(identity) => (&identity.session_id, &identity.run_id),
+      Self::Resume { session_id, run_id } => (session_id, run_id),
+    }
+  }
+}
+
+/// The launch of a run of `option`, and the session id the run knows before it starts. A new Claude-family run names
+/// its session with `--session-id`; a resumed one names it through the resume style in [`resumed_launch`].
 fn launch_for_option(
   option: &BackendOption,
-  identity: &RunIdentity,
+  start: &RunStart,
   claude_config_dir: Option<&str>,
 ) -> (Option<String>, LaunchArgs) {
+  let (session_id, run_id) = start.ids();
   let mut launch = match option.backend_type.as_str() {
     type_names::CC_CLAUDE | type_names::CC_ANTHROPIC_COMPATIBLE | type_names::CC_OPENAI_COMPATIBLE => {
-      let mut launch = LaunchArgs { cgroup_session_id: Some(identity.session_id.clone()), ..LaunchArgs::default() };
-      launch.backend_kwargs.insert("claude_session_id".to_string(), identity.session_id.clone().into());
-      launch.backend_kwargs.insert("run_id".to_string(), identity.run_id.clone().into());
+      let mut launch = LaunchArgs { cgroup_session_id: Some(session_id.to_string()), ..LaunchArgs::default() };
+      if let RunStart::New(_) = start {
+        launch.backend_kwargs.insert("claude_session_id".to_string(), session_id.into());
+      }
+      launch.backend_kwargs.insert("run_id".to_string(), run_id.into());
       launch
     }
     _ => LaunchArgs::default(),
   };
-  let session_id = launch.cgroup_session_id.clone();
+  let known_session = match start {
+    RunStart::New(_) => launch.cgroup_session_id.clone(),
+    RunStart::Resume { session_id, .. } => Some(session_id.clone()),
+  };
   if let Some(dir) = claude_config_dir {
     launch.backend_kwargs.insert("claude_config_dir".to_string(), dir.into());
   }
-  (session_id, launch)
+  (known_session, launch)
 }
 
-/// Run `option` once with `prompt` in `cwd`, building its backend from `host`'s config and registry. `login` joins the
-/// process environment, and the raw event log is copied to `events_path`.
+/// The launch of a resumed run: the option type's resume style puts the session's flags before the launch's own flags,
+/// or names its native id in the launch. A type without a resume path fails and names itself.
+fn resumed_launch(
+  registry: &Registry,
+  option: &BackendOption,
+  start: &RunStart,
+  mut launch: LaunchArgs,
+) -> anyhow::Result<LaunchArgs> {
+  let RunStart::Resume { session_id, .. } = start else { return Ok(launch) };
+  let (flags, native_id) = registry.resume_parts(&option.backend_type, session_id)?;
+  launch.extra_flags = [flags, launch.extra_flags].concat();
+  launch.resume_session_id = native_id;
+  Ok(launch)
+}
+
+/// Run `option` once with `prompt` in `cwd`, building its backend from `host`'s config and registry. `start` names the
+/// session the run starts or continues. `login` joins the process environment, and the raw event log is copied to
+/// `events_path`.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_once(
   host: &CliHost,
@@ -70,14 +113,15 @@ pub async fn run_once(
   prompt: String,
   cwd: PathBuf,
   login: Env,
-  identity: RunIdentity,
+  start: RunStart,
   claude_config_dir: Option<&str>,
   events_path: &Path,
 ) -> anyhow::Result<RunReport> {
-  let (session_id, launch) = launch_for_option(option, &identity, claude_config_dir);
+  let (known_session, launch) = launch_for_option(option, &start, claude_config_dir);
+  let launch = resumed_launch(&host.registry, option, &start, launch)?;
   let built = backend_types::build_backend(Arc::clone(&host.registry), option, &host.cfg, launch)?;
   let report = run_built(built, &host.base_env.values, prompt, cwd, login, events_path).await?;
-  Ok(RunReport { session_id: session_id.or(report.session_id), ..report })
+  Ok(RunReport { session_id: known_session.or(report.session_id), ..report })
 }
 
 /// Run a built backend once in `cwd`. `login` joins the process environment, and the raw event log is copied to
@@ -130,8 +174,12 @@ mod tests {
   use std::fs;
   use std::sync::{Arc, Mutex};
 
-  use charliebot_registry::Registry;
-  use charliebot_registry::backend::LaunchArgs;
+  use anyhow::bail;
+  use charliebot_core::config::CharlieBotConfig;
+  use charliebot_registry::RegistryError;
+  use charliebot_registry::backend::{
+    AgentBackend, BackendFactory, BackendTraits, BackendTypeRegistration, LaunchArgs, ResumeStyle,
+  };
 
   use super::*;
   use crate::backend_types::BuiltBackend;
@@ -190,18 +238,115 @@ mod tests {
       type_fields: Default::default(),
       visible: true,
     };
-    let (sid, launch) = launch_for_option(&base, &identity, Some("/tmp/acct"));
+    let start = RunStart::New(identity);
+    let (sid, launch) = launch_for_option(&base, &start, Some("/tmp/acct"));
     assert_eq!(sid.as_deref(), Some("s1"));
+    assert_eq!(launch.backend_kwargs.get("claude_session_id"), Some(&serde_json::json!("s1")));
     assert_eq!(launch.backend_kwargs.get("claude_config_dir"), Some(&serde_json::json!("/tmp/acct")));
 
     let openai = BackendOption { backend_type: type_names::CC_OPENAI_COMPATIBLE.into(), ..base.clone() };
-    let (sid, launch) = launch_for_option(&openai, &identity, None);
+    let (sid, launch) = launch_for_option(&openai, &start, None);
     assert_eq!(sid.as_deref(), Some("s1"));
     assert_eq!(launch.backend_kwargs.get("run_id"), Some(&serde_json::json!("r1")));
 
     let codex = BackendOption { backend_type: type_names::CODEX.into(), ..base };
-    let (sid, launch) = launch_for_option(&codex, &identity, None);
+    let (sid, launch) = launch_for_option(&codex, &start, None);
     assert_eq!(sid, None);
     assert!(launch.backend_kwargs.is_empty());
+  }
+
+  /// Registers one type per resume style, under the real type names where a test needs them, and one type with no
+  /// resume path.
+  fn register_resume_types(registry: &mut Registry) -> Result<(), RegistryError> {
+    struct NoBuild;
+    impl BackendFactory for NoBuild {
+      fn build(
+        &self,
+        _option: Option<&BackendOption>,
+        _cfg: &CharlieBotConfig,
+        _launch: LaunchArgs,
+      ) -> anyhow::Result<Box<dyn AgentBackend>> {
+        bail!("the resume tests build no backend")
+      }
+    }
+    for (type_name, resume) in [
+      (type_names::CC_CLAUDE, ResumeStyle::CliFlag),
+      (type_names::CODEX, ResumeStyle::NativeId),
+      ("synthetic-no-resume", ResumeStyle::Unsupported),
+    ] {
+      registry.backend_type(BackendTypeRegistration {
+        type_name,
+        traits: BackendTraits {
+          resume,
+          restart_reattach: false,
+          preassigned_session_id: false,
+          family_prefix: None,
+          manual_compact: false,
+          compact_hint: None,
+        },
+        option_model: |_| Ok(()),
+        factory: Arc::new(NoBuild),
+        lifecycle: None,
+        translate_fallback: false,
+      })?;
+    }
+    Ok(())
+  }
+
+  fn option_of_type(backend_type: &str) -> BackendOption {
+    BackendOption {
+      id: "opt".into(),
+      label: "Opt".into(),
+      model: "m".into(),
+      prompt_overlay: None,
+      billing: None,
+      backend_type: backend_type.into(),
+      type_fields: Default::default(),
+      visible: true,
+    }
+  }
+
+  /// A resumed run continues the named session through its type's resume style: a Claude-family run takes the resume
+  /// flag and no new `--session-id`, and a native-id type takes the id in its launch.
+  #[test]
+  fn a_resumed_run_continues_the_session_through_the_types_resume_style() {
+    let mut registry = Registry::new();
+    registry.register_package("synthetic.backend-run", register_resume_types).unwrap();
+    let start = RunStart::Resume { session_id: "old-session".into(), run_id: "new-run".into() };
+
+    let claude = option_of_type(type_names::CC_CLAUDE);
+    let (sid, launch) = launch_for_option(&claude, &start, None);
+    assert_eq!(sid.as_deref(), Some("old-session"));
+    assert!(!launch.backend_kwargs.contains_key("claude_session_id"), "{:?}", launch.backend_kwargs);
+    assert_eq!(launch.backend_kwargs.get("run_id"), Some(&serde_json::json!("new-run")));
+    let launch = resumed_launch(&registry, &claude, &start, launch).unwrap();
+    assert_eq!(launch.extra_flags, ["--resume", "old-session"]);
+    assert_eq!(launch.resume_session_id, None);
+
+    let codex = option_of_type(type_names::CODEX);
+    let (sid, launch) = launch_for_option(&codex, &start, None);
+    assert_eq!(sid.as_deref(), Some("old-session"));
+    let launch = resumed_launch(&registry, &codex, &start, launch).unwrap();
+    assert!(launch.extra_flags.is_empty());
+    assert_eq!(launch.resume_session_id.as_deref(), Some("old-session"));
+  }
+
+  /// A type without a resume path refuses a resumed run by name, and a new run on the same type needs no resume path.
+  #[test]
+  fn a_type_without_a_resume_path_refuses_a_resumed_run_by_name() {
+    let mut registry = Registry::new();
+    registry.register_package("synthetic.backend-run", register_resume_types).unwrap();
+    let option = option_of_type("synthetic-no-resume");
+
+    let resumed = RunStart::Resume { session_id: "old-session".into(), run_id: "new-run".into() };
+    let error = resumed_launch(&registry, &option, &resumed, LaunchArgs::default()).unwrap_err();
+    let message = format!("{error:#}");
+    assert!(message.contains("synthetic-no-resume"), "{message}");
+    assert!(message.contains("no resume path"), "{message}");
+
+    let fresh = RunStart::New(RunIdentity { session_id: "s1".into(), run_id: "r1".into() });
+    let launch = resumed_launch(&registry, &option, &fresh, LaunchArgs::default()).unwrap();
+    assert!(launch.extra_flags.is_empty());
+    assert_eq!(launch.resume_session_id, None);
   }
 }

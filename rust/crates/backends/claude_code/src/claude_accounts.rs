@@ -569,7 +569,7 @@ fn scored_pick(
           let hours = (reset.into_inner() - moment.into_inner()).as_seconds_f64() / 3600.0;
           hours.max(SCORE_HOURS_FLOOR)
         }
-        _ => SCORE_SCALE_HOURS,
+        Some(_) | None => SCORE_SCALE_HOURS,
       };
       let score = weight * SCORE_SCALE_HOURS / hours_to_reset;
       (account, weight, score)
@@ -674,7 +674,7 @@ fn live_counts(table: &mut Vec<Weak<ReservationHandle>>, now: UtcDateTime) -> Ha
       *counts.entry(handle.label.clone()).or_insert(0) += 1;
       true
     }
-    _ => false,
+    Some(_) | None => false,
   });
   counts
 }

@@ -1,11 +1,11 @@
 //! The text scan: the words of a text file, read line by line against the match definition.
 //!
-//! A word is a run of name, path and flag characters. The scan reads the positions that select a backend from the words
-//! around a word: the program after a backend CLI name, the value after a `--backend` flag or a `backend` key, and the
-//! operand after a default operator. A code file (a shell, Python, Perl, awk or JavaScript file) is read as code with its
-//! comments left out, since a comment chooses nothing that runs. Every other text file is prose. A prose sentence that
-//! names a backend CLI describes a harness, so the name is no site there. A model id, an option id, a pool id, a default
-//! operand and a gateway URL are sites in prose and in code alike.
+//! A word is a run of name, path and flag characters. Backend-selecting positions are read from surrounding words.
+//! These positions are a backend CLI name followed by a call marker, a pool id after `--backend` or `backend`, and an
+//! operand after a default operator. A code file (a shell, Python, Perl, awk or JavaScript file) is read as code with
+//! its comments left out, since a comment chooses nothing that runs. Every other text file is prose. A prose sentence
+//! that names a backend CLI describes a harness, so the name is no site there. A model id, an option id, a pool id, a
+//! default operand and a gateway URL are sites in prose and in code alike.
 
 use std::path::Path;
 
@@ -312,8 +312,8 @@ fn is_word_char(ch: char) -> bool {
   ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '/' | '~' | '$')
 }
 
-/// Whether a word followed by `gap` puts the next word in a backend position: a `--backend` flag, or a `backend` key
-/// with a separator that holds a `:` or `=`.
+/// Whether `word` and `gap` place the next word in a pool-id position. Matches a `--backend` flag or a `backend` key
+/// whose separator includes `:` or `=`.
 fn follows_pool_position(word: &str, gap: &str) -> bool {
   (word == "--backend" && only(gap, FLAG_GAP)) || (word == "backend" && only(gap, KEY_GAP) && gap.contains([':', '=']))
 }

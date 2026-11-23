@@ -5,8 +5,8 @@
 //! A row's path is a file, or a directory that ends in `/` and covers every file under it. Each row names the owner that
 //! keeps the value.
 //!
-//! The rules that are not owned values stay out of the table: a file under `configs/`, and a mock or fixture tree, are
-//! not scanned at all, and a code comment is not read at all (`text_scan`, `rust_scan`).
+//! Rules that are not owned values stay out of the table. Files under `configs/` and mock or fixture trees are not
+//! scanned. Code comments are left unread (`text_scan`, `rust_scan`).
 
 use crate::rules::Class;
 

@@ -55,8 +55,8 @@ mod tests {
   use crate::rules::Class;
   use charliebot_registry::Registry;
 
-  /// A scan of two files, one holding a model id and one holding the price table's spelling of a model: the first is a
-  /// site, and the second is the price table's, which the exemption table keeps.
+  /// Scans two files that each hold a model id, one in `list_price.rs` and one in `scripts/run.sh`. Only
+  /// `scripts/run.sh` stays an open hit because the exemption table keeps the price table entry.
   #[test]
   fn open_hits_keep_the_sites_no_exemption_keeps() {
     let root = tempfile::tempdir().unwrap();

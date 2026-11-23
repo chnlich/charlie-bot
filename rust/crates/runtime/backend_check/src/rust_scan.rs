@@ -3,8 +3,8 @@
 //! Items under `#[cfg(test)]` and `#[test]` functions are test code and are left out. Attributes are left out too: they
 //! hold documentation and configuration, not code, and a doc comment is an attribute. Comments are no site, since the
 //! syntax tree holds none and a comment chooses nothing that runs. Every string literal is read as text (`text_scan`).
-//! The positions that select a backend are read from the expression that holds them: a program's arguments, a
-//! constant's value, the operand of a default method, the value of a `backend` field, and a `--backend` pair in a list.
+//! Positions that select a backend are read from their holding expressions. These include program arguments, constant
+//! values, default-method operands, `backend` fields, and `--backend` pairs in lists.
 //! A macro whose body is a list of expressions is visited as those expressions. Any other macro body is read as its
 //! tokens.
 
@@ -72,8 +72,8 @@ impl Scanner<'_> {
     }
   }
 
-  /// A list of words: an argv whose first word is a backend CLI and whose later word is a call marker, and a
-  /// `--backend` word followed by a pool id.
+  /// Scans a list of words for two backend sites. One is an argv starting with a backend CLI and holding a call
+  /// marker. The other is a `--backend` element followed by a pool id.
   fn list_hits(&mut self, elements: &[&Expr]) {
     if let Some((_, first)) = elements.first().and_then(|first| literal_text(first))
       && let Some(command) = fixed_command(&first)
@@ -107,8 +107,8 @@ impl Scanner<'_> {
     }
   }
 
-  /// The tokens of a macro that is not a list of expressions: each string literal is text, and a `--backend` flag, a
-  /// `backend` key, and a program followed by its marker are read across the tokens.
+  /// Scans a macro body whose tokens are not an expression list. Each string literal is scanned as text. Across tokens,
+  /// `--backend` flags, `backend` keys, and commands followed by markers are also matched.
   fn token_hits(&mut self, tokens: TokenStream) {
     let mut pieces = Vec::new();
     flatten(tokens, &mut pieces);

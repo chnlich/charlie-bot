@@ -1,6 +1,5 @@
-//! The vocabulary the scans match against: the backend ids, models and endpoint hosts that the loaded configuration
-//! names, the id prefixes that the registered backend types claim, and the provider host and price-table models the
-//! code owns.
+//! The vocabulary that scans match against. It holds backend ids, models, and endpoint hosts from the loaded
+//! configuration. It also includes registered backend type id prefixes, the Gemini host, and price-table models.
 //!
 //! The configuration is read through the loader, so a key that the loader refuses never reaches the vocabulary. Two
 //! files feed it: the profile's `config.yaml`, when it exists, and the repository's configuration example, when a

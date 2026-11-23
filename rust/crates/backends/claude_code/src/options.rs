@@ -1,6 +1,8 @@
 //! The registered cc-claude option fields.
 
+use charliebot_core::backend_types;
 use charliebot_core::config::{OptionField, OptionFieldDefault};
+use charliebot_registry::option_model;
 use serde_yaml::{Mapping, Value};
 
 /// The `effort` key of a `backends.options[]` entry: the Claude Code `--effort` level. The Anthropic-compatible
@@ -23,9 +25,7 @@ pub fn option_model(fields: &Mapping) -> Result<(), String> {
     };
     match name {
       EFFORT_KEY | "account_pool" => {
-        if !matches!(value, Value::Null | Value::String(_)) {
-          return Err(format!("cc-claude option {name} must be a string or null"));
-        }
+        optional_text(fields, name)?;
       }
       "fast_mode" => {
         if !matches!(value, Value::Bool(_)) {
@@ -38,12 +38,9 @@ pub fn option_model(fields: &Mapping) -> Result<(), String> {
   Ok(())
 }
 
+/// The string value of the cc-claude option field `name`, read by the registry's reader under the cc-claude type name.
 pub(crate) fn optional_text(fields: &Mapping, name: &str) -> Result<Option<String>, String> {
-  match fields.get(Value::String(name.to_string())) {
-    None | Some(Value::Null) => Ok(None),
-    Some(Value::String(value)) => Ok(Some(value.clone())),
-    Some(_) => Err(format!("cc-claude option {name} must be a string or null")),
-  }
+  option_model::optional_text(fields, backend_types::CC_CLAUDE, name)
 }
 
 pub(crate) fn fast_mode(fields: &Mapping) -> Result<bool, String> {
@@ -68,5 +65,14 @@ mod tests {
       let error = option_model(&fields(&format!("effort: high\n{key}: x\n"))).unwrap_err();
       assert!(error.contains(key), "{error}");
     }
+  }
+
+  #[test]
+  fn a_text_field_that_is_not_a_string_fails_the_option_model_by_name() {
+    for key in [EFFORT_KEY, "account_pool"] {
+      let error = option_model(&fields(&format!("{key}: 3\n"))).unwrap_err();
+      assert_eq!(error, format!("cc-claude option {key} must be a string or null"));
+    }
+    option_model(&fields("effort: high\naccount_pool:\n")).expect("a string or an unset field passes");
   }
 }

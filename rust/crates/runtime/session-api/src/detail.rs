@@ -2166,9 +2166,17 @@ backends:
     }
     let payload = build_bootstrap_payload(&features.store, &cfg_of(&features), &meta).unwrap();
     let messages = payload.value["messages"].as_array().unwrap();
-    let served_wire = gzip_level_one(&charliebot_compat::json::fast_json_bytes(&payload.value)).len();
+    // The For-you catch-up rides outside the first screen's wire budget, so the budget measures the trim's product
+    // alone; the payload still carries the older rows the trim's cursor makes room for.
+    let mut served = payload.value.clone();
+    let older_for_you = served.as_object_mut().unwrap().remove(OLDER_FOR_YOU_FIELD);
+    let served_wire = gzip_level_one(&charliebot_compat::json::fast_json_bytes(&served)).len();
     assert!(payload.untrimmed_wire_bytes > FIRST_SCREEN_WIRE_BUDGET_BYTES, "the running turn is over the budget");
     assert!(served_wire <= FIRST_SCREEN_WIRE_BUDGET_BYTES, "served {served_wire} over the budget");
+    assert!(
+      older_for_you.is_some_and(|rows| rows.as_array().is_some_and(|rows| !rows.is_empty())),
+      "the payload carries the trimmed rows back as the For-you catch-up"
+    );
     assert!(renders(messages, &replies[2]), "the running turn's newest row renders");
     assert!(payload.value["pending_draft"].to_string().contains(&replies[3]), "the running draft renders");
     assert!(!renders(messages, &fixture_text(101, 700)), "the last finished reply drops for the running turn");
@@ -2203,8 +2211,16 @@ backends:
     features.store.append_chat_event(&meta.id, json!({"type": "run_finished", "run_id": "run-2"})).await.unwrap();
     let payload = build_bootstrap_payload(&features.store, &cfg_of(&features), &meta).unwrap();
     let messages = payload.value["messages"].as_array().unwrap();
-    let served_wire = gzip_level_one(&charliebot_compat::json::fast_json_bytes(&payload.value)).len();
+    // The For-you catch-up rides outside the first screen's wire budget, so the budget measures the trim's product
+    // alone; the payload still carries the older rows the trim's cursor makes room for.
+    let mut served = payload.value.clone();
+    let older_for_you = served.as_object_mut().unwrap().remove(OLDER_FOR_YOU_FIELD);
+    let served_wire = gzip_level_one(&charliebot_compat::json::fast_json_bytes(&served)).len();
     assert!(served_wire <= FIRST_SCREEN_WIRE_BUDGET_BYTES, "served {served_wire} over the budget");
+    assert!(
+      older_for_you.is_some_and(|rows| rows.as_array().is_some_and(|rows| !rows.is_empty())),
+      "the payload carries the trimmed rows back as the For-you catch-up"
+    );
     assert!(renders(messages, &reply), "the newest turn's reply renders");
     assert!(renders(messages, &turn_users[9]), "the newest user message renders");
     assert!(!renders(messages, &turn_users[0]), "the oldest user messages of the turn do not fit");

@@ -492,7 +492,13 @@ function countersAt(timeline, at) {
 }
 
 // One measured open: the browser, the link's conditions and the page's timings.
-async function measureOnce(ctx, cell, repetition) {
+export function assertOpenTarget(ctx, cell, repetition, newestMessage, { checkTarget = true } = {}) {
+  if (checkTarget && !STORED_COPY_CONDITIONS.includes(cell.condition)) {
+    assertSameTargetAsBefore(ctx.expectedTargets, cell.id, repetition, targetIdentity(newestMessage));
+  }
+}
+
+async function measureOnce(ctx, cell, repetition, { checkTarget = true } = {}) {
   const session = ctx.sessions.switchTarget;
   const profile = path.join(ctx.runDir, `open-${cell.id.replace(/\W+/g, '-')}-${repetition}-${randomTag()}`);
   fs.cpSync(cell.warmDir, profile, { recursive: true });
@@ -556,10 +562,8 @@ async function measureOnce(ctx, cell, repetition) {
     if (newestMessage === null) {
       throw new Error(`the open target's first screen (${firstScreen.messages.length} messages) paints no For you row`);
     }
-    // The two stored-copy setups exist only on the after side, so they have no before-side target to compare.
-    if (!STORED_COPY_CONDITIONS.includes(cell.condition)) {
-      assertSameTargetAsBefore(ctx.expectedTargets, cell.id, repetition, targetIdentity(newestMessage));
-    }
+    // The segment probe runs before background work; openScenario's reference runs after it.
+    assertOpenTarget(ctx, cell, repetition, newestMessage, { checkTarget });
     const tab = await openMeasuredTab(tabs, newestMessage.id);
     await tab.page.send('Emulation.setCPUThrottlingRate', { rate: cell.rate });
     await tabs.show(tab);
@@ -812,7 +816,7 @@ export async function openPrepare(ctx, result) {
 // openProbe(ctx, reference): one repetition of the reference cell, the CPU probe a bench segment starts with. It runs
 // at the reference rate, so its tail reads the host's CPU speed (open.mjs cpuRateFrom).
 export async function openProbe(ctx, reference) {
-  return measureOnce(ctx, reference, 1);
+  return measureOnce(ctx, reference, 1, { checkTarget: false });
 }
 
 // The open scenario. Fills `result`, the object the JSON keeps, cell by cell: a failure part-way leaves the cells

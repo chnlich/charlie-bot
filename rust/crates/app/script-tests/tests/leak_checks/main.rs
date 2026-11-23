@@ -735,17 +735,26 @@ fn tools_scanner(repo: &Path) -> PathBuf {
 
 // -- github-post.sh pr-merge --
 
-/// The `gh` stand-in for `pr-merge`: it answers the diff and view reads from files the test writes, records every call,
-/// and copies the squash message's `--body-file` aside so a test can read what reached the merge.
+/// The `gh` stand-in for `pr-merge` and the verdict comment: it answers the diff and view reads from files the test
+/// writes, runs a `--jq` filter over the comments file with jq as gh does, records every call, and copies the
+/// `--body-file` of a merge and of a comment aside so a test can read what reached GitHub.
 const MERGE_GH_STUB: &str = r#"case "$1 $2" in
   'pr diff')
     cat "$GH_CHANGED_PATHS"
     ;;
   'pr view')
-    case " $* " in
-      *" title "*) cat "$GH_PR_TITLE" ;;
-      *" body "*) cat "$GH_PR_BODY" ;;
-      *" isDraft "*) cat "$GH_PR_DRAFT" ;;
+    json=
+    previous=
+    for argument in "$@"; do
+      if [ "$previous" = --json ]; then json=$argument; fi
+      previous=$argument
+    done
+    case "$json" in
+      title) cat "$GH_PR_TITLE" ;;
+      body) cat "$GH_PR_BODY" ;;
+      isDraft) cat "$GH_PR_DRAFT" ;;
+      headRefOid) printf '%s\n' "$GH_HEAD_SHA" ;;
+      comments) jq --raw-output "${!#}" "$GH_COMMENTS" ;;
       *) printf '%s\n' 'https://github.com/chnlich/charlie-bot/pull/5046' ;;
     esac
     ;;
@@ -757,7 +766,26 @@ if [[ "$1 $2" == 'pr merge' ]]; then
     shift
   done
 fi
+if [[ "$1 $2" == 'pr comment' ]]; then
+  while [[ $# -gt 0 ]]; do
+    if [[ "$1" == --body-file ]]; then cp "$2" "$GH_COMMENT_BODY"; fi
+    shift
+  done
+fi
 "#;
+
+/// The head sha of the synthetic pull request, and an older head it was rebased or fixed from.
+const HEAD_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+const OLDER_SHA: &str = "89abcdef0123456789abcdef0123456789abcdef";
+/// The review's stdout for a verdict with no issues, and for one with a finding at the bar of confidence 80.
+const CLEAN_REVIEW: &str = "Code review: no issues found.\nScope: commits a1 and files web/static/ui.js.\n";
+const FINDING_REVIEW: &str =
+  "- The panel drops its first row (confidence 85) — web/static/ui.js: the loop bound is one short.\n";
+
+/// The comment that `pr-comment --verdict-head <sha>` posts: the head line, a blank line, then the review's stdout.
+fn verdict_comment(sha: &str, review: &str) -> String {
+  format!("Review verdict on {sha}\n\n{review}")
+}
 
 /// One synthetic pull request for `pr-merge`: the changed paths, the title and body, the draft state, the call log and
 /// the copied squash message, plus an evidence directory the caller fills with screenshots.
@@ -766,11 +794,14 @@ struct MergeWorld {
   env: Env,
   gh_log: PathBuf,
   merge_body: PathBuf,
+  comment_body: PathBuf,
+  comments: PathBuf,
   evidence: PathBuf,
   pr_draft: PathBuf,
 }
 
 impl MergeWorld {
+  /// A pull request at `HEAD_SHA` whose newest verdict comment reports no issues on that head.
   fn new(changed: &str, pr_body: &str) -> MergeWorld {
     let sandbox = Sandbox::new();
     let home = pattern_home(&sandbox);
@@ -784,6 +815,8 @@ impl MergeWorld {
     let pr_title = sandbox.root().join("pr-title");
     let pr_body_file = sandbox.root().join("pr-body");
     let merge_body = sandbox.root().join("merge-body");
+    let comment_body = sandbox.root().join("comment-body");
+    let comments = sandbox.root().join("comments.json");
     let pr_draft = sandbox.root().join("pr-draft");
     std::fs::write(&changed_paths, changed).unwrap();
     std::fs::write(&pr_title, "Improve the status panel\n").unwrap();
@@ -795,8 +828,19 @@ impl MergeWorld {
     env.insert("GH_PR_BODY".to_string(), pr_body_file.display().to_string());
     env.insert("GH_PR_DRAFT".to_string(), pr_draft.display().to_string());
     env.insert("GH_MERGE_BODY".to_string(), merge_body.display().to_string());
+    env.insert("GH_COMMENT_BODY".to_string(), comment_body.display().to_string());
+    env.insert("GH_COMMENTS".to_string(), comments.display().to_string());
+    env.insert("GH_HEAD_SHA".to_string(), HEAD_SHA.to_string());
     let evidence = sandbox.dir("evidence");
-    MergeWorld { sandbox, env, gh_log, merge_body, evidence, pr_draft }
+    let world = MergeWorld { sandbox, env, gh_log, merge_body, comment_body, comments, evidence, pr_draft };
+    world.set_comments(&[verdict_comment(HEAD_SHA, CLEAN_REVIEW)]);
+    world
+  }
+
+  /// Replaces the pull request's comments, oldest first.
+  fn set_comments(&self, bodies: &[String]) {
+    let comments: Vec<serde_json::Value> = bodies.iter().map(|body| serde_json::json!({ "body": body })).collect();
+    std::fs::write(&self.comments, serde_json::json!({ "comments": comments }).to_string()).unwrap();
   }
 
   /// Writes `count` PNGs at each window size into the evidence directory.
@@ -817,6 +861,12 @@ impl MergeWorld {
   fn merge(&self, args: &[&str]) -> Run {
     let mut command = harness::command("bash", &self.env);
     command.arg(github_post()).arg("pr-merge").args(args);
+    run_in(&mut command, self.sandbox.root())
+  }
+
+  fn comment(&self, args: &[&str]) -> Run {
+    let mut command = harness::command("bash", &self.env);
+    command.arg(github_post()).arg("pr-comment").args(args);
     run_in(&mut command, self.sandbox.root())
   }
 
@@ -917,6 +967,105 @@ fn a_pr_merge_refuses_a_draft_pull_request() {
   assert_eq!(run.code, 2, "{}", run.describe());
   assert!(run.stderr.contains("a draft waits for its measurements"), "{}", run.describe());
   assert!(world.merge_calls().is_empty(), "nothing may merge: {}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_refuses_a_pr_without_a_verdict_comment() {
+  let world = MergeWorld::new("rust/crates/x/src/lib.rs\n", "## Evidence\nno screenshot needed.\n");
+  world.set_comments(&["improve-waiting: main repair held by another direction".to_string()]);
+
+  let run = world.merge(&["5046"]);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("has no review verdict comment"), "{}", run.describe());
+  assert!(world.merge_calls().is_empty(), "nothing may merge: {}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_refuses_a_verdict_that_names_an_older_head() {
+  let world = MergeWorld::new("rust/crates/x/src/lib.rs\n", "## Evidence\nno screenshot needed.\n");
+  world.set_comments(&[verdict_comment(OLDER_SHA, CLEAN_REVIEW)]);
+
+  let run = world.merge(&["5046"]);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains(OLDER_SHA) && run.stderr.contains(HEAD_SHA), "{}", run.describe());
+  assert!(world.merge_calls().is_empty(), "nothing may merge: {}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_refuses_a_verdict_on_the_head_that_reports_findings() {
+  let world = MergeWorld::new("rust/crates/x/src/lib.rs\n", "## Evidence\nno screenshot needed.\n");
+  world.set_comments(&[verdict_comment(HEAD_SHA, FINDING_REVIEW)]);
+
+  let run = world.merge(&["5046"]);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("reports findings"), "{}", run.describe());
+  assert!(world.merge_calls().is_empty(), "nothing may merge: {}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_passes_a_clean_verdict_on_the_head() {
+  let world = MergeWorld::new("rust/crates/x/src/lib.rs\n", "## Evidence\nno screenshot needed.\n");
+
+  let run = world.merge(&["5046"]);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert_eq!(world.merge_calls(), ["pr merge --squash 5046"], "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_reads_the_newest_verdict_after_a_fix_and_its_rerun() {
+  // The round's fix moves the head to HEAD_SHA, and the rerun of the same review posts a clean verdict on it.
+  let world = MergeWorld::new("rust/crates/x/src/lib.rs\n", "## Evidence\nno screenshot needed.\n");
+  world.set_comments(&[verdict_comment(OLDER_SHA, FINDING_REVIEW), verdict_comment(HEAD_SHA, CLEAN_REVIEW)]);
+
+  let run = world.merge(&["5046"]);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert_eq!(world.merge_calls(), ["pr merge --squash 5046"], "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_comment_with_a_verdict_head_posts_the_head_line_that_pr_merge_reads() {
+  let world = MergeWorld::new("rust/crates/x/src/lib.rs\n", "## Evidence\nno screenshot needed.\n");
+  let review = world.sandbox.root().join("review.md");
+  std::fs::write(&review, CLEAN_REVIEW).unwrap();
+
+  let run = world.comment(&["--verdict-head", HEAD_SHA, "--body-file", review.to_str().unwrap(), "5046"]);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  let posted = std::fs::read_to_string(&world.comment_body).expect("the verdict comment was posted");
+  assert_eq!(posted, verdict_comment(HEAD_SHA, CLEAN_REVIEW), "{}", run.describe());
+  let calls: Vec<String> =
+    gh_log_lines(&world.gh_log).into_iter().filter(|line| line.starts_with("pr comment")).collect();
+  assert_eq!(calls.len(), 1, "{}", run.describe());
+  assert!(!calls[0].contains("--verdict-head"), "gh receives no verdict flag: {}", calls[0]);
+  // The comment the round posted is the one the merge reads back: the same head clears the merge.
+  world.set_comments(&[posted]);
+  let merge = world.merge(&["5046"]);
+  assert_eq!(merge.code, 0, "{}", merge.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_comment_refuses_a_verdict_head_that_is_not_a_full_sha() {
+  let world = MergeWorld::new("rust/crates/x/src/lib.rs\n", "## Evidence\nno screenshot needed.\n");
+  let review = world.sandbox.root().join("review.md");
+  std::fs::write(&review, CLEAN_REVIEW).unwrap();
+
+  let run = world.comment(&["--verdict-head", "0123abc", "--body-file", review.to_str().unwrap(), "5046"]);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("full 40-character head sha"), "{}", run.describe());
+  assert!(!world.comment_body.exists(), "nothing was posted");
 }
 
 // -- the credential check: one scanner for the round's writes and the landing --

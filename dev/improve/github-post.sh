@@ -19,6 +19,8 @@
 # refuses a draft pull request, a web page change whose evidence directory fails
 # the screenshot check, whose body lacks a full-URL View line, or whose View value
 # does not start with `/`, and carries the View lines into the squash commit message.
+# It also refuses a merge unless the newest verdict comment names the pull request's head sha and reports no
+# issues. pr-comment --verdict-head writes that comment: its first line names the head the review read.
 #
 # pr-edit does not call gh pr edit: on gh 2.45 that fails on the Projects
 # (classic) lookup. It reads the PR's URL with gh pr view, then sends the
@@ -26,7 +28,7 @@
 #
 # usage:
 #   github-post.sh pr-create --title <title> --body-file <file> [gh pr create args...]
-#   github-post.sh pr-comment --body-file <file> [gh pr comment args...]
+#   github-post.sh pr-comment --body-file <file> [--verdict-head <sha>] [gh pr comment args...]
 #   github-post.sh pr-close --comment-file <file> [--delete-branch] [gh pr close args...]
 #   github-post.sh pr-edit [--title <title>] [--body-file <file>] [--repo <owner/repo>] [<PR>]
 #   github-post.sh pr-merge --evidence-dir <dir> <PR> [--repo <owner/repo>]
@@ -104,7 +106,7 @@ require_readable() {  # require_readable <path> <what>
 subcommand=$1
 shift
 orig_args=("$@")
-title='' body_file='' comment_file=''
+title='' body_file='' comment_file='' verdict_head=''
 
 # Text reaches gh only through the checked fields. An inline text argument would
 # go to gh unchecked, so it is refused before any call; its value is not echoed.
@@ -113,6 +115,7 @@ while [[ $# -gt 0 ]]; do
     --title|-t) title=$2; shift 2 ;;
     --body-file|-F) body_file=$2; shift 2 ;;
     --comment-file) comment_file=$2; shift 2 ;;
+    --verdict-head) verdict_head=$2; shift 2 ;;
     --body|-b|--comment|-c|--title=*|--body=*|--body-file=*|--comment-file=*|--comment=*|-[btcF]?*)
       printf 'Refused an inline text argument; pass text with --title, --body-file or --comment-file.\n' >&2
       exit 2
@@ -132,8 +135,31 @@ case "$subcommand" in
   pr-comment)
     [[ -n "$body_file" ]] || { usage; exit 2; }
     require_readable "$body_file" body
+    # A verdict comment opens with the full head sha its review read: pr-merge reads that first line back.
+    if [[ -n "$verdict_head" ]]; then
+      [[ "$verdict_head" =~ ^[0-9a-f]{40}$ ]] || {
+        printf 'Refused --verdict-head: it takes the full 40-character head sha; nothing was sent.\n' >&2
+        exit 2
+      }
+      { printf 'Review verdict on %s\n\n' "$verdict_head"; cat -- "$body_file"; } > "$tmp_dir/verdict-body"
+      body_file=$tmp_dir/verdict-body
+    fi
     check_text body "$body_file"
-    gh pr comment "${orig_args[@]}"
+    # gh receives the checked file, so the body it posts is the text that passed; the flags that name the
+    # body and the verdict head are removed from the arguments first.
+    gh_args=()
+    skip_next=0
+    for arg in "${orig_args[@]}"; do
+      if [[ $skip_next -eq 1 ]]; then
+        skip_next=0
+        continue
+      fi
+      case "$arg" in
+        --verdict-head|--body-file|-F) skip_next=1 ;;
+        *) gh_args+=("$arg") ;;
+      esac
+    done
+    gh pr comment "${gh_args[@]}" --body-file "$body_file"
     ;;
   pr-close)
     [[ -n "$comment_file" ]] || { usage; exit 2; }
@@ -266,6 +292,34 @@ case "$subcommand" in
         exit 2
         ;;
     esac
+    # The merge head carries a clean verdict: the newest verdict comment names the head sha and reports no issues.
+    # A verdict on an older head, or one that reports findings, refuses the merge.
+    merge_head=$(gh pr view "$pr_selector" "${repo_args[@]}" --json headRefOid --jq .headRefOid) || {
+      printf 'Cannot read the head of PR %s; nothing was merged.\n' "$pr_selector" >&2
+      exit 2
+    }
+    gh pr view "$pr_selector" "${repo_args[@]}" --json comments \
+      --jq '[.comments[] | select(.body | startswith("Review verdict on "))] | last | .body // ""' \
+      > "$tmp_dir/verdict" || {
+      printf 'Cannot read the comments of PR %s; nothing was merged.\n' "$pr_selector" >&2
+      exit 2
+    }
+    verdict_named=$(sed -n '1s/^Review verdict on //p' "$tmp_dir/verdict")
+    if [[ -z "$verdict_named" ]]; then
+      printf 'PR %s has no review verdict comment; nothing was merged.\n' "$pr_selector" >&2
+      exit 2
+    fi
+    if [[ "$verdict_named" != "$merge_head" ]]; then
+      printf 'PR %s: its newest review verdict names %s, not the head %s; nothing was merged.\n' \
+        "$pr_selector" "$verdict_named" "$merge_head" >&2
+      exit 2
+    fi
+    if ! grep -qxF 'Code review: no issues found.' "$tmp_dir/verdict" ||
+      grep -qE '^- .*\(confidence [0-9]+\)' "$tmp_dir/verdict"; then
+      printf 'PR %s: the review verdict on head %s reports findings; nothing was merged.\n' \
+        "$pr_selector" "$merge_head" >&2
+      exit 2
+    fi
     changed=$(gh pr diff --name-only "$pr_selector" "${repo_args[@]}") || {
       printf 'Cannot read the changed paths of PR %s; nothing was merged.\n' "$pr_selector" >&2
       exit 2

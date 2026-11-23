@@ -921,11 +921,18 @@ fn trial_socket_path_limit() -> usize {
 const PREFLIGHT_UID: &str = "999999";
 
 /// The CLI beside the server: the verbs that the trial calls before its server starts. Any other verb fails the trial.
+/// `backend resolve` reads the live server, so with PREFLIGHT_SERVER=down it fails as the CLI fails when no server runs.
 const CLI_STUB: &str = r#"#!/usr/bin/env bash
 case "$*" in
   'release-helper --help') ;;
   'config get server.enable_local_work_guard') echo false ;;
-  'backend resolve --call probe') echo '{"option":{"id":"stub","model":"m","api_base":"http://127.0.0.1:9/v1"}}' ;;
+  'backend resolve --call probe')
+    if [[ ${PREFLIGHT_SERVER:-up} == down ]]; then
+      echo 'backend resolve: [Errno 111] Connection refused on http://localhost:18498' >&2
+      exit 1
+    fi
+    echo '{"option":{"id":"stub","model":"m","api_base":"http://127.0.0.1:9/v1"}}' ;;
+  'release-helper credential-key '*) echo stub-key ;;
   'release-helper session-weights '*) printf 'true\ntrue\n' ;;
   'release-helper stand-in-options '*) printf -- '- id: stub-stand-in\n  type: cc-claude\n  model: stub-model\n' ;;
   'release-helper disable-cron-tasks '*) printf 'memory-curator\nstub-stand-in\n' ;;
@@ -998,9 +1005,22 @@ impl PreflightWorld {
 
   /// One trial of `commit` by the user `uid`, with `tmpdir` as its TMPDIR and `options` between --serve and the commit.
   fn trial_of(&self, commit: &str, uid: &str, tmpdir: &Path, options: &[&str]) -> Run {
+    self.trial_in(commit, uid, tmpdir, options, &[])
+  }
+
+  /// One trial of the world's commit by the preflight's uid, with `extra` set in its environment beside the world's
+  /// variables, as a round's runner sets them for its agent.
+  fn trial_with(&self, tmpdir: &Path, options: &[&str], extra: &[(&str, &str)]) -> Run {
+    self.trial_in(&self.commit, PREFLIGHT_UID, tmpdir, options, extra)
+  }
+
+  fn trial_in(&self, commit: &str, uid: &str, tmpdir: &Path, options: &[&str], extra: &[(&str, &str)]) -> Run {
     let mut env = self.env.clone();
     env.insert("TMPDIR".to_string(), tmpdir.display().to_string());
     env.insert("PREFLIGHT_UID".to_string(), uid.to_string());
+    for (name, value) in extra {
+      env.insert(name.to_string(), value.to_string());
+    }
     let mut command = harness::command("bash", &env);
     command
       .arg(self.repo.join("scripts/release/trial.sh"))
@@ -1172,6 +1192,69 @@ fn test_trial_preflight_with_tree_root_puts_both_sockets_under_its_temp_root() {
   assert_socket_passes(&run, &format!("{}/tmux/tmux-{PREFLIGHT_UID}/charliebot", temp.display()));
   assert_socket_passes(&run, &format!("{}/org.chromium.Chromium.XXXXXX/SingletonSocket", temp.display()));
   assert_eq!(fs::read_dir(tree_root.path()).expect("the tree root").count(), 0, "the tree root kept its tree");
+}
+
+/// The probe answer that a round's launcher ships with its launch: the option of `backends.calls.probe`, with the
+/// endpoint and the credential name the trial's charlie-code option takes. The answer holds no key.
+const SHIPPED_PROBE_ANSWER: &str = r#"{"option":{"id":"shipped-probe","label":"Shipped probe","type":"charlie-code","model":"shipped-probe-model","api_base":"http://127.0.0.1:9/v1","credential":"shipped-probe-credential"}}"#;
+
+/// A round's host runs no server, so its trial reads the probe answer that the launch shipped. With the server down, a
+/// trial that names the shipped answer passes the probe step and the socket preflight, and it stops at its server start.
+#[test]
+#[ignore = "integration"]
+fn test_trial_preflight_takes_the_probe_from_the_shipped_answer_when_no_server_runs() {
+  let world = PreflightWorld::new();
+  let answer = world.sandbox.dir("launch").join("probe-option.json");
+  fs::write(&answer, SHIPPED_PROBE_ANSWER).expect("the shipped probe answer");
+  let answer_path = answer.display().to_string();
+  let scope = RoundScope::new("ux");
+
+  let run = world.trial_with(
+    scope.path(),
+    &["--in-caller-scope"],
+    &[("PREFLIGHT_SERVER", "down"), ("CHARLIEBOT_TRIAL_PROBE_ANSWER", &answer_path)],
+  );
+
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(!run.stderr.contains("preflight failed"), "{}", run.describe());
+  passed_chrome_socket(&run);
+  assert!(run.stdout.contains("FAIL serve Startup"), "the trial did not reach its server start: {}", run.describe());
+}
+
+/// A trial with neither a shipped answer nor a server refuses at the probe step with exit 2: the refusal names the
+/// missing answer, and the server's reason is printed above it. A named answer file that does not exist refuses the
+/// same way and names the file. Each refusal starts nothing and writes nothing under the TMPDIR.
+#[test]
+fn test_trial_preflight_refuses_the_probe_step_without_a_shipped_answer_or_a_server() {
+  let world = PreflightWorld::new();
+  let scope = RoundScope::new("ux");
+
+  let run = world.trial_with(scope.path(), &["--in-caller-scope"], &[("PREFLIGHT_SERVER", "down")]);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("Connection refused"), "the server's reason is missing: {}", run.describe());
+  assert!(
+    run.stderr.contains("preflight failed: no probe answer: CHARLIEBOT_TRIAL_PROBE_ANSWER is unset"),
+    "the refusal names no missing answer: {}",
+    run.describe()
+  );
+  assert_eq!(fs::read_dir(scope.path()).expect("the TMPDIR").count(), 0, "the refused run wrote into its TMPDIR");
+
+  let missing = world.sandbox.dir("launch").join("missing-probe-option.json");
+  let missing_path = missing.display().to_string();
+  let run = world.trial_with(
+    scope.path(),
+    &["--in-caller-scope"],
+    &[("PREFLIGHT_SERVER", "down"), ("CHARLIEBOT_TRIAL_PROBE_ANSWER", &missing_path)],
+  );
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(
+    run.stderr.contains(&format!("CHARLIEBOT_TRIAL_PROBE_ANSWER names a file that cannot be read: {missing_path}")),
+    "the refusal names no unreadable answer file: {}",
+    run.describe()
+  );
+  assert_eq!(fs::read_dir(scope.path()).expect("the TMPDIR").count(), 0, "the refused run wrote into its TMPDIR");
 }
 
 fn mock_home() -> PathBuf {

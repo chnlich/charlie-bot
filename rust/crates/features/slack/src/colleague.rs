@@ -432,6 +432,25 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn a_run_fed_by_an_agent_trigger_in_a_colleague_thread_is_refused() {
+    let api = FakeApi::start(&[]).await;
+    let (home, session_id) = thread_home(
+      &api,
+      vec![message(THREAD, "U_ALLOWED", "status?"), message("1700000000.000200", "U_COLLEAGUE", "help")],
+    )
+    .await;
+    append(
+      &home,
+      &session_id,
+      json!({"id": "evt-agent-trigger", "type": event_types::SCHEDULED_TRIGGER, "message": "synthetic timer"}),
+    )
+    .await;
+    let caller = run_caller(&home, &session_id, &["evt-agent-trigger"]);
+
+    assert_eq!(refuse_work_with(&home.features, Some(&api.client), &caller).await, Some(COLLEAGUE_REFUSAL));
+  }
+
+  #[tokio::test]
   async fn a_run_fed_only_by_the_operator_passes_in_a_colleague_thread() {
     let api = FakeApi::start(&[]).await;
     let (home, session_id) = thread_home(

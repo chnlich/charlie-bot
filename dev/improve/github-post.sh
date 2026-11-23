@@ -26,8 +26,12 @@
 # (classic) lookup. It reads the PR's URL with gh pr view, then sends the
 # checked title and body with gh api -X PATCH on the REST pull endpoint.
 #
+# pr-create and pr-merge check the side records that the body cites against the round's evidence directory
+# (dev/improve/side-record.sh). pr-create catches a bad citation before the pull request exists. pr-merge runs
+# the check on the body as it will merge, so an edit made after creation is checked too; pr-edit does not check.
+#
 # usage:
-#   github-post.sh pr-create --title <title> --body-file <file> [gh pr create args...]
+#   github-post.sh pr-create --title <title> --body-file <file> --evidence-dir <dir> [--draft] [gh pr create args...]
 #   github-post.sh pr-comment --body-file <file> [--verdict-head <sha>] [gh pr comment args...]
 #   github-post.sh pr-close --comment-file <file> [--delete-branch] [gh pr close args...]
 #   github-post.sh pr-edit [--title <title>] [--body-file <file>] [--repo <owner/repo>] [<PR>]
@@ -45,6 +49,7 @@ usage() {
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 scanner="$repo_root/dev/check-skills-host-leak.sh"
 source "$repo_root/dev/push-text-lists.sh"
+source "$repo_root/dev/improve/side-record.sh"
 
 tmp_dir=$(mktemp -d)
 trap 'rm -rf "$tmp_dir"' EXIT
@@ -102,11 +107,28 @@ require_readable() {  # require_readable <path> <what>
   fi
 }
 
+# without_evidence_dir: set gh_args to the call's arguments without each --evidence-dir option, which this script reads.
+without_evidence_dir() {
+  local skip_next=0 arg
+  gh_args=()
+  for arg in "${orig_args[@]}"; do
+    if [[ $skip_next -eq 1 ]]; then
+      skip_next=0
+      continue
+    fi
+    case "$arg" in
+      --evidence-dir) skip_next=1 ;;
+      --evidence-dir=*) ;;
+      *) gh_args+=("$arg") ;;
+    esac
+  done
+}
+
 [[ $# -ge 1 ]] || { usage; exit 2; }
 subcommand=$1
 shift
 orig_args=("$@")
-title='' body_file='' comment_file='' verdict_head=''
+title='' body_file='' comment_file='' verdict_head='' evidence_dir=''
 
 # Text reaches gh only through the checked fields. An inline text argument would
 # go to gh unchecked, so it is refused before any call; its value is not echoed.
@@ -116,6 +138,8 @@ while [[ $# -gt 0 ]]; do
     --body-file|-F) body_file=$2; shift 2 ;;
     --comment-file) comment_file=$2; shift 2 ;;
     --verdict-head) verdict_head=$2; shift 2 ;;
+    --evidence-dir) evidence_dir=$2; shift 2 ;;
+    --evidence-dir=*) evidence_dir=${1#--evidence-dir=}; shift ;;
     --body|-b|--comment|-c|--title=*|--body=*|--body-file=*|--comment-file=*|--comment=*|-[btcF]?*)
       printf 'Refused an inline text argument; pass text with --title, --body-file or --comment-file.\n' >&2
       exit 2
@@ -126,11 +150,20 @@ done
 
 case "$subcommand" in
   pr-create)
-    [[ -n "$title" && -n "$body_file" ]] || { usage; exit 2; }
+    [[ -n "$title" && -n "$body_file" && -n "$evidence_dir" ]] || { usage; exit 2; }
     require_readable "$body_file" body
     check_string title "$title"
     check_text body "$body_file"
-    gh pr create "${orig_args[@]}"
+    # A draft waits for its measurements, so it may cite no record yet; its cited records still pass the check.
+    draft=0
+    for arg in "${orig_args[@]}"; do
+      if [[ "$arg" == --draft || "$arg" == -d ]]; then
+        draft=1
+      fi
+    done
+    side_record_check_body "$evidence_dir" "$body_file" "$draft" || exit 2
+    without_evidence_dir
+    gh pr create "${gh_args[@]}"
     ;;
   pr-comment)
     [[ -n "$body_file" ]] || { usage; exit 2; }
@@ -276,6 +309,10 @@ case "$subcommand" in
     [[ -n "$pr_selector" ]] || { usage; exit 2; }
     repo_args=()
     [[ -z "$pr_repo" ]] || repo_args=(--repo "$pr_repo")
+    [[ -n "$evidence_dir" ]] || {
+      printf 'pr-merge needs --evidence-dir naming the round evidence directory; nothing was merged.\n' >&2
+      exit 2
+    }
     # A draft waits for its measurements, so this check stays ahead of every read and merge of the pull request.
     draft_state=$(gh pr view "$pr_selector" "${repo_args[@]}" --json isDraft --jq .isDraft) || {
       printf 'Cannot read the draft state of PR %s; nothing was merged.\n' "$pr_selector" >&2
@@ -320,35 +357,35 @@ case "$subcommand" in
         "$pr_selector" "$merge_head" >&2
       exit 2
     fi
+    # The body is read once: the side record check and the View lines below both use this copy, which is the
+    # text the squash commit carries.
+    gh pr view "$pr_selector" "${repo_args[@]}" --json body --jq .body > "$tmp_dir/pr-body" || {
+      printf 'Cannot read the body of PR %s; nothing was merged.\n' "$pr_selector" >&2
+      exit 2
+    }
+    side_record_check_body "$evidence_dir" "$tmp_dir/pr-body" 0 || {
+      printf 'PR %s cites a side record that does not pass the check; nothing was merged.\n' "$pr_selector" >&2
+      exit 2
+    }
     changed=$(gh pr diff --name-only "$pr_selector" "${repo_args[@]}") || {
       printf 'Cannot read the changed paths of PR %s; nothing was merged.\n' "$pr_selector" >&2
       exit 2
     }
     # `charliebot` is the round's own build (dev/improve/remote-runner.sh builds it), so it carries
     # the window sizes this check reads.
-    check_args=(screenshots check)
-    [[ -z "$evidence_dir" ]] || check_args+=(--dir "$evidence_dir")
+    check_args=(screenshots check --dir "$evidence_dir")
     set +e
     web_change=$(printf '%s\n' "$changed" | charliebot "${check_args[@]}")
     check_status=$?
     set -e
     if [[ "$check_status" -ne 0 ]]; then
-      if [[ -z "$evidence_dir" ]]; then
-        printf 'PR %s changes a web page, so pr-merge needs --evidence-dir naming the round evidence directory; nothing was merged.\n' \
-          "$pr_selector" >&2
-      else
-        printf 'PR %s did not pass the screenshot check; nothing was merged.\n' "$pr_selector" >&2
-      fi
+      printf 'PR %s did not pass the screenshot check; nothing was merged.\n' "$pr_selector" >&2
       exit 2
     fi
     merge_args=(pr merge --squash "$pr_selector" "${repo_args[@]}")
     if [[ -n "$web_change" ]]; then
       pr_title=$(gh pr view "$pr_selector" "${repo_args[@]}" --json title --jq .title) || {
         printf 'Cannot read the title of PR %s; nothing was merged.\n' "$pr_selector" >&2
-        exit 2
-      }
-      gh pr view "$pr_selector" "${repo_args[@]}" --json body --jq .body > "$tmp_dir/pr-body" || {
-        printf 'Cannot read the body of PR %s; nothing was merged.\n' "$pr_selector" >&2
         exit 2
       }
       sed -n 's/^View:[[:space:]]*//p' "$tmp_dir/pr-body" > "$tmp_dir/views"

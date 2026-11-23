@@ -1463,6 +1463,7 @@ dependencies = [
  "charliebot-usage",
  "charliebot-voice",
  "charliebot-web-reply",
+ "flate2",
  "futures-util",
  "ignore",
  "libc",

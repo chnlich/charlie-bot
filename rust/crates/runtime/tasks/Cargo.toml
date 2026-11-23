@@ -25,6 +25,7 @@ charliebot-html.workspace = true
 charliebot-registry.workspace = true
 charliebot-store.workspace = true
 charliebot-usage.workspace = true
+flate2.workspace = true
 futures-util.workspace = true
 ignore.workspace = true
 libc.workspace = true

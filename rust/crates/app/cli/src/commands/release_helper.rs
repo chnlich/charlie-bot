@@ -1080,21 +1080,33 @@ fn endpoint_option(args: &[String]) -> Result<i32, String> {
   Ok(0)
 }
 
-/// The first answer whose `option.api_base` is a non-empty string, asking `resolve` for each member in order. A member
-/// whose resolve fails fails the selection, so a broken target never reads as one with no endpoint.
+/// The first resolve answer whose `option.api_base` is non-empty, checking members in order. If no member qualifies,
+/// the error includes every resolve failure.
 fn first_endpoint_member(
   subject: &str,
   members: &[String],
   mut resolve: impl FnMut(&str) -> Result<Value, String>,
 ) -> Result<Value, String> {
+  let mut resolve_errors = Vec::new();
   for member in members {
-    let answer = resolve(member)?;
+    let answer = match resolve(member) {
+      Ok(answer) => answer,
+      Err(error) => {
+        resolve_errors.push(format!("{member}: {error}"));
+        continue;
+      }
+    };
     let api_base = answer.get("option").and_then(|option| option.get(config::API_BASE_KEY)).and_then(Value::as_str);
     if api_base.is_some_and(|api_base| !api_base.is_empty()) {
       return Ok(answer);
     }
   }
-  Err(format!("{subject} has no member with an api_base; members: {}", members.join(", ")))
+  let failure = format!("{subject} has no member with an api_base; members: {}", members.join(", "));
+  if resolve_errors.is_empty() {
+    Err(failure)
+  } else {
+    Err(format!("{failure}; resolve errors: {}", resolve_errors.join("; ")))
+  }
 }
 
 /// The message a failed internal-API call carries, for a helper that reports plain text.
@@ -1409,7 +1421,7 @@ mod tests {
   const SERVER_LOCATION: &str = "server/main.rs:307";
 
   #[test]
-  fn the_endpoint_option_takes_the_first_member_with_an_api_base() {
+  fn first_endpoint_member_takes_the_first_member_with_an_api_base() {
     let members = vec!["no-base".to_string(), "endpoint".to_string(), "later".to_string()];
     let mut asked = Vec::new();
 
@@ -1427,11 +1439,51 @@ mod tests {
   }
 
   #[test]
-  fn the_endpoint_option_names_the_target_and_its_members_when_none_names_an_api_base() {
+  fn first_endpoint_member_skips_members_whose_resolve_fails() {
+    let members = vec!["first".to_string(), "second".to_string(), "third".to_string()];
+    let mut asked = Vec::new();
+
+    let answer = first_endpoint_member("target", &members, |member| {
+      asked.push(member.to_string());
+      match member {
+        "first" => Err("quota_error".to_string()),
+        "second" => Ok(json!({"member": member, "option": {"api_base": "non-empty"}})),
+        other => Ok(json!({"member": other})),
+      }
+    })
+    .unwrap();
+
+    assert_eq!(asked, vec!["first".to_string(), "second".to_string()]);
+    assert_eq!(answer["member"], "second");
+  }
+
+  #[test]
+  fn first_endpoint_member_reports_every_resolve_error_when_no_member_has_an_api_base() {
+    let members = vec!["a".to_string(), "b".to_string()];
+
+    let error = first_endpoint_member("target", &members, |member| match member {
+      "a" => Err("quota_error".to_string()),
+      "b" => Err("connection refused".to_string()),
+      _ => unreachable!(),
+    })
+    .unwrap_err();
+
+    assert_eq!(
+      error,
+      "target has no member with an api_base; members: a, b; resolve errors: a: quota_error; b: connection refused"
+    );
+  }
+
+  #[test]
+  fn first_endpoint_member_names_the_target_and_its_members_when_none_names_an_api_base() {
     let members = vec!["a".to_string(), "b".to_string()];
 
     let error = first_endpoint_member("backends.calls.probe target 'fast'", &members, |member| {
-      Ok(json!({"option": {"id": member, "api_base": ""}}))
+      Ok(if member == "a" {
+        json!({"option": {"id": member}})
+      } else {
+        json!({"option": {"id": member, "api_base": ""}})
+      })
     })
     .unwrap_err();
 

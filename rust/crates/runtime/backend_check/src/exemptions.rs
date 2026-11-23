@@ -20,7 +20,8 @@ pub enum Values {
   Words(&'static [&'static str]),
   /// A backend CLI run that carries no model, option or pool: the program's name and the marker that follows it.
   Invocation { command: &'static str, marker: &'static str },
-  /// Any model id in the file. The file owns the model spellings it holds.
+  /// Any model spelling in the file, whichever class the vocabulary gives it. The file owns the spellings it holds: a
+  /// host configuration may name a priced model as an option id, and the spelling is still the price table's.
   AnyModel,
   /// The backend CLI names that a backend crate owns for its own type: its harness binary, its argv and its usage kind.
   /// Another backend's name in the same crate stays refused.
@@ -99,7 +100,7 @@ impl Values {
       Values::Invocation { command, marker } => {
         class == Class::FixedCommand && value.split_once(' ') == Some((command, marker))
       }
-      Values::AnyModel => class == Class::ModelId,
+      Values::AnyModel => matches!(class, Class::ModelId | Class::OptionId),
       Values::OwnHarness => {
         let Some(dir) = path.strip_prefix(BACKEND_CRATES).and_then(|rest| rest.split('/').next()) else {
           return false;
@@ -184,14 +185,14 @@ mod tests {
     );
   }
 
+  /// The price table exempts a model spelling whichever class the host's configuration gives it, since a configured
+  /// option may share a priced model's id. A backend CLI name in the same file stays refused.
   #[test]
-  fn price_table_row_exempts_any_model_only() {
-    assert_row(
-      "rust/crates/infra/core/src/list_price.rs",
-      Class::ModelId,
-      "gemini-4-argon-high",
-      &[(Class::FixedCommand, "claude")],
-    );
+  fn price_table_row_exempts_its_model_spellings_only() {
+    let path = "rust/crates/infra/core/src/list_price.rs";
+    assert_row(path, Class::ModelId, "gemini-4-argon-high", &[(Class::FixedCommand, "claude")]);
+    assert_row(path, Class::OptionId, "claude-fable-5-2", &[(Class::FixedCommand, "claude")]);
+    assert!(find("rust/crates/infra/core/src/list_price_extra.rs", Class::OptionId, "claude-fable-5-2").is_none());
   }
 
   /// A backend crate names its own harness, argv and usage kind: its directory names the program. Another backend's

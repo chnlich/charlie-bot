@@ -89,8 +89,8 @@ Startup latency is the interval from the server's first log timestamp to its fir
 runs and summarize them with their median.
 
 Memory reports the server's peak resident memory during the fixed 200 requests only, on each side.
-The peak counts from the first of those requests to the last, so startup and earlier work stay out of the figure.
-The peak comes from the kernel's resident high-water counter, because a value sampled at intervals can miss a short spike.
+Reset the kernel's resident high-water counter immediately before the first request, and read it after the last request.
+This captures short spikes while leaving startup and earlier work out of the figure.
 Both sides use the same method, and the pull request evidence names it.
 CPU reports user and system CPU time spent serving those 200 requests. Keep the workload identical between sides.
 

@@ -64,7 +64,7 @@ pub fn scan(vocab: &Vocabulary, roots: &Roots, paths: &[PathBuf]) -> anyhow::Res
       files.push(path);
     }
   }
-  files.retain(|file| !is_configuration(roots, file));
+  files.retain(|file| !is_configuration(roots, file) && !is_skipped_path(file));
   let test_only = test_only_files(&files)?;
   let mut hits = Vec::new();
   for file in files.iter().filter(|file| !test_only.contains(*file)) {
@@ -121,6 +121,12 @@ fn is_mock_or_fixture(name: &str) -> bool {
 fn is_skipped_file(path: &Path) -> bool {
   let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
   name == config::CONFIG_FILENAME || name.ends_with(".pyc") || is_mock_or_fixture(name)
+}
+
+/// Whether a path is a skipped file or sits under a directory the tree walk skips. Explicit file and directory
+/// arguments keep the same test and fixture boundary as a repository-root scan.
+fn is_skipped_path(path: &Path) -> bool {
+  is_skipped_file(path) || path.parent().is_some_and(|parent| parent.ancestors().any(is_skipped_dir))
 }
 
 /// Whether a file lies in the repository's `configs/` directory: the example and default configuration that a host copies
@@ -351,5 +357,10 @@ mod tests {
     let hits = scan(&vocab(), &roots, std::slice::from_ref(&repo_root)).unwrap();
     let files: Vec<PathBuf> = hits.iter().map(|hit| hit.path.strip_prefix(&repo_root).unwrap().to_path_buf()).collect();
     assert_eq!(files, vec![PathBuf::from("app/cli/src/lib.rs")], "{hits:?}");
+
+    let explicit =
+      scan(&vocab(), &roots, &[repo_root.join("app/mock-home/src/lib.rs"), repo_root.join("app/cli/tests/cli.rs")])
+        .unwrap();
+    assert!(explicit.is_empty(), "{explicit:?}");
   }
 }

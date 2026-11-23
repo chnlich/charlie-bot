@@ -9,7 +9,7 @@ use std::process::Command;
 /// The guard options the script prepends, in the order it passes them.
 const GUARD_OPTIONS: [&str; 6] = ["-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"];
 
-/// A ControlMaster argv that turns the guard's settings off: BatchMode=no, no keepalive, a persisted master.
+/// A ControlMaster argv that requests values the guard overrides: BatchMode=no, no keepalive, a persisted master.
 const UNGUARDED_MASTER_ARGV: [&str; 9] = [
   "-M",
   "-S",

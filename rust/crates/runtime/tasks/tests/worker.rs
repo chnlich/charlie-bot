@@ -764,6 +764,9 @@ async fn test_worker_pool_exhaustion_names_the_option_pool() -> anyhow::Result<(
   Ok(())
 }
 
+/// Every login of a four-login pool rejects on quota. The run tries each login once: one build per login, and a relay
+/// from each login but the first. The relay that finds no untried login ends the run as a quota failure with the
+/// earliest reset.
 #[tokio::test]
 #[ignore = "integration"]
 async fn test_worker_stops_after_the_relay_limit() -> anyhow::Result<()> {
@@ -777,15 +780,68 @@ async fn test_worker_stops_after_the_relay_limit() -> anyhow::Result<()> {
 
   let error = refusal(task_worker.run().await.expect_err("the run is refused"));
 
-  assert!(error.message.contains("relay limit"), "{}", error.message);
+  assert!(error.message.contains(claude_relay::POOL_EXHAUSTED_PHRASE), "{}", error.message);
   assert_eq!(
     error.failure,
     charliebot_registry::backend::MemberFailure::Quota,
-    "every login is rejected, so the pool is exhausted at the cap"
+    "every login is rejected, so the pool is exhausted once each login has been tried"
   );
   assert!(error.resets_at.is_some(), "the exhausted pool names the earliest reset its rejections stated");
-  assert_eq!(scripts.builds().len(), 1 + claude_relay::MAX_RELAYS_PER_TURN);
-  assert_eq!(task_worker.account_relays(), claude_relay::MAX_RELAYS_PER_TURN);
+  assert_eq!(scripts.builds().len(), 4, "one build per login of the pool");
+  assert_eq!(task_worker.account_relays(), 3, "a relay to each login after the first");
+  Ok(())
+}
+
+/// Four logins reject on quota and the fifth serves. The old cap of three relays refused the fourth relay; the cap is
+/// the pool's login count, so the run reaches the fifth login and completes there.
+#[tokio::test]
+#[ignore = "integration"]
+async fn test_worker_relays_past_three_rejections_to_the_fifth_login_that_serves() -> anyhow::Result<()> {
+  let root = Root::new()?;
+  make_transcript(&root.claude("main"), CC_ID)?;
+  let state = Arc::new(ClaudeAccountState::new());
+  let mut scripts: Vec<String> = (0..4).map(|_| exits(&[rate_limit("rejected", 1.0)], 1)).collect();
+  scripts.push(exits(&[assistant_text("done"), result()], 0));
+  let scripts = Scripts::new(scripts);
+  let config = pooled_config(&root, &["main", "a", "b", "c", "d"], &[], &scripts.token)?;
+  let setup = Setup::new(&root, scripted_registry(&state)?, &config)?;
+  let task_worker = setup.worker(setup.spec(&root, Some(POOLED), Some(CC_ID))?)?;
+
+  assert_eq!(task_worker.run().await?, 0);
+
+  let labels: Vec<_> = scripts.builds().iter().map(|build| account_label(build).map(str::to_string)).collect();
+  let expected: Vec<_> = ["main", "a", "b", "c", "d"].iter().map(|label| Some(label.to_string())).collect();
+  assert_eq!(labels, expected);
+  assert_eq!(task_worker.account_relays(), 4);
+  Ok(())
+}
+
+/// A single-model session whose logins all reject on quota ends with the reset time its logins stated. `ext-1` rejects
+/// until two hours out and `main` until three, so the run ends at the two-hour reset. No other model takes the run: the
+/// session has one option, and its builds stay on it.
+#[tokio::test]
+#[ignore = "integration"]
+async fn test_worker_single_model_session_with_every_login_rejected_ends_at_the_earliest_reset() -> anyhow::Result<()> {
+  let root = Root::new()?;
+  make_transcript(&root.claude("main"), CC_ID)?;
+  let state = Arc::new(ClaudeAccountState::new());
+  let ext_reset = (OffsetDateTime::now_utc() + TimeDuration::hours(2)).unix_timestamp();
+  let scripts = Scripts::new(vec![
+    exits(&[rate_limit("rejected", 1.0)], 1),
+    exits(&[rate_limit_resetting("rejected", 1.0, ext_reset)], 1),
+  ]);
+  let config = pooled_config(&root, &["main", "ext-1"], &[], &scripts.token)?;
+  let setup = Setup::new(&root, scripted_registry(&state)?, &config)?;
+  let task_worker = setup.worker(setup.spec(&root, Some(POOLED), Some(CC_ID))?)?;
+
+  let error = refusal(task_worker.run().await.expect_err("no login is left for the session"));
+
+  assert_eq!(error.failure, charliebot_registry::backend::MemberFailure::Quota);
+  assert_eq!(error.resets_at.map(|reset| reset.into_inner().unix_timestamp()), Some(ext_reset));
+  assert!(error.message.contains("earliest reset"), "{}", error.message);
+  let labels: Vec<_> = scripts.builds().iter().map(|build| account_label(build).map(str::to_string)).collect();
+  assert_eq!(labels, [Some("main".to_string()), Some("ext-1".to_string())]);
+  assert_eq!(task_worker.account_relays(), 1);
   Ok(())
 }
 
@@ -1370,14 +1426,13 @@ fn config_text_with_group(
   Ok(text)
 }
 
-#[tokio::test]
-#[ignore = "integration"]
-async fn test_a_model_group_keeps_claude_while_a_login_can_run_and_takes_the_metered_member_when_none_can()
--> anyhow::Result<()> {
-  let root = Root::new()?;
-  let state = Arc::new(ClaudeAccountState::new());
-  // No process runs in this test: the group's selection and the row are its subject.
-  let scripts = Scripts::new(Vec::new());
+/// A setup whose model group holds the pooled Claude member (logins `main` and `ext-1`) and its metered member, with
+/// the session and the run that a group switch reads. The pooled option runs the processes `scripts` holds.
+async fn group_fixture(
+  root: &Root,
+  state: &Arc<ClaudeAccountState>,
+  scripts: &Scripts,
+) -> anyhow::Result<(Setup, SessionMetadata, RunRecord)> {
   // A priority pool reads each member's billing from its option.
   let options = [
     format!(
@@ -1389,12 +1444,12 @@ async fn test_a_model_group_keeps_claude_while_a_login_can_run_and_takes_the_met
       option_yaml_with_model(METERED, "worker_script", "metered-model", Some(&scripts.token), None)
     ),
   ];
-  let config = config_text_with_group(&root, &["main", "ext-1"], (GROUP, &[POOLED, METERED]), &options)?;
-  let mut registry = scripted_registry(&state)?;
+  let config = config_text_with_group(root, &["main", "ext-1"], (GROUP, &[POOLED, METERED]), &options)?;
+  let mut registry = scripted_registry(state)?;
   // The pool_member session slot, which the server registers at startup: a pool switch writes it.
   registry.register_package("features.model_pool", charliebot_agents::model_pool::register)?;
-  let setup = Setup::new(&root, registry, &config)?;
-  attach_availability(&setup, &root)?;
+  let setup = Setup::new(root, registry, &config)?;
+  attach_availability(&setup, root)?;
   setup.features.startup.insert(RotationPositions::default())?;
   let session = setup
     .features
@@ -1425,6 +1480,18 @@ async fn test_a_model_group_keeps_claude_while_a_login_can_run_and_takes_the_met
     .await?;
   let meta = setup.features.store.load_meta(&session.id).await?.context("the session metadata loads")?;
   let run: RunRecord = serde_json::from_value(json!({"id": "group-run", "session_id": session.id, "backend": POOLED}))?;
+  Ok((setup, meta, run))
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn test_a_model_group_keeps_claude_while_a_login_can_run_and_takes_the_metered_member_when_none_can()
+-> anyhow::Result<()> {
+  let root = Root::new()?;
+  let state = Arc::new(ClaudeAccountState::new());
+  // No process runs in this test: the group's selection and the row are its subject.
+  let scripts = Scripts::new(Vec::new());
+  let (setup, meta, run) = group_fixture(&root, &state, &scripts).await?;
   let failure = QuotaFailure {
     resets_at: None,
     message: "You've hit your 5-hour limit".to_string(),
@@ -1473,7 +1540,7 @@ async fn test_a_model_group_keeps_claude_while_a_login_can_run_and_takes_the_met
   );
   let earliest = OffsetDateTime::from_unix_timestamp(earliest_epoch)?;
   assert_eq!(availability.out_until(POOLED), Some(earliest), "the row runs to the login pool's earliest reset");
-  let events = setup.features.store.load_chat_events_sync(&session.id)?;
+  let events = setup.features.store.load_chat_events_sync(&meta.id)?;
   let change = events
     .iter()
     .map(ChatEvent::to_value)
@@ -1484,6 +1551,45 @@ async fn test_a_model_group_keeps_claude_while_a_login_can_run_and_takes_the_met
   assert_eq!(
     change[charliebot_core::event_types::QUOTA_FAILOVER_RECOVERS_AT],
     availability.out_until_minutes(POOLED).context("the written row states its reset")?
+  );
+  Ok(())
+}
+
+/// Every login of a model group's Claude member rejects on quota in one run. The run tries each login once and refuses
+/// with the quota failure; the group then moves the run to its metered member.
+#[tokio::test]
+#[ignore = "integration"]
+async fn test_every_login_rejected_in_a_model_group_moves_to_the_metered_member() -> anyhow::Result<()> {
+  let root = Root::new()?;
+  make_transcript(&root.claude("main"), CC_ID)?;
+  let state = Arc::new(ClaudeAccountState::new());
+  let scripts = Scripts::new(vec![exits(&[rate_limit("rejected", 1.0)], 1), exits(&[rate_limit("rejected", 1.0)], 1)]);
+  let (setup, meta, run) = group_fixture(&root, &state, &scripts).await?;
+  let task_worker = setup.worker(setup.spec(&root, Some(POOLED), Some(CC_ID))?)?;
+
+  let refused = refusal(task_worker.run().await.expect_err("every login is rejected"));
+
+  assert_eq!(refused.failure, charliebot_registry::backend::MemberFailure::Quota);
+  assert_eq!(scripts.builds().len(), 2, "each login of the pool is tried once");
+  let failure = QuotaFailure {
+    resets_at: refused.resets_at,
+    message: refused.message.clone(),
+    reason: refused.failure.availability_reason().map(str::to_string),
+  };
+  let moved = auto_switch::switch_member(
+    &setup.features,
+    GROUP,
+    &meta,
+    HandoffSource::WorkerRun { run: &run },
+    POOLED,
+    &failure,
+    &[],
+  )
+  .await?;
+  assert_eq!(
+    moved,
+    MemberSwitch::Moved { member: METERED.to_string() },
+    "the spent login pool moves to the metered member"
   );
   Ok(())
 }

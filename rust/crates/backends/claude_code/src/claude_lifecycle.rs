@@ -140,6 +140,8 @@ impl BackendLifecycle for ClaudeCliLifecycle {
 struct PooledLaunch {
   account: claude_config::ClaudeAccount,
   relays: usize,
+  /// The logins this run has launched on, `account` among them. A relay never picks one of them again.
+  used: HashSet<String>,
   decision: Arc<Mutex<Option<String>>>,
   /// The reservation the run's placement took on `account`. Held until the launch drops, so the login counts the
   /// run until the round ends or the relay replaces the launch. Nothing reads it. Holding it is the point.
@@ -166,6 +168,8 @@ impl ClaudeCodeLifecycle {
     launch_kwargs(ctx, first_process)
   }
 
+  /// The launch on `account`. `used` holds the logins the run launched on before this one; `account` joins them.
+  #[allow(clippy::too_many_arguments)]
   fn pooled_launch(
     &self,
     ctx: &LaunchContext,
@@ -174,12 +178,14 @@ impl ClaudeCodeLifecycle {
     prompt: Option<String>,
     relays: usize,
     handle: Option<Arc<claude_accounts::ReservationHandle>>,
+    mut used: HashSet<String>,
   ) -> anyhow::Result<Launch> {
     let mut backend_kwargs = Self::launch_args(ctx, relays == 0)?;
     backend_kwargs
       .insert("claude_account".to_string(), json!({"label": account.label, "config_dir": account.config_dir}));
     let decision = Arc::new(Mutex::new(None));
-    let private = PooledLaunch { account: account.clone(), relays, decision, handle };
+    used.insert(account.label.clone());
+    let private = PooledLaunch { account: account.clone(), relays, used, decision, handle };
     Ok(Launch {
       backend_kwargs,
       resume_id,
@@ -284,6 +290,7 @@ impl ClaudeCodeLifecycle {
             "redirect",
             None,
           )),
+          HashSet::new(),
         )
         .map_err(|error| refused(error, MemberFailure::Other, None));
     }
@@ -335,7 +342,15 @@ impl ClaudeCodeLifecycle {
       return Err(LaunchRefused { message, failure: no_login.failure, resets_at: no_login.recovers_at });
     };
     self
-      .pooled_launch(ctx, reservation.account, held.map(str::to_string), None, 0, Some(reservation.handle))
+      .pooled_launch(
+        ctx,
+        reservation.account,
+        held.map(str::to_string),
+        None,
+        0,
+        Some(reservation.handle),
+        HashSet::new(),
+      )
       .map_err(|error| refused(error, MemberFailure::Other, None))
   }
 }
@@ -373,7 +388,7 @@ impl BackendLifecycle for ClaudeCodeLifecycle {
               .await?;
           let resume_id = if ctx.held_native_id.is_some() { self.pooled_resume_id(ctx).await? } else { resume_id };
           self
-            .pooled_launch(ctx, placement.account, resume_id, None, 0, placement.handle)
+            .pooled_launch(ctx, placement.account, resume_id, None, 0, placement.handle, HashSet::new())
             .map_err(|error| refused(error, MemberFailure::Other, None))
         }
         LaunchKind::Task => self.place_task(ctx).await,
@@ -533,8 +548,16 @@ impl BackendLifecycle for ClaudeCodeLifecycle {
         return Err(cap_refusal);
       }
       let relays = pooled.relays + 1;
-      let placement =
-        master_cc_relay::prepare_relay(&self.state, ctx, &pooled.account, native_id, Some(&decision), relays).await?;
+      let placement = master_cc_relay::prepare_relay(
+        &self.state,
+        ctx,
+        &pooled.account,
+        native_id,
+        Some(&decision),
+        &pooled.used,
+        relays,
+      )
+      .await?;
       if ctx.kind == LaunchKind::Turn {
         (ctx.record_account)(placement.account.label.clone())
           .await
@@ -548,6 +571,7 @@ impl BackendLifecycle for ClaudeCodeLifecycle {
           Some(claude_relay::CONTINUATION_PROMPT.to_string()),
           relays,
           placement.handle,
+          pooled.used.clone(),
         )
         .map_err(|error| refused(error, MemberFailure::Other, None))
     })
@@ -1097,7 +1121,7 @@ mod tests {
     }
     let account =
       claude_config::ClaudeAccount { label: "current".to_string(), config_dir: current.display().to_string() };
-    let launch = lifecycle.pooled_launch(&ctx, account, None, None, 0, None).unwrap();
+    let launch = lifecycle.pooled_launch(&ctx, account, None, None, 0, None, HashSet::new()).unwrap();
     (ctx, launch)
   }
 
@@ -1398,8 +1422,9 @@ mod tests {
       claude_config::ClaudeAccount { label: "a".to_string(), config_dir: account_dir.display().to_string() };
     let lifecycle = ClaudeCodeLifecycle::new();
 
-    let first = lifecycle.pooled_launch(&ctx, account.clone(), None, None, 0, None).unwrap();
-    let relay = lifecycle.pooled_launch(&ctx, account, None, Some("continue".to_string()), 1, None).unwrap();
+    let first = lifecycle.pooled_launch(&ctx, account.clone(), None, None, 0, None, HashSet::new()).unwrap();
+    let relay =
+      lifecycle.pooled_launch(&ctx, account, None, Some("continue".to_string()), 1, None, HashSet::new()).unwrap();
 
     assert_eq!(first.backend_kwargs["midturn_delivery"], json!(true));
     assert_eq!(relay.backend_kwargs["midturn_delivery"], json!(true));

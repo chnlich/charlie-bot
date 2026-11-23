@@ -1,6 +1,6 @@
 //! Account placement and transcript adoption for Claude manager turns.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
@@ -296,21 +296,24 @@ async fn report_empty_credentials(state: &ClaudeAccountStateRef, ctx: &LaunchCon
   Ok(())
 }
 
+/// Moves a run off `current` to a login it has not used. `used` holds the logins the run has launched on.
 pub async fn prepare_relay(
   state: &ClaudeAccountStateRef,
   ctx: &LaunchContext,
   current: &claude_config::ClaudeAccount,
   session_id: Option<&str>,
   reason: Option<&str>,
+  used: &HashSet<String>,
   relays: usize,
 ) -> Result<AccountPlacement, LaunchRefused> {
   let account_pool = claude_accounts::option_pool(&ctx.option);
   let pool_choice = if ctx.kind == LaunchKind::Turn { Some(state.pool_choice.lock().await) } else { None };
-  let movement = claude_relay::relay_move(
+  let movement = claude_relay::relay_move_excluding(
     state,
     &ctx.cfg,
     Some(&ctx.option.model),
     current,
+    used,
     session_id,
     None,
     account_pool.as_deref(),
@@ -772,7 +775,7 @@ mod tests {
     let current = claude_accounts::account_by_label(&cfg, Some("a")).unwrap().unwrap();
     let ctx = context(cfg, "turn", Some("a"), None, Arc::new(Vec::new), record_account());
 
-    let refused = prepare_relay(&state, &ctx, &current, Some("session-id"), None, 0)
+    let refused = prepare_relay(&state, &ctx, &current, Some("session-id"), None, &HashSet::new(), 0)
       .await
       .expect_err("no login can take the relay");
 

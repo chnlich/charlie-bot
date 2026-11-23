@@ -255,12 +255,23 @@ pub fn relay_limit_message(
   state: &claude_accounts::ClaudeAccountState,
   cfg: &CharlieBotConfig,
   model: Option<&str>,
+  cap: usize,
   account_pool: Option<&str>,
 ) -> anyhow::Result<String> {
   Ok(format!(
-    "Claude account relay limit reached ({MAX_RELAYS_PER_TURN} relays in one run; {}); this run did not complete.",
+    "Claude account relay limit reached ({cap} relays in one run; {}); this run did not complete.",
     pool_detail(state, cfg, model, None, account_pool)?
   ))
+}
+
+/// The relay count at which the cap refuses the next relay for `decision`. A quota rejection walks the pool once, so
+/// its cap is the pool's login count. The warning and login-failure decisions keep [`MAX_RELAYS_PER_TURN`].
+fn relay_cap(cfg: &CharlieBotConfig, decision: &str, account_pool: Option<&str>) -> anyhow::Result<usize> {
+  if decision == RELAY_REJECTED {
+    Ok(claude_accounts::pool_accounts(cfg, account_pool)?.len())
+  } else {
+    Ok(MAX_RELAYS_PER_TURN)
+  }
 }
 
 /// The refusal the relay cap produces, or `None` when the cap does not stop this relay. A warning decision whose
@@ -276,7 +287,8 @@ pub fn relay_cap_refusal(
   decision: &str,
   account_pool: Option<&str>,
 ) -> anyhow::Result<Option<LaunchRefused>> {
-  if relays < MAX_RELAYS_PER_TURN {
+  let cap = relay_cap(cfg, decision, account_pool)?;
+  if relays < cap {
     return Ok(None);
   }
   let has_cool_destination = claude_accounts::cool_destination(state, cfg, model, account_pool, None)?.is_some();
@@ -285,7 +297,7 @@ pub fn relay_cap_refusal(
   }
   let exhausted = decision != LOGIN_FAILED && !has_cool_destination;
   Ok(Some(LaunchRefused {
-    message: relay_limit_message(state, cfg, model, account_pool)?,
+    message: relay_limit_message(state, cfg, model, cap, account_pool)?,
     failure: if exhausted { MemberFailure::Quota } else { MemberFailure::Other },
     resets_at: if exhausted { claude_accounts::earliest_reset(state, cfg, model, None, account_pool)? } else { None },
   }))
@@ -336,12 +348,30 @@ pub struct RelayMove {
   pub handle: Option<Arc<claude_accounts::ReservationHandle>>,
 }
 
+/// The move of a run that has launched on no login but `current`.
 #[allow(clippy::too_many_arguments)]
 pub fn relay_move(
   state: &ClaudeAccountStateRef,
   cfg: &CharlieBotConfig,
   model: Option<&str>,
   current: &claude_config::ClaudeAccount,
+  session_id: Option<&str>,
+  now: Option<UtcDateTime>,
+  account_pool: Option<&str>,
+  run_id: &str,
+) -> anyhow::Result<RelayMove> {
+  relay_move_excluding(state, cfg, model, current, &HashSet::new(), session_id, now, account_pool, run_id)
+}
+
+/// The move of a run off `current` to a login of its pool. `used` holds the logins the run has launched on; the move
+/// never picks one of them, `current` included, so each login serves a run at most once.
+#[allow(clippy::too_many_arguments)]
+pub fn relay_move_excluding(
+  state: &ClaudeAccountStateRef,
+  cfg: &CharlieBotConfig,
+  model: Option<&str>,
+  current: &claude_config::ClaudeAccount,
+  used: &HashSet<String>,
   session_id: Option<&str>,
   now: Option<UtcDateTime>,
   account_pool: Option<&str>,
@@ -356,7 +386,8 @@ pub fn relay_move(
       handle: None,
     });
   };
-  let exclude = HashSet::from([current.label.clone()]);
+  let mut exclude = used.clone();
+  exclude.insert(current.label.clone());
   let reservation = claude_accounts::reserve_pick(state, cfg, model, &exclude, None, now, account_pool, run_id)?;
   let Some(pick) = reservation else {
     return Ok(RelayMove {
@@ -554,21 +585,25 @@ mod tests {
     claude_accounts::observe_rate_limit(&state, "spent", &rejected, Some(now), None);
     claude_accounts::observe_rate_limit(&state, "fresh", &below_line, Some(now), None);
 
-    // The cap does not stop a relay while a login below the line can take over.
+    // The cap does not stop a relay while a login below the line can take over. A rejection's cap is the pool's login
+    // count, which this pool of two logins sets at two.
+    let pool_logins = claude_accounts::pool_accounts(&cfg, None).unwrap().len();
+    assert_eq!(pool_logins, 2);
     assert!(
       relay_cap_refusal(&state, &cfg, Some("claude-fable-5-1"), MAX_RELAYS_PER_TURN, RELAY_WARNING, None)
         .unwrap()
         .is_none()
     );
     assert!(
-      relay_cap_refusal(&state, &cfg, Some("claude-fable-5-1"), MAX_RELAYS_PER_TURN - 1, RELAY_REJECTED, None)
+      relay_cap_refusal(&state, &cfg, Some("claude-fable-5-1"), pool_logins - 1, RELAY_REJECTED, None)
         .unwrap()
         .is_none()
     );
 
-    // A rejected relay at the cap still refuses, but a login below the line is in the pool, so it is no quota fact.
+    // A rejected relay at the pool's login count still refuses, but a login below the line is in the pool, so it is no
+    // quota fact.
     let refused_below_line =
-      relay_cap_refusal(&state, &cfg, Some("claude-fable-5-1"), MAX_RELAYS_PER_TURN, RELAY_REJECTED, None)
+      relay_cap_refusal(&state, &cfg, Some("claude-fable-5-1"), pool_logins, RELAY_REJECTED, None)
         .unwrap()
         .expect("the cap refuses a rejected relay");
     assert_eq!(refused_below_line.failure, MemberFailure::Other);
@@ -618,6 +653,54 @@ mod tests {
       relay_move(&state, &cfg, Some("claude-fable-5-1"), &current, Some("uuid-1"), Some(now), None, "run-1").unwrap();
 
     assert_eq!(movement.account.map(|account| account.label), Some("ext-1".to_string()));
+  }
+
+  /// A login the run already launched on stays out of the move, though it still has headroom. `b` reads 93%, so its 7%
+  /// is the only headroom left, and the run warned on it earlier. Without that history the move takes `b`.
+  #[test]
+  fn relay_move_excluding_never_picks_a_login_the_run_used() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let a = root.path().join("a");
+    let b = root.path().join("b");
+    let c = root.path().join("c");
+    for directory in [&a, &b, &c] {
+      std::fs::create_dir_all(directory).unwrap();
+      std::fs::write(directory.join(login_dirs::CREDENTIALS_FILE), r#"{"claudeAiOauth":{"accessToken":"synthetic"}}"#)
+        .unwrap();
+    }
+    std::fs::create_dir_all(a.join("projects/work")).unwrap();
+    std::fs::write(a.join("projects/work/uuid-1.jsonl"), "synthetic transcript\n").unwrap();
+    let cfg = pooled_config(&home, &[("a", &a), ("b", &b), ("c", &c)]);
+    let state = Arc::new(claude_accounts::ClaudeAccountState::new());
+    let now = UtcDateTime::parse("2025-01-01T12:00:00Z").unwrap();
+    let window = |utilization: f64| json!({"unifiedWindows":{"five_hour":{"utilization":utilization}}});
+    let rejected =
+      json!({"unifiedWindows":{"five_hour":{"utilization":1.0}},"status":"rejected","resetsAt":4102462800.0});
+    claude_accounts::observe_rate_limit(&state, "b", &window(0.93), Some(now), None);
+    claude_accounts::observe_rate_limit(&state, "c", &rejected, Some(now), None);
+    let current = claude_accounts::account_by_label(&cfg, Some("a")).unwrap().unwrap();
+    let used = HashSet::from(["a".to_string(), "b".to_string()]);
+
+    let free =
+      relay_move(&state, &cfg, Some("claude-fable-5-1"), &current, Some("uuid-1"), Some(now), None, "run-1").unwrap();
+    assert_eq!(free.account.map(|account| account.label), Some("b".to_string()));
+
+    let movement = relay_move_excluding(
+      &state,
+      &cfg,
+      Some("claude-fable-5-1"),
+      &current,
+      &used,
+      Some("uuid-1"),
+      Some(now),
+      None,
+      "run-1",
+    )
+    .unwrap();
+    assert!(movement.account.is_none(), "the run already used b, so no login is left");
+    assert!(movement.pool_exhausted);
   }
 
   /// The warning relay holds while the reservations leave no login over the line, and stops at the next tool result

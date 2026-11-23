@@ -90,7 +90,7 @@ pub const BACKENDS_CALLS_KEY: &str = "calls";
 /// Retired keys under `backends:`, replaced by `backends.pools` and `backends.calls`.
 const RETIRED_BACKENDS_KEYS: &[&str] = &["preference", "worker_default", "auto", "pool"];
 
-/// The top-level names `CharlieBotConfig` declares as fields.
+// The top-level field and section names `CharlieBotConfig` declares; `charliebot config get` matches on them too.
 pub const CHARLIEBOT_HOME_KEY: &str = "charliebot_home";
 pub const HEADLESS_CHROME_BIN_KEY: &str = "headless_chrome_bin";
 pub const SERVER_KEY: &str = "server";

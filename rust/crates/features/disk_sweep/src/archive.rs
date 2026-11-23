@@ -36,13 +36,32 @@ pub(crate) fn archive_worktree(worktree: &Path, archive_path: &Path, untracked: 
       .with_context(|| format!("untracked path {} is outside worktree {}", path.display(), worktree.display()))?;
     let mut archive_name = PathBuf::from("untracked");
     archive_name.push(relative);
-    builder
-      .append_path_with_name(path, &archive_name)
+    append_untracked(&mut builder, path, &archive_name)
       .with_context(|| format!("adding {} to the worktree archive", archive_name.display()))?;
   }
   builder.finish().context("finishing the worktree archive")?;
   drop(builder);
   fs::rename(temp.path(), archive_path)
     .with_context(|| format!("publishing worktree archive {}", archive_path.display()))?;
+  Ok(())
+}
+
+/// One untracked path into the archive. A link that still resolves archives its target's content; a link whose target
+/// is gone is written as a link entry, so the archive keeps the tree's shape. Any other read failure fails the archive.
+fn append_untracked(builder: &mut Builder<&mut fs::File>, path: &Path, archive_name: &Path) -> Result<()> {
+  match fs::metadata(path) {
+    Ok(_) => builder.append_path_with_name(path, archive_name)?,
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+      let link = fs::symlink_metadata(path)?;
+      if !link.file_type().is_symlink() {
+        return Err(error.into());
+      }
+      let target = fs::read_link(path)?;
+      let mut header = Header::new_gnu();
+      header.set_metadata(&link);
+      builder.append_link(&mut header, archive_name, &target)?;
+    }
+    Err(error) => return Err(error.into()),
+  }
   Ok(())
 }

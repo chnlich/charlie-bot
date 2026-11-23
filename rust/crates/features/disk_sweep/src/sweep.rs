@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io;
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -203,6 +203,7 @@ impl SweepRow {
           }
           // A candidate that is itself a linked worktree is gone once git removed it.
           if self.path.try_exists().with_context(|| format!("inspecting {}", self.path.display()))? {
+            make_dirs_owner_writable(&self.path)?;
             fs::remove_dir_all(&self.path)
               .with_context(|| format!("removing scratch directory {}", self.path.display()))?;
           }
@@ -701,6 +702,26 @@ fn scratch_keep_reason(path: &Path) -> Result<Option<&'static str>> {
   Ok(None)
 }
 
+/// Gives `u+rwx` to every real directory under `path`, `path` included, so a read-only tree still removes. The walk
+/// follows no symlink: a link's target keeps its mode, and file permissions never change.
+fn make_dirs_owner_writable(path: &Path) -> Result<()> {
+  for entry in WalkDir::new(path).sort_by_file_name() {
+    let entry = entry.map_err(walk_io_error)?;
+    if !entry.file_type().is_dir() {
+      continue;
+    }
+    let mut permissions = entry
+      .metadata()
+      .map_err(walk_error)
+      .with_context(|| format!("inspecting scratch path {}", entry.path().display()))?
+      .permissions();
+    permissions.set_mode(permissions.mode() | 0o700);
+    fs::set_permissions(entry.path(), permissions)
+      .with_context(|| format!("making {} owner-writable for removal", entry.path().display()))?;
+  }
+  Ok(())
+}
+
 fn tree_latest_mtime(path: &Path) -> Result<f64> {
   let metadata = fs::symlink_metadata(path).with_context(|| format!("inspecting {}", path.display()))?;
   let mut latest = mtime(&metadata);
@@ -815,13 +836,12 @@ enum PreparedApply {
 
 async fn apply_worktree_removal(row: &SweepRow, roots: &SweepRoots, remove_worktree: WorktreeRemovalFn) -> Result<()> {
   let run = row.owner()?;
-  let repo_path = run.repo_path.as_deref().context("worktree owner run has no repository path")?;
   let branch_name = run.branch_name.as_deref().context("worktree owner run has no branch name")?;
   let worktree_path = paths::display(&row.path);
+  let worktree_dir = row.path.clone();
   let run_id = run.id.clone();
   let owner_session_id = run.session_id.clone();
   let worktree_root = roots.worktree_root.clone();
-  let repo_path = repo_path.to_string();
   let branch_name = branch_name.to_string();
   let handle = tokio::runtime::Handle::current();
   let log_fields = serde_json::Map::from_iter([
@@ -829,6 +849,9 @@ async fn apply_worktree_removal(row: &SweepRow, roots: &SweepRoots, remove_workt
     ("session".to_string(), Value::String(owner_session_id)),
   ]);
   let error = on_blocking(move || {
+    // The removal runs in the worktree's own main repository, resolved from its `.git` pointer: the owner run's
+    // recorded `repo_path` can name a directory an earlier sweep already removed.
+    let repo_path = paths::display(&git::main_checkout(&worktree_dir)?);
     Ok(handle.block_on(async move {
       remove_worktree(WorktreeRemoval {
         repo_path: &repo_path,

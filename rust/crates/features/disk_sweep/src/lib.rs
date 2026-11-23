@@ -28,16 +28,22 @@ fn run_handler(context: Arc<FeatureContext>) -> futures_util::future::BoxFuture<
     let roots = sweep::SweepRoots::from_config(&cfg);
     let remove_worktree = context.registry.worktree_remover()?;
     let report = sweep::run_sweep(roots, sweep::SweepMode::Apply, Utc::now(), remove_worktree).await?;
-    if !report.failures.is_empty() {
-      let failures = report
-        .failures
-        .iter()
-        .map(|failure| format!("{}: {}", failure.path.display(), failure.reason))
-        .collect::<Vec<_>>()
-        .join("; ");
-      anyhow::bail!("disk_sweep failed: {failures}");
-    }
-    Ok(report.apply_summary())
+    handler_result(&report)
   }
   .boxed()
+}
+
+/// The handler's result: a run with failed rows stays an error, but the summary a clean run reports follows the
+/// failure list so the scheduler's error event still carries it.
+fn handler_result(report: &sweep::SweepReport) -> anyhow::Result<String> {
+  if !report.failures.is_empty() {
+    let failures = report
+      .failures
+      .iter()
+      .map(|failure| format!("{}: {}", failure.path.display(), failure.reason))
+      .collect::<Vec<_>>()
+      .join("; ");
+    anyhow::bail!("disk_sweep failed: {failures}\n{}", report.apply_summary());
+  }
+  Ok(report.apply_summary())
 }

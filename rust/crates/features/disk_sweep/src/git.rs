@@ -169,7 +169,7 @@ fn venv_link_is_rebuildable(link: &Path, main_venv: &Path) -> Result<bool> {
 
 /// The main checkout that owns this repository's git directory: the parent of the common `.git` directory, which a
 /// linked worktree shares with its main checkout.
-fn main_checkout(repo: &Path) -> Result<PathBuf> {
+pub(crate) fn main_checkout(repo: &Path) -> Result<PathBuf> {
   let common = git_output(repo, &["rev-parse", "--path-format=absolute", "--git-common-dir"], None)?;
   let common = PathBuf::from(OsString::from_vec(common.trim_ascii_end().to_vec()));
   common

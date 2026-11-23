@@ -251,7 +251,9 @@ struct RestorePermissions(PathBuf);
 
 impl Drop for RestorePermissions {
   fn drop(&mut self) {
-    fs::set_permissions(&self.0, Permissions::from_mode(0o700)).unwrap();
+    if self.0.exists() {
+      fs::set_permissions(&self.0, Permissions::from_mode(0o700)).unwrap();
+    }
   }
 }
 
@@ -1063,4 +1065,170 @@ async fn test_open_worktree_is_held_when_the_scratch_root_is_reached_through_a_s
 
   let report = run(&roots, SweepMode::List, now).await;
   assert_eq!(row_reason(&report, &candidate), (SweepAction::Skip, "task-open".to_string()));
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn test_a_worktree_whose_owner_record_names_a_missing_repo_is_removed() {
+  let root = tempdir().unwrap();
+  let roots = fixture(root.path());
+  let repo = create_repo(&root.path().join("repo"));
+  let (worktree, branch) = create_worktree(&roots, &repo, "missing-repo");
+  let recorded = worktree.canonicalize().unwrap();
+  let gone = root.path().join("gone");
+  write_owner(
+    &roots,
+    Owner {
+      session_id: "missing-repo",
+      worktree: &worktree,
+      repo: &gone,
+      branch: &branch,
+      closed_at: Some(utc("2026-01-01T00:00:00Z")),
+      keep_worktree: false,
+      reopened: false,
+    },
+  );
+
+  let report = run(&roots, SweepMode::Apply, utc("2026-01-20T00:00:00Z")).await;
+  assert!(report.failures.is_empty(), "{:?}", report.failures);
+  assert_eq!(row_reason(&report, &recorded), (SweepAction::Delete, "closed-task".to_string()));
+  assert!(!worktree.exists());
+  let listed = String::from_utf8(git(&repo, &["worktree", "list", "--porcelain"])).unwrap();
+  assert!(!listed.contains("missing-repo"), "{listed}");
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn test_the_archive_holds_a_valid_links_target_and_a_dangling_link_as_a_link() {
+  let root = tempdir().unwrap();
+  let roots = fixture(root.path());
+  let repo = create_repo(&root.path().join("repo"));
+  let (worktree, branch) = create_worktree(&roots, &repo, "links");
+  let run_dir = write_owner(
+    &roots,
+    Owner {
+      session_id: "links",
+      worktree: &worktree,
+      repo: &repo,
+      branch: &branch,
+      closed_at: Some(utc("2026-01-01T00:00:00Z")),
+      keep_worktree: false,
+      reopened: false,
+    },
+  );
+  fs::write(worktree.join("target.txt"), b"link target\n").unwrap();
+  std::os::unix::fs::symlink("target.txt", worktree.join("valid-link")).unwrap();
+  let missing = root.path().join("missing");
+  std::os::unix::fs::symlink(&missing, worktree.join("dangling-link")).unwrap();
+
+  let report = run(&roots, SweepMode::Apply, utc("2026-01-20T00:00:00Z")).await;
+  assert!(report.failures.is_empty(), "{:?}", report.failures);
+  assert!(!worktree.exists());
+  let mut entries = BTreeMap::new();
+  for entry in tar::Archive::new(File::open(run_dir.join("worktree-changes.tar")).unwrap()).entries().unwrap() {
+    let mut entry = entry.unwrap();
+    let name = entry.path().unwrap().to_string_lossy().into_owned();
+    let link = entry.link_name().unwrap().map(|target| target.to_string_lossy().into_owned());
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut entry, &mut bytes).unwrap();
+    entries.insert(name, (entry.header().entry_type(), link, bytes));
+  }
+  assert_eq!(entries["untracked/target.txt"].2, b"link target\n");
+  assert_eq!(entries["untracked/valid-link"].0, tar::EntryType::Regular);
+  assert_eq!(entries["untracked/valid-link"].2, b"link target\n");
+  assert_eq!(entries["untracked/dangling-link"].0, tar::EntryType::Symlink);
+  assert_eq!(entries["untracked/dangling-link"].1.as_deref(), Some(missing.to_str().unwrap()));
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn test_a_read_only_scratch_tree_is_removed_and_the_outside_link_target_keeps_its_mode() {
+  let root = tempdir().unwrap();
+  let roots = fixture(root.path());
+  let now = utc("2026-05-20T00:00:00Z");
+  let old_time = SystemTime::UNIX_EPOCH + Duration::from_secs((now - chrono::Duration::days(15)).timestamp() as u64);
+
+  let candidate = roots.scratch_root.join("go-cache");
+  let locked = candidate.join("pkg/mod");
+  let deep = candidate.join("pkg/mod/cache/download");
+  fs::create_dir_all(&deep).unwrap();
+  fs::write(deep.join("mod.zip"), b"zip\n").unwrap();
+  let outside = root.path().join("outside-target");
+  fs::create_dir(&outside).unwrap();
+  fs::write(outside.join("kept.txt"), b"kept\n").unwrap();
+  std::os::unix::fs::symlink(&outside, candidate.join("outside-link")).unwrap();
+  set_tree_mtime(&candidate, old_time);
+  // The link's own mtime is fresh at creation; the age gate reads it, so it must be aged like the rest.
+  let aged =
+    Command::new("touch").arg("-h").arg("-r").arg(&candidate).arg(candidate.join("outside-link")).status().unwrap();
+  assert!(aged.success());
+  fs::set_permissions(&locked, Permissions::from_mode(0o555)).unwrap();
+  fs::set_permissions(&deep, Permissions::from_mode(0o555)).unwrap();
+  fs::set_permissions(&outside, Permissions::from_mode(0o555)).unwrap();
+  let _restore_locked = RestorePermissions(locked.clone());
+  let _restore_deep = RestorePermissions(deep.clone());
+  let _restore_outside = RestorePermissions(outside.clone());
+  assert_scratch_aged(&candidate, now);
+
+  let report = run(&roots, SweepMode::Apply, now).await;
+  assert!(report.failures.is_empty(), "{:?}", report.failures);
+  assert_eq!(row_reason(&report, &candidate), (SweepAction::Delete, "old-scratch".to_string()));
+  assert!(!candidate.exists());
+  assert_eq!(fs::read(outside.join("kept.txt")).unwrap(), b"kept\n");
+  assert_eq!(fs::metadata(&outside).unwrap().permissions().mode() & 0o777, 0o555);
+}
+
+/// A worktree removal that always fails, reporting like the real remover does.
+fn fail_removal(request: WorktreeRemoval<'_>) -> BoxFuture<'_, Option<String>> {
+  Box::pin(
+    async move { Some(format!("{} cleanup failed for {}: synthetic refusal", request.label, request.worktree_path)) },
+  )
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn test_a_failed_row_reports_the_failure_line_and_the_full_summary() {
+  let root = tempdir().unwrap();
+  let roots = fixture(root.path());
+  let repo = create_repo(&root.path().join("repo"));
+  let (worktree, branch) = create_worktree(&roots, &repo, "bad");
+  write_owner(
+    &roots,
+    Owner {
+      session_id: "bad",
+      worktree: &worktree,
+      repo: &repo,
+      branch: &branch,
+      closed_at: Some(utc("2026-01-01T00:00:00Z")),
+      keep_worktree: false,
+      reopened: false,
+    },
+  );
+  let good = roots.scratch_root.join("old-scratch");
+  fs::create_dir(&good).unwrap();
+  fs::write(good.join("file.txt"), b"data\n").unwrap();
+  let now = utc("2026-05-20T00:00:00Z");
+  let old_time = SystemTime::UNIX_EPOCH + Duration::from_secs((now - chrono::Duration::days(15)).timestamp() as u64);
+  set_tree_mtime(&good, old_time);
+  assert_scratch_aged(&good, now);
+  let worktree_path = worktree.canonicalize().unwrap();
+
+  let report = run_sweep(roots.clone(), SweepMode::Apply, now, fail_removal).await.unwrap();
+  let error = crate::handler_result(&report).expect_err("a failed row fails the handler");
+  let message = error.to_string();
+  let (first, rest) = message.split_once('\n').expect("the summary follows the failure line");
+  assert_eq!(
+    first,
+    format!(
+      "disk_sweep failed: {}: Disk sweep worktree cleanup failed for {}: synthetic refusal",
+      worktree_path.display(),
+      worktree_path.display()
+    )
+  );
+  assert_eq!(rest, report.apply_summary());
+  assert!(rest.contains(&format!("scratch\t{}", good.display())), "{rest}");
+  assert!(rest.contains("skipped\tapply-failed\t1"), "{rest}");
+  assert!(rest.contains("total\t"), "{rest}");
+  assert!(!good.exists());
+  assert!(worktree.is_dir());
 }

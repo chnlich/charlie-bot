@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types;
 use charliebot_registry::backend::{
-  BackendLifecycle, EXTRA_FLAGS_BACKEND_KWARG, IMPROVE_TOKEN_MIN_SECONDS, IdleArmContext, Launch, LaunchContext,
-  LaunchKind, LaunchRefused, LaunchWatch, MemberFailure, QuotaOutlook, ReattachHold,
+  BackendLifecycle, CLAUDE_SESSION_ID_FIELD, EXTRA_FLAGS_BACKEND_KWARG, IMPROVE_TOKEN_MIN_SECONDS, IdleArmContext,
+  Launch, LaunchContext, LaunchKind, LaunchRefused, LaunchWatch, MemberFailure, QuotaOutlook, ReattachHold,
 };
 use charliebot_store::metadata::{SessionMetadata, ThreadMetadata};
 use charliebot_store::run_records::RunKind;
@@ -85,7 +85,7 @@ fn launch_kwargs(ctx: &LaunchContext, first_process: bool) -> anyhow::Result<Map
       && ctx.held_native_id.is_none()
       && let Some(native_id) = ctx.preassigned_native_id.as_deref()
     {
-      kwargs.insert("claude_session_id".to_string(), Value::String(native_id.to_string()));
+      kwargs.insert(CLAUDE_SESSION_ID_FIELD.to_string(), Value::String(native_id.to_string()));
     }
   } else {
     anyhow::bail!("unknown launch kind {:?}", ctx.kind);

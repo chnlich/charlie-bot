@@ -19,6 +19,10 @@ pub use crate::registry::{
 /// reads, and the field the resolve answer carries the same directory under.
 pub const CLAUDE_CONFIG_DIR_FIELD: &str = "claude_config_dir";
 
+/// The Claude native session id: the `backend_kwargs` key the option launch and the Claude lifecycle write and the
+/// Claude factory reads, and the thread-metadata field the backend keeps it in.
+pub const CLAUDE_SESSION_ID_FIELD: &str = "claude_session_id";
+
 /// The lifecycle of a backend type that registered none.
 pub struct DefaultLifecycle;
 

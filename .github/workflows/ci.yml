@@ -24,6 +24,10 @@ jobs:
       - name: Reject Python
         run: dev/check-no-python.sh
 
+      # The generic rules run without a local pattern file; the host-only patterns stay on the machine.
+      - name: Check generic host leaks
+        run: dev/check-skills-host-leak.sh
+
       - name: Install integration selector dependencies
         run: npm ci --prefix dev/integration-selection --ignore-scripts --no-audit --no-fund
 

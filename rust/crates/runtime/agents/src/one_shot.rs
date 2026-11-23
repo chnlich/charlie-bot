@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::Context;
+use anyhow::{Context, bail};
 use charliebot_core::event_types;
 use futures_util::future::BoxFuture;
 use serde_json::Value;
@@ -13,7 +13,7 @@ use crate::backend_types::BuiltBackend;
 use crate::launch_loop::ChildEnvPolicy;
 use crate::runner::{AgentRunner, EventFn, RunRequest};
 
-/// The assistant text of one run of a built backend with `base_env` in a temporary working directory.
+/// The final answer of one run of a built backend with `base_env` in a temporary working directory.
 pub async fn agent_one_shot_text(
   mut built: BuiltBackend,
   base_env: &charliebot_registry::backend::Env,
@@ -24,7 +24,7 @@ pub async fn agent_one_shot_text(
   built.launch.instructions_file = None;
   built.launch.instructions_content = None;
   let cwd = charliebot_core::tempdir::mkdtemp("charliebot-oneshot-")?;
-  let result = FinalText::default();
+  let result = FinalResult::default();
   let runner = AgentRunner::new(&built.backend_type, built.backend, built.launch.clone());
   let mut request = RunRequest::new(
     frame_system_prompt(system_prompt, prompt),
@@ -49,39 +49,45 @@ pub async fn agent_one_shot_text(
       runner.run(request).await.context("running tool-capable one-shot backend")?;
     }
   }
-  Ok(result.text())
+  result.text()
 }
 
-/// The final text of a run's events: the assistant text before the run's result event, which is the answer a caller
-/// reads. Cloning shares the collector, so the event callback and the reader see the same text.
+/// The final answer of a run: the `result` text of its first result event. Each backend's translator writes its final
+/// answer into that event, and Claude Code writes it there itself, so the assistant text before it is never joined.
+/// Cloning shares the collector, so the event callback and the reader see the same result.
 #[derive(Clone, Default)]
-pub struct FinalText {
-  state: Arc<Mutex<OneShotResult>>,
+pub struct FinalResult {
+  /// The first result event of the run, or `None` before one arrives.
+  result_event: Arc<Mutex<Option<Value>>>,
 }
 
-impl FinalText {
+impl FinalResult {
   /// The event callback a run feeds its translated events to.
   pub fn on_event(&self) -> EventFn {
-    let state = Arc::clone(&self.state);
+    let result_event = Arc::clone(&self.result_event);
     Arc::new(move |event: Value| -> BoxFuture<'static, anyhow::Result<()>> {
-      let state = Arc::clone(&state);
+      let result_event = Arc::clone(&result_event);
       Box::pin(async move {
-        let mut state = state.lock().expect("final text lock is not poisoned");
-        match event.get("type").and_then(Value::as_str) {
-          Some(event_types::RESULT) => state.saw_result = true,
-          Some(event_types::ASSISTANT) if !state.saw_result => {
-            state.text.push_str(&assistant_text(&event));
-          }
-          _ => {}
+        if event.get("type").and_then(Value::as_str) == Some(event_types::RESULT) {
+          let mut slot = result_event.lock().expect("final result lock is not poisoned");
+          slot.get_or_insert(event);
         }
         Ok(())
       })
     })
   }
 
-  /// The collected text, trimmed.
-  pub fn text(&self) -> String {
-    self.state.lock().expect("final text lock is not poisoned").text.trim().to_string()
+  /// The final answer, trimmed. It is empty when the result event's text is empty, which each caller judges. Fails when
+  /// the run emitted no result event, or when the result event carries no text field.
+  pub fn text(&self) -> anyhow::Result<String> {
+    let slot = self.result_event.lock().expect("final result lock is not poisoned");
+    let Some(event) = slot.as_ref() else {
+      bail!("the run ended without a final result event");
+    };
+    match event.get("result").and_then(Value::as_str) {
+      Some(text) => Ok(text.trim().to_string()),
+      None => bail!("the final result event carries no text"),
+    }
   }
 }
 
@@ -98,12 +104,6 @@ pub async fn one_shot_text(
     return native.await;
   }
   agent_one_shot_text(built, base_env, prompt, system_prompt, timeout).await
-}
-
-#[derive(Default)]
-struct OneShotResult {
-  text: String,
-  saw_result: bool,
 }
 
 pub fn frame_system_prompt(system_prompt: &str, prompt: &str) -> String {
@@ -199,14 +199,40 @@ pub(crate) mod tests {
     assert_eq!(frame_system_prompt("system", "user"), "<system-instructions>\nsystem\n</system-instructions>\n\nuser");
   }
 
+  /// The answer is the first result event's text, trimmed. Assistant text is never the answer. A run with no result
+  /// event, or a result event with no text field, fails by name; an empty text is the answer's own.
   #[tokio::test]
-  async fn agent_one_shot_text_collects_assistant_text_until_result() {
+  async fn final_result_is_the_first_result_text_and_names_a_run_without_one() {
+    let final_result = FinalResult::default();
+    let on_event = final_result.on_event();
+    let no_result = final_result.text().unwrap_err().to_string();
+    assert!(no_result.contains("without a final result event"), "{no_result}");
+
+    on_event(json!({"type":"assistant","message":{"content":[{"type":"text","text":"intermediate"}]}})).await.unwrap();
+    assert!(final_result.text().unwrap_err().to_string().contains("without a final result event"));
+
+    on_event(json!({"type":"result","result":"  final answer \n"})).await.unwrap();
+    on_event(json!({"type":"result","result":"second result"})).await.unwrap();
+    assert_eq!(final_result.text().unwrap(), "final answer");
+
+    let empty = FinalResult::default();
+    empty.on_event()(json!({"type":"result","result":"   "})).await.unwrap();
+    assert_eq!(empty.text().unwrap(), "");
+
+    let textless = FinalResult::default();
+    textless.on_event()(json!({"type":"result","usage":{}})).await.unwrap();
+    let message = textless.text().unwrap_err().to_string();
+    assert!(message.contains("carries no text"), "{message}");
+  }
+
+  #[tokio::test]
+  async fn agent_one_shot_text_answers_with_the_result_text() {
     let root = tempfile::tempdir().unwrap();
     let instructions_file = root.path().join("instructions.md");
     let script = concat!(
       "cat <<'EVENTS'\n",
-      "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"first\"}]}}\n",
-      "{\"type\":\"result\",\"usage\":{}}\n",
+      "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"intermediate\"}]}}\n",
+      "{\"type\":\"result\",\"result\":\"answer\",\"usage\":{}}\n",
       "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"ignored\"}]}}\n",
       "EVENTS\n"
     )
@@ -238,7 +264,7 @@ pub(crate) mod tests {
     base_env.insert("PYDANTIC_DISABLE_PLUGINS".to_string(), "__all__".to_string());
     let answer = agent_one_shot_text(built, &base_env, "prompt", "system", None).await.unwrap();
 
-    assert_eq!(answer, "first");
+    assert_eq!(answer, "answer");
     assert!(!instructions_file.exists());
 
     // The run's throwaway transport dir (`charliebot-run-*`) and the
@@ -276,7 +302,7 @@ pub(crate) mod tests {
     };
     assert_eq!(one_shot_text(native, &base_env, "prompt", "system", None).await.unwrap(), "native");
 
-    let script = "printf '%s\\n' '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"tool-capable\"}]}}' '{\"type\":\"result\"}'";
+    let script = "printf '%s\\n' '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"tool-capable\"}]}}' '{\"type\":\"result\",\"result\":\"tool-capable\"}'";
     let tool_capable = BuiltBackend {
       backend: Box::new(ScriptedBackend {
         script: script.to_string(),

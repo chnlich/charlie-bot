@@ -274,11 +274,14 @@ fn run_command(args: RunArgs, lazy_host: &LazyHost) -> Result<(), CliExit> {
   let session = report.session_id.as_deref().unwrap_or("none");
   eprintln!("backend run: {} ({}) session {session}", option.id, option.backend_type);
   match report.exit_code {
-    Some(0) if !report.text.is_empty() => {
-      println!("{}", report.text);
-      Ok(())
-    }
-    Some(0) => Err(run_failure(&option, session, "the run ended with no final text")),
+    Some(0) => match report.final_text {
+      Ok(text) if !text.is_empty() => {
+        println!("{text}");
+        Ok(())
+      }
+      Ok(_) => Err(run_failure(&option, session, "the run ended with no final text")),
+      Err(error) => Err(run_failure(&option, session, &format!("{error:#}"))),
+    },
     Some(code) => {
       let stderr = report.stderr_text.trim();
       let reason = if stderr.is_empty() { format!("the backend exited with code {code}") } else { stderr.to_string() };

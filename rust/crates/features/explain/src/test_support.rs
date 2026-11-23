@@ -140,13 +140,13 @@ pub fn answer_script(text: &str) -> String {
   format!(
     "printf '%s\\n' '{}' '{}'",
     json!({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}),
-    json!({"type": "result", "usage": {}}),
+    json!({"type": "result", "result": text, "usage": {}}),
   )
 }
 
-/// The script of an agent that finishes with no assistant text.
+/// The script of an agent whose result event carries an empty text.
 pub fn empty_script() -> String {
-  "printf '%s\\n' '{\"type\":\"result\",\"usage\":{}}'".to_string()
+  "printf '%s\\n' '{\"type\":\"result\",\"result\":\"\",\"usage\":{}}'".to_string()
 }
 
 /// The script of an agent that exits with an error and says nothing.

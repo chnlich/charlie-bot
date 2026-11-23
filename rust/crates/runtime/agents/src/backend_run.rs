@@ -18,14 +18,15 @@ use crate::agent_environment::AgentBaseEnvironment;
 use crate::backend_types::{self, BuiltBackend};
 use crate::cli_host::CliHost;
 use crate::launch_loop::ChildEnvPolicy;
-use crate::one_shot::FinalText;
+use crate::one_shot::FinalResult;
 use crate::runner::{AgentRunner, RunRequest};
 
 /// What one run reports.
 #[derive(Debug)]
 pub struct RunReport {
-  /// The final text of the run, trimmed.
-  pub text: String,
+  /// The final answer of the run, trimmed. Fails with the reason when the run emitted no result event or the result
+  /// event carries no text.
+  pub final_text: anyhow::Result<String>,
   /// The process's exit code, `None` when no process started.
   pub exit_code: Option<i32>,
   /// The process's stderr: the reason of a failed run.
@@ -148,10 +149,10 @@ pub async fn run_built(
 ) -> anyhow::Result<RunReport> {
   let log_dir = charliebot_core::tempdir::mkdtemp("charliebot-backend-run-")?;
   built.launch.log_dir = Some(log_dir.path().to_path_buf());
-  let final_text = FinalText::default();
+  let final_result = FinalResult::default();
   let attached_session = Arc::new(std::sync::Mutex::new(None::<String>));
   let attached_slot = Arc::clone(&attached_session);
-  let text_event = final_text.on_event();
+  let result_event = final_result.on_event();
   let runner = AgentRunner::new(&built.backend_type, built.backend, built.launch.clone());
   let mut request = RunRequest::new(
     prompt,
@@ -168,7 +169,7 @@ pub async fn run_built(
     {
       *attached_slot.lock().expect("attached session lock is not poisoned") = Some(id.to_string());
     }
-    text_event(event)
+    result_event(event)
   });
   let outcome = runner.run(request).await;
   let raw_log = log_dir.path().join(RAW_LOG_NAME);
@@ -178,7 +179,12 @@ pub async fn run_built(
   }
   let outcome = outcome.context("running the backend")?;
   let session_id = attached_session.lock().expect("attached session lock is not poisoned").clone();
-  Ok(RunReport { text: final_text.text(), exit_code: outcome.exit_code, stderr_text: outcome.stderr_text, session_id })
+  Ok(RunReport {
+    final_text: final_result.text(),
+    exit_code: outcome.exit_code,
+    stderr_text: outcome.stderr_text,
+    session_id,
+  })
 }
 
 /// Answer `prompt` under `system` once with `option`'s one-shot, built from `host`'s config and registry. The
@@ -288,30 +294,36 @@ mod tests {
     }
   }
 
-  /// A stub command line stands in for the backend: its final text is the run's report, its raw events are kept in the
-  /// working directory, and a failing stub reports its exit code and stderr.
+  /// A stub command line stands in for the backend: its final answer is the result event's text, its raw events are
+  /// kept in the working directory, and a stub that ends without a result event or fails reports why.
   #[tokio::test]
-  async fn a_run_reports_the_final_text_the_raw_events_and_the_exit_code() {
+  async fn a_run_reports_the_final_result_the_raw_events_and_the_exit_code() {
     let root = tempfile::tempdir().unwrap();
     let base_env = crate::gh_wrapper::stub_environment(root.path(), "/bin:/usr/bin");
     let cwd = root.path().join("work");
     fs::create_dir(&cwd).unwrap();
-    let answer = "printf '%s\\n' '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"the answer\"}]}}' '{\"type\":\"result\"}'";
+    let stream = "printf '%s\\n' '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"intermediate\"}]}}' '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"the answer\"}]}}' '{\"type\":\"result\",\"result\":\"the answer\"}'";
     let events = cwd.join("events.ndjson");
     let report =
-      run_built(scripted(answer), &base_env, "prompt".into(), cwd.clone(), Env::new(), &events).await.unwrap();
-    assert_eq!(report.text, "the answer");
+      run_built(scripted(stream), &base_env, "prompt".into(), cwd.clone(), Env::new(), &events).await.unwrap();
+    assert_eq!(report.final_text.unwrap(), "the answer");
     assert_eq!(report.exit_code, Some(0));
-    assert!(
-      fs::read_to_string(&events).unwrap().contains("the answer"),
-      "the raw events stay in the working directory"
-    );
+    let raw = fs::read_to_string(&events).unwrap();
+    assert!(raw.contains("intermediate"), "the raw events keep the intermediate text: {raw}");
+
+    let no_result =
+      "printf '%s\\n' '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"cut off\"}]}}'";
+    let unfinished =
+      run_built(scripted(no_result), &base_env, "prompt".into(), cwd.clone(), Env::new(), &events).await.unwrap();
+    assert_eq!(unfinished.exit_code, Some(0));
+    let reason = unfinished.final_text.unwrap_err().to_string();
+    assert!(reason.contains("without a final result event"), "{reason}");
 
     let failing = run_built(scripted("echo reason >&2; exit 3"), &base_env, "prompt".into(), cwd, Env::new(), &events)
       .await
       .unwrap();
     assert_eq!(failing.exit_code, Some(3));
-    assert_eq!(failing.text, "");
+    assert!(failing.final_text.is_err());
     assert!(failing.stderr_text.contains("reason"), "{}", failing.stderr_text);
   }
 

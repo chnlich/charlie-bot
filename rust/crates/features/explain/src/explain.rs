@@ -508,14 +508,15 @@ mod tests {
 
   #[tokio::test]
   #[ignore = "integration"]
-  async fn an_agent_that_exits_with_an_error_and_says_nothing_ends_in_the_empty_error() {
+  async fn an_agent_that_exits_with_an_error_and_says_nothing_ends_without_a_final_result() {
     let home = Home::new(vec![Start::Script(failing_script())]);
     home.create_session("s1");
     home.append_round("s1", Some("The answer.")).await;
 
     generation(&home, "s1", 2).generate(ONESHOT_TIMEOUT).await;
 
-    assert_eq!(entry_of(&home, "s1", 2).await["error"], EMPTY_ANSWER_ERROR);
+    let error = entry_of(&home, "s1", 2).await["error"].as_str().unwrap().to_string();
+    assert!(error.contains("without a final result event"), "{error}");
   }
 
   #[tokio::test]

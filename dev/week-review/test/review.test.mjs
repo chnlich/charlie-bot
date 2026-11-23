@@ -340,7 +340,7 @@ test('label judges each packet through the option the server resolves, and recor
     await withCli(changedModelCli, () =>
       assert.rejects(
         labelWindow(labelOptions(home, out, credentials)),
-        /saved judgments came from fixture-judge \\(fixture-model\\), not fixture-judge \\(changed-model\\)/,
+        /saved judgments came from fixture-judge \(fixture-model\), not fixture-judge \(changed-model\)/,
       ),
     );
     assert.equal(calls.length, callsBeforeResume, 'a changed model does not reuse or replace cached judgments');

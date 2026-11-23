@@ -117,8 +117,9 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     var NOT_A_QUESTION_LABEL = 'This should not be a question';
     var NOT_A_QUESTION_ANSWER_PREFIX = NOT_A_QUESTION_LABEL + ' → ';
     var NOT_A_QUESTION_REC_LABEL = '推荐：';
-    // The tray stage names each step of a send. Editing changes the pending list. In sending the post is in flight,
-    // retried on a network error or 5xx. Entries leave the list when the post lands.
+    // The tray stage names each step of a send. Editing changes the pending list. Checking confirms the target can
+    // take a message before the post. In sending the post is in flight, retried on a network error or 5xx. Entries
+    // leave the list when the post lands.
     var trayStage = 'editing';
     // The session the send in flight posts to, fixed at the click, and the outcome of the last send
     // ({text, error}), which the tray shows until the next Send click or Clear.
@@ -403,11 +404,8 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       return label ? ' \u2192 ' + label : '';
     }
 
-    function fetchSessionName(id) {
-      if (sessionNameCache[id]) return Promise.resolve(sessionNameCache[id]);
-      if (sessionNameRequests[id]) return sessionNameRequests[id];
-
-      var request = fetch('/api/sessions/' + encodeURIComponent(id), {
+    function fetchSessionDetail(id) {
+      return fetch('/api/sessions/' + encodeURIComponent(id), {
         credentials: 'same-origin',
       }).then(function(response) {
         if (response.status === 404) {
@@ -416,10 +414,17 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
           throw notFound;
         }
         if (!response.ok) {
-          throw new Error('Session name fetch failed: HTTP ' + response.status);
+          throw new Error('Session detail fetch failed: HTTP ' + response.status);
         }
         return response.json();
-      }).then(function(data) {
+      });
+    }
+
+    function fetchSessionName(id) {
+      if (sessionNameCache[id]) return Promise.resolve(sessionNameCache[id]);
+      if (sessionNameRequests[id]) return sessionNameRequests[id];
+
+      var request = fetchSessionDetail(id).then(function(data) {
         var name = data && data.name ? String(data.name).trim() : '';
         sessionNameCache[id] = name || fallbackSessionLabel(id);
         sessionRoutableCache[id] = archivedRefusalOf(data);
@@ -434,12 +439,12 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       return request;
     }
 
-    // The refusal for the session detail the server answers a session fetch with, or null when the
-    // session can take a send. An archived session with no successor is unroutable: the questions on
-    // its page belong to a line that no live session owns, so a send would only reopen the stale one.
+    // The refusal for the session detail the server answers a session fetch with, or null when the session can take
+    // a send. An archived primary session is unroutable: POST /api/chat/{id}/message admits to {id} directly without
+    // redirecting to a successor, so sending would reopen the archived session.
     function archivedRefusalOf(detail) {
-      if (!detail || !detail.archived || detail.successor_session_id) return null;
-      return 'Cannot send: this page\'s primary session is archived and no successor session can take the message.';
+      if (!detail || !detail.archived) return null;
+      return 'Cannot send: this page\'s primary session is archived.';
     }
 
     function ensureTargetSessionName() {
@@ -1063,7 +1068,9 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     function pickRecordFor(entry) {
       for (var i = 0; i < picks.length; i++) {
         if (entry.context !== 'Q' + picks[i].n) continue;
-        if (answerIsNotAQuestion(entry.comment) || optionIndexOf(picks[i], entry.comment) !== -1) return picks[i];
+        if ((answerIsNotAQuestion(entry.comment) && picks[i].rec !== -1) || optionIndexOf(picks[i], entry.comment) !== -1) {
+          return picks[i];
+        }
       }
       return null;
     }
@@ -1259,6 +1266,9 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     // last send did. Null when Send is ready and no send has reported.
     function trayStatusOf() {
       if (!resolveTargetSessionId()) return {text: NO_SESSION_MESSAGE, error: true};
+      if (trayStage === 'checking') {
+        return {text: 'Checking that the target session can receive the message.', error: false};
+      }
       if (trayStage === 'sending') {
         return {
           text: 'Sending to ' + sessionLabelOf(sendTarget) + '. A lost connection is retried until the server answers.',
@@ -1325,7 +1335,8 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       tray.setAttribute('data-cbc-mode', mode);
       tray.setAttribute('data-cbc-open', String(open));
       trayHeader.textContent = 'Pending (' + pending.length + ')' + targetSuffix;
-      traySendBtn.textContent = idle ? 'Send ' + pending.length + (bottom ? '' : targetSuffix) : 'Sending';
+      traySendBtn.textContent = trayStage === 'checking'
+        ? 'Checking' : idle ? 'Send ' + pending.length + (bottom ? '' : targetSuffix) : 'Sending';
       trayExpandText.textContent = expanded ? 'Hide list' : 'Show list';
       setIcon(trayExpandIcon, expanded ? 'expand-up' : 'expand-down', 12);
       trayExpandButton.setAttribute('aria-expanded', String(expanded));
@@ -1589,22 +1600,39 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     // The one send of the tray: every pending entry, picks and comments, goes as one message to the comment target at
     // once. The target is the one the click names. While the post is in flight Send stays disabled; entries that land
     // leave the list. Every outcome sets the tray's status line.
+    // The send checks the target session first: an archived primary session is refused in the tray and the entries stay
+    // pending. The check reads the session as it is now, so an archive that lands after the page loaded is caught too.
     function sendBatch() {
       var target = resolveTargetSessionId();
       if (!target || pending.length === 0 || trayStage !== 'editing') return;
-      var refusal = sessionRoutableCache[target];
-      if (refusal) {
-        trayNotice = {text: refusal, error: true};
-        refreshTray();
-        return;
-      }
-      startSend(target);
-    }
-
-    function startSend(target) {
       var batch = batchOrder(pending);
       var message = buildBatchMessage(batch);
       var count = batch.length;
+      trayStage = 'checking';
+      trayNotice = null;
+      refreshTray();
+      fetchSessionDetail(target).then(function(detail) {
+        var refusal = archivedRefusalOf(detail);
+        sessionRoutableCache[target] = refusal;
+        if (refusal) {
+          trayStage = 'editing';
+          trayNotice = {text: refusal, error: true};
+          refreshTray();
+          return;
+        }
+        startSend(target, batch, message, count);
+      }, function(err) {
+        trayStage = 'editing';
+        console.error('Batch session check failed:', err);
+        trayNotice = {
+          text: 'Not sent: ' + endWithPeriod(err.message) + ' The entries are still pending; press Send to try again.',
+          error: true,
+        };
+        refreshTray();
+      });
+    }
+
+    function startSend(target, batch, message, count) {
       sendTarget = target;
       trayNotice = null;
       trayStage = 'sending';

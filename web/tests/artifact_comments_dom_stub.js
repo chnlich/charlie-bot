@@ -23,10 +23,9 @@ function makeClassList() {
 }
 
 function makeElement() {
-  return {
+  const el = {
     _textContent: '',
     _innerHTML: '',
-    _listeners: {},
     attributes: {},
     style: {},
     children: [],
@@ -34,8 +33,6 @@ function makeElement() {
     nodeType: 1,
     tagName: 'DIV',
     className: '',
-    parentNode: null,
-    parentElement: null,
     display: 'block',
     offsetHeight: 40,
     offsetWidth: 300,
@@ -213,6 +210,14 @@ function makeElement() {
       return 0;
     },
   };
+  // Keep tree back-pointers and listener maps non-enumerable so Node's AssertionError
+  // object inspection does not walk the full cyclic DOM graph when an assertion fails.
+  Object.defineProperties(el, {
+    parentNode: {value: null, writable: true, enumerable: false, configurable: true},
+    parentElement: {value: null, writable: true, enumerable: false, configurable: true},
+    _listeners: {value: {}, writable: true, enumerable: false, configurable: true},
+  });
+  return el;
 }
 
 function findChildByClass(parent, className) {

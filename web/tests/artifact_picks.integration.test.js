@@ -21,6 +21,7 @@
 // CHARLIEBOT_TEST_CHROME_BIN names the headless Chrome binary. The test fails when it is unset or names no file.
 // CHARLIEBOT_COVER_PAGE names the plan page the cover checks open, in place of the template.
 // CHARLIEBOT_COVER_SHOTS names a file prefix: the cover checks save screenshots as <prefix>_<width>px_<state>_<label>.png.
+// CHARLIEBOT_TASK_A_SHOTS names a file prefix for the three-size Task A state screenshots.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -37,6 +38,7 @@ const REPO_DIR = path.join(WEB_DIR, '..');
 const TEMPLATE_PATH = path.join(REPO_DIR, 'prompts', 'plan_template.html');
 // The plan page the cover checks open: the template, or the page CHARLIEBOT_COVER_PAGE names (a real plan on the host).
 const COVER_PAGE_PATH = process.env.CHARLIEBOT_COVER_PAGE || TEMPLATE_PATH;
+const TASK_A_SHOTS_PREFIX = process.env.CHARLIEBOT_TASK_A_SHOTS;
 const FIXTURE_PATH = path.join(REPO_DIR, 'rust', 'crates', 'features', 'artifacts', 'tests', 'data',
   'plan_template_forks.json');
 const ICON_PARITY_PATH = path.join(WEB_DIR, 'tests', 'icons_parity.json');
@@ -69,7 +71,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // address the page is served at, so a genre's own file name reaches the page's pick pattern. `sessionDetail`
 // is the body the fake server answers each session fetch with.
 function serve(sent, sourcePath, reply = {status: 202, body: {status: 'accepted'}}, pagePath = PAGE_PATH,
-  sessionDetail = {name: 'Viewing session'}) {
+  sessionDetail = {name: 'Viewing session'}, sessionDetailDelayMs = 0) {
   const template = fs.readFileSync(sourcePath, 'utf8');
   const tags = `<script>window.__cbcServerSessionId=${JSON.stringify(OWNER)};</script>\n` +
     `<script>${iconTableScript()}</script>\n` +
@@ -108,8 +110,12 @@ function serve(sent, sourcePath, reply = {status: 202, body: {status: 'accepted'
     }
     // The tray names its target session; a name the server does not answer would fall back to the page owner.
     if (req.method === 'GET' && url.pathname.startsWith('/api/sessions/')) {
-      res.writeHead(200, {'Content-Type': 'application/json; charset=utf-8'});
-      res.end(JSON.stringify(sessionDetail));
+      const sendSessionDetail = () => {
+        res.writeHead(200, {'Content-Type': 'application/json; charset=utf-8'});
+        res.end(JSON.stringify(sessionDetail));
+      };
+      if (sessionDetailDelayMs) setTimeout(sendSessionDetail, sessionDetailDelayMs);
+      else sendSessionDetail();
       return;
     }
     if (req.method === 'GET' && statics[url.pathname]) {
@@ -190,9 +196,10 @@ async function withPlanPage(check, {
   reply,
   pagePath = PAGE_PATH,
   sessionDetail,
+  sessionDetailDelayMs = 0,
 } = {}) {
   const sent = [];
-  const {server, base} = await serve(sent, source, reply, pagePath, sessionDetail);
+  const {server, base} = await serve(sent, source, reply, pagePath, sessionDetail, sessionDetailDelayMs);
   const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'artifact-picks-chrome-'));
   let chrome = null;
   try {
@@ -691,7 +698,7 @@ test('a send to an archived primary session is refused and the tray reports the 
     assert.equal(await page.evaluate(TRAY_ITEMS), 1, 'the pick stays pending');
     assert.equal(await page.evaluate(TRAY_STATUS_IS_ERROR), true);
     assert.match(await page.evaluate(TRAY_STATUS), /archived/);
-  }, {sessionDetail: {name: 'Viewing session', archived: true}});
+  }, {sessionDetail: {name: 'Viewing session', archived: true, successor_session_id: 'next-session'}});
 });
 
 test('picks and a comment from a page in the plan panel reach the session the app shows, not the page owner', async () => {
@@ -709,6 +716,30 @@ const COVER_WIDTHS = [1570, 1280, 390];
 const COVER_VIEWPORT_HEIGHT = 800;
 const COVER_SCROLLS = [0, 0.2, 0.4, 0.5, 0.6, 0.8, 1];
 const COVER_SHOT_LABELS = {0: 'top', 0.5: 'mid', 1: 'end'};
+
+// The landing evidence sizes, each at device pixel ratio 1.
+const TASK_A_VIEWPORTS = [
+  {width: 1536, height: 900},
+  {width: 1400, height: 1000},
+  {width: 390, height: 844},
+];
+
+const SCROLL_TO_NOT_A_QUESTION = `(() => {
+  const button = document.querySelector('.__cbc-pick-naq');
+  button.closest('.fork').scrollIntoView({block: 'center'});
+  return button.getAttribute('aria-pressed');
+})()`;
+
+const ADD_SCREENSHOT_COMMENT = `(() => {
+  const paragraph = Array.from(document.querySelectorAll('p')).find((node) =>
+    !node.closest('.fork, .__cbc-ui') && node.textContent.trim().length > 40 && node.getClientRects().length > 0);
+  paragraph.click();
+  const textarea = document.querySelector('.__cbc-popover textarea');
+  textarea.value = 'The selected recommendation is ready to send with this note.';
+  document.querySelector('.__cbc-add').click();
+  document.querySelector('.__cbc-pick-naq').closest('.fork').scrollIntoView({block: 'center'});
+  return document.querySelector('.__cbc-tray-send').disabled;
+})()`;
 
 // One pick and one pending comment, typed into the composer and sent to the tray, then the trigger shown by a hover.
 const PICK_AND_COMMENT = `(() => {
@@ -795,6 +826,13 @@ function coverProbe() {
   return {overlaps, offscreen, contents: contents.length, controls: controls.length};
 }
 
+function assertCoverClear(report, state) {
+  assert.ok(report.controls > 0, `${state} shows floating controls to inspect`);
+  assert.ok(report.contents > 0, `${state} shows page content to inspect`);
+  assert.deepEqual(report.overlaps, [], `${state} controls leave page content readable`);
+  assert.deepEqual(report.offscreen, [], `${state} controls stay inside the viewport`);
+}
+
 // Saves the viewport as <CHARLIEBOT_COVER_SHOTS>_<width>px_<state>_<top|mid|end>.png when that prefix is set.
 async function saveCoverShot(page, width, state, label) {
   const prefix = process.env.CHARLIEBOT_COVER_SHOTS;
@@ -802,6 +840,13 @@ async function saveCoverShot(page, width, state, label) {
   const {data} = await page.send('Page.captureScreenshot', {format: 'png'});
   fs.mkdirSync(path.dirname(prefix), {recursive: true});
   fs.writeFileSync(`${prefix}_${width}px_${state}_${label}.png`, Buffer.from(data, 'base64'));
+}
+
+async function saveTaskAShot(page, viewport, state) {
+  const prefix = path.resolve(REPO_DIR, TASK_A_SHOTS_PREFIX);
+  const {data} = await page.send('Page.captureScreenshot', {format: 'png'});
+  fs.mkdirSync(path.dirname(prefix), {recursive: true});
+  fs.writeFileSync(`${prefix}_${viewport.width}x${viewport.height}_${state}.png`, Buffer.from(data, 'base64'));
 }
 
 // The cover findings at every scroll position from the top to the end of the page, one line per finding.
@@ -842,4 +887,53 @@ for (const width of COVER_WIDTHS) {
       assert.deepEqual(findings, []);
     }, {viewport: {width, height: COVER_VIEWPORT_HEIGHT}, source: COVER_PAGE_PATH});
   });
+}
+
+if (TASK_A_SHOTS_PREFIX) {
+  for (const viewport of TASK_A_VIEWPORTS) {
+    test(`Task A screenshot evidence at ${viewport.width}x${viewport.height}`, async () => {
+      assert.notEqual(COVER_PAGE_PATH, TEMPLATE_PATH, 'Task A evidence uses the approved real plan page');
+      await withPlanPage(async (page) => {
+        assert.equal(await page.evaluate(SCROLL_TO_NOT_A_QUESTION), 'false', 'the recommendation starts unselected');
+        await sleep(60);
+        const unselectedReport = await page.evaluate(`(${coverProbe})()`);
+        assertCoverClear(unselectedReport, 'unselected state');
+        await saveTaskAShot(page, viewport, 'unselected');
+
+        await page.evaluate('document.querySelector(".__cbc-pick-naq").click()');
+        await sleep(FRAME_WAIT_MS);
+        assert.equal(await page.evaluate('document.querySelector(".__cbc-pick-naq").getAttribute("aria-pressed")'),
+          'true', 'the not-a-question recommendation is selected');
+        assert.equal(await page.evaluate(TRAY_ITEMS), 1, 'the selected answer appears in the unified tray');
+        await page.evaluate(SCROLL_TO_NOT_A_QUESTION);
+        await sleep(60);
+        const selectedReport = await page.evaluate(`(${coverProbe})()`);
+        assertCoverClear(selectedReport, 'selected state');
+        await saveTaskAShot(page, viewport, 'selected');
+
+        assert.equal(await page.evaluate(ADD_SCREENSHOT_COMMENT), false, 'Send is ready with the pick and comment');
+        await sleep(FRAME_WAIT_MS);
+        assert.equal(await page.evaluate(TRAY_ITEMS), 2, 'the ready tray contains the pick and comment');
+        const readyReport = await page.evaluate(`(${coverProbe})()`);
+        assertCoverClear(readyReport, 'ready-to-send state');
+        await saveTaskAShot(page, viewport, 'ready-to-send');
+
+        await page.evaluate(CLICK_SEND);
+        await sleep(60);
+        assert.equal(await page.evaluate('document.querySelector(".__cbc-tray-send").textContent'), 'Checking',
+          'the send preflight state is visible');
+        assert.match(await page.evaluate(TRAY_STATUS), /Checking that the target session can receive/);
+        assert.equal(await page.evaluate(
+          'Array.from(document.querySelectorAll(".__cbc-tray-action"))' +
+          '.find((button) => button.textContent.includes("Undo")).style.display'),
+        'inline-block', 'Undo remains available during the preflight');
+        const checkingReport = await page.evaluate(`(${coverProbe})()`);
+        assertCoverClear(checkingReport, 'checking state');
+        await saveTaskAShot(page, viewport, 'checking-session');
+        await page.evaluate(CLICK_UNDO);
+        await sleep(650);
+        assert.match(await page.evaluate(TRAY_STATUS), /Undone/);
+      }, {viewport, source: COVER_PAGE_PATH, sessionDetailDelayMs: 500});
+    });
+  }
 }

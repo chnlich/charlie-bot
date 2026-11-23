@@ -2670,25 +2670,30 @@ mod tests {
   #[test]
   fn the_rule_files_carry_the_not_a_question_sentences() {
     let skill = fs::read_to_string(repo_root().join("skills/plan-approval/SKILL.md")).expect("the skill reads");
+    let expected_skill_block = "\
+- When a pick entry's answer starts with `This should not be a question`, settle its question on the
+  recommendation that the entry carries. Judge whether that action takes a high-consequence step
+  (Action Boundaries in `prompts/master.md`) from the question and the Waiting on you item you wrote;
+  when it does and the entry does not name that step, keep the question in Waiting on you and ask for
+  the take off of that step.
+- When a reply that is not a pick says that a question should not be asked, settle only the Waiting on
+  you item or page question that the reply quotes or names, or the sole open item, on that question's
+  recommendation under the same high-consequence condition. When several items are open and the reply
+  names none, ask the user which item the reply means.";
     assert!(
-      skill
-        .contains("When a pick entry's answer starts with `This should not be a question`, settle its question on the"),
-      "the pick rule is missing from the skill's Don't guess list"
-    );
-    assert!(
-      skill.contains(
-        "When a reply that is not a pick says that a question should not be asked, settle only the Waiting on"
-      ),
-      "the chat-reply rule is missing from the skill's Don't guess list"
+      skill.contains(expected_skill_block),
+      "the not-a-question rules are missing or altered in skills/plan-approval/SKILL.md"
     );
     let reply = fs::read_to_string(repo_root().join("prompts/web_reply.md")).expect("the reply rules read");
+    let expected_reply_block = "\
+  A pick's entry names its question `Q<n>` and carries the option's text.
+  When the answer starts with `This should not be a question`, state in the web reply:
+  - the chosen option;
+  - why the question did not need the user;
+  - the reply that undoes the choice, as `plan-approval SKILL.md` (Don't guess) says.";
     assert!(
-      reply.contains("When the answer starts with `This should not be a question`, state in the web reply:"),
-      "the marked pick answer rule is missing from the web reply"
-    );
-    assert!(
-      reply.contains("- the reply that undoes the choice, as `plan-approval SKILL.md` (Don't guess) says."),
-      "the undo reply rule is missing from the web reply"
+      reply.contains(expected_reply_block),
+      "the not-a-question web reply rule is missing or altered in prompts/web_reply.md"
     );
   }
 

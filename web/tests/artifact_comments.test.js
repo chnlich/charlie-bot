@@ -1591,29 +1591,42 @@ function pickForkTwo() {
   ], '「later」, to wait.');
 }
 
-test('a question inside a closed details or a demo is not a pick, and a sitrep page has no picks', () => {
-  const folded = makeElement();
-  folded.tagName = 'DETAILS';
-  folded.appendChild(makeOption('「hidden」: hidden choice.'));
-  const fork = makePickFork('1', [
-    makeOption('「keep」: keep the file.'),
-    makeOption('「drop」: drop the file.'),
-  ], null);
-  fork.appendChild(folded);
-  loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
-    bodyChildren: [fork], serverSessionId: 'owner', fetch: FETCH_OK,
-  });
-  assert.deepEqual(findChildByClass(fork, '__cbc-picks').children.map((b) => b.textContent), ['keep', 'drop']);
+test('a question inside a closed details or a demo is not a pick, all six genres have picks, and an unregistered page has none',
+  () => {
+    const folded = makeElement();
+    folded.tagName = 'DETAILS';
+    folded.appendChild(makeOption('「hidden」: hidden choice.'));
+    const fork = makePickFork('1', [
+      makeOption('「keep」: keep the file.'),
+      makeOption('「drop」: drop the file.'),
+    ], null);
+    fork.appendChild(folded);
+    loadArtifactCommentsScript(PICK_PAGE_PATH, false, {bodyChildren: [fork], serverSessionId: 'owner'});
+    assert.deepEqual(findChildByClass(fork, '__cbc-picks').children.map((b) => b.textContent), ['keep', 'drop']);
 
-  const sitrep = pickForkOne();
-  const {body: sitrepBody} = loadArtifactCommentsScript(
-    '/absolute_filepath/data/home/user/.charliebot/sessions/owner/artifacts/sitrep_week.html', false,
-    {bodyChildren: [sitrep], serverSessionId: 'owner', fetch: FETCH_OK});
-  assert.equal(findChildByClass(sitrep, '__cbc-picks'), undefined);
-  const sitrepTray = findChildByClass(stackOf(sitrepBody), '__cbc-tray');
-  assert.equal(findChildByClass(sitrepTray, '__cbc-tray-picks').style.display, 'none',
-    'a page without questions shows no pick row in the tray');
-});
+    for (const genre of ['plan', 'understanding', 'waiting', 'debug', 'explain', 'sitrep']) {
+      const genreFork = pickForkOne();
+      const {body: genreBody} = loadArtifactCommentsScript(
+        `/absolute_filepath/data/home/user/.charliebot/sessions/owner/artifacts/${genre}_week.html`, false,
+        {bodyChildren: [genreFork], serverSessionId: 'owner'});
+      assert.deepEqual(
+        findChildByClass(genreFork, '__cbc-picks').children.map((b) => b.textContent),
+        ['keep', 'drop', 'This should not be a question推荐：「keep」: keep the file.'],
+        `${genre} offers picks and the not-a-question button`);
+      const genreTray = findChildByClass(stackOf(genreBody), '__cbc-tray');
+      assert.notEqual(findChildByClass(genreTray, '__cbc-tray-picks').style.display, 'none',
+        `${genre} shows the pick row in the tray`);
+    }
+
+    const other = pickForkOne();
+    const {body: otherBody} = loadArtifactCommentsScript(
+      '/absolute_filepath/data/home/user/.charliebot/sessions/owner/artifacts/notes_week.html', false,
+      {bodyChildren: [other], serverSessionId: 'owner'});
+    assert.equal(findChildByClass(other, '__cbc-picks'), undefined);
+    const otherTray = findChildByClass(stackOf(otherBody), '__cbc-tray');
+    assert.equal(findChildByClass(otherTray, '__cbc-tray-picks').style.display, 'none',
+      'a page outside the six genres shows no pick row in the tray');
+  });
 
 
 // ---- The one tray: picks and comments share its list, its count, its Send and its one message ----
@@ -1888,4 +1901,126 @@ test('the tray draws the done icon on a picked option, and Rest draws no icon', 
   assert.equal(keep.children[0].innerHTML, window.cbIcon('done', 12), 'a picked option draws the done icon');
   assert.equal(pickButton(fork, 'drop').children[0].innerHTML, '', 'the other option stays bare');
   assert.equal(trayButton(body, 'Rest as recommended').children.length, 1, 'Rest draws no icon');
+});
+
+test('the not-a-question pick toggles, stays mutually exclusive with option picks, and sends the full recommendation',
+  async () => {
+    const calls = [];
+    const clock = manualTimers();
+    const storage = makeSessionStorage();
+    const {body} = loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
+      hash: '#cbsession=viewer',
+      bodyChildren: [pickForkOne()],
+      serverSessionId: 'owner',
+      fetch: pickFetchStub(calls),
+      setTimeout: clock.setTimeout,
+      sessionStorage: storage,
+    });
+    const [fork] = forksOf(body);
+    const naq = findChildByClass(fork, '__cbc-picks').children.find(
+      (b) => String(b.className).split(/\s+/).includes('__cbc-pick-naq'));
+    assert.ok(naq, 'the not-a-question button renders');
+    clickElement(naq);
+    assert.equal(pressedOf(naq), true);
+    assert.equal(trayItemsOf(body).length, 1);
+
+    clickElement(pickButton(fork, 'drop'));
+    assert.equal(pressedOf(naq), false, 'choosing an option clears the not-a-question pick');
+    assert.equal(pressedOf(pickButton(fork, 'drop')), true);
+
+    clickElement(naq);
+    assert.equal(pressedOf(naq), true, 're-selecting not-a-question clears the option pick');
+    assert.equal(pressedOf(pickButton(fork, 'drop')), false);
+
+    // Reload with the same sessionStorage and verify the not-a-question pick re-anchors.
+    const reloaded = loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
+      hash: '#cbsession=viewer',
+      bodyChildren: [pickForkOne()],
+      serverSessionId: 'owner',
+      fetch: pickFetchStub(calls),
+      setTimeout: clock.setTimeout,
+      sessionStorage: storage,
+    });
+    const reloadedNaq = findChildByClass(forksOf(reloaded.body)[0], '__cbc-picks').children.find(
+      (b) => String(b.className).split(/\s+/).includes('__cbc-pick-naq'));
+    assert.equal(pressedOf(reloadedNaq), true, 'the restored not-a-question pick stays pressed');
+
+    clickElement(traySend(reloaded.body));
+    await flushPromises(3);
+    await flushPromises(5);
+    assert.equal(postsOf(calls).length, 1);
+    assert.ok(
+      postsOf(calls)[0].body.content.includes('   ↳ This should not be a question → 「keep」: keep the file.'),
+      'the message carries the full recommendation line');
+  });
+
+test('a send to an archived primary session fails fast in the tray even when a successor exists', async () => {
+  for (const successor of [null, 'next-session']) {
+    const calls = [];
+    const clock = manualTimers();
+    const fetch = async (url, options = {}) => {
+      calls.push({url, method: options.method || 'GET'});
+      if (!url.endsWith('/message')) {
+        return {
+          ok: true,
+          status: 200,
+          async json() {
+            return {name: 'Owner', archived: true, successor_session_id: successor};
+          },
+        };
+      }
+      return {ok: true, status: 202, async json() { return {}; }};
+    };
+    const {body} = loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
+      bodyChildren: [pickForkOne()],
+      serverSessionId: 'owner',
+      fetch,
+      setTimeout: clock.setTimeout,
+    });
+    clickElement(pickButton(forksOf(body)[0], 'keep'));
+    await flushPromises(3);
+    clickElement(traySend(body));
+    await flushPromises(5);
+    assert.equal(postsOf(calls).length, 0, 'nothing is posted to an archived primary session');
+    assert.equal(trayItemsOf(body).length, 1, 'the pick stays pending');
+    const status = findChildByClass(trayOf(body), '__cbc-tray-status');
+    assert.match(status.textContent, /archived/, 'the tray status reports the archived session');
+  }
+});
+
+test('a session archived after the page loads is checked again before the pick is sent', async () => {
+  const calls = [];
+  const clock = manualTimers();
+  let detailReads = 0;
+  const fetch = async (url, options = {}) => {
+    calls.push({url, method: options.method || 'GET', body: JSON.parse(options.body || 'null')});
+    if (url.endsWith('/message')) return {ok: true, status: 202, async json() { return {}; }};
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        detailReads += 1;
+        return detailReads === 1
+          ? {name: 'Owner'}
+          : {name: 'Owner', archived: true, successor_session_id: 'next-session'};
+      },
+    };
+  };
+  const {body} = loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
+    bodyChildren: [pickForkOne()],
+    serverSessionId: 'owner',
+    fetch,
+    setTimeout: clock.setTimeout,
+  });
+  clickElement(pickButton(forksOf(body)[0], 'keep'));
+  await flushPromises(3);
+  assert.equal(detailReads, 1, 'the page initially sees an open primary session');
+
+  clickElement(traySend(body));
+  await flushPromises(6);
+
+  assert.equal(detailReads, 2, 'the send checks the current session state');
+  assert.equal(postsOf(calls).length, 0, 'nothing is posted after the primary session is archived');
+  assert.equal(trayItemsOf(body).length, 1, 'the pick stays pending');
+  assert.match(findChildByClass(trayOf(body), '__cbc-tray-status').textContent, /archived/);
 });

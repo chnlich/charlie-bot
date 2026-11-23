@@ -141,8 +141,8 @@
 {% include 'partials/concurrency_badge.html' %}
 <div class="wrap">
   <h1>Token usage</h1>
-  <p class="sub">Last week is the Pacific calendar week, Monday 00:00 to Monday 00:00; all-time figures are read from the
-  ledger ({{ as_of }}).</p>
+  <p class="sub">Last week is the Pacific calendar week, Monday 00:00 to Monday 00:00. This week to date runs from this
+  Monday 00:00 to the ledger&rsquo;s last capture. All-time figures are read from the ledger ({{ as_of }}).</p>
   <div class="meta">
     {% if ctx.rows %}<span class="mtag">window &middot; {{ window[0] }} &rarr; {{ window[1] }} {{ zone }}</span>{% endif %}
     <button class="mtag detBtn" type="button" aria-expanded="false" aria-controls="usage-details">Details {{ icon('disclosure', 7, 'det-chev') }}</button>
@@ -217,7 +217,19 @@
     </div>
   </div>
 
-  <h2><span class="n">1</span>Last week by model <span class="win">{{ ctx.week.label }} {{ zone }}</span></h2>
+  <h2><span class="n">1</span>This week to date by model <span class="win">{{ ctx.to_date.label }}</span></h2>
+  <table class="data stack" id="tbl_to_date">
+    {% if ctx.to_date.models %}<thead><tr>
+      <th>Model</th><th class="l">Platform</th><th>API calls</th><th>Output</th><th>Total</th>
+      <th>Share of week</th><th>API list-price equivalent</th>
+    </tr></thead>{% endif %}
+    <tbody>
+    {%- if not ctx.rows %}<tr class="none"><td colspan="7">The ledger is empty; the next capture fills it.</td></tr>
+    {%- elif not ctx.to_date.models %}<tr class="none"><td colspan="7">No records this week yet.</td></tr>{% endif %}
+    </tbody>
+  </table>
+
+  <h2><span class="n">2</span>Last week by model <span class="win">{{ ctx.week.label }} {{ zone }}</span></h2>
   <table class="data stack" id="tbl_week">
     {% if ctx.week.models %}<thead><tr>
       <th>Model</th><th class="l">Platform</th><th>API calls</th><th>Output</th><th>Total</th>
@@ -229,13 +241,13 @@
     </tbody>
   </table>
 
-  <h2><span class="n">2</span>Output by model &middot; last week</h2>
+  <h2><span class="n">3</span>Output by model &middot; last week</h2>
   <div class="card">
     {% if ctx.week.models %}<div class="legend" id="lg"></div><div class="chart" id="c_week"></div>
     {% else %}<p class="none">{{ 'The ledger is empty; the next capture fills it.' if not ctx.rows else 'No records last week.' }}</p>{% endif %}
   </div>
 
-  <h2><span class="n">3</span>All time by model</h2>
+  <h2><span class="n">4</span>All time by model</h2>
   <p style="color:var(--mut);font-size:13px;margin:0 0 10px">One row per model, in output order. Open a row for its sources,
   and open its accounts from there.</p>
   <table class="data stack" id="tbl_all">
@@ -245,7 +257,7 @@
     </tbody>
   </table>
 
-  <h2><span class="n">4</span>Summary</h2>
+  <h2><span class="n">5</span>Summary</h2>
   <ul>
     {%- if ctx.rows %}
     <li><b>Scale by platform:</b>
@@ -264,7 +276,7 @@
       while Claude Code almost always reads input from cache, so cross-platform totals are only loosely comparable.</li>
   </ul>
 
-  <h2><span class="n">5</span>Methodology</h2>
+  <h2><span class="n">6</span>Methodology</h2>
   <ul>
     <li><b>Sources:</b> the local-log sources ({{ ctx.usage_sources|join(', ') }}) feed a
       per-call ledger (<code>usage/ledger.sqlite3</code> under this profile&rsquo;s charliebot home): every
@@ -279,8 +291,9 @@
       CLI&rsquo;s own log holds no record of the same session, so a sub-row marked (fallback) is a lower
       bound.</li>
     <li><b>Last week and time zone:</b> last week is the Pacific calendar week <code>[Monday 00:00, next Monday 00:00)</code>
-      in America/Los_Angeles, the week before the one the page was rendered in. Every date and stamp on the page is in
-      that zone, marked PDT or PST; a week that crosses the clock change runs 169 hours.</li>
+      in America/Los_Angeles, the week before the one the page was rendered in. This week to date is
+      <code>[Monday 00:00, last capture)</code> in the same zone, so it reads only what the ledger holds. Every date and
+      stamp on the page is in that zone, marked PDT or PST; a week that crosses the clock change runs 169 hours.</li>
     <li><b>API list-price equivalent:</b> each token at its model&rsquo;s standard API list price, with a rate per token
       category. It is what the tokens would cost through the API, not cash spend. A model with no published price, or a
       ledger category its published rates cannot price, reads N/A; its tokens are left out of the total.</li>
@@ -504,13 +517,13 @@ function tip(ev, r) {
 }
 function hide() { TIP.style.opacity = '0'; TIP.setAttribute('aria-hidden','true'); }
 
-// Last week's table: a model's row opens onto its per-source values.
-function weekTable() {
-  const weekTotal = DATA.week.reduce((sum, r) => sum + r.total, 0);
-  const tbody = document.querySelector('#tbl_week tbody');
+// A week's table, last week or this week to date: a model's row opens onto its per-source values.
+function weekTable(tableId, rows) {
+  const weekTotal = rows.reduce((sum, r) => sum + r.total, 0);
+  const tbody = document.querySelector(`#${tableId} tbody`);
   const columns = [['API calls', 'calls'], ['Output', 'output'], ['Cache read', 'cache_read'], ['Total', 'total']];
   let calls = 0, output = 0, usd = 0;
-  for (const r of DATA.week) {
+  for (const r of rows) {
     const button = toggler(r.model, 'tg');
     const row = el('tr', 'mrow');
     // A model with no list price reads N/A and adds nothing to the sum.
@@ -534,7 +547,7 @@ function weekTable() {
     usd += r.usd ?? 0;
   }
   const sum = el('tr', 'sum');
-  sum.append(td('Model', 'Sum (' + DATA.week.length + ' models)'), td('Platform', '', 'l'), td('API calls', fmt(calls)),
+  sum.append(td('Model', 'Sum (' + rows.length + ' models)'), td('Platform', '', 'l'), td('API calls', fmt(calls)),
     td('Output', fmt(output)), td('Total', fmt(weekTotal)), td('Share of week', '100.0%'),
     td('API list-price equivalent', usdText(usd)));
   tbody.append(sum);
@@ -579,9 +592,10 @@ function allTimeTable() {
 const detBtn = document.querySelector('.detBtn');
 if (detBtn) openable(detBtn, document.getElementById('usage-details'));
 
+if (DATA.to_date.length > 0) weekTable('tbl_to_date', DATA.to_date);
 if (DATA.week.length > 0) {
   bars('c_week', DATA.week);
-  weekTable();
+  weekTable('tbl_week', DATA.week);
 }
 if (DATA.rows.length > 0) allTimeTable();
 </script>

@@ -398,7 +398,7 @@ mod tests {
 
   fn page_cases() -> Vec<(String, serde_json::Value)> {
     vec![
-      // The uses in token_usage.html: `"%.1f"|format(cache_share)` at lines 85, 106 and 121.
+      // The use in token_usage.html: `"%.1f"|format(cache_share)` in its summary.
       (r#"{{ "%.1f"|format(cache_share) }}%"#.into(), json!({"cache_share": 37.45})),
       (r#"{{ "%.2f"|format(ctx.out_share*100) }}% of the total"#.into(), json!({"ctx": {"out_share": 0.0625}})),
       (r#"{{ "%.1f"|format(ctx.fresh_percent) }}%"#.into(), json!({"ctx": {"fresh_percent": 12.25}})),

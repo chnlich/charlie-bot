@@ -11,9 +11,8 @@
     .spinner { flex: 0 0 auto; color: #2563eb; animation: spin 0.8s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
     /* Placeholder hints sit on white, where preflight's #9ca3af draws 2.54:1 and 12-14 px text
-       needs 4.5:1. #64748b draws 4.76:1; the selector keeps preflight's element specificity so
-       this rule wins the cascade, and it reaches the form fields and the comment boxes
-       diff_comments.js builds. */
+       needs 4.5:1. #64748b draws 4.76:1. This selector matches preflight's element specificity,
+       so it wins the cascade for form fields and comment boxes built in diff_comments.js. */
     input::placeholder, textarea::placeholder { color: #64748b; }
     /* A form field's border is the only mark of its box: the field's white fill sits on the form bar's
        #f8fafc at 1.05:1. slate-300, the utility's tone, draws 1.48:1 on the fill and 1.42:1 on the bar.
@@ -94,10 +93,10 @@
       .diff-file-row:has(.diff-file-dir):has(.diff-file-rename) .diff-file-chevron,
       .diff-file-row:has(.diff-file-dir):has(.diff-file-rename) .diff-file-badge { grid-row: span 3; }
     }
-    /* diff2html's stylesheet (the CDN bundle this page loads) sets each line's code cell to white-space: nowrap,
-       so the cell's minimum width is its widest line and the table stands as wide as that line. The file row
-       clips what the table overflows, and nothing scrolls it, so a long line is cut at the panel's edge.
-       On a phone this block wraps the code text at the panel's width, breaking a token that no space separates.
+    /* The loaded diff2html CDN stylesheet sets code cells to white-space: nowrap.
+       The widest line therefore sets the table's minimum width. The file row clips overflow without
+       scrolling, cutting long lines at the panel's edge. On phones, this block wraps code tokens
+       that contain no spaces.
        The code cell takes normal white space, which collapses the whitespace between its elements, so no blank
        line opens above the code. The 1.5em cap keeps the code text clear of the row's +/- prefix, and a wrapped
        line takes the rows its text needs. Above 768 px a line keeps its one row. A side-by-side table on a phone
@@ -115,8 +114,8 @@
         vertical-align: top;
       }
     }
-    /* The row chevron is a 9 px disclosure icon drawn inline, so the chevron keeps the 16 px line box
-       of the text glyph it replaced; as a block SVG it would shrink the row's chevron box to 9 px. */
+    /* The 9 px disclosure icon is inline, so it keeps the text glyph's 16 px line box.
+       A block SVG would reduce the row box to 9 px. */
     .diff-file-chevron > svg { display: inline-block; vertical-align: middle; }
   </style>
 </head>

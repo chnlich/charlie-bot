@@ -6,6 +6,7 @@ use charliebot_core::backend_types;
 use charliebot_core::config::{
   API_BASE_KEY, CONTEXT_WINDOW_KEY, CREDENTIAL_KEY, EXTRA_BODY_KEY, OptionField, OptionFieldDefault,
 };
+use charliebot_registry::option_model::optional_text;
 use serde_json::{Map, Value as JsonValue};
 use serde_yaml::{Mapping, Value};
 
@@ -71,8 +72,8 @@ impl CcAnthropicCompatibleOption {
         return Err(format!("{TYPE_NAME} option context_window must be an integer greater than 0"));
       }
     };
-    let credential = optional_string(fields, CREDENTIAL_KEY)?;
-    let effort = optional_string(fields, EFFORT_KEY)?;
+    let credential = optional_text(fields, TYPE_NAME, CREDENTIAL_KEY)?;
+    let effort = optional_text(fields, TYPE_NAME, EFFORT_KEY)?;
     let headers = match fields.get(HEADERS) {
       None => Vec::new(),
       Some(Value::Mapping(headers)) => {
@@ -97,15 +98,6 @@ impl CcAnthropicCompatibleOption {
       Some(_) => return Err(format!("{TYPE_NAME} option extra_body must be a mapping")),
     };
     Ok(Self { api_base, context_window, credential, effort, headers, extra_body })
-  }
-}
-
-/// The field's string value: absent or null means `None`, a string is the value, and any other type is refused.
-fn optional_string(fields: &Mapping, key: &str) -> Result<Option<String>, String> {
-  match fields.get(key) {
-    None | Some(Value::Null) => Ok(None),
-    Some(Value::String(value)) => Ok(Some(value.clone())),
-    Some(_) => Err(format!("{TYPE_NAME} option {key} must be a string or null")),
   }
 }
 

@@ -35,6 +35,7 @@
 //! past the pushed commit's base; every other refusal — a hook, a dead transport, a timeout, an
 //! auth error — ends the call at once with git's stderr verbatim.
 
+use std::collections::BTreeSet;
 use std::fs::DirBuilder;
 use std::io::Read as _;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
@@ -42,8 +43,10 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
+use charliebot_backend_check::{Vocabulary, gate};
 use charliebot_core::git::ancestry_args;
 use charliebot_core::home::CHARLIEBOT_HOME_ENV;
+use charliebot_registry::Registry;
 use charliebot_registry::pages::WEB_DIR_NAME;
 use charliebot_store::layout;
 use charliebot_store::metadata::{read_metadata_value, read_session_metadata};
@@ -654,8 +657,65 @@ async fn outbound_checks(
   Ok(())
 }
 
-/// Run one landing: the whole flow, ending in a written `landing.json` and the record returned.
-pub async fn land(home: &Path, task_session_id: &str, options: &LandOptions) -> anyhow::Result<LandingRecord> {
+/// The paths the backend-literal check reads for a landing: each changed file that still exists, and for a changed Rust
+/// file its crate. A `cfg(test)` module is test code by the declaration in its parent file, and that parent may be
+/// unchanged, so the crate's sources are read together.
+fn literal_check_paths(worktree: &Path, changed: &[String]) -> Vec<PathBuf> {
+  let mut paths = BTreeSet::new();
+  for relative in changed {
+    let file = worktree.join(relative);
+    if !file.is_file() {
+      continue;
+    }
+    let crate_dir = file
+      .ancestors()
+      .skip(1)
+      .take_while(|dir| dir.starts_with(worktree))
+      .find(|dir| dir.join("Cargo.toml").is_file())
+      .map(Path::to_path_buf);
+    let path = match crate_dir {
+      Some(dir) if file.extension().is_some_and(|ext| ext == "rs") => dir,
+      _ => file,
+    };
+    paths.insert(path);
+  }
+  paths.into_iter().collect()
+}
+
+/// Refuses a landing whose `paths` hold a hardcoded backend choice that the check does not exempt, and names each site.
+/// The check reads the host's vocabulary: the registered packages and the profile's `config.yaml`.
+fn refuse_backend_literals(registry: &Registry, home: &Path, worktree: &Path, paths: &[PathBuf]) -> anyhow::Result<()> {
+  let roots = gate::roots(Some(worktree), home)?;
+  let vocab = Vocabulary::load(registry, home, None)?;
+  let hits = gate::open_hits(&vocab, &roots, paths)?;
+  if hits.is_empty() {
+    return Ok(());
+  }
+  anyhow::bail!(
+    "landing refused before any push or PR create: a hardcoded backend choice in the changed files:\n{}",
+    gate::report(&hits, roots.repo.as_deref())
+  )
+}
+
+/// The backend-literal check of a landing: the files the task branch changes against the base.
+async fn backend_literal_check(
+  registry: &Registry,
+  home: &Path,
+  worktree: &Path,
+  base_ref: &str,
+) -> anyhow::Result<()> {
+  let changed = changed_paths(worktree, base_ref).await?;
+  refuse_backend_literals(registry, home, worktree, &literal_check_paths(worktree, &changed))
+}
+
+/// Run one landing: the whole flow, ending in a written `landing.json` and the record returned. The backend-literal
+/// check runs on the head that the landing pushes, before either push.
+pub async fn land(
+  registry: &Registry,
+  home: &Path,
+  task_session_id: &str,
+  options: &LandOptions,
+) -> anyhow::Result<LandingRecord> {
   options.validate()?;
   let ctx = TaskLanding::load(home, task_session_id).await?;
   let published = review_text::review_published_branch(&ctx.base_branch);
@@ -707,6 +767,7 @@ pub async fn land(home: &Path, task_session_id: &str, options: &LandOptions) -> 
     first_round = false;
 
     carry_view_trailers(&ctx.worktree, &views).await?;
+    backend_literal_check(registry, home, &ctx.worktree, &base_ref).await?;
     let sha = head_sha(&ctx.worktree).await?;
     let push_base_sha = git::git_rev_parse(&ctx.worktree, &base_ref)
       .await
@@ -2335,6 +2396,43 @@ esac
     assert_eq!(repo_from_remote_url("https://github.com/owner/repo/"), Some("owner/repo".to_string()));
     assert_eq!(repo_from_remote_url("not-a-remote"), None);
   }
+
+  /// The check reads each changed file that still exists, and a changed Rust file's whole crate, so a `cfg(test)`
+  /// module declared in an unchanged parent is test code. A file the diff removed is left out.
+  #[test]
+  fn the_literal_check_reads_the_changed_files_and_the_crates_of_changed_rust_files() {
+    use std::fs;
+    let root = tempfile::tempdir().unwrap();
+    let worktree = root.path();
+    let crate_dir = worktree.join("rust/crates/x/y");
+    fs::create_dir_all(crate_dir.join("src")).unwrap();
+    fs::write(crate_dir.join("Cargo.toml"), "[package]\n").unwrap();
+    fs::write(crate_dir.join("src/lib.rs"), "").unwrap();
+    fs::write(crate_dir.join("src/extra.rs"), "").unwrap();
+    fs::create_dir_all(worktree.join("scripts")).unwrap();
+    fs::write(worktree.join("scripts/run.sh"), "").unwrap();
+    let changed =
+      ["rust/crates/x/y/src/extra.rs".to_string(), "scripts/run.sh".to_string(), "scripts/removed.sh".to_string()];
+    assert_eq!(literal_check_paths(worktree, &changed), vec![crate_dir, worktree.join("scripts/run.sh")]);
+  }
+
+  /// A changed file that holds a backend literal refuses the landing and names its file and line; once the literal is
+  /// gone the same file passes.
+  #[test]
+  fn a_backend_literal_in_a_changed_file_refuses_the_landing_and_a_clean_file_passes() {
+    use std::fs;
+    let root = tempfile::tempdir().unwrap();
+    let worktree = root.path();
+    fs::create_dir_all(worktree.join("scripts")).unwrap();
+    fs::write(worktree.join("scripts/run.sh"), "echo ok\nmodel=claude-opus-5-5\n").unwrap();
+    let paths = [worktree.join("scripts/run.sh")];
+    let text =
+      format!("{:#}", refuse_backend_literals(&Registry::new(), &worktree.join("home"), worktree, &paths).unwrap_err());
+    assert!(text.contains("scripts/run.sh:2") && text.contains("claude-opus-5-5"), "{text}");
+
+    fs::write(worktree.join("scripts/run.sh"), "echo ok\n").unwrap();
+    refuse_backend_literals(&Registry::new(), &worktree.join("home"), worktree, &paths).expect("a clean file passes");
+  }
 }
 
 // Every test in this module launches git, and each credential check also launches the bash leak scanner. A test that
@@ -2467,6 +2565,35 @@ mod synthetic_repo_tests {
     assert!(text.contains("credentials.yaml leaf planted.api_key"), "the kind is named: {text}");
     assert!(text.contains("commit ") && text.contains(" diff"), "the field is named: {text}");
     assert!(!text.contains(SECRET), "the value never appears: {text}");
+  }
+
+  /// The literal check reads the files the branch changes. A literal that main already holds is not a site of this
+  /// landing; one that the branch adds is, and the refusal names its file and line.
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_backend_literal_the_branch_adds_refuses_the_landing_and_one_main_holds_does_not() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    let home = root.path().join("home");
+    let repo = synthetic_repo(root.path(), "main");
+    fs::create_dir(repo.join("scripts")).expect("the scripts directory is created");
+    commit(&repo, "scripts/old.sh", "model=claude-opus-5-5\n");
+    assert!(
+      Command::new("git").arg("-C").arg(&repo).args(["push", "-q", "origin", "main"]).status().unwrap().success()
+    );
+    assert!(
+      Command::new("git").arg("-C").arg(&repo).args(["switch", "-q", "-c", "feature"]).status().unwrap().success()
+    );
+    commit(&repo, "notes.txt", "clean\n");
+    fetch_main(&repo).await;
+    backend_literal_check(&Registry::new(), &home, &repo, "origin/main").await.expect("the branch adds no literal");
+
+    commit(&repo, "scripts/new.sh", "model=claude-opus-5-5\n");
+    let error = backend_literal_check(&Registry::new(), &home, &repo, "origin/main")
+      .await
+      .expect_err("the branch adds a literal");
+    let text = format!("{error:#}");
+    assert!(text.contains("scripts/new.sh:1") && text.contains("claude-opus-5-5"), "{text}");
+    assert!(!text.contains("old.sh"), "{text}");
   }
 
   #[tokio::test]

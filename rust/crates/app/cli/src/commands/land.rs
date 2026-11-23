@@ -69,11 +69,12 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   let task = matches.get_one::<String>("task").map(String::as_str);
   let session_id = resolve::resolve_from_env(task)?;
   let home = home_dir()?;
+  let registry = charliebot_packages::registry().map_err(|error| CliExit::error(format!("{error:#}")))?;
   let runtime = tokio::runtime::Builder::new_current_thread()
     .enable_all()
     .build()
     .map_err(|error| CliExit::error(format!("tokio runtime failed to start: {}", exit::source_chain(&error))))?;
-  match runtime.block_on(charliebot_tasks::land::land(&home, &session_id, &options)) {
+  match runtime.block_on(charliebot_tasks::land::land(&registry, &home, &session_id, &options)) {
     Ok(record) => {
       let exit_code = charliebot_tasks::land::LandState::try_from(record.state.as_str())
         .map_err(|error| CliExit::error(format!("landing record holds an unknown state: {error}")))?

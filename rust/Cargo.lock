@@ -1460,6 +1460,7 @@ dependencies = [
  "anyhow",
  "axum",
  "charliebot-agents",
+ "charliebot-backend-check",
  "charliebot-anthropic-compatible",
  "charliebot-antigravity",
  "charliebot-charlie-code",

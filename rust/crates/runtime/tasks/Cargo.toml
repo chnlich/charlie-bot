@@ -18,6 +18,7 @@ test-fixtures = ["charliebot-core/test-support", "dep:tempfile", "dep:tower"]
 anyhow.workspace = true
 axum.workspace = true
 charliebot-agents.workspace = true
+charliebot-backend-check.workspace = true
 charliebot-cli-common.workspace = true
 charliebot-compat.workspace = true
 charliebot-core.workspace = true

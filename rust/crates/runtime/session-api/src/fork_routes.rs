@@ -17,6 +17,7 @@ use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::caller::{self, CallerIdentity};
+use charliebot_registry::colleague_gate::guard_agent_work;
 use charliebot_registry::task_errors::task_http_error;
 use charliebot_store::StoreResult;
 use charliebot_store::control_events::{ACTOR_AGENT, ACTOR_USER};
@@ -72,6 +73,9 @@ async fn fork_session(
     Ok(body) => body,
     Err(response) => return *response,
   };
+  if let Some(refusal) = guard_agent_work(&features, &headers).await {
+    return refusal;
+  }
   let parent = match features.store.require_session(&session_id).await {
     Ok(parent) => parent,
     Err(error) => return store_error(error),
@@ -128,6 +132,9 @@ async fn elone_session(
     Ok(body) => body,
     Err(response) => return *response,
   };
+  if let Some(refusal) = guard_agent_work(&features, &headers).await {
+    return refusal;
+  }
   let parent = match features.store.require_session(&session_id).await {
     Ok(parent) => parent,
     Err(error) => return store_error(error),

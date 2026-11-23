@@ -17,6 +17,7 @@ use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
 use charliebot_core::config::{CallClass, CallTarget, CharlieBotConfig};
 use charliebot_core::repo_root::RepoRoot;
+use charliebot_registry::colleague_gate::guard_agent_work;
 use charliebot_registry::context::FeatureContext;
 use charliebot_registry::sequence::SequenceTree;
 use charliebot_registry::task_errors::task_http_error;
@@ -115,6 +116,9 @@ async fn start_improve_loop(
     Ok(body) => body,
     Err(response) => return *response,
   };
+  if let Some(refusal) = guard_agent_work(&features, &parts.headers).await {
+    return refusal;
+  }
   let fields = match body.declared_fields(&IMPROVE_BODY) {
     Ok(fields) => fields,
     Err(response) => return *response,

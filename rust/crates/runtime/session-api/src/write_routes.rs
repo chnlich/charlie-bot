@@ -19,6 +19,7 @@ use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::metadata_slot::MetadataFile;
 use charliebot_core::{event_types, text_repr};
 use charliebot_registry::caller::{self, CallerIdentity};
+use charliebot_registry::colleague_gate::refuse_colleague_work;
 use charliebot_registry::task_errors::task_http_error;
 use charliebot_registry::{FeatureContext, Registry};
 use charliebot_store::metadata::{
@@ -228,6 +229,11 @@ async fn create(
   body: &RequestBody,
 ) -> Result<SessionMetadata, Response> {
   let (fields, slot_values) = create_fields(features, body)?;
+  if fields.task_parent_id.is_some()
+    && let Some(refusal) = refuse_colleague_work(features, caller).await
+  {
+    return Err(refusal);
+  }
   let cfg = config(features)?;
   let v2 = fields.request_id.is_some()
     || fields.task_parent_id.is_some()

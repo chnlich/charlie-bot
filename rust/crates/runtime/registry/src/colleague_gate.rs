@@ -4,14 +4,14 @@
 
 use std::sync::Arc;
 
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use charliebot_compat::responses;
 use futures_util::future::BoxFuture;
 use serde_json::json;
 
 use crate::FeatureContext;
-use crate::caller::CallerIdentity;
+use crate::caller::{self, CallerIdentity};
 
 /// The platform's colleague check. Both methods run on every request or wake and decide it.
 pub trait ColleagueGate: Send + Sync {
@@ -37,6 +37,16 @@ pub async fn refuse_colleague_work(features: &FeatureContext, caller: &CallerIde
   let gate = features.startup.get::<Arc<dyn ColleagueGate>>()?;
   let detail = gate.refuse_agent_work(features, caller).await?;
   Some(responses::json(StatusCode::FORBIDDEN, &json!({ "detail": detail })))
+}
+
+/// The response that stops an agent-work request carrying `headers`: the refusal of a caller that does not verify, or the
+/// gate's 403. None when the request may proceed.
+pub async fn guard_agent_work(features: &FeatureContext, headers: &HeaderMap) -> Option<Response> {
+  let caller = match caller::resolve_caller(headers, features) {
+    Ok(caller) => caller,
+    Err(response) => return Some(response),
+  };
+  refuse_colleague_work(features, &caller).await
 }
 
 /// Whether a wake of `session_id` by `label` may start a run. Without a registered gate every wake may start one.

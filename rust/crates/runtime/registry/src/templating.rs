@@ -1458,7 +1458,11 @@ mod tests {
     assert_eq!(zstd.headers()[header::CONTENT_ENCODING], "zstd");
     assert_eq!(zstd.headers()[header::VARY], "Accept-Encoding");
     let zstd_body = axum::body::to_bytes(zstd.into_body(), usize::MAX).await.unwrap();
-    assert_eq!(zstd_body.as_ref(), zstd_memoized_body(page.as_bytes()));
+    assert!(zstd_body.starts_with(&[0x28, 0xb5, 0x2f, 0xfd]), "zstd response carries a zstd frame");
+    assert!(zstd_body.len() < page.len(), "the zstd page is shorter than identity");
+    let zstd_repeat = templating.render_page(&features, "bulk.html", &json!({}), &parts(Some("gzip, zstd"))).unwrap();
+    let zstd_repeat_body = axum::body::to_bytes(zstd_repeat.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(zstd_repeat_body, zstd_body);
     assert_eq!(templating.page_gzips.lock().unwrap().len(), 1, "zstd shares the body's memo entry");
 
     let plain = templating.render_page(&features, "bulk.html", &json!({}), &parts(None)).unwrap();

@@ -1567,17 +1567,61 @@ mod tests {
     assert_eq!(PageEncoding::for_request(&headers("gzip;q=0")), PageEncoding::Identity);
   }
 
-  #[test]
-  fn a_client_that_forbids_gzip_takes_the_identity_page_from_both_layers() {
-    let headers = |value: &'static str| {
-      let mut headers = HeaderMap::new();
-      headers.insert(header::ACCEPT_ENCODING, HeaderValue::from_static(value));
-      headers
+  #[tokio::test]
+  async fn a_client_that_forbids_gzip_takes_the_identity_page_from_both_layers() {
+    let template = Arc::new(page_html());
+    let plain_app = axum::Router::new()
+      .route(
+        "/",
+        axum::routing::get({
+          let template = Arc::clone(&template);
+          move |req: Request<Body>| async move {
+            let mut memo = PageBodyMemo::default();
+            let encoding = PageEncoding::for_request(req.headers());
+            let (body, compressed) = memo.body("home.html", &template, &[], None, None, encoding).unwrap();
+            page_response(body, compressed, StatusCode::OK)
+          }
+        }),
+      )
+      .layer(axum::middleware::from_fn(crate::gzip::layer));
+
+    let send = |app: axum::Router, accept_encoding: &'static str| async move {
+      app
+        .oneshot(
+          Request::builder()
+            .method(Method::GET)
+            .uri("/")
+            .header(header::ACCEPT_ENCODING, accept_encoding)
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap()
     };
-    assert_eq!(PageEncoding::for_request(&headers("gzip;q=0")), PageEncoding::Identity);
-    assert_eq!(ResponseEncoding::for_request(&headers("gzip;q=0")), ResponseEncoding::Identity);
-    assert_eq!(PageEncoding::for_request(&headers("gzip")), PageEncoding::Gzip);
-    assert_eq!(ResponseEncoding::for_request(&headers("gzip")), ResponseEncoding::Gzip);
+
+    let forbidden = send(plain_app, "gzip;q=0").await;
+    assert!(forbidden.headers().get(header::CONTENT_ENCODING).is_none());
+    assert_eq!(body_text(forbidden).await, *template);
+
+    let passthrough_app = axum::Router::new()
+      .route(
+        "/",
+        axum::routing::get({
+          let template = Arc::clone(&template);
+          move || async move { page_response(Bytes::from(template.as_str().to_string()), None, StatusCode::OK) }
+        }),
+      )
+      .layer(axum::middleware::from_fn(crate::gzip::layer));
+
+    let transport_forbidden = send(passthrough_app.clone(), "gzip;q=0").await;
+    assert!(transport_forbidden.headers().get(header::CONTENT_ENCODING).is_none());
+    assert_eq!(body_text(transport_forbidden).await, *template);
+
+    let transport_gzip = send(passthrough_app.clone(), "gzip").await;
+    assert_eq!(transport_gzip.headers()[header::CONTENT_ENCODING], "gzip");
+
+    let transport_zstd = send(passthrough_app, "gzip, zstd").await;
+    assert_eq!(transport_zstd.headers()[header::CONTENT_ENCODING], "zstd");
   }
 
   #[tokio::test]

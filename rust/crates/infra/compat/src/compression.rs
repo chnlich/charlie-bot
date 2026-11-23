@@ -221,8 +221,8 @@ pub fn zstd_fast_body(data: &[u8]) -> Vec<u8> {
 
 /// The zstd level of a dynamic API body whose version can change between requests.
 ///
-/// On multi-megabyte session listings and status snapshots, level 9 runs faster than gzip level 8/9 while keeping
-/// compressed bytes smaller than gzip; level 19 would stall each cache miss for over a second.
+/// On multi-megabyte session listings, bootstrap payloads, and event tails, level 9 runs faster than gzip level 8/9
+/// while keeping compressed bytes smaller than gzip; level 19 would stall each cache miss for over a second.
 pub const ZSTD_DYNAMIC_LEVEL: i32 = ZSTD_HEAD_LEVEL;
 
 /// The level-9 zstd form of a dynamic API body.

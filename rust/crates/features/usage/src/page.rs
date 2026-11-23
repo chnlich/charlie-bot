@@ -69,7 +69,7 @@ async fn token_usage_viewer(State(features): State<Arc<FeatureContext>>, request
 /// and the memo keeps for the next one.
 fn view(features: &FeatureContext, request: &Parts) -> Result<Response, Failure> {
   let now = Timestamp::now();
-  let week = Week::last_before(now).map_err(exception)?;
+  let this_week = Week::containing(now).map_err(exception)?;
   let templating =
     features.startup.require::<Templating>().map_err(|error| Failure::new("RuntimeError", error.to_string()))?;
   // The concurrency badge's script is the page's only static asset, so it carries the version that busts its cache.
@@ -78,7 +78,7 @@ fn view(features: &FeatureContext, request: &Parts) -> Result<Response, Failure>
   let ledger_path = default_ledger_path(&config.charliebot_home);
   let inputs = PageInputs {
     host: host_name().map_err(exception)?,
-    week: week.label().map_err(exception)?,
+    week: this_week.monday.to_string(),
     config: Arc::clone(&config),
     template_revision: templating.revision(),
     asset_version: asset_version.clone(),
@@ -88,7 +88,7 @@ fn view(features: &FeatureContext, request: &Parts) -> Result<Response, Failure>
     let mut memo = PAGE_MEMO.lock().expect("the page memo mutex is not poisoned");
     memo
       .body(&ledger_path, inputs, |ledger| {
-        let read = read_in_ledger(ledger, now, week, &config).map_err(exception)?;
+        let read = read_in_ledger(ledger, now, this_week, &config).map_err(exception)?;
         render_html(features, &read, request, &asset_version)
       })?
       .to_string()
@@ -96,15 +96,17 @@ fn view(features: &FeatureContext, request: &Parts) -> Result<Response, Failure>
   Ok(templating.page_response(TEMPLATE, body, request))
 }
 
-/// What `read_ledger` returns: the all-time rows, the last Pacific week and the week before it, each source's native
-/// start, and the last capture of this host. It also carries the instant of the read with the week it names, the time
-/// the read took, and the config the rows' charlie-bot accounts attribute against.
+/// What `read_ledger` returns: the all-time rows, the last Pacific week and the week before it, this week up to the
+/// last capture, each source's native start, and the last capture of this host. It also carries the instant of the
+/// read, the time the read took, and the config the rows' charlie-bot accounts attribute against.
 pub(crate) struct LedgerRead {
   pub now: Timestamp,
   pub week: Week,
   pub rows: Vec<LedgerRow>,
   pub week_rows: Vec<LedgerRow>,
   pub previous_week_rows: Vec<LedgerRow>,
+  pub to_date: Week,
+  pub to_date_rows: Vec<LedgerRow>,
   pub native_starts: BTreeMap<String, String>,
   pub last_capture: Option<OffsetDateTime>,
   pub elapsed: Duration,
@@ -122,29 +124,31 @@ fn read_ledger(features: &FeatureContext) -> anyhow::Result<LedgerRead> {
 #[cfg(test)]
 fn read_ledger_at(features: &FeatureContext, now: Timestamp) -> anyhow::Result<LedgerRead> {
   let config = features.config.get()?;
-  let week = Week::last_before(now)?;
   let mut ledger = UsageLedger::open(default_ledger_path(&config.charliebot_home))?;
-  let read = read_in_ledger(&mut ledger, now, week, &config)?;
+  let read = read_in_ledger(&mut ledger, now, Week::containing(now)?, &config)?;
   ledger.close()?;
   Ok(read)
 }
 
-/// The page's read through a ledger connection the caller holds open. It returns the all-time rows, the last Pacific
-/// week and the week before it, each source's native start, and the last capture of this host.
+/// The page's read through a ledger connection the caller holds open. `this_week` is the Pacific week the render falls
+/// in. The read returns the all-time rows, the last Pacific week and the week before it, this week to date, each
+/// source's native start, and the last capture of this host.
 fn read_in_ledger(
   ledger: &mut UsageLedger,
   now: Timestamp,
-  week: Week,
+  this_week: Week,
   config: &Arc<CharlieBotConfig>,
 ) -> anyhow::Result<LedgerRead> {
   let started = Instant::now();
-  let snapshot = ledger.read_page(week, &host_name()?)?;
+  let snapshot = ledger.read_page(this_week, &host_name()?)?;
   Ok(LedgerRead {
     now,
-    week,
+    week: snapshot.week,
     rows: snapshot.rows,
     week_rows: snapshot.week_rows,
     previous_week_rows: snapshot.previous_week_rows,
+    to_date: snapshot.to_date,
+    to_date_rows: snapshot.to_date_rows,
     native_starts: snapshot.native_starts,
     last_capture: snapshot.last_capture,
     elapsed: started.elapsed(),
@@ -200,9 +204,11 @@ pub(crate) fn token_usage_context(read: &LedgerRead, registry: &Registry) -> any
   let merged = page_rows::merge(&read.rows, &read.config, registry, &cards)?;
   let week_merged = page_rows::merge(&read.week_rows, &read.config, registry, &cards)?;
   let previous_merged = page_rows::merge(&read.previous_week_rows, &read.config, registry, &cards)?;
+  let to_date_merged = page_rows::merge(&read.to_date_rows, &read.config, registry, &cards)?;
   let usd_weeks = UsdWeeks::of(&week_merged, &previous_merged)?;
   let rows = Value::Array(merged.iter().map(PageRow::to_json).collect());
   let week_rows = Value::Array(week_merged.iter().map(week_row_json).collect());
+  let to_date_rows = Value::Array(to_date_merged.iter().map(week_row_json).collect());
   let (window_first, window_last) = window(&read.rows)?;
   let week_top = page_rows::first_max_by(week_merged.as_slice(), |row| row.output);
   let per_src = per_source(read, registry, &cards, &tot)?;
@@ -214,11 +220,15 @@ pub(crate) fn token_usage_context(read: &LedgerRead, registry: &Registry) -> any
     "usage_sources": cards.iter().map(|card| card.name).collect::<Vec<_>>(),
     "tot_calls": group_thousands(Count::Int(tot.calls)),
     "week": week_context(read, &week_tot, &previous, &tot, week_merged.len(), week_top, &usd_weeks)?,
+    "to_date": to_date_context(read, to_date_merged.len())?,
     "elapsed_s": read.elapsed.as_secs_f64(),
   });
   Ok(json!({
     "ctx": ctx,
-    "payload": text_repr::json_dumps(&json!({"rows": rows, "week": week_rows}), &PAYLOAD_JSON),
+    "payload": text_repr::json_dumps(
+      &json!({"rows": rows, "week": week_rows, "to_date": to_date_rows}),
+      &PAYLOAD_JSON,
+    ),
     "window": [window_first, window_last],
     // Null for a ledger with no tokens, so the summary states the cache-read share only when there is one.
     "cache_share": (tot.total.as_f64() != 0.0).then(|| percent(tot.cache_read, tot.total)),
@@ -267,8 +277,18 @@ fn week_context(
   }))
 }
 
-/// A last-week row as the page's script reads it: its token fields, and its list-price equivalent in USD, which is null
-/// when the row reads N/A.
+/// The to-date view's label and model count. The label names the window: this week's Monday midnight, then the last
+/// capture, both in Pacific time. A host with no capture yet names no end.
+fn to_date_context(read: &LedgerRead, models: usize) -> anyhow::Result<Value> {
+  let end = match read.last_capture {
+    None => "no capture yet".to_string(),
+    Some(moment) => pacific::stamp(pacific::instant_of(moment)?)?,
+  };
+  Ok(json!({"label": format!("{} → {end}", pacific::stamp(read.to_date.start)?), "models": models}))
+}
+
+/// A row of a week (last week or this week to date) as the page's script reads it: its token fields, and its
+/// list-price equivalent in USD, which is null when the row reads N/A.
 fn week_row_json(row: &PageRow) -> Value {
   let mut value = row.to_json();
   value["usd"] = json!(usd::row_usd(row));
@@ -386,10 +406,7 @@ fn ratio(part: Count, whole: Count) -> f64 {
 fn as_of(last_capture: Option<OffsetDateTime>) -> anyhow::Result<String> {
   match last_capture {
     None => Ok("no capture yet".to_string()),
-    Some(moment) => {
-      let instant = Timestamp::from_second(moment.unix_timestamp()).context("the capture time fits the time range")?;
-      Ok(format!("as of {}", pacific::stamp(instant)?))
-    }
+    Some(moment) => Ok(format!("as of {}", pacific::stamp(pacific::instant_of(moment)?)?)),
   }
 }
 

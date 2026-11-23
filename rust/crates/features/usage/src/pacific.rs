@@ -5,12 +5,14 @@
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
 use jiff::{Span, Timestamp};
+use time::OffsetDateTime;
 
 use charliebot_core::pacific::zone;
 
 pub use charliebot_core::pacific::day_text_of_stamp as day_of_ts;
 
-/// A Pacific calendar week: `[start, end)`, both ends at 00:00 on `monday` in America/Los_Angeles.
+/// A Pacific calendar week: `[start, end)`, both ends at 00:00 on `monday` in America/Los_Angeles. The one exception is
+/// `to_date`, whose end is the ledger's last capture instant.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Week {
   pub monday: Date,
@@ -19,11 +21,23 @@ pub struct Week {
 }
 
 impl Week {
-  /// The last full week before the one `now` falls in.
-  pub fn last_before(now: Timestamp) -> anyhow::Result<Week> {
+  /// The Pacific calendar week `now` falls in, whole: [Monday 00:00, next Monday 00:00).
+  pub fn containing(now: Timestamp) -> anyhow::Result<Week> {
     let today = now.to_zoned(zone()?).date();
     let this_monday = today.checked_sub(Span::new().days(i64::from(today.weekday().to_monday_zero_offset())))?;
-    Week::starting(this_monday.checked_sub(Span::new().days(7))?)
+    Week::starting(this_monday)
+  }
+
+  /// The last full week before the one `now` falls in.
+  pub fn last_before(now: Timestamp) -> anyhow::Result<Week> {
+    Week::containing(now)?.previous()
+  }
+
+  /// This week up to the ledger's last capture, `as_of`: [Monday 00:00, as_of). A capture that predates this Monday
+  /// leaves the window empty. With no capture for this host, the window is empty too.
+  pub fn to_date(self, as_of: Option<Timestamp>) -> Week {
+    let end = as_of.map_or(self.start, |as_of| as_of.max(self.start));
+    Week { end, ..self }
   }
 
   /// The week before this one.
@@ -54,6 +68,11 @@ impl Week {
   pub fn utc_day(moment: Timestamp) -> String {
     moment.to_zoned(TimeZone::UTC).strftime("%Y-%m-%d").to_string()
   }
+}
+
+/// The instant of a stored capture stamp, to the nanosecond.
+pub fn instant_of(moment: OffsetDateTime) -> anyhow::Result<Timestamp> {
+  Ok(Timestamp::from_nanosecond(moment.unix_timestamp_nanos())?)
 }
 
 /// `%Y-%m-%d %H:%M %Z` of an instant in Pacific time: the zone abbreviation is PDT or PST.
@@ -95,6 +114,29 @@ mod tests {
       Week::last_before(at("2026-10-26T06:59:59Z")).expect("the week resolves").start,
       at("2026-10-12T07:00:00Z")
     );
+  }
+
+  #[test]
+  fn this_week_opens_on_its_monday_after_the_spring_change() {
+    // The clocks went forward on 2026-03-08, so the Monday after it opens PDT. Last week, [03-02, 03-09), is 167 hours.
+    let now = at("2026-03-10T20:00:00Z");
+    let week = Week::containing(now).expect("the week resolves");
+    assert_eq!(week.start, at("2026-03-09T07:00:00Z"));
+    assert_eq!(week.end, at("2026-03-16T07:00:00Z"));
+    let last = Week::last_before(now).expect("the week resolves");
+    assert_eq!(last.end, week.start);
+    assert_eq!(last.end.duration_since(last.start).as_secs(), 167 * 3600);
+  }
+
+  #[test]
+  fn to_date_ends_at_the_capture_and_never_before_its_monday() {
+    let week = Week::containing(at("2026-03-10T20:00:00Z")).expect("the week resolves");
+    assert_eq!(week.to_date(Some(at("2026-03-10T19:30:00Z"))).end, at("2026-03-10T19:30:00Z"));
+    // A capture at the Monday's first instant leaves the window empty, and so does one from the Sunday before it.
+    assert_eq!(week.to_date(Some(at("2026-03-09T07:00:00Z"))).end, week.start);
+    assert_eq!(week.to_date(Some(at("2026-03-09T06:59:59Z"))).end, week.start);
+    // With no capture for this host, nothing is counted.
+    assert_eq!(week.to_date(None).end, week.start);
   }
 
   #[test]

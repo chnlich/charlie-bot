@@ -28,12 +28,15 @@ pub struct LedgerAccount {
 }
 
 /// What one render of the usage page reads, every part from one read transaction. It holds the all-time rows and the
-/// native starts, the last Pacific week and the week before it, and the last capture.
+/// native starts, the last Pacific week and the week before it, this week up to the last capture, and the last capture.
 pub struct PageSnapshot {
   pub rows: Vec<LedgerRow>,
   pub native_starts: BTreeMap<String, String>,
+  pub week: Week,
   pub week_rows: Vec<LedgerRow>,
   pub previous_week_rows: Vec<LedgerRow>,
+  pub to_date: Week,
+  pub to_date_rows: Vec<LedgerRow>,
   pub last_capture: Option<OffsetDateTime>,
 }
 
@@ -397,14 +400,15 @@ impl UsageLedger {
     rows_from_accs(self.all_time_accs(aggregate_serves)?)
   }
 
-  /// Everything one usage page render reads, from one read transaction. The aggregate's readiness decides the path of
-  /// every read in it: the all-time rows and the weeks both take the aggregate when it serves, and the table otherwise.
-  pub fn read_page(&mut self, week: Week, host: &str) -> anyhow::Result<PageSnapshot> {
-    let previous = week.previous()?;
+  /// Everything one usage page render reads, from one read transaction. `this_week` is the Pacific week the render
+  /// falls in; the last week and the week before it are its predecessors. The aggregate's readiness decides the path
+  /// of every read in it: the all-time rows and the weeks both take the aggregate when it serves, and the table
+  /// otherwise.
+  pub fn read_page(&mut self, this_week: Week, host: &str) -> anyhow::Result<PageSnapshot> {
     // A backfill writes, so it runs before the snapshot opens: a write cannot nest in the read transaction.
     let aggregate_serves = self.aggregate_ready()?;
     self.conn.execute_batch("BEGIN")?;
-    let outcome = self.read_in_snapshot(aggregate_serves, week, previous, host);
+    let outcome = self.read_in_snapshot(aggregate_serves, this_week, host);
     let closed = self.conn.execute_batch(if outcome.is_ok() { "COMMIT" } else { "ROLLBACK" });
     match (outcome, closed) {
       (Ok(snapshot), Ok(())) => Ok(snapshot),
@@ -414,20 +418,23 @@ impl UsageLedger {
     }
   }
 
-  fn read_in_snapshot(
-    &self,
-    aggregate_serves: bool,
-    week: Week,
-    previous: Week,
-    host: &str,
-  ) -> anyhow::Result<PageSnapshot> {
+  fn read_in_snapshot(&self, aggregate_serves: bool, this_week: Week, host: &str) -> anyhow::Result<PageSnapshot> {
+    let week = this_week.previous()?;
+    let previous = week.previous()?;
     let (rows, native_starts) = rows_from_accs(self.all_time_accs(aggregate_serves)?)?;
+    // The to-date window ends at the capture that the ledger holds last, so it reads the same rows the capture wrote.
+    let last_capture = self.last_capture_at(host)?;
+    let as_of = last_capture.map(pacific::instant_of).transpose()?;
+    let to_date = this_week.to_date(as_of);
     Ok(PageSnapshot {
       rows,
       native_starts,
+      week,
       week_rows: rows_from_accs(self.week_accs(aggregate_serves, week)?)?.0,
       previous_week_rows: rows_from_accs(self.week_accs(aggregate_serves, previous)?)?.0,
-      last_capture: self.last_capture_at(host)?,
+      to_date,
+      to_date_rows: rows_from_accs(self.week_accs(aggregate_serves, to_date)?)?.0,
+      last_capture,
     })
   }
 

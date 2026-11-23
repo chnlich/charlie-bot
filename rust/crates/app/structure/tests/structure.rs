@@ -887,6 +887,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_registry::usage::CODEX_ROLLOUTS_CATEGORY`.",
   },
   OwnerRow {
+    name: "claude_session_id",
+    owner: "runtime/registry",
+    hint: "Use `charliebot_registry::backend::CLAUDE_SESSION_ID_FIELD`.",
+  },
+  OwnerRow {
     name: "stdout.log",
     owner: "runtime/store",
     hint: "Use `charliebot_store::run_records::STDOUT_LOG_NAME`.",

@@ -10,7 +10,8 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use charliebot_registry::backend::{
-  AgentBackend, CLAUDE_INSTRUCTIONS_FILE_NAME, ContextLimits, Env, ExitedProbe, LaunchArgs, Translate, TransportKind,
+  AgentBackend, CLAUDE_INSTRUCTIONS_FILE_NAME, CLAUDE_SESSION_ID_FIELD, ContextLimits, Env, ExitedProbe, LaunchArgs,
+  Translate, TransportKind,
 };
 use charliebot_store::run_records::RunKind;
 use futures_util::future::BoxFuture;
@@ -224,7 +225,7 @@ impl ClaudeCodeBackend {
         .context("backend_kwargs.run_kind must name a known run kind")?,
       Some(_) => bail!("backend_kwargs.run_kind must be a string"),
     };
-    let claude_session_id = launch.backend_kwargs.get("claude_session_id");
+    let claude_session_id = launch.backend_kwargs.get(CLAUDE_SESSION_ID_FIELD);
     let claude_session_id = match claude_session_id {
       None | Some(Value::Null) => None,
       Some(Value::String(value)) => Some(value.clone()),

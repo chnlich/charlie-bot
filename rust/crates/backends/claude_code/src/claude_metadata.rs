@@ -1,5 +1,6 @@
 //! Accessors for Claude-owned session and thread metadata fields.
 
+use charliebot_registry::backend::CLAUDE_SESSION_ID_FIELD;
 use charliebot_store::metadata::{SessionMetadata, ThreadMetadata};
 use serde_json::Value;
 
@@ -12,13 +13,14 @@ pub fn set_account(meta: &mut SessionMetadata, label: Option<&str>) {
 }
 
 pub fn session_id_of(thread: &ThreadMetadata) -> Option<String> {
-  thread.extra.get("claude_session_id").and_then(Value::as_str).map(str::to_string)
+  thread.extra.get(CLAUDE_SESSION_ID_FIELD).and_then(Value::as_str).map(str::to_string)
 }
 
 pub fn set_session_id(thread: &mut ThreadMetadata, session_id: Option<&str>) {
-  thread
-    .extra
-    .insert("claude_session_id".to_string(), session_id.map_or(Value::Null, |value| Value::String(value.to_string())));
+  thread.extra.insert(
+    CLAUDE_SESSION_ID_FIELD.to_string(),
+    session_id.map_or(Value::Null, |value| Value::String(value.to_string())),
+  );
 }
 
 #[cfg(test)]

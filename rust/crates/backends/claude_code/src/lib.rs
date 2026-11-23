@@ -39,7 +39,9 @@ pub use usage_logs::USAGE_SOURCE;
 use std::sync::Arc;
 
 use charliebot_core::backend_types;
-use charliebot_registry::backend::{BackendLifecycle, BackendTraits, BackendTypeRegistration, ResumeStyle};
+use charliebot_registry::backend::{
+  BackendLifecycle, BackendTraits, BackendTypeRegistration, CLAUDE_SESSION_ID_FIELD, ResumeStyle,
+};
 use charliebot_registry::usage::{CLAUDE_READING_KIND, NativeCacheRead, UsageSource};
 use charliebot_registry::{Registry, RegistryError, registration_step};
 use serde_json::{Map, Value};
@@ -117,7 +119,7 @@ pub fn register_with_host(registry: &mut Registry, host: ClaudeHost, http: Quota
     on: charliebot_core::metadata_slot::MetadataFile::Thread,
     after: Some(charliebot_store::metadata::EXIT_CODE_FIELD),
     fields: vec![charliebot_core::metadata_slot::SlotField {
-      name: "claude_session_id",
+      name: CLAUDE_SESSION_ID_FIELD,
       default: serde_json::Value::Null,
     }],
   })?;

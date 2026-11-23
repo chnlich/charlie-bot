@@ -10,6 +10,13 @@ Its rules govern the diff this round produces.
 `main` takes no direct pushes: every change lands through a pull request.
 The pull request is the triage record, and CI is the full test run.
 
+Category rule: a pull request whose body names pending measurements is a draft.
+Its runner marks it ready for review once its body records the results.
+A round adopts only a pull request that is ready for review.
+A round merges only a pull request that is ready for review.
+A draft is left to its runner, and a round does not count a draft as the started topic.
+When a round opens a pull request whose body names pending measurements, the pull request opens as a draft.
+
 Every text the round writes to GitHub — a pull-request title, body, comment, commit message or branch name — goes through `dev/improve/github-post.sh`, which checks it against the leak rules and the round's credential values before it sends anything.
 Every push and every `gh` call of the round passes the same credential check: the clone's pre-push hook checks each pushed commit's message and diff, and the round's `gh` checks every argument and file argument.
 A credential value never enters any text the round writes, and no write reaches GitHub while the check holds a hit.
@@ -103,10 +110,10 @@ Then enter the clone, fetch `origin`, and start every branch from `origin/main`:
 
 ## Step 2: adopt an open pull request
 
-List the open pull requests whose head branch starts with `improve/<direction>/`:
+List the open pull requests whose head branch starts with `improve/<direction>/` and that are ready for review (category rule):
 
-    gh pr list --state open --limit 50 --json number,headRefName,createdAt --jq \
-      '.[] | select(.headRefName | startswith("improve/<direction>/"))'
+    gh pr list --state open --limit 50 --json number,headRefName,createdAt,isDraft --jq \
+      '.[] | select(.headRefName | startswith("improve/<direction>/")) | select(.isDraft | not)'
 
 When more than one is open, take the oldest.
 An adopted pull request is the whole round.
@@ -116,7 +123,7 @@ When its newest comment starts `improve-waiting:`, read Step 8 first.
 End the round after it closes, merged or abandoned, and open no new pull request.
 This rule finishes a started topic before a new one.
 
-Go to Step 3 only when no such pull request is open, because an adopted pull request holds the round.
+Go to Step 3 only when the list is empty, because an adopted pull request holds the round, and a draft is not adopted.
 
 ## Step 3: avoid in-flight files and abandoned topics
 
@@ -196,6 +203,8 @@ Push the branch and open one pull request against `main` through the posting scr
     dev/improve/github-post.sh push -u origin improve/<direction>/<topic slug>
     dev/improve/github-post.sh pr-create --title "<topic>" --body-file <body file> --base main --head improve/<direction>/<topic slug>
 
+When the body names pending measurements, add `--draft` to the pr-create command (category rule).
+
 The body carries the direction's evidence under a `## Evidence` heading; the CI contract check rejects a pull request without it.
 One pull request per round is the unit that CI and the reviewer check.
 
@@ -226,8 +235,9 @@ A silent skip breaks the protocol.
 
 ## Step 7: land the pull request or abandon it
 
-Merge only when the pull request carries a review verdict comment.
+Merge only when the pull request carries a review verdict comment and is ready for review (category rule).
 A pull request without one waits: the round that posted no verdict leaves it open, and Step 2 adopts it in the next round to run the review first.
+When the pull request is a draft, leave it open for its runner and end the round after its verdict.
 
 Before the merge, the pull request's title and body describe its final commits.
 When the branch gained commits after the description was written, update the title and body through `dev/improve/github-post.sh pr-edit`.

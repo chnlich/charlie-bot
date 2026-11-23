@@ -120,7 +120,8 @@ pub enum SequenceCloseOutcome {
 }
 
 impl SequenceCloseOutcome {
-  /// The wire spelling of the outcome: the close fact's `outcome` and the text the sequence trait carries.
+  /// The wire spelling of the outcome. The close fact's `sequence_outcome`, the child report's outcome and the
+  /// sequence trait's text carry it. The close fact's `outcome` holds the lifecycle value instead.
   pub fn as_str(self) -> &'static str {
     match self {
       Self::Completed => "completed",

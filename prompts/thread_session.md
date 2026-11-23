@@ -14,6 +14,8 @@ This instruction file omits `prompts/manager_workflows.md`.
 
 Before you start work on a page, a delegation, an improve loop or a recipe, read `prompts/manager_workflows.md` in full.
 
+A turn in a thread where a Slack colleague has posted follows the colleague rules in `prompts/slack_reply_scope.md`.
+
 - In this thread session, open your last session message of each turn with the status block:
   - Put the turn's one-line result into **Now**.
   - Write the labels **Goal**, **Now** and **Waiting on you** in English in every chat language.

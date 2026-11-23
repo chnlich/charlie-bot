@@ -31,7 +31,7 @@ use charliebot_store::metadata::{
 use charliebot_store::run_logs;
 use charliebot_store::run_records::{RUN_EVENTS_NAME, RunKind, RunRecord, SequenceRef};
 use charliebot_store::{CreateTask, SharedChatEvent, Store, StoreError, StoreResult, TaskCaller, control_events};
-use charliebot_tasks::completion::RUN_REF_PREFIX;
+use charliebot_tasks::completion::{RUN_REF_PREFIX, SequenceCloseOutcome};
 use charliebot_tasks::execution::TaskExecutionAdapter;
 use charliebot_tasks::{git, prompts, spawner_prompt};
 use serde_json::{Map, Value, json};
@@ -884,7 +884,7 @@ async fn close_ended_loop_child_inner(
     }
   }
   let (outcome, evidence) = loop_close_verdict(tree, cfg, session_id, &state, &child_id, &run_records, &events).await?;
-  match tree.completion().close_sequence_child(&child_id, &request_id, outcome, &evidence).await {
+  match tree.completion().close_sequence_child(&child_id, &request_id, outcome.as_str(), &evidence).await {
     Ok(_) => {}
     Err(error) => {
       // A raced close either landed under this request id (the loser returns quietly) or met a changed node.
@@ -895,7 +895,14 @@ async fn close_ended_loop_child_inner(
       return Err(error.into());
     }
   }
-  tracing::info!(target: "charliebot_improve", session = session_id, child = child_id.as_str(), loop_id, outcome, "improve_sequence_child_closed");
+  tracing::info!(
+    target: "charliebot_improve",
+    session = session_id,
+    child = child_id.as_str(),
+    loop_id,
+    outcome = outcome.as_str(),
+    "improve_sequence_child_closed"
+  );
   Ok(())
 }
 
@@ -915,7 +922,7 @@ async fn loop_close_verdict(
   child_id: &str,
   run_records: &[RunRecord],
   events: &[SharedChatEvent],
-) -> anyhow::Result<(&'static str, Value)> {
+) -> anyhow::Result<(SequenceCloseOutcome, Value)> {
   let loop_id = state.loop_id;
   let mut terminal = Vec::new();
   for run in run_records {
@@ -1008,10 +1015,10 @@ async fn loop_close_verdict(
     "landing": landing,
   });
   let outcome = match state.status {
-    LoopStatus::Completed => "completed",
-    LoopStatus::Blocked => "blocked",
-    LoopStatus::Failed | LoopStatus::Interrupted => "failed",
-    LoopStatus::Stopped => "cancelled",
+    LoopStatus::Completed => SequenceCloseOutcome::Completed,
+    LoopStatus::Blocked => SequenceCloseOutcome::Blocked,
+    LoopStatus::Failed | LoopStatus::Interrupted => SequenceCloseOutcome::Failed,
+    LoopStatus::Stopped => SequenceCloseOutcome::Cancelled,
     LoopStatus::Running => bail!("improve loop {loop_id} has the non-terminal status running"),
   };
   Ok((outcome, evidence))

@@ -924,7 +924,10 @@ const CLI_STUB: &str = r#"#!/usr/bin/env bash
 case "$*" in
   'release-helper --help') ;;
   'config get server.enable_local_work_guard') echo false ;;
-  'release-helper backend-option '*) echo 'http://127.0.0.1:9/v1' ;;
+  'backend resolve --call probe') echo '{"option":{"id":"stub","model":"m","api_base":"http://127.0.0.1:9/v1"}}' ;;
+  'release-helper session-weights '*) printf 'true\ntrue\n' ;;
+  'release-helper stand-in-options '*) printf -- '- id: stub-stand-in\n  type: cc-claude\n  model: stub-model\n' ;;
+  'release-helper disable-cron-tasks '*) printf 'memory-curator\nstub-stand-in\n' ;;
   'release-helper free-port '*) echo 18650 ;;
   'release-helper redact-stdin') cat ;;
   *) echo "charliebot stub: unexpected arguments: $*" >&2; exit 1 ;;

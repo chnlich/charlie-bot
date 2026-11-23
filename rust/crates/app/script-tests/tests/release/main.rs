@@ -1223,8 +1223,10 @@ fn test_trial_preflight_takes_the_probe_from_the_shipped_answer_when_no_server_r
 
 /// A trial with neither a shipped answer nor a server refuses at the probe step with exit 2: the refusal names the
 /// missing answer, and the server's reason is printed above it. A named answer file that does not exist refuses the
-/// same way and names the file. Each refusal starts nothing and writes nothing under the TMPDIR.
+/// same way and names the file. Each refusal starts nothing and writes nothing under the TMPDIR. The two trials take it
+/// over rust-test's 0.1 s unit gate alone, as the other script-backed preflight cases do.
 #[test]
+#[ignore = "integration"]
 fn test_trial_preflight_refuses_the_probe_step_without_a_shipped_answer_or_a_server() {
   let world = PreflightWorld::new();
   let scope = RoundScope::new("ux");

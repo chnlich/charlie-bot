@@ -1,13 +1,12 @@
 //! The charlie-code option fields. Each field carries its bound checks, and the type refuses any key
 //! it does not name.
 
+use charliebot_core::backend_types;
 use charliebot_core::config::{
   API_BASE_KEY, CONTEXT_WINDOW_KEY, CREDENTIAL_KEY, OptionField, OptionFieldDefault, PROXY_URL_KEY,
 };
 use charliebot_registry::option_model::optional_text;
 use serde_yaml::{Mapping, Value};
-
-use crate::TYPE_NAME;
 
 const IMAGE_INPUT: &str = "image_input";
 const STREAM: &str = "stream";
@@ -63,10 +62,10 @@ impl CharlieCodeOption {
       }
     }
     Ok(Self {
-      api_base: optional_text(fields, TYPE_NAME, API_BASE_KEY)?,
+      api_base: optional_text(fields, backend_types::CHARLIE_CODE, API_BASE_KEY)?,
       context_window: optional_positive_int(fields, CONTEXT_WINDOW_KEY)?,
-      credential: optional_text(fields, TYPE_NAME, CREDENTIAL_KEY)?,
-      proxy_url: optional_text(fields, TYPE_NAME, PROXY_URL_KEY)?,
+      credential: optional_text(fields, backend_types::CHARLIE_CODE, CREDENTIAL_KEY)?,
+      proxy_url: optional_text(fields, backend_types::CHARLIE_CODE, PROXY_URL_KEY)?,
       image_input: flag(fields, IMAGE_INPUT, true)?,
       stream: flag(fields, STREAM, true)?,
       timeout_seconds: optional_positive_int(fields, TIMEOUT_SECONDS)?,

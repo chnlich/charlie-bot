@@ -102,10 +102,6 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   }
 }
 
-/// The top-level names `CharlieBotConfig` declares as fields.
-const FIELD_KEYS: [&str; 8] =
-  ["charliebot_home", "headless_chrome_bin", "server", "paths", "backends", "ui", "telegram", "remote_run"];
-
 /// The home fact that is no config field: the state directory `CHARLIEBOT_HOME` selects when it is unset or
 /// blank. [`charliebot_core::home`] owns the value; the launcher scripts read it the same way they read
 /// `charliebot_home`.
@@ -125,7 +121,7 @@ fn known_key(key: &str, registry: &Registry) -> bool {
     || key == GUARD_SWITCH_KEY
     || key == RUNNER_HOST_KEY
     || key == RUNNER_BASE_KEY
-    || FIELD_KEYS.contains(&key)
+    || config::TOP_LEVEL_CONFIG_FIELD_NAMES.contains(&key)
     || registry.config_sections().any(|section| section.key == key)
 }
 
@@ -165,6 +161,7 @@ fn value(key: &str, cfg: &CharlieBotConfig, registry: &Registry) -> Result<Optio
     "backends" => Rendered::Json(backends_json(cfg, registry).map_err(Failure::value)?),
     "ui" => Rendered::Json(ui_json(cfg)),
     "telegram" => Rendered::Json(telegram_json(cfg)),
+    "github" => Rendered::Json(github_json(cfg)),
     _ => {
       let Some(section) = registry.config_sections().find(|section| section.key == key) else {
         return Err(Failure::unknown_key(key));
@@ -228,6 +225,13 @@ fn ui_json(cfg: &CharlieBotConfig) -> Value {
 
 fn telegram_json(cfg: &CharlieBotConfig) -> Value {
   json!({ "chat_id": cfg.telegram.chat_id })
+}
+
+fn github_json(cfg: &CharlieBotConfig) -> Value {
+  json!({
+    "user_token_command": cfg.github.user_token_command,
+    "app_token_command": cfg.github.app_token_command,
+  })
 }
 
 /// `backends`, with each option rendered from its registered schema: the shared fields, then the type's own
@@ -354,6 +358,18 @@ mod tests {
     let expected_text = recorded(include_str!("../../tests/fixtures/config_get/telegram_golden.txt"));
     assert_eq!(stdout, expected_text);
     assert_eq!(serde_json::from_str::<Value>(stdout.trim_end()).unwrap(), json!({ "chat_id": null }));
+  }
+
+  #[test]
+  fn github_prints_its_token_commands() {
+    let yaml = "github:\n  user_token_command: /synthetic/user-token\n  app_token_command: /synthetic/app-token\n";
+    let (_home, registry, cfg) = load_yaml(yaml);
+    assert!(known_key("github", &registry));
+    let stdout = get("github", &cfg, &registry).expect("github prints");
+    assert_eq!(
+      serde_json::from_str::<Value>(stdout.trim_end()).unwrap(),
+      json!({ "user_token_command": "/synthetic/user-token", "app_token_command": "/synthetic/app-token" })
+    );
   }
 
   #[test]

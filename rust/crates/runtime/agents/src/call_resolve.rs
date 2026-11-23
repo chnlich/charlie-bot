@@ -165,7 +165,8 @@ mod tests {
     assert_eq!(picked.id, "a");
   }
 
-  /// Each of the four call classes T1 adds refuses an unset key, naming the key to set rather than falling back.
+  /// The call classes ImproveReview, Compaction, WebSearch and Judge each refuse an unset key, naming the key to set
+  /// rather than falling back.
   #[test]
   fn each_new_call_class_refuses_its_unset_key_by_name() {
     let (home, cfg) = load("backends:\n  options:\n    - {id: a, label: A, type: synthetic, model: m}\n");

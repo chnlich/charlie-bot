@@ -9,8 +9,8 @@ use std::process::Command;
 /// The guard options the script prepends, in the order it passes them.
 const GUARD_OPTIONS: [&str; 6] = ["-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"];
 
-/// The incident's ControlMaster argv (REPORT.md:26) with the unguarded options the moonlite script passed.
-const INCIDENT_ARGV: [&str; 9] = [
+/// A ControlMaster argv that turns the guard's settings off: BatchMode=no, no keepalive, a persisted master.
+const UNGUARDED_MASTER_ARGV: [&str; 9] = [
   "-M",
   "-S",
   "/tmp/ssh-guard-test-control-socket",
@@ -57,14 +57,15 @@ fn guard_prepends_the_three_options_before_the_callers_own() {
 
   let status = Command::new(guard_dir().join("ssh"))
     .env("PATH", guarded_path(&guard_dir(), Some(&stub_dir)))
-    .args(INCIDENT_ARGV)
+    .args(UNGUARDED_MASTER_ARGV)
     .arg("host1")
     .status()
     .unwrap();
 
   assert!(status.success(), "the guard runs the stub: {status}");
   let received: Vec<String> = fs::read_to_string(&record).unwrap().lines().map(str::to_string).collect();
-  let expected: Vec<&str> = GUARD_OPTIONS.iter().chain(INCIDENT_ARGV.iter()).chain(["host1"].iter()).copied().collect();
+  let expected: Vec<&str> =
+    GUARD_OPTIONS.iter().chain(UNGUARDED_MASTER_ARGV.iter()).chain(["host1"].iter()).copied().collect();
   assert_eq!(received, expected);
 }
 
@@ -82,7 +83,7 @@ fn symlinked_guard_path_entry_still_runs_the_real_ssh() {
 
   let mut child = Command::new(linked_guard.join("ssh"))
     .env("PATH", guarded_path(&linked_guard, Some(&stub_dir)))
-    .args(INCIDENT_ARGV)
+    .args(UNGUARDED_MASTER_ARGV)
     .arg("host1")
     .spawn()
     .unwrap();
@@ -101,7 +102,8 @@ fn symlinked_guard_path_entry_still_runs_the_real_ssh() {
 
   assert!(status.success(), "the guard runs the stub: {status}");
   let received: Vec<String> = fs::read_to_string(&record).unwrap().lines().map(str::to_string).collect();
-  let expected: Vec<&str> = GUARD_OPTIONS.iter().chain(INCIDENT_ARGV.iter()).chain(["host1"].iter()).copied().collect();
+  let expected: Vec<&str> =
+    GUARD_OPTIONS.iter().chain(UNGUARDED_MASTER_ARGV.iter()).chain(["host1"].iter()).copied().collect();
   assert_eq!(received, expected);
 }
 
@@ -111,7 +113,7 @@ fn ssh_config_readback_through_the_guard_shows_the_guard_values_first() {
   let output = Command::new(guard_dir().join("ssh"))
     .env("PATH", guarded_path(&guard_dir(), None))
     .args(["-G", "-F", "/dev/null"])
-    .args(INCIDENT_ARGV)
+    .args(UNGUARDED_MASTER_ARGV)
     .arg("host1")
     .output()
     .unwrap();

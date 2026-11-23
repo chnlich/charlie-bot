@@ -17,7 +17,7 @@ use charliebot_cli_common::json_out;
 
 /// The subcommand vocabulary, sorted: every registered command with a
 /// caller. A caller-less name is an unknown name here.
-const COMMANDS: [&str; 35] = [
+const COMMANDS: [&str; 36] = [
   "artifact",
   "backend",
   "backup",
@@ -25,6 +25,7 @@ const COMMANDS: [&str; 35] = [
   "config",
   "delegate",
   "discord",
+  "disk-sweep",
   "feishu",
   "files",
   "gc-trash",
@@ -110,6 +111,7 @@ fn run_subcommand(
     "config" => commands::config::main(args),
     "delegate" => commands::delegate::main(args),
     "discord" => charliebot_discord::cli::main(args),
+    "disk-sweep" => commands::disk_sweep::main(args, host),
     "feishu" => charliebot_feishu::cli::main(args),
     "files" => commands::files::main(args),
     "gc-trash" => commands::gc_trash::main(args, host),

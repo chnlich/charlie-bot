@@ -1502,13 +1502,61 @@ fn an_approval_prompt_exits_3_inside_five_seconds() {
   let elapsed = start.elapsed();
   assert_eq!(run.code, 3, "{}", run.describe());
   assert!(elapsed < Duration::from_secs(5), "the launcher waited {elapsed:?} for the approval");
-  assert!(stderr(&run).contains("/host-auth"), "the message names no approval page: {}", run.describe());
+  let text = stderr(&run);
+  assert!(text.contains("asks for a login approval"), "the message names no approval: {text}");
+  assert!(text.contains("/host-auth"), "the message names no approval page: {}", run.describe());
+  assert!(
+    text.contains("https://login.tailscale.com/a/synthetic-approval"),
+    "the message does not quote the login link ssh printed: {text}"
+  );
+  assert!(!text.contains("did not answer"), "an approval was reported as an absent host: {text}");
   assert!(!world.claude_ran(), "the round started although the connection needed an approval");
   assert!(
     !world.ssh_arguments().contains("remote-runner.sh"),
     "the launcher started the runner before the preflight passed:\n{}",
     world.ssh_arguments()
   );
+}
+
+/// A host that does not answer names the ssh error and sends the line manager to no approval page. The incident behind
+/// this check: host3's preflight printed a /host-auth instruction while no approval was pending, and two rounds' line
+/// managers checked a login instead of the host.
+#[test]
+#[ignore = "integration"]
+fn an_unreachable_host_names_the_ssh_error_and_no_approval_page() {
+  let world = World::new();
+  let error = world.sandbox.root().join("unreachable.txt");
+  fs::write(&error, "ssh: connect to host synthetic-improve-host port 22: Connection timed out\n")
+    .expect("the unreachable host's error");
+  let mut env = world.env();
+  env.insert("SSH_UNREACHABLE_FILE".to_string(), error.display().to_string());
+  let run = world.run(&env);
+  assert_eq!(run.code, 3, "{}", run.describe());
+  let text = stderr(&run);
+  assert!(text.contains("did not answer at the preflight"), "the message does not name an absent host:\n{text}");
+  assert!(
+    text.contains("ssh: connect to host synthetic-improve-host port 22: Connection timed out"),
+    "the message does not quote the ssh error:\n{text}"
+  );
+  assert!(!text.contains("/host-auth"), "an unreachable host sent the line manager to the approval page:\n{text}");
+  assert!(!world.claude_ran(), "the round started although the host did not answer");
+}
+
+/// A host that stops answering after the preflight gives the input send the same treatment: the ssh error, and no
+/// approval page.
+#[test]
+#[ignore = "integration"]
+fn a_failed_input_send_names_the_ssh_error_and_no_approval_page() {
+  let world = World::new();
+  let mut env = world.env();
+  env.insert("SSH_FAIL_SEND".to_string(), "1".to_string());
+  let run = world.run(&env);
+  assert_eq!(run.code, 3, "{}", run.describe());
+  let text = stderr(&run);
+  assert!(text.contains("did not answer at the input send"), "the message does not name an absent host:\n{text}");
+  assert!(text.contains("Connection timed out"), "the message does not quote the ssh error:\n{text}");
+  assert!(!text.contains("/host-auth"), "a failed send sent the line manager to the approval page:\n{text}");
+  assert!(!world.claude_ran(), "the round started although the input send failed");
 }
 
 #[test]

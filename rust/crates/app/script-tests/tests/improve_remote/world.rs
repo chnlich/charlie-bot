@@ -99,8 +99,16 @@ for last in "$@"; do
   remote=$last
 done
 if [[ -n ${SSH_APPROVAL_FILE:-} && -e $SSH_APPROVAL_FILE ]]; then
-  printf 'To approve this connection, open https://login.example.ts.net/a/synthetic-approval\n' >&2
+  printf 'To authenticate, visit: https://login.tailscale.com/a/synthetic-approval\n' >&2
   sleep 30
+  exit 255
+fi
+if [[ -n ${SSH_UNREACHABLE_FILE:-} && -e $SSH_UNREACHABLE_FILE ]]; then
+  cat -- "$SSH_UNREACHABLE_FILE" >&2
+  exit 255
+fi
+if [[ ${SSH_FAIL_SEND:-0} == 1 && $remote == *'umask 077; mkdir -p'* ]]; then
+  printf 'ssh: connect to host synthetic-improve-host port 22: Connection timed out\n' >&2
   exit 255
 fi
 if [[ ${SSH_FAIL_EVIDENCE_LISTING:-0} == 1 && $remote == *'-mindepth 1 -printf'* ]]; then

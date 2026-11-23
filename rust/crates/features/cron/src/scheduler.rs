@@ -1,9 +1,11 @@
 //! The scheduled-task service and its croniter-compatible five-field scan.
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use charliebot_backend_check::{Hit, Roots, Vocabulary, gate};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
 use charliebot_core::repo_root::RepoRoot;
@@ -173,6 +175,101 @@ impl CronScheduler {
     rounds::session_backend_refusal(cfg, &session.backend, task.improve_host.is_some())
   }
 
+  /// The reason a fire of `task` is refused because the profile's machinery, or the task's own prompt files, hold a
+  /// hardcoded backend choice; `None` when the fire may run. Every cron task is checked, a handler's fire included.
+  fn literal_refusal(&self, task: &ScheduledTaskConfig, cfg: &CharlieBotConfig) -> anyhow::Result<Option<String>> {
+    let repo = self.features.startup.require::<RepoRoot>()?;
+    let prompt_pointers =
+      task.prompt_file.iter().chain(task.steps.iter().flatten().filter_map(|step| step.prompt_file.as_ref()));
+    let mut prompts = Vec::new();
+    for pointer in prompt_pointers {
+      prompts.push(loader::resolve_path(pointer, repo.path()).map_err(anyhow::Error::msg)?);
+    }
+    let (hits, roots) = self.literal_sites(cfg, &prompts)?;
+    Ok((!hits.is_empty()).then(|| {
+      format!("a hardcoded backend choice, so the fire does not run:\n{}", gate::report(&hits, roots.repo.as_deref()))
+    }))
+  }
+
+  /// The open sites in the profile's machinery and in `prompts`, read under the server's own configuration, and the
+  /// roots that the sites are reported under.
+  fn literal_sites(&self, cfg: &CharlieBotConfig, prompts: &[PathBuf]) -> anyhow::Result<(Vec<Hit>, Roots)> {
+    let repo = self.features.startup.require::<RepoRoot>()?;
+    let mut paths = charliebot_backend_check::default_paths(None, &cfg.charliebot_home);
+    paths.extend_from_slice(prompts);
+    let roots = gate::roots(Some(repo.path()), &cfg.charliebot_home)?;
+    let vocab = Vocabulary::of_config(&self.features.registry, cfg)?;
+    let hits = gate::open_hits(&vocab, &roots, &paths)?;
+    Ok((hits, roots))
+  }
+
+  /// The server-start check: the profile's machinery is read once, when the server starts. Each site is logged, and the
+  /// report goes to the bound session of each enabled task, because every fire of such a task is refused until the site
+  /// is removed. A check that cannot run is logged and reported the same way. The start goes on either way.
+  async fn report_machinery_literals(&self) {
+    let message = match self.machinery_report() {
+      Ok(Some(message)) => message,
+      Ok(None) => return,
+      Err(error) => {
+        tracing::error!(error = %format!("{error:#}"), "scheduler_machinery_check_error");
+        format!("the backend check of the profile's machinery could not run at server start: {error:#}")
+      }
+    };
+    self.post_to_bound_sessions(&message).await;
+  }
+
+  /// The startup report of the machinery's open sites, one log line per site, or `None` when there are none.
+  fn machinery_report(&self) -> anyhow::Result<Option<String>> {
+    let cfg = self.features.config.get()?;
+    let (hits, roots) = self.literal_sites(&cfg, &[])?;
+    if hits.is_empty() {
+      return Ok(None);
+    }
+    for hit in &hits {
+      tracing::warn!(
+        path = %hit.path.display(),
+        line = hit.line,
+        class = hit.class.label(),
+        value = %hit.value,
+        "scheduler_machinery_literal"
+      );
+    }
+    Ok(Some(format!(
+      "the server start found hardcoded backend choices in the profile's machinery, so each scheduled fire is refused until \
+       they are removed:\n{}",
+      gate::report(&hits, roots.repo.as_deref())
+    )))
+  }
+
+  /// Posts `message` to the bound session of each enabled task. A session that cannot be read or written is logged, and
+  /// the other sessions still get the message.
+  async fn post_to_bound_sessions(&self, message: &str) {
+    let sessions = match self.enabled_bound_sessions() {
+      Ok(sessions) => sessions,
+      Err(error) => {
+        tracing::error!(error = %format!("{error:#}"), "scheduler_startup_report_error");
+        return;
+      }
+    };
+    for session_id in sessions {
+      let posted = match self.features.store.get_session(&session_id).await {
+        Ok(Some(session)) => self.post_fire_error(&session, message, false).await,
+        Ok(None) => Err(anyhow::anyhow!("bound session {session_id} does not exist")),
+        Err(error) => Err(error.into()),
+      };
+      if let Err(error) = posted {
+        tracing::error!(session = %session_id, error = %format!("{error:#}"), "scheduler_startup_report_error");
+      }
+    }
+  }
+
+  /// The session ids that the enabled cron tasks are bound to.
+  fn enabled_bound_sessions(&self) -> anyhow::Result<Vec<String>> {
+    let cfg = self.features.config.get()?;
+    let snapshot = loader::load_snapshot(&self.features, &cfg)?;
+    Ok(snapshot.tasks.into_iter().filter(|task| task.enabled).filter_map(|task| task.session_id).collect())
+  }
+
   /// Refuse one fire of `task` whose bound session's backend cannot take it. The reason is posted to the session, the
   /// fire counts as used so the next tick does not retry it, and the task's last run records as failed. No trigger
   /// input is queued and no worker starts.
@@ -320,6 +417,17 @@ impl CronScheduler {
     };
     // A due fire was checked in `maybe_run`; a run started now is checked here.
     if !scheduled && let Some(reason) = Self::fire_backend_refusal(&task, &cfg, &session)? {
+      self.refuse_fire(&session, &task, now, &reason).await?;
+      return Ok(TaskRunResult { session_id: session.id, thread_id: None });
+    }
+    let refusal = match self.literal_refusal(&task, &cfg) {
+      Ok(refusal) => refusal,
+      Err(error) => {
+        tracing::error!(task = %task.name, error = %format!("{error:#}"), "scheduler_backend_check_error");
+        Some(format!("the backend check could not run: {error:#}"))
+      }
+    };
+    if let Some(reason) = refusal {
       self.refuse_fire(&session, &task, now, &reason).await?;
       return Ok(TaskRunResult { session_id: session.id, thread_id: None });
     }
@@ -672,6 +780,7 @@ impl Service for SchedulerService {
       ctx.recovery_done.await;
       let scheduler = CronScheduler::new(Arc::clone(&ctx.features));
       ctx.features.startup.insert(scheduler.clone())?;
+      scheduler.report_machinery_literals().await;
       let run_scheduler = scheduler.clone();
       let task = tokio::spawn(async move { run_scheduler.loop_forever().await });
       *self.task.lock().expect("scheduler task mutex is not poisoned") = Some(task);
@@ -1192,15 +1301,7 @@ mod tests {
 
     // Both ticks run at 08:00:30 of the task's default timezone on a fixed date. No wall clock then decides
     // whether the first tick fires the 0 8 * * * occurrence.
-    let clock_timezone = crate::config::DEFAULT_TIMEZONE.parse::<chrono_tz::Tz>().unwrap();
-    let clock = chrono::NaiveDate::from_ymd_opt(2026, 1, 5)
-      .unwrap()
-      .and_hms_opt(8, 0, 30)
-      .unwrap()
-      .and_local_timezone(clock_timezone)
-      .single()
-      .unwrap()
-      .with_timezone(&Utc);
+    let clock = due_clock();
     scheduler.tick_at(clock).await.unwrap();
     let mut binding: Value = serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     binding["enabled"] = json!(true);
@@ -1224,6 +1325,131 @@ mod tests {
     let projection = features.store.get_message_projection(session_id).unwrap().unwrap();
     assert_eq!(projection.history().len(), 1);
     assert!(features.store.child_ids(session_id).unwrap().is_empty());
+  }
+
+  /// 08:00:30 of a fixed date in the task's default timezone: the minute of a `0 8 * * *` task, once the task is due.
+  fn due_clock() -> chrono::DateTime<Utc> {
+    let clock_timezone = crate::config::DEFAULT_TIMEZONE.parse::<chrono_tz::Tz>().unwrap();
+    chrono::NaiveDate::from_ymd_opt(2026, 1, 5)
+      .unwrap()
+      .and_hms_opt(8, 0, 30)
+      .unwrap()
+      .and_local_timezone(clock_timezone)
+      .single()
+      .unwrap()
+      .with_timezone(&Utc)
+  }
+
+  /// Writes a master-mode task that sends `prompt` at 08:00, binds it with one tick, then ticks at its due minute with
+  /// the task enabled. Returns the bound session's id.
+  async fn fire_prompt_task_at_due_minute(
+    home: &Path,
+    features: &Arc<FeatureContext>,
+    name: &str,
+    prompt: &Path,
+  ) -> String {
+    install_execution(features).await;
+    let body =
+      json!({"cron": "0 8 * * *", "mode": "master", "prompt_file": prompt.display().to_string(), "enabled": false});
+    let path = write_task(home, name, &body);
+    let scheduler = CronScheduler::new(Arc::clone(features));
+    scheduler.tick_at(due_clock()).await.unwrap();
+    let mut binding: Value = serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    binding["enabled"] = json!(true);
+    std::fs::write(&path, crate::yaml::dump(&binding).unwrap()).unwrap();
+    let session_id = binding["session_id"].as_str().unwrap().to_string();
+    seed_task_slot(features, &session_id, name, json!({LAST_SCHEDULED_RUN: "2026-01-01T03:00:00+00:00"})).await;
+    scheduler.tick_at(due_clock()).await.unwrap();
+    session_id
+  }
+
+  /// The content of each error the bound session has been posted, in order.
+  fn posted_errors(features: &FeatureContext, session_id: &str) -> Vec<String> {
+    features
+      .store
+      .load_chat_events_sync(session_id)
+      .unwrap()
+      .iter()
+      .filter(|event| event["type"].as_str() == Some(event_types::ASSISTANT_ERROR))
+      .filter_map(|event| event["content"].as_str().map(str::to_string))
+      .collect()
+  }
+
+  /// A due fire whose prompt file holds a hardcoded backend choice is refused: the task records failed, the bound session
+  /// is told the file and line, and no trigger input is queued.
+  #[tokio::test]
+  async fn a_due_fire_whose_prompt_file_holds_a_backend_literal_is_refused_and_queues_no_input() {
+    let (home, features) = feature_context();
+    let prompt = home.path().join("literal-prompt.md");
+    std::fs::write(&prompt, "Review the diff on claude-opus-5-5.\n").unwrap();
+
+    let session_id = fire_prompt_task_at_due_minute(home.path(), &features, "literal-task", &prompt).await;
+
+    let meta = features.store.get_session(&session_id).await.unwrap().unwrap();
+    assert_eq!(task_slot(&meta, "literal-task", LAST_RUN_STATUS), Some(json!("failed")));
+    let errors = posted_errors(&features, &session_id);
+    let expected = format!("{}:1 model-id claude-opus-5-5", prompt.display());
+    assert!(errors.iter().any(|error| error.contains(&expected)), "{errors:?}");
+    let events = features.store.load_chat_events_sync(&session_id).unwrap();
+    assert!(!events.iter().any(|event| event["type"].as_str() == Some(event_types::SCHEDULED_TRIGGER)));
+  }
+
+  /// A due fire whose prompt file is clean runs: its trigger input is queued to the bound session and nothing is refused.
+  #[tokio::test]
+  async fn a_due_fire_whose_prompt_file_is_clean_queues_its_trigger() {
+    let (home, features) = feature_context();
+    let prompt = home.path().join("clean-prompt.md");
+    std::fs::write(&prompt, "Review the diff.\n").unwrap();
+
+    let session_id = fire_prompt_task_at_due_minute(home.path(), &features, "clean-task", &prompt).await;
+
+    assert!(posted_errors(&features, &session_id).iter().all(|error| !error.contains("hardcoded")));
+    let events = features.store.load_chat_events_sync(&session_id).unwrap();
+    assert!(events.iter().any(|event| event["type"].as_str() == Some(event_types::SCHEDULED_TRIGGER)));
+  }
+
+  /// A hardcoded backend choice in the profile's machinery refuses every due fire, whatever the task's own prompt says.
+  #[tokio::test]
+  async fn a_due_fire_is_refused_by_a_backend_literal_in_the_profile_machinery() {
+    let (home, features) = feature_context();
+    std::fs::create_dir_all(home.path().join("scripts")).unwrap();
+    std::fs::write(home.path().join("scripts/run.sh"), "echo start\nmodel=claude-opus-5-5\n").unwrap();
+    let prompt = home.path().join("clean-prompt.md");
+    std::fs::write(&prompt, "Review the diff.\n").unwrap();
+
+    let session_id = fire_prompt_task_at_due_minute(home.path(), &features, "machinery-task", &prompt).await;
+
+    let meta = features.store.get_session(&session_id).await.unwrap().unwrap();
+    assert_eq!(task_slot(&meta, "machinery-task", LAST_RUN_STATUS), Some(json!("failed")));
+    let errors = posted_errors(&features, &session_id);
+    let expected = format!("{}:2 model-id claude-opus-5-5", home.path().join("scripts/run.sh").display());
+    assert!(errors.iter().any(|error| error.contains(&expected)), "{errors:?}");
+  }
+
+  /// The server start reports a backend literal in the profile's machinery to the bound session of each enabled task,
+  /// and posts nothing when the machinery is clean.
+  #[tokio::test]
+  async fn the_server_start_reports_a_machinery_literal_to_each_enabled_bound_session() {
+    let (home, features) = feature_context();
+    write_task(home.path(), "startup-task", &json!({"cron": "0 9 * * *", "handler": "synthetic_handler"}));
+    let scheduler = CronScheduler::new(Arc::clone(&features));
+    scheduler.tick_at(due_clock()).await.unwrap();
+    let session_id = {
+      let binding: Value =
+        serde_yaml::from_str(&std::fs::read_to_string(home.path().join("config.d/cron.d/startup-task.yaml")).unwrap())
+          .unwrap();
+      binding["session_id"].as_str().unwrap().to_string()
+    };
+
+    scheduler.report_machinery_literals().await;
+    assert!(posted_errors(&features, &session_id).is_empty(), "a clean machinery posts nothing");
+
+    std::fs::create_dir_all(home.path().join("skills")).unwrap();
+    std::fs::write(home.path().join("skills/guide.md"), "Use claude-opus-5-5 for the review.\n").unwrap();
+    scheduler.report_machinery_literals().await;
+    let errors = posted_errors(&features, &session_id);
+    let expected = format!("{}:1 model-id claude-opus-5-5", home.path().join("skills/guide.md").display());
+    assert!(errors.iter().any(|error| error.contains(&expected)), "{errors:?}");
   }
 
   /// The task names of a session's handler results, in the order the scheduler wrote them.

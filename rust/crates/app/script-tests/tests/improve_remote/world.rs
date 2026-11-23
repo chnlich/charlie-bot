@@ -282,10 +282,11 @@ fn sha256_file(path: &Path) -> String {
 
 /// The launching host's `charliebot`: `backend resolve --call improve_review` prints the answer that FAKE_RESOLVE_ANSWER
 /// names. Without that file the call class is unset, and the command fails as the CLI fails for an unset key.
-/// `backend resolve --call probe` prints FAKE_PROBE_ANSWER, which the launch ships.
-const RESOLVE_CHARLIEBOT: &str = r#"# Fake charliebot on the launching host: answer the review and probe resolves from their fixtures, or refuse as an unset
-# call class.
-if [[ ${1-} == backend && ${2-} == resolve && ${3-} == --call && ${4-} == probe ]]; then
+/// `release-helper endpoint-option` prints FAKE_PROBE_ANSWER, the endpoint member of `backends.calls.probe`, which the
+/// launch ships.
+const RESOLVE_CHARLIEBOT: &str = r#"# Fake charliebot on the launching host: answer the review resolve and the probe endpoint from their fixtures, or refuse
+# as an unset call class.
+if [[ ${1-} == release-helper && ${2-} == endpoint-option ]]; then
   cat -- "$FAKE_PROBE_ANSWER"
   exit 0
 fi

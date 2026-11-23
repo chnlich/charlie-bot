@@ -27,8 +27,9 @@
 #
 # The config carries the live config's weight switches, server.enable_session_cpu_weight and
 # server.enable_session_io_weight, read by `release-helper session-weights`; an absent switch takes the server's
-# default. The trial's model endpoint is the `backends.calls.probe` member: the answer that
-# CHARLIEBOT_TRIAL_PROBE_ANSWER names when it is set, else the live server's answer to `charliebot backend resolve`.
+# default. The trial's model endpoint is the first member of the `backends.calls.probe` target that names an api_base:
+# the answer that CHARLIEBOT_TRIAL_PROBE_ANSWER names when it is set, else the live home's answer to
+# `release-helper endpoint-option`.
 # The two Claude stand-in options are the step backends of the default memory-curator,
 # and `release-helper stand-in-options` copies each record from the commit's configs/config.example.yaml. The trial
 # fires no scheduled task: before its server starts, `release-helper disable-cron-tasks` seeds the commit's default cron
@@ -212,23 +213,23 @@ if ! LIVE_GUARD_SWITCH=$(CHARLIEBOT_HOME="$LIVE_HOME" "$TRIAL_CLI" config get se
 fi
 readonly LIVE_GUARD_SWITCH
 
-# The trial's model endpoint is the member that `backends.calls.probe` selects, so the trial runs the operator's own
-# probe model and the repository names no model, host or credential. The probe answer is the `charliebot backend
-# resolve --call probe` answer. CHARLIEBOT_TRIAL_PROBE_ANSWER names a file that holds it: an improve round's launcher
-# resolves the call where the server runs and ships the answer, so a host that runs no server reads it there. Without
-# the variable the live server answers. The member needs an api_base, since the trial's charlie-code option is an
-# endpoint type. Its credential is optional. When the member names one, the trial copies that section's key from the
-# live credentials into the trial home and redacts it from saved logs; when it names none, the endpoint needs no
-# client-side key, so the trial home's backend entry has no credential field and its credentials file carries no
-# backend section.
+# The trial's model endpoint is the first member of the `backends.calls.probe` target that names an api_base, so the
+# trial runs the operator's own probe model and the repository names no model, host or credential. The answer is
+# `charliebot release-helper endpoint-option <live home> probe`, which walks the target's members in config order and
+# takes the first with an api_base. CHARLIEBOT_TRIAL_PROBE_ANSWER names a file that holds that answer: an improve
+# round's launcher resolves it where the server runs and ships it, so a host that runs no server reads it there. Without
+# the variable the live home answers. The member needs an api_base, since the trial's charlie-code option is an endpoint
+# type. Its credential is optional. When the member names one, the trial copies that section's key from the live
+# credentials into the trial home and redacts it from saved logs; when it names none, the endpoint needs no client-side
+# key, so the trial home's backend entry has no credential field and its credentials file carries no backend section.
 if [[ -v CHARLIEBOT_TRIAL_PROBE_ANSWER ]]; then
   PROBE_SOURCE=$CHARLIEBOT_TRIAL_PROBE_ANSWER
   PROBE_ANSWER=$(cat -- "$PROBE_SOURCE") \
     || preflight_fail "CHARLIEBOT_TRIAL_PROBE_ANSWER names a file that cannot be read: $PROBE_SOURCE"
 else
-  PROBE_SOURCE="the live server at $LIVE_HOME"
-  PROBE_ANSWER=$(CHARLIEBOT_HOME="$LIVE_HOME" "$TRIAL_CLI" backend resolve --call probe) \
-    || preflight_fail "no probe answer: CHARLIEBOT_TRIAL_PROBE_ANSWER is unset; the live server cannot answer the probe"
+  PROBE_SOURCE="the probe target of the live home at $LIVE_HOME"
+  PROBE_ANSWER=$(CHARLIEBOT_HOME="$LIVE_HOME" "$TRIAL_CLI" release-helper endpoint-option "$LIVE_HOME" probe) \
+    || preflight_fail "no probe answer: CHARLIEBOT_TRIAL_PROBE_ANSWER is unset, and the live home names no endpoint member for backends.calls.probe"
 fi
 TRIAL_PROBE_ID=$(jq -er '.option.id' <<<"$PROBE_ANSWER") \
   || preflight_fail "the probe answer from $PROBE_SOURCE names no option id"

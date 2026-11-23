@@ -921,14 +921,15 @@ fn trial_socket_path_limit() -> usize {
 const PREFLIGHT_UID: &str = "999999";
 
 /// The CLI beside the server: the verbs that the trial calls before its server starts. Any other verb fails the trial.
-/// `backend resolve` reads the live server, so with PREFLIGHT_SERVER=down it fails as the CLI fails when no server runs.
+/// `release-helper endpoint-option` reads the live home and resolves its target through the live server, so with
+/// PREFLIGHT_SERVER=down it fails as the CLI fails when no server runs.
 const CLI_STUB: &str = r#"#!/usr/bin/env bash
 case "$*" in
   'release-helper --help') ;;
   'config get server.enable_local_work_guard') echo false ;;
-  'backend resolve --call probe')
+  'release-helper endpoint-option '*)
     if [[ ${PREFLIGHT_SERVER:-up} == down ]]; then
-      echo 'backend resolve: [Errno 111] Connection refused on http://localhost:18498' >&2
+      echo 'release-helper endpoint-option: cannot resolve backends.calls.probe member claude-code-deepseek-flash: [Errno 111] Connection refused on http://localhost:18498' >&2
       exit 1
     fi
     echo '{"option":{"id":"stub","model":"m","api_base":"http://127.0.0.1:9/v1"}}' ;;

@@ -47,9 +47,9 @@ fn wait_until(limit: Duration, mut condition: impl FnMut() -> bool) -> bool {
   condition()
 }
 
-/// The launcher resolves `backends.calls.probe` on its host and ships the answer with the launch. A host that runs no
-/// server has no other way to resolve the probe, so the round's environment names that answer, and the round's agent
-/// reads the answer the launcher shipped.
+/// The launcher resolves the endpoint member of `backends.calls.probe` on its host and ships the answer with the
+/// launch. A host that runs no server has no other way to resolve it, so the round's environment names that answer, and
+/// the round's agent reads the answer the launcher shipped.
 #[test]
 #[ignore = "integration"]
 fn the_round_reads_the_probe_answer_the_launcher_shipped() {

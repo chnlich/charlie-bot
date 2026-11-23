@@ -16,6 +16,8 @@ use std::process::{Command, exit};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+use charliebot_agents::call_resolve::{self, RESOLVE_PATH};
+use charliebot_cli_common::client;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::route;
 use charliebot_cli_common::skew;
@@ -56,6 +58,7 @@ const VERBS: &[(&str, &str)] = &[
   ("credential-key", "CREDENTIALS_PATH SECTION"),
   ("delegation-error", "SESSIONS_DIR MANAGER_ID"),
   ("disable-cron-tasks", "HOME REPO_ROOT"),
+  ("endpoint-option", "HOME CALL_CLASS"),
   ("event", "SERVER_LOG EVENT_NAME"),
   ("event-type-count", "EVENTS_PATH EVENT_TYPE"),
   ("free-port", "MIN MAX"),
@@ -123,6 +126,7 @@ fn dispatch(name: &str, args: &[String]) -> Result<i32, String> {
     "credential-key" => credential_key(args),
     "delegation-error" => delegation_error(args),
     "disable-cron-tasks" => disable_cron_tasks(args),
+    "endpoint-option" => endpoint_option(args),
     "event" => event(args),
     "event-type-count" => event_type_count(args),
     "free-port" => free_port(args),
@@ -1056,6 +1060,48 @@ fn disable_cron_tasks(args: &[String]) -> Result<i32, String> {
   Ok(0)
 }
 
+/// `endpoint-option <home> <call-class>`: the resolve answer of the first member of the class's target whose record
+/// names an `api_base`, printed as `{"option": ...}`. A serve trial runs a charlie-code endpoint, and the class's own
+/// pick need not name one, so the trial reads this answer instead.
+fn endpoint_option(args: &[String]) -> Result<i32, String> {
+  let [home, class] = arguments::<2>(args, "endpoint-option")?;
+  let class = config::CallClass::from_key(class).ok_or_else(|| {
+    let keys = config::CallClass::ALL.map(config::CallClass::key).join(", ");
+    format!("unknown call class '{class}'; the keys are {keys}")
+  })?;
+  let registry = charliebot_packages::registry().map_err(|error| error.to_string())?;
+  let cfg = registry.load_config(Path::new(home)).map_err(|error| error.to_string())?;
+  let (target, members) = call_resolve::call_target_members(&cfg, class).map_err(|error| error.to_string())?;
+  let subject = format!("backends.calls.{} target '{target}'", class.key());
+  let answer = first_endpoint_member(&subject, &members, |member| {
+    client::post(RESOLVE_PATH, json!({ "backend": member }), None, &[]).map_err(|exit| cli_exit_message(&exit))
+  })?;
+  println!("{}", text_repr::json_dumps(&answer, &text_repr::DEFAULT_JSON));
+  Ok(0)
+}
+
+/// The first answer whose `option.api_base` is a non-empty string, asking `resolve` for each member in order. A member
+/// whose resolve fails fails the selection, so a broken target never reads as one with no endpoint.
+fn first_endpoint_member(
+  subject: &str,
+  members: &[String],
+  mut resolve: impl FnMut(&str) -> Result<Value, String>,
+) -> Result<Value, String> {
+  for member in members {
+    let answer = resolve(member)?;
+    let api_base = answer.get("option").and_then(|option| option.get("api_base")).and_then(Value::as_str);
+    if api_base.is_some_and(|api_base| !api_base.is_empty()) {
+      return Ok(answer);
+    }
+  }
+  Err(format!("{subject} has no member with an api_base; members: {}", members.join(", ")))
+}
+
+/// The message a failed internal-API call carries, for a helper that reports plain text.
+fn cli_exit_message(exit: &CliExit) -> String {
+  exit.body.get("error").map(text_repr::value_str).unwrap_or_else(|| exit.body.to_string())
+}
+
 /// `credentials.yaml`'s `section.api_key`, or `None` when the file has no such key.
 fn credential_api_key(credentials_path: &str, section: &str) -> Result<Option<String>, String> {
   let home = Path::new(credentials_path).parent().ok_or_else(|| format!("{credentials_path} has no directory"))?;
@@ -1361,6 +1407,36 @@ mod tests {
   const CGROUP_LOCATION: &str = "agents/transport/cgroup.rs:350";
   /// The location column of the server's startup events, from `crates/app/server/src/main.rs`.
   const SERVER_LOCATION: &str = "server/main.rs:307";
+
+  #[test]
+  fn the_endpoint_option_takes_the_first_member_with_an_api_base() {
+    let members = vec!["no-base".to_string(), "endpoint".to_string(), "later".to_string()];
+    let mut asked = Vec::new();
+
+    let answer = first_endpoint_member("backends.calls.probe target 'fast'", &members, |member| {
+      asked.push(member.to_string());
+      Ok(match member {
+        "no-base" => json!({"option": {"id": "no-base"}}),
+        other => json!({"option": {"id": other, "api_base": "https://endpoint.example/v1"}}),
+      })
+    })
+    .unwrap();
+
+    assert_eq!(asked, vec!["no-base".to_string(), "endpoint".to_string()]);
+    assert_eq!(answer["option"]["id"], "endpoint");
+  }
+
+  #[test]
+  fn the_endpoint_option_names_the_target_and_its_members_when_none_names_an_api_base() {
+    let members = vec!["a".to_string(), "b".to_string()];
+
+    let error = first_endpoint_member("backends.calls.probe target 'fast'", &members, |member| {
+      Ok(json!({"option": {"id": member, "api_base": ""}}))
+    })
+    .unwrap_err();
+
+    assert_eq!(error, "backends.calls.probe target 'fast' has no member with an api_base; members: a, b");
+  }
 
   #[test]
   fn the_sweep_line_is_read_from_text_and_json_logs() {

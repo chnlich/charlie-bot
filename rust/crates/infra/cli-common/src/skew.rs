@@ -2,6 +2,7 @@
 
 use charliebot_core::git;
 use charliebot_core::repo_root;
+use charliebot_core::text_repr::string_field;
 
 use crate::timeouts;
 use crate::wire::{Method, TransportError, WireRequest, WireResponse};
@@ -69,10 +70,6 @@ fn best_effort_server_version(
     Ok(info) => (string_field(&info, SHA_FIELD), string_field(&info, STARTED_AT_FIELD)),
     Err(_) => (None, None),
   }
-}
-
-fn string_field(value: &serde_json::Value, key: &str) -> Option<String> {
-  value.get(key).and_then(serde_json::Value::as_str).map(str::to_string)
 }
 
 /// The local half of the hint: `git rev-parse --short HEAD` in the directory

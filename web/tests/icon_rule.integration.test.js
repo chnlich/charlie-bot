@@ -188,6 +188,7 @@ const EXCEPTIONS = [
     ["us · Waiting on you]\\n1. ▸ Waiting on you · session synthetic-requ", CHAT_TEXT_REASON],
   ]),
   ...byFile('web/features/artifacts/static/artifact-comments.js', [
+    ["NOT_A_QUESTION_ANSWER_PREFIX = NOT_A_QUESTION_LABEL + ' ' + String.fromCharCode(0x2192)", PROSE_REASON],
     ["return label ? ' \\u2192 ' + label : '';", PROSE_REASON],
     ["_HEAD_CHARS) head = head.slice(0, QUESTION_HEAD_CHARS) + '\\u2026';", PROSE_REASON],
     ["return heading ? heading + ' \\u203A ' + question : question;", BREADCRUMB_REASON],

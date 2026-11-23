@@ -1,5 +1,7 @@
-//! Process identity reads shared by run stores and task-tree liveness checks.
+//! Process identity reads shared by run stores and task-tree liveness checks, and the `/proc/<pid>/stat` text that the
+//! readback and renderer process trees read for their parent and process group.
 
+use std::fs;
 use std::io;
 
 use procfs::process::Process;
@@ -20,6 +22,19 @@ pub struct ProcessStat {
 pub fn read_pid_stat(pid: u32) -> Option<ProcessStat> {
   let stat = Process::new(i32::try_from(pid).ok()?).ok()?.stat().ok()?;
   Some(ProcessStat { pid_start: stat.starttime.to_string(), state: stat.state.to_string() })
+}
+
+/// The text of `/proc/<pid>/stat`. A process that has ended has no entry, so the read fails with `NotFound`, or with
+/// `ESRCH` when the entry goes away during the read; each caller decides what that absence means.
+pub fn read_stat_text(pid: u32) -> io::Result<String> {
+  fs::read_to_string(format!("/proc/{pid}/stat"))
+}
+
+/// The fields of a stat text that follow the command name, or `None` when the text has no `)`. The command name sits
+/// in parentheses and may hold spaces, so the fields start after its last `)`: the state, then the parent pid, then
+/// the process group, in the kernel's order.
+pub fn stat_fields_after_command(stat: &str) -> Option<&str> {
+  stat.rsplit_once(')').map(|(_, fields)| fields)
 }
 
 /// The host boot time from `/proc/stat`'s `btime` line.

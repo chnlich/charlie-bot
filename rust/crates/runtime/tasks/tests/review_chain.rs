@@ -14,7 +14,8 @@ use std::time::{Duration, Instant};
 use anyhow::Context;
 use charliebot_agents::backend_availability::BackendAvailability;
 use charliebot_agents::backend_pool::{BackendPool, BackendRoute};
-use charliebot_core::config::{CallClass, CallTarget, CharlieBotConfig};
+use charliebot_agents::model_pool::POOL_MEMBER_FIELD;
+use charliebot_core::config::{CallClass, CallTarget, CharlieBotConfig, PoolConfig, PoolMember, PoolRule};
 use charliebot_core::event_types;
 use charliebot_registry::Registry;
 use charliebot_store::metadata::{TaskApprover, TaskProfile, TaskSpec, TaskType, UtcDateTime};
@@ -104,15 +105,19 @@ fn first_n_gates_script(control_dir: &Path, summary: &str, native_id: Option<&st
   )
 }
 
-fn gated_review_then_failure_script(control_dir: &Path) -> String {
+fn gated_review_then_script(control_dir: &Path, follow_up: &str) -> String {
   let control = control_dir.display();
   let init = serde_json::to_string(&json!({"type": "system", "subtype": "init", "session_id": "review-native"}))
     .expect("native init event serializes");
   let result = serde_json::to_string(&json!({"type": "result", "subtype": "success", "result": "review approved"}))
     .expect("JSON event serializes");
   format!(
-    "counter=0; if [ -f '{control}/count' ]; then counter=$(/bin/cat '{control}/count'); fi; counter=$((counter + 1)); printf '%s' \"$counter\" > '{control}/count'; if [ \"$counter\" -eq 1 ]; then printf '%s\\n' '{init}'; touch '{control}/started-1'; while [ ! -e '{control}/release-1' ]; do /bin/sleep 0.01; done; printf '%s\\n' '{result}'; else exit 1; fi"
+    "counter=0; if [ -f '{control}/count' ]; then counter=$(/bin/cat '{control}/count'); fi; counter=$((counter + 1)); printf '%s' \"$counter\" > '{control}/count'; if [ \"$counter\" -eq 1 ]; then printf '%s\\n' '{init}'; touch '{control}/started-1'; while [ ! -e '{control}/release-1' ]; do /bin/sleep 0.01; done; printf '%s\\n' '{result}'; else {follow_up}; fi"
   )
+}
+
+fn gated_review_then_failure_script(control_dir: &Path) -> String {
+  gated_review_then_script(control_dir, "exit 1")
 }
 
 fn pending_trigger_path(stack: &Stack, session_id: &str) -> PathBuf {
@@ -237,6 +242,30 @@ async fn wait_for_task_state(stack: &Stack, session_id: &str, expected: &str) ->
     }
     anyhow::ensure!(Instant::now() < deadline, "task {session_id} did not become {expected}");
     tokio::time::sleep(Duration::from_millis(20)).await;
+  }
+}
+
+async fn wait_for_trigger_pause_notice(
+  stack: &Stack,
+  initiator_id: &str,
+  session_id: &str,
+  run_id: &str,
+) -> anyhow::Result<()> {
+  let notice_id = control_events::stable_trigger_pause_notice_id(session_id, run_id);
+  let deadline = Instant::now() + TEST_DEADLINE;
+  loop {
+    let has_notice = stack
+      .run_event_values(initiator_id)?
+      .iter()
+      .any(|event| event["type"] == event_types::AGENT_MESSAGE && event["id"].as_str() == Some(notice_id.as_str()));
+    if has_notice {
+      return Ok(());
+    }
+    anyhow::ensure!(
+      Instant::now() < deadline,
+      "initiator {initiator_id} did not receive the pending-trigger notice for run {run_id}"
+    );
+    tokio::time::sleep(Duration::from_millis(10)).await;
   }
 }
 
@@ -2062,5 +2091,335 @@ async fn review_continuation_fails_when_its_backend_is_removed() -> anyhow::Resu
   assert_eq!(fs::read_to_string(control.path().join("count"))?, "1");
   let reports = wait_for_child_reports(&stack, &manager.id, 1).await?;
   assert_eq!(reports[0]["outcome"], "failed");
+  Ok(())
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn continued_review_quota_failure_fails_over_to_next_pool_member() -> anyhow::Result<()> {
+  let review_control = tempfile::tempdir()?;
+  let retry_control = tempfile::tempdir()?;
+  let stack = Stack::start_with(
+    vec![
+      script_option("fake", &result_script("implemented")),
+      script_option("fake2", &gated_review_then_script(review_control.path(), &spent_quota_script())),
+      script_option("fake3", &shared_gate_script(retry_control.path(), "review failover ok")),
+    ],
+    vec!["fake".to_string(), "fake2".to_string(), "fake3".to_string()],
+  )
+  .await?;
+  let mut cfg = (*stack.cfg).clone();
+  cfg.backends.pools.extend([
+    PoolConfig {
+      id: "writerpool".to_string(),
+      label: "Writer".to_string(),
+      rule: PoolRule::Rotate,
+      members: vec![PoolMember { backend: "fake".to_string() }],
+      visible: true,
+    },
+    PoolConfig {
+      id: "reviewpool".to_string(),
+      label: "Review".to_string(),
+      rule: PoolRule::Rotate,
+      members: vec![PoolMember { backend: "fake2".to_string() }, PoolMember { backend: "fake3".to_string() }],
+      visible: true,
+    },
+  ]);
+  cfg.backends.calls = [(CallClass::Review, CallTarget::Session)].into_iter().collect();
+  stack.replace_config(cfg)?;
+  set_access_key(&stack)?;
+  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+  let worker =
+    stack.node("worker", Some(&manager.id), TaskProfile::Worker, Some(implement_task("write a report", None))).await?;
+  stack
+    .store()
+    .update_slot_fields(
+      &worker.id,
+      charliebot_agents::backend_pool::METADATA_OWNER,
+      serde_json::Map::from_iter([(
+        "route".to_string(),
+        serde_json::to_value(BackendRoute {
+          backends: vec!["writerpool".to_string(), "reviewpool".to_string()],
+          reason: "continued review route".to_string(),
+        })?,
+      )]),
+    )
+    .await?;
+  let guard = ProcessGroupGuard::new();
+  queue_and_launch_work(&stack, &worker.id, "run-work", "write a report").await?;
+  assert_eq!(wait_for_run(&stack, &guard, &worker.id, "run-work").await?, RunOutcomeKind::Success);
+
+  let first_review = wait_for_review(&stack, &worker.id, "run-work").await?;
+  assert_eq!(first_review.backend.as_deref(), Some("fake2"));
+  wait_for_file(&review_control.path().join("started-1"), "the first review run's start marker").await?;
+  if let Some(pid) = stack.store().read_run_sync(&worker.id, &first_review.id)?.and_then(|run| run.pid) {
+    guard.track(pid);
+  }
+  fs::create_dir_all(pending_trigger_path(&stack, &worker.id).parent().context("trigger directory exists")?)?;
+  fs::write(pending_trigger_path(&stack, &worker.id), pending_trigger_record(&worker.id))?;
+  fs::write(review_control.path().join("release-1"), "release")?;
+  assert_eq!(wait_for_run(&stack, &guard, &worker.id, &first_review.id).await?, RunOutcomeKind::Success);
+  stack.node_pass(&worker.id).await?;
+  assert_eq!(stack.store().task_state(&worker.id)?, "open");
+
+  fs::remove_file(pending_trigger_path(&stack, &worker.id))?;
+  let trigger = stack
+    .dispatch
+    .admit_input(
+      &worker.id,
+      event_types::SCHEDULED_TRIGGER,
+      "CI passed",
+      "system",
+      json!({"input_id": "synthetic-continued-review-402"}),
+    )
+    .await?;
+  stack.dispatch.dispatch_pending(&worker.id).await?;
+  let continuation = wait_for_new_run(
+    &stack,
+    &worker.id,
+    &HashSet::from(["run-work".to_string(), first_review.id.clone()]),
+    RunKind::Review,
+  )
+  .await?;
+  assert_eq!(continuation.backend.as_deref(), Some("fake2"));
+  assert_eq!(continuation.review_of_run_id.as_deref(), Some("run-work"));
+  assert_eq!(wait_for_run(&stack, &guard, &worker.id, &continuation.id).await?, RunOutcomeKind::Failed);
+
+  let pool = charliebot_agents::backend_pool::backend_pool(&stack.features)?;
+  assert!(pool.availability().out_until("fake2").is_some(), "the spent reviewer cools");
+  let retry = wait_for_new_run(
+    &stack,
+    &worker.id,
+    &HashSet::from(["run-work".to_string(), first_review.id.clone(), continuation.id.clone()]),
+    RunKind::Review,
+  )
+  .await?;
+  wait_for_file(&retry_control.path().join("started"), "the failover review retry's start marker").await?;
+  if let Some(pid) = stack.store().read_run_sync(&worker.id, &retry.id)?.and_then(|run| run.pid) {
+    guard.track(pid);
+  }
+  assert_eq!(retry.backend.as_deref(), Some("fake3"));
+  assert_eq!(retry.retry_of_run_id.as_deref(), Some(continuation.id.as_str()));
+  assert_eq!(retry.review_of_run_id.as_deref(), Some("run-work"));
+  assert_eq!(retry.input_event_ids, [trigger["id"].as_str().context("fired trigger has an id")?]);
+  assert_eq!(stack.store().task_state(&worker.id)?, "open");
+  assert!(child_reports(&stack, &manager.id)?.is_empty());
+
+  let switches: Vec<Value> = stack
+    .run_events(&worker.id)?
+    .into_iter()
+    .map(|event| event.to_value())
+    .filter(|event| event["type"] == event_types::QUOTA_FAILOVER)
+    .collect();
+  assert_eq!(switches.len(), 1, "{switches:?}");
+  assert_eq!(switches[0]["from"], "fake2");
+  assert_eq!(switches[0]["to"], "fake3");
+  assert_eq!(switches[0]["set"], "reviewpool");
+
+  stack.dispatch.set_executor(None);
+  fs::write(retry_control.path().join("release"), "release")?;
+  assert_eq!(wait_for_run(&stack, &guard, &worker.id, &retry.id).await?, RunOutcomeKind::Success);
+  wait_for_task_state(&stack, &worker.id, "completed").await?;
+  let reports = wait_for_child_reports(&stack, &manager.id, 1).await?;
+  assert_eq!(reports[0]["outcome"], "completed");
+  Ok(())
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn continued_review_quota_failure_uses_calls_review_pool_when_worker_uses_another_pool() -> anyhow::Result<()> {
+  let review_control = tempfile::tempdir()?;
+  let retry_control = tempfile::tempdir()?;
+  let stack = Stack::start_with(
+    vec![
+      script_option("fake", &result_script("implemented")),
+      script_option("fake2", &gated_review_then_script(review_control.path(), &spent_quota_script())),
+      script_option("fake3", &shared_gate_script(retry_control.path(), "review failover ok")),
+    ],
+    Vec::new(),
+  )
+  .await?;
+  let mut cfg = (*stack.cfg).clone();
+  cfg.backends.pools = vec![
+    PoolConfig {
+      id: "workpool".to_string(),
+      label: "Work".to_string(),
+      rule: PoolRule::Rotate,
+      members: vec![PoolMember { backend: "fake".to_string() }],
+      visible: true,
+    },
+    PoolConfig {
+      id: "reviewpool".to_string(),
+      label: "Review".to_string(),
+      rule: PoolRule::Rotate,
+      members: vec![PoolMember { backend: "fake2".to_string() }, PoolMember { backend: "fake3".to_string() }],
+      visible: true,
+    },
+  ];
+  cfg.backends.calls = [
+    (CallClass::Worker, CallTarget::Backend("workpool".to_string())),
+    (CallClass::Review, CallTarget::Backend("reviewpool".to_string())),
+  ]
+  .into_iter()
+  .collect();
+  stack.replace_config(cfg)?;
+  set_access_key(&stack)?;
+  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+  let worker = stack
+    .node_on("worker", Some(&manager.id), TaskProfile::Worker, Some(implement_task("write a report", None)), "workpool")
+    .await?;
+  stack
+    .store()
+    .update_slot_fields(
+      &worker.id,
+      charliebot_agents::model_pool::OWNER,
+      serde_json::Map::from_iter([(POOL_MEMBER_FIELD.to_string(), json!("fake"))]),
+    )
+    .await?;
+  let guard = ProcessGroupGuard::new();
+  queue_and_launch_work(&stack, &worker.id, "run-work", "write a report").await?;
+  assert_eq!(wait_for_run(&stack, &guard, &worker.id, "run-work").await?, RunOutcomeKind::Success);
+
+  let first_review = wait_for_review(&stack, &worker.id, "run-work").await?;
+  assert_eq!(first_review.backend.as_deref(), Some("fake2"));
+  wait_for_file(&review_control.path().join("started-1"), "the first review run's start marker").await?;
+  if let Some(pid) = stack.store().read_run_sync(&worker.id, &first_review.id)?.and_then(|run| run.pid) {
+    guard.track(pid);
+  }
+  fs::create_dir_all(pending_trigger_path(&stack, &worker.id).parent().context("trigger directory exists")?)?;
+  fs::write(pending_trigger_path(&stack, &worker.id), pending_trigger_record(&worker.id))?;
+  fs::write(review_control.path().join("release-1"), "release")?;
+  assert_eq!(wait_for_run(&stack, &guard, &worker.id, &first_review.id).await?, RunOutcomeKind::Success);
+  stack.node_pass(&worker.id).await?;
+
+  fs::remove_file(pending_trigger_path(&stack, &worker.id))?;
+  stack
+    .dispatch
+    .admit_input(
+      &worker.id,
+      event_types::SCHEDULED_TRIGGER,
+      "CI passed",
+      "system",
+      json!({"input_id": "synthetic-split-pool-review-402"}),
+    )
+    .await?;
+  stack.dispatch.dispatch_pending(&worker.id).await?;
+  let continuation = wait_for_new_run(
+    &stack,
+    &worker.id,
+    &HashSet::from(["run-work".to_string(), first_review.id.clone()]),
+    RunKind::Review,
+  )
+  .await?;
+  assert_eq!(wait_for_run(&stack, &guard, &worker.id, &continuation.id).await?, RunOutcomeKind::Failed);
+
+  let retry = wait_for_new_run(
+    &stack,
+    &worker.id,
+    &HashSet::from(["run-work".to_string(), first_review.id.clone(), continuation.id.clone()]),
+    RunKind::Review,
+  )
+  .await?;
+  wait_for_file(&retry_control.path().join("started"), "the split-pool review retry's start marker").await?;
+  if let Some(pid) = stack.store().read_run_sync(&worker.id, &retry.id)?.and_then(|run| run.pid) {
+    guard.track(pid);
+  }
+  assert_eq!(retry.backend.as_deref(), Some("fake3"));
+  let worker_meta = stack.store().load_task_meta(&worker.id).await?;
+  assert_eq!(worker_meta.backend, "workpool", "review failover keeps the worker's own pool");
+  assert_eq!(worker_meta.extra(POOL_MEMBER_FIELD), Some(&json!("fake")), "review failover keeps the worker's member");
+
+  let switches: Vec<Value> = stack
+    .run_events(&worker.id)?
+    .into_iter()
+    .map(|event| event.to_value())
+    .filter(|event| event["type"] == event_types::QUOTA_FAILOVER)
+    .collect();
+  assert_eq!(switches.len(), 1, "{switches:?}");
+  assert_eq!(switches[0]["set"], "reviewpool");
+
+  stack.dispatch.set_executor(None);
+  fs::write(retry_control.path().join("release"), "release")?;
+  assert_eq!(wait_for_run(&stack, &guard, &worker.id, &retry.id).await?, RunOutcomeKind::Success);
+  wait_for_task_state(&stack, &worker.id, "completed").await?;
+  Ok(())
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn continued_review_non_quota_failure_reports_failure_to_parent() -> anyhow::Result<()> {
+  let control = tempfile::tempdir()?;
+  let non_quota = format!(
+    "printf '%s\\n' '{}'; exit 1",
+    serde_json::to_string(&json!({
+      "type": "result",
+      "subtype": "error",
+      "is_error": true,
+      "result": "API Error: 400 Bad Request",
+    }))
+    .expect("JSON event serializes")
+  );
+  let stack = Stack::start_with(
+    vec![
+      script_option("fake", &result_script("implemented")),
+      script_option("fake2", &gated_review_then_script(control.path(), &non_quota)),
+      script_option("fake3", &result_script("unused")),
+    ],
+    vec!["fake".to_string(), "fake2".to_string(), "fake3".to_string()],
+  )
+  .await?;
+  set_access_key(&stack)?;
+  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+  let worker =
+    stack.node("worker", Some(&manager.id), TaskProfile::Worker, Some(implement_task("write a report", None))).await?;
+  let guard = ProcessGroupGuard::new();
+  queue_and_launch_work(&stack, &worker.id, "run-work", "write a report").await?;
+  assert_eq!(wait_for_run(&stack, &guard, &worker.id, "run-work").await?, RunOutcomeKind::Success);
+
+  let first_review = wait_for_review(&stack, &worker.id, "run-work").await?;
+  wait_for_file(&control.path().join("started-1"), "the first review run's start marker").await?;
+  if let Some(pid) = stack.store().read_run_sync(&worker.id, &first_review.id)?.and_then(|run| run.pid) {
+    guard.track(pid);
+  }
+  fs::create_dir_all(pending_trigger_path(&stack, &worker.id).parent().context("trigger directory exists")?)?;
+  fs::write(pending_trigger_path(&stack, &worker.id), pending_trigger_record(&worker.id))?;
+  fs::write(control.path().join("release-1"), "release")?;
+  assert_eq!(wait_for_run(&stack, &guard, &worker.id, &first_review.id).await?, RunOutcomeKind::Success);
+  stack.node_pass(&worker.id).await?;
+  wait_for_trigger_pause_notice(&stack, &manager.id, &worker.id, &first_review.id).await?;
+  assert_eq!(stack.store().task_state(&worker.id)?, "open");
+  assert!(child_reports(&stack, &manager.id)?.is_empty());
+
+  fs::remove_file(pending_trigger_path(&stack, &worker.id))?;
+  stack
+    .dispatch
+    .admit_input(
+      &worker.id,
+      event_types::SCHEDULED_TRIGGER,
+      "CI passed",
+      "system",
+      json!({"input_id": "synthetic-continued-review-500"}),
+    )
+    .await?;
+  stack.dispatch.dispatch_pending(&worker.id).await?;
+  let continuation = wait_for_new_run(
+    &stack,
+    &worker.id,
+    &HashSet::from(["run-work".to_string(), first_review.id.clone()]),
+    RunKind::Review,
+  )
+  .await?;
+  assert_eq!(continuation.review_of_run_id.as_deref(), Some("run-work"));
+  stack.dispatch.set_executor(None);
+  assert_eq!(wait_for_run(&stack, &guard, &worker.id, &continuation.id).await?, RunOutcomeKind::Failed);
+
+  let reports = wait_for_child_reports(&stack, &manager.id, 1).await?;
+  assert_eq!(reports[0]["outcome"], "failed");
+  wait_for_task_state(&stack, &worker.id, "archived").await?;
+  assert!(stack.run_records(&worker.id)?.iter().all(|run| run.retry_of_run_id.is_none()));
+  assert!(
+    stack.run_events(&worker.id)?.into_iter().all(|event| event["type"] != event_types::QUOTA_FAILOVER),
+    "a non-quota failure writes no failover event"
+  );
   Ok(())
 }

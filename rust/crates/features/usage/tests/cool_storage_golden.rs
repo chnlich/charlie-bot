@@ -283,13 +283,14 @@ fn normalize_table_row(table: &str, row: &mut Value, root: &Path, hostname: &str
         row[1] = json!("<timestamp omitted>");
       }
     }
-    _ => {
+    "native_sessions" | "fallback_sessions" | "usage_agg" => {
       for value in row.as_array_mut().unwrap() {
         if let Some(text) = value.as_str() {
           *value = Value::String(normalize_text(text, root, hostname));
         }
       }
     }
+    _ => unreachable!("the golden dump names no ledger table {table}"),
   }
 }
 

@@ -72,8 +72,20 @@ pub struct BackendRoute {
   pub reason: String,
 }
 
+/// Field names of the stdin JSON request `backends.routing.command` receives and the stdout JSON answer it returns.
+/// `charliebot router` reads and writes the same contract through these names and [`RouterAnswer`].
+pub const ROUTER_ROLE_FIELD: &str = "role";
+pub const ROUTER_TEXT_FIELD: &str = "text";
+pub const ROUTER_CANDIDATES_FIELD: &str = "candidates";
+pub const ROUTER_CANDIDATE_ID_FIELD: &str = "id";
+pub const ROUTER_CANDIDATE_COOLING_UNTIL_FIELD: &str = "cooling_until";
+pub const ROUTER_SESSION_BACKEND_FIELD: &str = "session_backend";
+pub const ROUTER_ROUTED_FIELD: &str = "routed";
+pub const ROUTER_BACKENDS_FIELD: &str = "backends";
+pub const ROUTER_REASON_FIELD: &str = "reason";
+
 /// One router answer: whether the router routed the request, the backend ids in preference order, and the reason.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct RouterAnswer {
   pub routed: bool,
   pub backends: Vec<String>,
@@ -172,10 +184,10 @@ impl BackendPool {
     let routing =
       cfg.backends.routing.as_ref().ok_or_else(|| RouterError("backends.routing is not configured".to_string()))?;
     let payload = json!({
-      "role": role,
-      "text": text,
-      "candidates": self.route_candidates(cfg, candidates),
-      "session_backend": session_backend,
+      (ROUTER_ROLE_FIELD): role,
+      (ROUTER_TEXT_FIELD): text,
+      (ROUTER_CANDIDATES_FIELD): self.route_candidates(cfg, candidates),
+      (ROUTER_SESSION_BACKEND_FIELD): session_backend,
     });
     self.route_command(&routing.command, payload, candidates, StdDuration::from_secs(ROUTER_TIMEOUT_SECONDS)).await
   }
@@ -252,7 +264,7 @@ impl BackendPool {
           Some(pool) => self.pool_cooling_until(pool, now),
           None => self.out_until(candidate).filter(|until| *until > now).map(format_isoformat),
         };
-        json!({"id": candidate, "cooling_until": cooling_until})
+        json!({(ROUTER_CANDIDATE_ID_FIELD): candidate, (ROUTER_CANDIDATE_COOLING_UNTIL_FIELD): cooling_until})
       })
       .collect()
   }
@@ -485,12 +497,12 @@ fn parse_router_output(
     ))
   })?;
   let object = parsed.as_object();
-  let routed = object.and_then(|object| object.get("routed")).and_then(Value::as_bool);
+  let routed = object.and_then(|object| object.get(ROUTER_ROUTED_FIELD)).and_then(Value::as_bool);
   let backends = object
-    .and_then(|object| object.get("backends"))
+    .and_then(|object| object.get(ROUTER_BACKENDS_FIELD))
     .and_then(Value::as_array)
     .filter(|backends| backends.iter().all(Value::is_string));
-  let reason = object.and_then(|object| object.get("reason")).and_then(Value::as_str);
+  let reason = object.and_then(|object| object.get(ROUTER_REASON_FIELD)).and_then(Value::as_str);
   let (Some(routed), Some(backends), Some(reason)) = (routed, backends, reason) else {
     return Err(RouterError(format!(
       "backend router command {program} exited {status_code} with stdout outside the router contract \

@@ -162,7 +162,7 @@ fn materialize_fixture_paths(expected: &mut [Value], root: &Path) {
       }
       Value::Array(values) => values.iter_mut().for_each(|value| materialize(value, root)),
       Value::Object(fields) => fields.values_mut().for_each(|value| materialize(value, root)),
-      _ => {}
+      Value::Null | Value::Bool(_) | Value::Number(_) => {}
     }
   }
   expected.iter_mut().for_each(|value| materialize(value, root));

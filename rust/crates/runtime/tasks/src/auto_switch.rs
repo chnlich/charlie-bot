@@ -79,7 +79,7 @@ pub async fn switch_member(
     summary: Some(handoff.summary),
   };
   features.store.persist_and_broadcast(&session.id, change.event()).await?;
-  if cfg.backends.pool(&session.backend).is_some() {
+  if session.backend == pool_id && cfg.backends.pool(&session.backend).is_some() {
     model_pool::set_current_member(features, &session.id, &member.id).await?;
   }
   Ok(MemberSwitch::Moved { member: member.id })

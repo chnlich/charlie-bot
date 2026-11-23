@@ -18,7 +18,9 @@
 # and removes the TMPDIR directories that earlier scopes made, runs the member's agent under the Landlock boundary
 # that limits its writes and signals, and records the scope's memory peak. The review's login is written into the
 # launch's review directory once the round has its scope, and the review's `charliebot backend run` reads it from
-# there. No round environment holds either login.
+# there. No round environment holds either login. The probe answer that the launcher shipped is the file
+# CHARLIEBOT_TRIAL_PROBE_ANSWER names in the round's environment: a serve trial reads the probe member from it, since
+# this host runs no server.
 #
 # Exit codes: the agent's exit code; 1 a local failure, such as a missing input file or a refused
 # scope, or a round whose review still runs in the scope after its agent exited (stderr names the
@@ -871,10 +873,13 @@ fi
 [[ $commit =~ ^[0-9a-f]{40}$ ]] || fail 1 "not a full commit: $commit"
 
 # The round's dependencies, checked before any side effect of the round: the review backend's record and login, the
-# member's login, and this host's lack of a live profile home. Each failure exits 7 and names the missing item.
+# probe answer, the member's login, and this host's lack of a live profile home. Each failure exits 7 and names the
+# missing item.
 check_round_dependencies() {
   [[ -f $LAUNCH_DIR/review/option.json ]] \
     || fail 7 "the launch holds no review backend record: $LAUNCH_DIR/review/option.json"
+  [[ -f $LAUNCH_DIR/probe/option.json ]] \
+    || fail 7 "the launch holds no probe answer: $LAUNCH_DIR/probe/option.json"
   { member_record_value REVIEW_ANTHROPIC_AUTH_TOKEN || member_record_value REVIEW_CLAUDE_CODE_OAUTH_TOKEN \
     || member_record_value REVIEW_CODEX_AUTH; } >/dev/null \
     || fail 7 "the round has no review login: $MEMBER_CREDENTIAL holds no REVIEW_ record"
@@ -929,9 +934,16 @@ check_clone
 # come the round tools of this commit, the runner's bin with the charliebot CLI that the hooks and the review
 # call, and cargo from ~/.cargo/bin.
 export CHARLIEBOT_HOME="$ROUND_HOME"
+# The CLI reads its checkout (prompts, gh wrapper, ssh guard) from this variable and fails without it. The round's clone
+# is that checkout at origin/main. The launcher forwards no such variable: the launching host's checkout path does not
+# exist on the improve host.
+export CHARLIEBOT_REPO_ROOT="$ROUND_ROOT/charlie-bot"
 export CLAUDE_CONFIG_DIR="$HOME_DIR/.claude-improve"
 export TMPDIR="$ROUND_TMPDIR"
 export IMPROVE_LAUNCH_DIR="$LAUNCH_DIR"
+# The serve trial's probe member: this host runs no server to resolve backends.calls.probe, so the trial reads the answer
+# that the launcher resolved and shipped.
+export CHARLIEBOT_TRIAL_PROBE_ANSWER="$LAUNCH_DIR/probe/option.json"
 export IMPROVE_DIRECTION="$direction"
 export PATH="$RUNNER_ROOT/bin:$HOME_DIR/.local/bin:$HOME_DIR/.cargo/bin:${PATH:-/usr/local/bin:/usr/bin:/bin}"
 check_existing_runner_directory "$ROUND_TMP"

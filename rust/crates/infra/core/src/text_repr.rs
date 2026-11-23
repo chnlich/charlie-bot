@@ -267,6 +267,11 @@ pub fn truthy_field_text(value: Option<&Value>) -> String {
   value.filter(|value| is_truthy(value)).map(|value| field_text(Some(value))).unwrap_or_default()
 }
 
+/// The string that a JSON object's field holds: `None` when the field is absent or holds a value that is not a string.
+pub fn string_field(value: &Value, key: &str) -> Option<String> {
+  value.get(key).and_then(Value::as_str).map(str::to_string)
+}
+
 /// The class name a JSON value reports in Python's error text: `NoneType`, `bool`, `float`, `int`, `str`, `list`
 /// or `dict`.
 pub fn type_name(value: &Value) -> &'static str {

@@ -175,3 +175,80 @@ fn a_row_with_a_comment_item_lands_beside_an_older_row_of_the_same_event_without
   );
   assert_eq!(stdout(&output).trim(), "T2");
 }
+
+#[test]
+#[ignore = "integration"]
+fn not_a_question_pick_entry_candidates_and_records_one_choice_row_in_temp_home() {
+  let sandbox = Sandbox::new();
+  let session_id = "sess-not-a-question";
+  let session_dir = charliebot_core::config::sessions_dir_in(&sandbox.home).join(session_id);
+  let events_path = charliebot_store::layout::chat_events_path(&session_dir);
+  fs::create_dir_all(events_path.parent().expect("events parent")).expect("data dir");
+  fs::write(session_dir.join(charliebot_core::metadata_slot::METADATA_FILE_NAME), r#"{"profile":"manager"}"#)
+    .expect("metadata");
+
+  let recommendation = "Deploy config change";
+  let pick_answer = format!("This should not be a question → {recommendation}");
+  let web_reply = json!({
+    "type": "web_reply",
+    "id": "w1",
+    "content": format!(
+      "Q1: {recommendation} or Hold change? Recommended: {recommendation}. Confirm take off to deploy."
+    ),
+    "timestamp": "2026-11-22T10:00:00+00:00",
+  });
+  let pick_comment = json!({
+    "type": "user",
+    "id": "u1",
+    "content": format!(
+      "[Artifact comments · /sessions/{session_id}/artifacts/plan_v1.html] (1)\n\n▸ Q1: Which rollout action?\n↳ {pick_answer}"
+    ),
+    "timestamp": "2026-11-22T10:05:00+00:00",
+  });
+  fs::write(&events_path, format!("{web_reply}\n{pick_comment}\n")).expect("chat events");
+
+  let output = sandbox.run(&["taste", "candidates", "--since", "2026-11-22T00:00:00+00:00", "--sources", "comments"]);
+  assert!(output.status.success(), "{}", stderr(&output));
+  let candidates: Vec<serde_json::Value> =
+    stdout(&output).lines().map(|line| serde_json::from_str(line).expect("candidate JSON")).collect();
+  assert_eq!(candidates.len(), 1, "{candidates:?}");
+  assert!(candidates[0]["text"].as_str().expect("candidate text").contains(&pick_answer));
+  assert!(
+    candidates[0]["previous_web_reply"].as_str().expect("previous web reply").contains("Confirm take off to deploy.")
+  );
+
+  let row_file = sandbox.row_file(&json!({
+    "type": "row",
+    "decided_at": "2026-11-22T10:05:00+00:00",
+    "domain": "charliebot/approval-flow",
+    "kind": "choice",
+    "situation": "whether to deploy a reversible config change or hold it",
+    "options": [recommendation, "Hold change"],
+    "recommended": recommendation,
+    "chosen": recommendation,
+    "reason": pick_answer,
+    "source": {
+      "session_id": session_id,
+      "url": format!("/?session={session_id}"),
+      "event_id": "u1",
+      "comment_item": 1,
+    },
+    "supersedes": null,
+  }));
+  let row_path = row_file.to_str().expect("row file path is UTF-8");
+  let output = sandbox.run(&["taste", "add", "--file", row_path]);
+  assert!(output.status.success(), "{}", stderr(&output));
+  assert_eq!(stdout(&output).trim(), "T1");
+
+  let output = sandbox.run(&["taste", "query", "--domain", "charliebot/approval-flow", "--json"]);
+  assert!(output.status.success(), "{}", stderr(&output));
+  let rows: Vec<serde_json::Value> =
+    stdout(&output).lines().map(|line| serde_json::from_str(line).expect("queried row JSON")).collect();
+  assert_eq!(rows.len(), 1, "high-consequence take-off step yields no extra row: {rows:?}");
+  assert_eq!(rows[0]["kind"], "choice");
+  assert_eq!(rows[0]["options"], json!([recommendation, "Hold change"]));
+  assert_eq!(rows[0]["recommended"], recommendation);
+  assert_eq!(rows[0]["chosen"], recommendation);
+  assert_eq!(rows[0]["reason"], pick_answer);
+  assert!(rows[0]["reason"].as_str().expect("reason string").starts_with("This should not be a question"));
+}

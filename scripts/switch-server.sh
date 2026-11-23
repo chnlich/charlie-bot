@@ -29,8 +29,10 @@
 # the switch back found that the old release refuses the home while the new release serves: the new release keeps
 # serving, and the log names the failed step and the refusal text; 6 when the probe turn or the delegation check failed
 # on the model's side after one retry: the new release keeps serving and the log names the check and the model's error;
-# 7 when the live capture of a View line that a landed commit carries failed: the new release keeps serving, nothing is
-# switched back, and the log names the capture that failed. A failed capture is no server fault.
+# 7 when the live capture of a View line that a landed commit carries failed, or when the post-capture live view check
+# reports `not-visible`, `broken`, a missing or unrecognized verdict, or a `judge` run failure: the new release keeps
+# serving, nothing is switched back, and the log names the commit, view, and reason (or failed capture). Neither is a
+# server fault.
 #
 # The standing switch rule has two checks. Both run in the preflight, after the clone check and before any release is
 # selected or the server stops. Check A (the prior switch accounted for every run): the prior switch is the newest
@@ -61,8 +63,11 @@
 # `charliebot screenshots sizes`, captures each view at every size from the new server on 127.0.0.1, and prints one
 # line per capture naming the file, the commit, the view and the size. The files stay under
 # CHARLIEBOT_LOG_DIR/live-screenshots/<switch log name>/<commit>/. A view the live server does not resolve, such as a
-# session id the server does not know, fails its capture. A capture that fails keeps the new release serving and exits
-# 7.
+# session id the server does not know, fails its capture. After all captures succeed, the switch runs
+# `charliebot backend run --call judge` sequentially for each distinct commit with `View:` trailers in that commit's
+# screenshot directory, writing `task.md`, `answer.txt`, and `events.ndjson` beside the PNGs. A capture failure or a
+# live view check reporting `not-visible`, `broken`, a missing or unrecognized verdict, or a `judge` run failure keeps
+# the new release serving, switches nothing back, logs the commit, view, and reason, and exits 7.
 #
 # The switch back runs the forward path's own steps with the previous release as the target: it stops the new release,
 # moves the clone and `current` back, installs the previous release's slice units, starts it, and reads back every run
@@ -1617,23 +1622,50 @@ post_ready_checks() {
   run_check delegation_check || switch_back "the delegation check failed"
 }
 
+# commit_view_lines SHA: each non-empty `View:` trailer value of commit SHA, one per line.
+commit_view_lines() {
+  local message views view
+  message="$(git -C "$REPO_ROOT" log -1 --format=%B "$1")" || return 1
+  views="$(printf '%s\n' "$message" | sed -n 's/^View:[[:space:]]*//p' | sed 's/[[:space:]]*$//')" || return 1
+  while IFS= read -r view; do
+    [ -n "$view" ] || continue
+    printf '%s\n' "$view"
+  done <<< "$views"
+}
+
 # view_trailers OLD NEW: each `View:` trailer of each commit in OLD..NEW, one `<short sha> <view path>` per line. The
 # trailer block sits at the end of a commit message, and a commit may carry several View lines.
 view_trailers() {
-  local sha message views view
+  local sha short views view
   for sha in $(git -C "$REPO_ROOT" rev-list "$1..$2"); do
-    message="$(git -C "$REPO_ROOT" log -1 --format=%B "$sha")" || return 1
-    views="$(printf '%s\n' "$message" | sed -n 's/^View:[[:space:]]*//p')" || return 1
+    views="$(commit_view_lines "$sha")" || return 1
+    [ -n "$views" ] || continue
+    short="$(git -C "$REPO_ROOT" rev-parse --short "$sha")" || return 1
     while IFS= read -r view; do
       [ -n "$view" ] || continue
-      printf '%s %s\n' "$(git -C "$REPO_ROOT" rev-parse --short "$sha")" "$view"
+      printf '%s %s\n' "$short" "$view"
     done <<< "$views"
   done
 }
 
-# view_slug VIEW: the view path as a file name, with each character outside the safe set replaced.
+# view_slug VIEW: the view path as a file name, with up to 80 safe characters plus an 8-hex-char SHA-256 suffix of the
+# full view string so two views sharing their first 80 characters never overwrite each other's PNGs.
 view_slug() {
-  printf '%s' "$1" | sed 's/[^A-Za-z0-9._-]/_/g' | cut -c1-80
+  local prefix hash
+  prefix="$(printf '%s' "$1" | sed 's/[^A-Za-z0-9._-]/_/g' | cut -c1-80)"
+  hash="$(printf '%s' "$1" | sha256sum | cut -c1-8)"
+  printf '%s-%s' "$prefix" "$hash"
+}
+
+# commit_screenshot_dir SHORT: the directory holding a commit's live screenshots and live-view-check artifacts.
+commit_screenshot_dir() {
+  local switch_name
+  switch_name="$(basename "${LOG%.log}")"
+  if [ -n "$switch_name" ]; then
+    printf '%s/live-screenshots/%s/%s' "$LOG_DIR" "$switch_name" "$1"
+  else
+    printf '%s/live-screenshots/%s' "$LOG_DIR" "$1"
+  fi
 }
 
 # live_screenshots: capture the live page of each View line in [OLD_SHA, TARGET_SHA], at every window size the
@@ -1655,7 +1687,7 @@ live_screenshots() {
     for size in $sizes; do
       width=${size%x*}
       height=${size#*x}
-      dir="$LOG_DIR/live-screenshots/$(basename "${LOG%.log}")/$short"
+      dir="$(commit_screenshot_dir "$short")"
       mkdir -p "$dir" || return 1
       path="$dir/$(view_slug "$view")-${width}x${height}.png"
       CHARLIEBOT_ACCESS_KEY="$KEY" node "$SCRIPT_DIR/live-shot.mjs" \
@@ -1663,6 +1695,133 @@ live_screenshots() {
       log "live screenshot: $path commit $short view $view size $width×$height"
     done
   done <<< "$trailers"
+}
+
+# write_live_view_task PROMPT SHA SHORT DIR VIEWS SIZES: write `task.md` inside DIR for the `judge` call, carrying the
+# prompt from TARGET_SHA, commit message, first-parent diff stat and full diff, and each View with its PNG filenames.
+write_live_view_task() {
+  local prompt=$1 sha=$2 short=$3 dir=$4 views=$5 sizes=$6
+  local message diff_stat diff_full view size
+  message="$(git -C "$REPO_ROOT" log -1 --format=%B "$sha")" || return 1
+  if git -C "$REPO_ROOT" rev-parse --verify -q "${sha}~1" > /dev/null 2>&1; then
+    diff_stat="$(git -C "$REPO_ROOT" diff --stat "${sha}~1..${sha}")" || return 1
+    diff_full="$(git -C "$REPO_ROOT" diff "${sha}~1..${sha}")" || return 1
+  else
+    diff_stat="$(git -C "$REPO_ROOT" diff-tree --root --stat --no-commit-id "$sha")" || return 1
+    diff_full="$(git -C "$REPO_ROOT" diff-tree --root -p --no-commit-id "$sha")" || return 1
+  fi
+  {
+    printf '%s\n\n' "$prompt"
+    printf '## Commit %s\n\n' "$short"
+    printf '### Message\n```\n%s\n```\n\n' "$message"
+    printf '### Changed paths\n```\n%s\n```\n\n' "$diff_stat"
+    printf '### Diff of the commit\n```diff\n%s\n```\n\n' "$diff_full"
+    printf '### View lines and screenshots\n'
+    while IFS= read -r view; do
+      [ -n "$view" ] || continue
+      printf -- '- View: %s\n' "$view"
+      for size in $sizes; do
+        printf '  - %s\n' "$(view_slug "$view")-${size}.png"
+      done
+    done <<< "$views"
+  } > "$dir/task.md" || return 1
+}
+
+# check_live_view_verdicts SHORT VIEWS ANSWER_FILE: parse one `VERDICT <view> <shows|not-visible|broken> <reason>` line
+# per View (allowing leading text before `VERDICT ` on the same line) and log `live view check: commit <short> view ...`
+# for every View. Fails without retry if any View lacks a verdict, duplicates a verdict, carries an unrecognized verdict
+# word, or reports `not-visible` or `broken`.
+check_live_view_verdicts() {
+  local short=$1 views=$2 answer_file=$3
+  local parsed_lines=() line payload p_view p_verdict p_reason
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    case "$line" in
+      *VERDICT\ *)
+        payload="${line#*VERDICT }"
+        read -r p_view p_verdict p_reason <<< "$payload"
+        parsed_lines+=("$p_view"$'\t'"$p_verdict"$'\t'"$p_reason")
+        ;;
+    esac
+  done < "$answer_file"
+
+  local failed=0 view entry match_count verdict reason
+  while IFS= read -r view; do
+    [ -n "$view" ] || continue
+    match_count=0
+    verdict=""
+    reason=""
+    if [ "${#parsed_lines[@]}" -gt 0 ]; then
+      for entry in "${parsed_lines[@]}"; do
+        IFS=$'\t' read -r p_view p_verdict p_reason <<< "$entry"
+        if [ "$p_view" = "$view" ]; then
+          match_count=$((match_count + 1))
+          verdict="$p_verdict"
+          reason="$p_reason"
+        fi
+      done
+    fi
+    if [ "$match_count" -eq 0 ]; then
+      log "live view check: commit $short view $view missing verdict"
+      failed=1
+      continue
+    fi
+    if [ "$match_count" -gt 1 ]; then
+      log "live view check: commit $short view $view multiple verdicts ($match_count)"
+      failed=1
+      continue
+    fi
+    case "$verdict" in
+      shows)
+        log "live view check: commit $short view $view shows: ${reason:-no reason given}"
+        ;;
+      not-visible|broken)
+        log "live view check: commit $short view $view $verdict: ${reason:-no reason given}"
+        failed=1
+        ;;
+      *)
+        log "live view check: commit $short view $view unrecognized verdict '${verdict:-none}': ${reason:-no reason given}"
+        failed=1
+        ;;
+    esac
+  done <<< "$views"
+  [ "$failed" -eq 0 ]
+}
+
+# live_view_checks: after `live_screenshots` succeeds, run `charliebot backend run --call judge` (with tool access,
+# never `--one-shot`) sequentially for each distinct commit in OLD_SHA..TARGET_SHA that carries `View:` trailers. Each
+# commit's `task.md`, `answer.txt`, and `events.ndjson` live beside its PNGs in its screenshot directory. Fails loud
+# without retry (caller exits 7 and keeps the new release serving) when `judge` fails, when a verdict is missing or
+# unrecognized, or when any View is `not-visible` or `broken`.
+live_view_checks() {
+  local sha views short dir sizes="" prompt="" err
+  for sha in $(git -C "$REPO_ROOT" rev-list "$OLD_SHA..$TARGET_SHA"); do
+    views="$(commit_view_lines "$sha")" || return 1
+    [ -n "$views" ] || continue
+    if [ -z "$sizes" ]; then
+      sizes="$("$RELEASE_DIR/charliebot" screenshots sizes)" || return 1
+    fi
+    if [ -z "$prompt" ]; then
+      prompt="$(git -C "$REPO_ROOT" show "$TARGET_SHA:prompts/live_view_check.md")" || {
+        log "live view check: cannot read $TARGET_SHA:prompts/live_view_check.md"
+        return 1
+      }
+    fi
+    short="$(git -C "$REPO_ROOT" rev-parse --short "$sha")" || return 1
+    dir="$(commit_screenshot_dir "$short")"
+    mkdir -p "$dir" || return 1
+    write_live_view_task "$prompt" "$sha" "$short" "$dir" "$views" "$sizes" || {
+      log "live view check: commit $short: failed to write task file in $dir"
+      return 1
+    }
+    if ! (cd "$dir" && CHARLIEBOT_HOME="$HOME_DIR" "$RELEASE_DIR/charliebot" backend run --call judge \
+      --task-file "$dir/task.md" > "$dir/answer.txt" 2> "$dir/judge.stderr"); then
+      err="$(cat "$dir/judge.stderr" "$dir/answer.txt" 2> /dev/null | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/[[:space:]]*$//')"
+      log "live view check: commit $short: judge failed: ${err:-exit status non-zero}"
+      return 1
+    fi
+    check_live_view_verdicts "$short" "$views" "$dir/answer.txt" || return 1
+  done
 }
 
 # switch_move: the steps from a serving server to the target release at a ready server. Both directions run them: stop
@@ -1740,6 +1899,10 @@ switch_forward() {
   post_ready_checks
   if ! live_screenshots; then
     log "live screenshot capture failed; the new release keeps serving, nothing is switched back"
+    exit 7
+  fi
+  if ! live_view_checks; then
+    log "live view check failed; the new release keeps serving, nothing is switched back"
     exit 7
   fi
   local head

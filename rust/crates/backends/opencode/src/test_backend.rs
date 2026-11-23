@@ -945,6 +945,27 @@ fn translation_maps_text_tool_and_usage_events() {
   assert_eq!(final_event["context_snapshot"]["tokens"]["input"], 10);
 }
 
+/// The result carries the text of the last assistant message: a streamed message joins its deltas, and an unstreamed
+/// part arrives whole at its end.
+#[test]
+fn the_result_carries_the_text_of_the_last_assistant_message() {
+  let mut translator = OpenCodeTranslator::new(MODEL.to_string());
+  for event in [
+    json!({"type": "session.text.delta", "data": {"assistantMessageID": "m1", "ordinal": 0, "delta": "Let me look. "}}),
+    json!({"type": "session.text.ended", "data": {"assistantMessageID": "m1", "ordinal": 0, "text": "Let me look. "}}),
+    json!({"type": "session.text.delta", "data": {"assistantMessageID": "m2", "ordinal": 0, "delta": "The "}}),
+    json!({"type": "session.text.delta", "data": {"assistantMessageID": "m2", "ordinal": 0, "delta": "answer."}}),
+    json!({"type": "session.text.ended", "data": {"assistantMessageID": "m2", "ordinal": 0, "text": "The answer."}}),
+  ] {
+    translator.translate_event(&event).unwrap();
+  }
+  assert_eq!(translator.accumulated_result(None)["result"], "The answer.");
+
+  let done = json!({"type": "session.text.ended", "data": {"assistantMessageID": "m3", "ordinal": 0, "text": "Done."}});
+  translator.translate_event(&done).unwrap();
+  assert_eq!(translator.accumulated_result(None)["result"], "Done.");
+}
+
 #[test]
 fn tool_call_without_a_started_name_fails_the_translation() {
   let mut translator = OpenCodeTranslator::new(MODEL.to_string());
@@ -2335,6 +2356,7 @@ fn registration_keeps_traits_attribution_and_snapshot_limits() {
   let mut registry = Registry::new();
   registry.register_package("backends.opencode", super::tests::register_synthetic).unwrap();
   let backend_type = registry.backend_type_of("opencode").unwrap();
+  assert!(registry.backend_type_has_tool_less_one_shot("opencode"));
   assert_eq!(backend_type.traits.resume, charliebot_registry::backend::ResumeStyle::NativeId);
   assert!(backend_type.traits.restart_reattach);
   assert!(!backend_type.traits.preassigned_session_id);

@@ -40,8 +40,8 @@ pub(crate) fn chrome_program(directory: &Path, steps: Value) -> PathBuf {
 pub(crate) use charliebot_shell_harness::repo_root;
 
 /// A plan page that passes every plan assertion except the ones its tests break. It has the genre template's style
-/// block verbatim, six numbered sections, a 4.1 Schema declaration with a dropped-features line, a closing non-goals
-/// paragraph in section 3, and a footer.
+/// block verbatim, six numbered sections, a 4.1 Schema declaration with a dropped-features line, an added-state
+/// paragraph and a closing non-goals paragraph in section 3, and a footer.
 pub(crate) fn plan_page(goal: &str) -> String {
   let template = fs::read_to_string(repo_root().join(PLAN_TEMPLATE_PATH)).unwrap();
   let style_start = template.find("<style>").unwrap();
@@ -58,7 +58,9 @@ pub(crate) fn plan_page(goal: &str) -> String {
         body = if index == 0 {
           format!("<p>{goal}</p>")
         } else if index == 2 {
-          format!("<p>{title}</p><p class=\"non-goals\">Non-goals: none.</p>")
+          format!(
+            "<p>{title}</p><p class=\"added-state\">Added state: none.</p><p class=\"non-goals\">Non-goals: none.</p>"
+          )
         } else if index == 3 {
           format!(
             "<p>{title}</p><h3><span class=\"sn\">4.1</span> Schema</h3><p class=\"dropped\">Dropped features: none.</p>"

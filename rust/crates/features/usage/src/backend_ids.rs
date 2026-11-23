@@ -46,7 +46,7 @@ fn tuple_repr(items: &[&str]) -> String {
   let reprs: Vec<String> = items.iter().map(|item| text_repr::str_repr(item)).collect();
   match reprs.as_slice() {
     [only] => format!("({only},)"),
-    _ => format!("({})", reprs.join(", ")),
+    [] | [_, _, ..] => format!("({})", reprs.join(", ")),
   }
 }
 

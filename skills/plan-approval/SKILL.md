@@ -40,12 +40,15 @@ not restate it here.
 
 ## Understanding
 
-An understanding page lists the divergences of a request that admits several readings
-(the trigger and its exemptions live in the master prompt).
+An understanding page lists the divergences of a request that admits several readings, and every request that changes
+what a CharlieBot web page shows gets one (the trigger and its exemptions live in the master prompt; improve rounds
+follow their direction file).
 
 - The page is `artifacts/understanding_<slug>_v<n>.html`, reusing the head and style of
   `prompts/plan_template.html`. Five blocks: goal in one sentence carrying the why one level up; the
-  deliverable through one concrete worked example and one figure showing the main reading or outcome;
+  deliverable through one concrete worked example and one figure, which for a request that changes what a CharlieBot
+  web page shows is a demo of the changed page beside today's page, as a static picture or a clickable HTML page, with
+  real content at each window size that `charliebot land --help` lists;
   acceptance criteria, each a trigger condition and an observable result in the page's natural language; non-goals; numbered
   divergences rendered as `div.fork` blocks, each carrying its options and their consequences outside folds
   and the fork grammar's folded explainer (block kit section 5, `prompts/plan_template.html`). Add the Linear block
@@ -155,7 +158,13 @@ An understanding page lists the divergences of a request that admits several rea
 - A request to stop, in any wording or language, or a cancel stops the line.
 - The parent node approves a child line's plan. A root line approves its own plan.
 - The parent's approval covers the plan terms other than decisions that only the user makes.
-  Each such decision then waits for the user's answer in the child's session.
+- When a plan revision or a fix round changes a look whose demo the user has seen on the understanding page, the parent
+  approves it with a new demo, judging it against the demo the user saw and the user's words that the change answers;
+  the user's notice shows both demos and waits for nothing.
+- A fix round that answers a user's complaint about a look quotes the user's words.
+  When a fix round or a plan revision changes a look the user has not seen as a demo, the round shows the user the new
+  demo and waits for the user's reply before it lands.
+- Each other decision that only the user makes waits for the user's answer in the child's session.
 - Before each high-consequence step, ask the user for a take off that names the step.
 - A pre take off names lines and steps ahead of time. It holds until those lines deliver.
 - Before a take off, state the goal, blast radius, and undo plan.

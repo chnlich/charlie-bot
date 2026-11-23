@@ -499,7 +499,9 @@ fn validate_field(field: &Field, value: &Value, loc: &[validation::Loc]) -> Resu
     FieldType::NullableModel { class_name, model } => match value {
       Value::Null => Ok(Value::Null),
       Value::Object(object) => validate_object(object, model, loc),
-      _ => failure(validation::Kind::ModelType { class_name }),
+      Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
+        failure(validation::Kind::ModelType { class_name })
+      }
     },
   };
   validated.and_then(|checked| match field.bounds.violation(&checked) {
@@ -658,7 +660,7 @@ impl Bounds {
         }
         None
       }
-      _ => None,
+      Value::Null | Value::Bool(_) | Value::Array(_) | Value::Object(_) => None,
     }
   }
 }

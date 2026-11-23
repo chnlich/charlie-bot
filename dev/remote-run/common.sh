@@ -11,6 +11,10 @@ REMOTE_RUN_LOCAL_PYTHON_VERSION=''
 REMOTE_RUN_WORKTREE_ROOT=''
 REMOTE_RUN_IGNORED_FILTERS=()
 REMOTE_RUN_CONFIG_VALUE=''
+REMOTE_RUN_CALLER_HOST=''
+REMOTE_RUN_OWNER_HOST=''
+REMOTE_RUN_OWNER_ROOT=''
+REMOTE_RUN_OWNER_FORMAT=''
 
 # The build host and its remote state base are set by remote_run_read_config on each run; the
 # environment does not set them.
@@ -71,7 +75,7 @@ remote_run_base_path() {
 
 remote_run_local_preflight() {
   local tool
-  for tool in ssh rsync git base64 sha256sum perl timeout mktemp; do
+  for tool in ssh rsync git base64 sha256sum perl timeout mktemp hostname; do
     if ! command -v "$tool" >/dev/null 2>&1; then
       printf 'preflight: required local tool %s is missing\n' "$tool" >&2
       return 2
@@ -81,6 +85,50 @@ remote_run_local_preflight() {
     printf 'preflight: %s/ssh-guard.pl is not executable\n' "$REMOTE_RUN_SCRIPT_DIR" >&2
     return 2
   fi
+}
+
+remote_run_read_caller_host() {
+  local host
+  if host=$(hostname); then
+    :
+  else
+    local status=$?
+    printf 'preflight: cannot identify the caller host (status %s)\n' "$status" >&2
+    return "$status"
+  fi
+  if [[ ! "$host" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    printf 'preflight: caller host has an unsafe name: %q\n' "$host" >&2
+    return 2
+  fi
+  REMOTE_RUN_CALLER_HOST=$host
+}
+
+# Owner records are `host=<caller hostname>` followed by `root=<local absolute path>`. A path-only
+# record is the old format and does not prove which caller host owns the tree.
+remote_run_parse_owner_record() {
+  local record=$1 host_line root_line
+  REMOTE_RUN_OWNER_HOST=''
+  REMOTE_RUN_OWNER_ROOT=''
+  REMOTE_RUN_OWNER_FORMAT=''
+  if [[ "$record" != *$'\n'* ]]; then
+    if [[ "$record" != /* ]]; then
+      return 2
+    fi
+    REMOTE_RUN_OWNER_FORMAT=legacy
+    REMOTE_RUN_OWNER_ROOT=$record
+    return 0
+  fi
+  host_line=${record%%$'\n'*}
+  root_line=${record#*$'\n'}
+  if [[ "$host_line" != host=* || "$root_line" != root=* || "$root_line" == *$'\n'* ]]; then
+    return 2
+  fi
+  REMOTE_RUN_OWNER_HOST=${host_line#host=}
+  REMOTE_RUN_OWNER_ROOT=${root_line#root=}
+  if [[ ! "$REMOTE_RUN_OWNER_HOST" =~ ^[A-Za-z0-9._-]+$ || "$REMOTE_RUN_OWNER_ROOT" != /* ]]; then
+    return 2
+  fi
+  REMOTE_RUN_OWNER_FORMAT=current
 }
 
 # The sync root is the whole git worktree that holds the current directory, or the current
@@ -344,4 +392,16 @@ remote_run_remote_command() {
   # The base travels in the command: ssh does not forward the local environment.
   printf 'REMOTE_RUN_REMOTE_BASE="%s" exec "%s/%s" "%s"' \
     "$REMOTE_RUN_REMOTE_BASE" "$(remote_run_base_path)" "$REMOTE_RUN_EXEC_NAME" "$payload"
+}
+
+remote_run_remove_tree_command() {
+  local caller_host=$1 tree_path=$2
+  printf 'REMOTE_RUN_REMOTE_BASE="%s" exec "%s/%s" --remove-tree "%s" "%s"' \
+    "$REMOTE_RUN_REMOTE_BASE" "$(remote_run_base_path)" "$REMOTE_RUN_EXEC_NAME" "$caller_host" "$tree_path"
+}
+
+remote_run_stop_tree_command() {
+  local caller_host=$1 tree_path=$2
+  printf 'REMOTE_RUN_REMOTE_BASE="%s" exec "%s/%s" --stop-tree "%s" "%s"' \
+    "$REMOTE_RUN_REMOTE_BASE" "$(remote_run_base_path)" "$REMOTE_RUN_EXEC_NAME" "$caller_host" "$tree_path"
 }

@@ -7,7 +7,7 @@ Pick the genre first by comparing the rows: the genre decides what follows.
 | Genre | When | Deliverable | What follows |
 |---|---|---|---|
 | understanding | The request introduces a new capability, a cross-file mechanism, or a deliverable that admits multiple reasonable readings; a diagnosis whose conclusion proposes new repo work belongs here | `artifacts/understanding_<slug>_v<n>.html` with numbered divergences, shared with the line's approver | Above the reading threshold the approver answers the divergences before the line continues on that reading; below it the line proceeds on the recommended reading, and its delivery lists each divergence |
-| direct | The reading is clear and the change is small: the request states the change, it adds no mechanism, and one revert undoes its landing | A worker delegation with no page; the report names the landed commit | The user reviews the delivered change, so a small change costs one worker run and no wait |
+| direct | The reading is clear and the change is small: the request states the change, it adds no mechanism, and one revert undoes its landing | A worker delegation with no page unless the change alters a CharlieBot web page; the report names the landed commit | The user reviews the delivered change, so a small change costs one worker run and no wait. A web page change gets a short understanding page with its demo, shared without a wait. |
 | plan | Plan-scale work whose reading is already aligned; bounded fixes outside the direct row, revision rounds, and requests that already state their deliverable and acceptance start here | A registered plan decision surface (`charliebot plan present`) | Improve round and verify, then the parent node or the root line approves the plan |
 | sitrep | The user asks the state of completed, in-flight, or blocked work, and the conclusion stays a report | `artifacts/sitrep_<topic-slug>_v<n>.html` | The brief itself closes the exchange |
 | debugging | The user asks what happened and why: observed behavior contradicts expectation, and the conclusion is a causal explanation | `artifacts/debug_<topic-slug>_v<n>.html` per `prompts/debug_template.html` | The page closes the exchange; a mid-investigation status question still gets a sitrep, and the two pages cross-reference |
@@ -18,7 +18,15 @@ Understanding and plan format, confirmation semantics, and plan linkage:
 
 ## Design
 
-Prefer stateless solutions over state machines. Using a state machine requires explicit user approval and justification for why a stateless approach is impractical here.
+Start every design from a stateless form.
+In the stateless form, an external store with concurrency control holds the state, and every copy reads it fresh.
+State outside that form includes:
+- a state machine;
+- a leader lease or any single-active copy;
+- state that a service keeps in its process across requests or passes when a decision depends on it (clocks, caches, counters, queues).
+
+Adding state outside that form requires explicit user approval and justification for why a stateless form is impractical.
+On the plan, name every piece of state the design adds with that reason.
 
 - For a platform change, describe the end state (the target user experience) first, then plan the migration to it.
 - Before you design a system, survey how open-source and industry products solve the problem.

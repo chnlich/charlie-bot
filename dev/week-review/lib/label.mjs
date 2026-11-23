@@ -12,11 +12,12 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
 
+import { gatewayCall, resolveCall } from './backend.mjs';
+import { chatCompletion } from './gateway.mjs';
 import { buildChildPackets } from './packets.mjs';
 import { isMerged, mergeFiles } from './files.mjs';
-import { callClaude, checkAnswers, judgeInput, parseAnswers, runPool, splitAnswers } from './judge.mjs';
+import { checkAnswers, judgeInput, parseAnswers, runPool, splitAnswers } from './judge.mjs';
 import { formatTally } from './tally.mjs';
 import { parentEventsOf, readSessionMetadata, reportsFrom, windowMessages } from './window.mjs';
 
@@ -49,9 +50,11 @@ function writeJsonl(file, rows) {
 
 // One judge pass over a packet. A message the pass left unanswered is judged once more, alone, with the same
 // instructions; the retry keeps only the answers for those messages, as the recovered review's fill step did.
-async function judgePacket({ packet, prompt, model }) {
+async function judgePacket({ packet, prompt, judge }) {
   const where = packet.name;
-  const result = await callClaude({ model, input: judgeInput({ prompt, packetText: packet.text }), where });
+  const ask = (input, callWhere) =>
+    chatCompletion({ base: judge.base, key: judge.key, model: judge.model, input, where: callWhere });
+  const result = await ask(judgeInput({ prompt, packetText: packet.text }), where);
   const first = parseAnswers(result, where);
   if (!Array.isArray(first)) throw new Error(`${where}: the answer is not an array`);
   const kept = splitAnswers(first, packet.messageIds);
@@ -61,11 +64,7 @@ async function judgePacket({ packet, prompt, model }) {
   const missing = packet.messageIds.filter((id) => !answered.has(id));
   let fillResult = null;
   if (missing.length > 0) {
-    fillResult = await callClaude({
-      model,
-      input: judgeInput({ prompt, packetText: packet.text, ids: missing }),
-      where: `${where} (fill)`,
-    });
+    fillResult = await ask(judgeInput({ prompt, packetText: packet.text, ids: missing }), `${where} (fill)`);
     const filled = parseAnswers(fillResult, `${where} (fill)`);
     if (!Array.isArray(filled)) throw new Error(`${where} (fill): the answer is not an array`);
     const retry = splitAnswers(filled, missing);
@@ -79,17 +78,20 @@ async function judgePacket({ packet, prompt, model }) {
   return { answers, result, fillResult, dropped };
 }
 
-// A judgment saved by an earlier run of the same window is reused; a judgment from another judge is refused.
-function loadJudgment(file, packet, model) {
+// A judgment saved by an earlier run of the same window and judge option is reused; another option is refused.
+function loadJudgment(file, packet, judgeId) {
   const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
-  if (saved.judge_backend !== model) {
-    throw new Error(`${packet.name}: saved judgment came from ${saved.judge_backend}, not ${model}; use a fresh output directory`);
+  if (saved.judge_backend !== judgeId) {
+    throw new Error(
+      `${packet.name}: saved judgment came from ${saved.judge_backend}, not ${judgeId}; use a fresh output directory`,
+    );
   }
   checkAnswers(saved.answers, packet.messageIds, packet.name);
   return saved;
 }
 
-export async function labelWindow({ home, from, to, reportsUntil, out, model, parallel, prompts }) {
+// The window's labels. The judge is the option `backends.calls.judge` selects, resolved before the store is read.
+export async function labelWindow({ home, from, to, reportsUntil, out, credentialsPath, parallel, prompts }) {
   const sessionsRoot = path.join(home, 'sessions');
   if (!fs.existsSync(sessionsRoot)) throw new Error(`no session store at ${sessionsRoot}`);
   const fromMs = Date.parse(from);
@@ -98,11 +100,35 @@ export async function labelWindow({ home, from, to, reportsUntil, out, model, pa
   for (const [flag, value] of [['--from', fromMs], ['--to', toMs], ['--reports-until', reportsUntilMs]]) {
     if (Number.isNaN(value)) throw new Error(`${flag} is not a timestamp`);
   }
-  const claudeCheck = spawnSync('claude', ['--version'], { encoding: 'utf8' });
-  if (claudeCheck.error || claudeCheck.status !== 0) throw new Error('the claude CLI is not on PATH');
+  const judge = gatewayCall(resolveCall('judge'), credentialsPath);
 
+  const promptHashes = { manager: sha256(prompts.manager), worker: sha256(prompts.worker) };
   fs.mkdirSync(path.join(out, 'packets'), { recursive: true });
-  fs.mkdirSync(path.join(out, 'judgments'), { recursive: true });
+  const judgmentsDir = path.join(out, 'judgments');
+  fs.mkdirSync(judgmentsDir, { recursive: true });
+  const judgmentFiles = fs.readdirSync(judgmentsDir).filter((name) => name.endsWith('.json'));
+  const runFile = path.join(out, 'run.json');
+  let runMatchesJudge = false;
+  if (fs.existsSync(runFile)) {
+    const savedRun = JSON.parse(fs.readFileSync(runFile, 'utf8'));
+    runMatchesJudge = savedRun.judge_backend === judge.id && savedRun.judge_model === judge.model;
+    if (judgmentFiles.length > 0 && !runMatchesJudge) {
+      throw new Error(
+        `saved judgments came from ${savedRun.judge_backend} (${savedRun.judge_model}), not ` +
+          `${judge.id} (${judge.model}); use a fresh output directory`,
+      );
+    }
+  } else if (judgmentFiles.length > 0) {
+    throw new Error('saved judgments have no run metadata; use a fresh output directory');
+  }
+  const runIdentity = {
+    from,
+    to,
+    reports_until: reportsUntil,
+    judge_backend: judge.id,
+    judge_model: judge.model,
+    prompt_sha256: promptHashes,
+  };
   const homeDir = os.homedir();
 
   const sessions = readSessionMetadata(sessionsRoot);
@@ -144,22 +170,22 @@ export async function labelWindow({ home, from, to, reportsUntil, out, model, pa
   for (const packet of packets) {
     fs.writeFileSync(path.join(out, 'packets', `${packet.name}.md`), packet.text);
   }
+  if (!runMatchesJudge) fs.writeFileSync(runFile, `${JSON.stringify(runIdentity, null, 1)}\n`);
 
-  const promptHashes = { manager: sha256(prompts.manager), worker: sha256(prompts.worker) };
   const judgments = new Map();
   const tasks = packets.map((packet) => async () => {
-    const file = path.join(out, 'judgments', `${packet.name}.json`);
+    const file = path.join(judgmentsDir, `${packet.name}.json`);
     const kind = promptKind(packet.profile);
     if (fs.existsSync(file)) {
-      judgments.set(packet.name, loadJudgment(file, packet, model));
+      judgments.set(packet.name, loadJudgment(file, packet, judge.id));
       return;
     }
-    const judged = await judgePacket({ packet, prompt: prompts[kind], model });
+    const judged = await judgePacket({ packet, prompt: prompts[kind], judge });
     const saved = {
       packet: packet.name,
       child: packet.child,
       profile: packet.profile,
-      judge_backend: model,
+      judge_backend: judge.id,
       prompt_kind: kind,
       prompt_sha256: promptHashes[kind],
       answers: judged.answers,
@@ -196,7 +222,7 @@ export async function labelWindow({ home, from, to, reportsUntil, out, model, pa
       off_goal_percent: answer.off_goal_percent,
       off_goal_quote: answer.off_goal_quote,
       reason: answer.reason,
-      judge_backend: model,
+      judge_backend: judge.id,
     };
   });
   writeJsonl(path.join(out, 'messages.jsonl'), records);
@@ -216,7 +242,8 @@ export async function labelWindow({ home, from, to, reportsUntil, out, model, pa
     from,
     to,
     reports_until: reportsUntil,
-    judge_backend: model,
+    judge_backend: judge.id,
+    judge_model: judge.model,
     prompt_sha256: promptHashes,
     messages: records.length,
     children: new Set(records.map((record) => record.target)).size,
@@ -225,7 +252,7 @@ export async function labelWindow({ home, from, to, reportsUntil, out, model, pa
     fill_passes: [...judgments.values()].filter((saved) => saved.fill_result !== null).length,
     dropped_answers: [...judgments.values()].reduce((total, saved) => total + saved.dropped_ids.length, 0),
   };
-  fs.writeFileSync(path.join(out, 'run.json'), `${JSON.stringify(run, null, 1)}\n`);
+  fs.writeFileSync(runFile, `${JSON.stringify(run, null, 1)}\n`);
   return { run, records };
 }
 

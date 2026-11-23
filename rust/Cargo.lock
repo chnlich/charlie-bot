@@ -445,6 +445,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "charliebot-backend-check"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "charliebot-compat",
+ "charliebot-core",
+ "charliebot-registry",
+ "ignore",
+ "proc-macro2",
+ "syn 2.0.119",
+ "tempfile",
+]
+
+[[package]]
 name = "charliebot-backup"
 version = "0.1.0"
 dependencies = [
@@ -539,6 +553,7 @@ dependencies = [
  "anyhow",
  "charliebot-agents",
  "charliebot-artifacts",
+ "charliebot-backend-check",
  "charliebot-backup",
  "charliebot-charlie-code",
  "charliebot-claude-code",
@@ -725,6 +740,7 @@ dependencies = [
  "anyhow",
  "axum",
  "charliebot-agents",
+ "charliebot-backend-check",
  "charliebot-compat",
  "charliebot-core",
  "charliebot-registry",
@@ -1255,6 +1271,7 @@ name = "charliebot-script-tests"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "charliebot-charlie-code",
  "charliebot-cli-common",
  "charliebot-core",
  "charliebot-session-api",
@@ -1447,6 +1464,7 @@ dependencies = [
  "charliebot-agents",
  "charliebot-anthropic-compatible",
  "charliebot-antigravity",
+ "charliebot-backend-check",
  "charliebot-charlie-code",
  "charliebot-claude-code",
  "charliebot-cli-common",
@@ -1463,6 +1481,7 @@ dependencies = [
  "charliebot-usage",
  "charliebot-voice",
  "charliebot-web-reply",
+ "flate2",
  "futures-util",
  "ignore",
  "libc",

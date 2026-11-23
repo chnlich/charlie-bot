@@ -55,6 +55,33 @@ pub fn resolve_call(
   select(selector, id, &[])
 }
 
+/// The target id and ordered member ids that `backends.calls.<class>` names: the members of the pool it names, in
+/// config order, or the one option. A member id may name an option or a pool, so a caller that picks by a member's own
+/// keys resolves each in turn. `session` names no fixed member: the call runs on the calling session's own backend.
+pub fn call_target_members(cfg: &CharlieBotConfig, class: CallClass) -> Result<(String, Vec<String>), ResolveError> {
+  let id = match cfg.backends.calls.get(class) {
+    None => {
+      return Err(ResolveError::Refused(format!(
+        "backends.calls.{} is unset; name a backends.options or backends.pools id for it in config.yaml",
+        class.key()
+      )));
+    }
+    Some(CallTarget::Session) => {
+      return Err(ResolveError::Refused(format!(
+        "backends.calls.{} is 'session', which names no fixed member to resolve",
+        class.key()
+      )));
+    }
+    Some(CallTarget::Backend(id)) => id.clone(),
+  };
+  cfg.backends.check_backend_id(&id).map_err(ResolveError::Refused)?;
+  let members = match cfg.backends.pool(&id) {
+    Some(pool) => pool.members.iter().map(|member| member.backend.clone()).collect(),
+    None => vec![id.clone()],
+  };
+  Ok((id, members))
+}
+
 /// The option a backend id names: an option that selects itself, or a pool's selectable member.
 pub fn resolve_backend(
   cfg: &CharlieBotConfig,
@@ -152,5 +179,34 @@ mod tests {
       let key = format!("backends.calls.{}", class.key());
       assert!(matches!(err, ResolveError::Refused(ref message) if message.contains(&key)), "{class:?}: {err}");
     }
+  }
+
+  /// A pool target gives its members in config order, so a caller that needs a member's own key reads them in the order
+  /// the priority rule reads them. A target naming one option gives that option alone.
+  #[test]
+  fn call_target_members_reads_a_pools_members_in_config_order() {
+    let (_home, cfg) = load(
+      "backends:\n  options:\n    - {id: a, label: A, type: synthetic, model: m, billing: payg}\n    - {id: b, label: B, type: synthetic, model: m, billing: payg}\n    - {id: c, label: C, type: synthetic, model: m}\n  pools:\n    - {id: pool, label: Pool, rule: priority, members: [b, a]}\n  calls:\n    probe: pool\n    review: c\n",
+    );
+
+    let (target, members) = call_target_members(&cfg, CallClass::Probe).unwrap();
+    assert_eq!(target, "pool");
+    assert_eq!(members, vec!["b".to_string(), "a".to_string()]);
+
+    let (target, members) = call_target_members(&cfg, CallClass::Review).unwrap();
+    assert_eq!(target, "c");
+    assert_eq!(members, vec!["c".to_string()]);
+  }
+
+  /// A `session` target names no member to pick, and an unset key names the key to set.
+  #[test]
+  fn call_target_members_refuses_session_and_unset_targets() {
+    let (_home, cfg) = load("backends:\n  calls:\n    review: session\n");
+
+    let err = call_target_members(&cfg, CallClass::Review).unwrap_err();
+    assert!(matches!(err, ResolveError::Refused(ref message) if message.contains("backends.calls.review")), "{err}");
+
+    let err = call_target_members(&cfg, CallClass::Probe).unwrap_err();
+    assert!(matches!(err, ResolveError::Refused(ref message) if message.contains("backends.calls.probe")), "{err}");
   }
 }

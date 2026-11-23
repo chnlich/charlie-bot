@@ -388,7 +388,7 @@ fn is_not_modified(file_headers: &FileHeaders, request: &HeaderMap) -> bool {
     parse_http_date(&file_headers.last_modified),
   ) {
     (Some(since), Some(modified)) => since >= modified,
-    _ => false,
+    (None, _) | (_, None) => false,
   }
 }
 

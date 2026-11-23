@@ -26,7 +26,7 @@ use serde_json::{Map, Value, json};
 use super::*;
 use crate::{UsageLedger, default_ledger_path};
 
-/// 2026-09-04T12:00:00Z, the instant every age in these tests is measured from.
+/// The fixed instant every age in these tests is measured from, at noon UTC.
 const NOW: &str = "2026-09-04T12:00:00+00:00";
 const NOW_UNIX: u64 = 1_788_523_200;
 /// Thirty days before NOW: cold once archived.

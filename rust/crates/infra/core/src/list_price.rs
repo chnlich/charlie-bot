@@ -63,6 +63,11 @@ pub fn lookup(model: &str) -> Option<&'static ListPrice> {
   LIST_PRICES.iter().find(|price| price.model == name)
 }
 
+/// The model names the price table lists, in table order. A tool that needs the names the ledger owns reads them here.
+pub fn price_models() -> impl Iterator<Item = &'static str> {
+  LIST_PRICES.iter().map(|price| price.model)
+}
+
 // These are model spellings, not prefix rules: a new version or effort name must be verified before it shares a rate.
 const ALIASES: &[(&str, &str)] = &[
   ("swe-2-max", "swe-2"),
@@ -116,6 +121,16 @@ static LIST_PRICES: &[ListPrice] = &[
     output: 20.00,
     source_url: ANTHROPIC,
     read_on: READ_ON,
+  },
+  // Claude Opus 5 is a separate model from Opus 5.5, with its own published rates.
+  ListPrice {
+    model: "claude-opus-5",
+    input: 5.00,
+    cache_read: 0.50,
+    cache_write: Some(6.25),
+    output: 25.00,
+    source_url: ANTHROPIC,
+    read_on: "2026-11-23",
   },
   ListPrice {
     model: "claude-sonnet-5-5",
@@ -172,6 +187,17 @@ static LIST_PRICES: &[ListPrice] = &[
     output: 7.50,
     source_url: GOOGLE,
     read_on: READ_ON,
+  },
+  // Neon's Standard paid tier, the one input rate the page gives it. Caching is implicit only, so cache reads are priced
+  // at the cached-input rate, and no cache-write rate is published.
+  ListPrice {
+    model: "gemini-4-neon",
+    input: 3.00,
+    cache_read: 0.15,
+    cache_write: None,
+    output: 15.00,
+    source_url: GOOGLE,
+    read_on: "2026-11-23",
   },
   // DeepSeek's peak-hour rates, which the page gives as its standard rates. Off-peak rates are half these and are not
   // used.
@@ -391,6 +417,8 @@ mod tests {
       ("gemini-3.8-flash-high", 1.5, 0.15, None, 7.5),
       ("gpt-6.2-astra", 8.0, 0.40, Some(10.0), 40.0),
       ("gpt-6.2-sol", 2.0, 0.10, Some(2.5), 10.0),
+      ("claude-opus-5", 5.0, 0.50, Some(6.25), 25.0),
+      ("gemini-4-neon", 3.0, 0.15, None, 15.0),
     ] {
       let price = lookup(name).unwrap();
       assert_eq!((price.input, price.cache_read, price.cache_write, price.output), (input, read, write, output));

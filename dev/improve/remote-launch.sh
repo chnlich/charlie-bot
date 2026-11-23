@@ -20,6 +20,9 @@
 #   - the review backend that `backends.calls.improve_review` selects, as `charliebot backend resolve` answers it,
 #     and its login: a gateway option's api_key in $CHARLIEBOT_HOME/credentials.yaml, a subscription account's access
 #     token, or a codex login in ~/.codex/auth.json;
+#   - the first member of the `backends.calls.probe` target that names an api_base, as
+#     `charliebot release-helper endpoint-option` answers it: the round's serve trial reads that answer, because the
+#     improve host runs no server;
 #   - the member's login: the gateway token in the environment, or a subscription member's access token in
 #     $CLAUDE_CONFIG_DIR/.credentials.json, or a codex member's login in ~/.codex/auth.json;
 #   - the leak pattern file $CHARLIEBOT_HOME/skills_leak_patterns.local.txt;
@@ -29,13 +32,15 @@
 #   - the origin URL of this launcher's checkout, which the runner clones from.
 # It writes only ~/improve/<direction>/evidence/.
 #
-# Exit codes: the agent's exit code; 1 a local failure, such as a missing input file; 3 the host asks for a Tailscale
-# approval or cannot be reached; 4 the direction's clone is missing, is not this protocol's clone, or holds uncommitted
-# work that blocks its checkout of origin/main; 5 the previous round of this direction still runs; 6 the round's
-# direction cannot be read; 7 a round dependency is missing, and stderr names it; 8 the member's login has less
-# access-token life than a round needs, and stderr names the login and its minutes left. Codes 3 to 8 start no agent
+# Exit codes: the agent's exit code; 1 a local failure, such as a missing input file; 3 an ssh step to the improve host
+# failed: either the host asks for a login approval, or stderr quotes ssh's error, or the bound that ended the wait
+# when ssh printed nothing; 4 the direction's clone is missing, is not this protocol's clone, or holds uncommitted work
+# that blocks its checkout of origin/main; 5 the previous round of this direction still runs; 6 the round's direction
+# cannot be read; 7 a round dependency is missing, and stderr names it; 8 the member's login has less access-token life
+# than a round needs, and stderr names the login and its minutes left. Codes 3 to 8 start no agent
 # and no scope, and codes 7 and 8 send nothing to the host. Code 7 also covers the review backend: an unresolved
-# `backends.calls.improve_review`, a missing key or login, or a login with too little life. The review never exits 8,
+# `backends.calls.improve_review`, a missing key or login, or a login with too little life; and the probe: a
+# `backends.calls.probe` target with no member that names an api_base. The review never exits 8,
 # because the server reads 8 as a member's short token and swaps the member. A code 7 for a member or review CLI means
 # this host's `--version` output names no version; the install and its check are the runner's.
 #
@@ -63,6 +68,54 @@ fail() {
   shift
   printf '%s %s\n' "$STDERR_PREFIX" "$*" >&2
   exit "$code"
+}
+
+# The output markers of a host that waits for the user's approval. One classifier owns a host's login state: `classify`
+# in rust/crates/features/host_auth/src/probe.rs maps a probe's output and return code to a status, `awaits_approval`
+# there names the statuses that wait for approval, and rust/crates/features/cron/src/host_gate.rs holds a fire on them.
+# No CLI exposes that verdict, so this launcher carries the same markers, and a change to either list belongs in both
+# files.
+readonly APPROVAL_MARKERS=(
+  'Okta verification required'
+  'activate\?user_code='
+  'Permission denied \(keyboard-interactive\)'
+  'requires an additional check'
+  'To authenticate, visit:'
+  'Host key verification failed'
+)
+
+# Whether a failed ssh call's output carries evidence that the host waits for a login approval.
+host_awaits_approval() {
+  local IFS='|' pattern
+  pattern=${APPROVAL_MARKERS[*]}
+  grep -Eq -- "$pattern" <<<"${1-}"
+}
+
+# The bounded evidence of a failed ssh call: up to five lines and 400 characters of what it printed, or `no_output`
+# when it printed nothing.
+ssh_failure_evidence() {
+  local output=$1 no_output=$2
+  if [[ -n $output ]]; then
+    printf '%s' "$output" | head -n 5 | cut -c1-400
+  else
+    printf '%s' "$no_output"
+  fi
+}
+
+# Exit 3 for a failed ssh call to the improve host, with the cause its evidence supports. An approval marker keeps the
+# /host-auth instruction; any other failure states that the ssh call failed and quotes ssh's error, or the bound that
+# ended the wait when ssh printed nothing. `phase` names the step, and `no_output` describes the case where the call
+# printed nothing.
+fail_ssh_call() {
+  local phase=$1 output=$2 no_output=$3 evidence
+  evidence=$(ssh_failure_evidence "$output" "$no_output")
+  if host_awaits_approval "$output"; then
+    if [[ -n $output ]]; then
+      printf '%s\n' "$evidence" >&2
+    fi
+    fail 3 "the improve host $REMOTE_HOST asks for a login approval; approve the connection on the /host-auth page"
+  fi
+  fail 3 "the ssh call to the improve host $REMOTE_HOST failed at the $phase: $evidence"
 }
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -340,16 +393,24 @@ cli_version_of "$review_kind" "$review_binary"
 review_version=$cli_version_result
 printf '%s review backend %s (%s)\n' "$STDERR_PREFIX" "$review_id" "$review_type" >&2
 
+# ---------- 1d. The probe answer ----------
+# `backends.calls.probe` names the target a serve trial takes its model endpoint from, and the trial needs a member
+# with an api_base. The helper walks the target's members in config order and answers the first one that names an
+# api_base; a target with no such member fails here, by name. The improve host runs no server, so the round's trial
+# reads this answer from the launch: CHARLIEBOT_TRIAL_PROBE_ANSWER names its file.
+if ! probe_answer=$(CHARLIEBOT_HOME="$PROFILE_HOME" charliebot release-helper endpoint-option "$PROFILE_HOME" probe 2>&1); then
+  fail 7 "cannot resolve an endpoint member of backends.calls.probe: $probe_answer"
+fi
+jq -e '.option.id' <<<"$probe_answer" >/dev/null \
+  || fail 7 "the probe answer of backends.calls.probe names no option id: $probe_answer"
+
 # ---------- 2. Round preflight ----------
 set +e
 preflight_output=$(timeout "$PREFLIGHT_SECONDS" "${SSH[@]}" -n "$REMOTE_HOST" true 2>&1)
 preflight_status=$?
 set -e
 if (( preflight_status != 0 )); then
-  if [[ -n $preflight_output ]]; then
-    printf '%s\n' "$preflight_output" >&2
-  fi
-  fail 3 "cannot reach the improve host $REMOTE_HOST; approve the connection on the /host-auth page"
+  fail_ssh_call 'preflight' "$preflight_output" "no answer within ${PREFLIGHT_SECONDS} s"
 fi
 
 # ---------- 3. Direction ----------
@@ -361,8 +422,13 @@ fi
 launch_id=$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM
 payload_parent=$TEMP_ROOT
 payload=$(mktemp -d "$payload_parent/improve-launch.XXXXXXXX") || fail 1 'cannot make the launch directory'
+# The ssh calls that send the launch write their stderr here, outside the payload: a log inside the payload would be
+# tarred with it.
+failure_dir=$(mktemp -d "$payload_parent/improve-failure.XXXXXXXX") \
+  || { rm -rf -- "$payload"; fail 1 'cannot make the failure log directory'; }
 cleanup_payload() {
   [[ $payload == "$payload_parent"/improve-launch.* ]] && rm -rf -- "$payload"
+  [[ $failure_dir == "$payload_parent"/improve-failure.* ]] && rm -rf -- "$failure_dir"
   return 0
 }
 trap cleanup_payload EXIT
@@ -383,6 +449,9 @@ cp -- "$SCRIPT_DIR/remote-runner.sh" "$payload/remote-runner.sh"
 # The review backend's answer: the runner reads the review's backend record from it, and the answer holds no key.
 mkdir -- "$payload/review"
 printf '%s\n' "$review_answer" >"$payload/review/option.json"
+# The probe answer, in the same form: the round's serve trial reads it from probe/option.json.
+mkdir -- "$payload/probe"
+printf '%s\n' "$probe_answer" >"$payload/probe/option.json"
 cp -- "$member_kinds_file" "$payload/member_kinds.txt"
 # The runner sources the in-flight rule from this copy, so its clone scan uses
 # the same claimant and path functions as the list above.
@@ -430,10 +499,19 @@ copy_evidence "$EVIDENCE_COPY_SECONDS"
 set +e
 tar -C "$payload" -cf - . |
   "${SSH[@]}" "$REMOTE_HOST" "umask 077; mkdir -p \"\$HOME/improve/launch/$launch_id\" && tar -C \"\$HOME/improve/launch/$launch_id\" -xf -" \
-    3>&-
+    3>&- 2>"$failure_dir/send.err"
 send_status=$?
 set -e
-(( send_status == 0 )) || fail 3 "cannot send the round's inputs to $REMOTE_HOST; approve the connection on the /host-auth page"
+if (( send_status != 0 )); then
+  send_output=
+  [[ -s $failure_dir/send.err ]] && send_output=$(<"$failure_dir/send.err")
+  if (( send_status == 255 )); then
+    fail_ssh_call 'input send' "$send_output" "ssh exited $send_status"
+  fi
+  # The host answered and the send itself failed: quote its error and name no approval page.
+  fail 3 "cannot send the round's inputs to $REMOTE_HOST (exit $send_status):" \
+    "$(ssh_failure_evidence "$send_output" 'no output')"
+fi
 
 # The heartbeat carries this launch id as its own argument. The host's next-start sweep uses that live process to keep
 # this launch's member-credential file between `--prepare` and the wrapper's start. Start it before preparing that
@@ -454,13 +532,19 @@ records=(
 )
 set +e
 printf '%s\0' "${records[@]}" |
-  "${SSH[@]}" "$REMOTE_HOST" "bash \$HOME/improve/launch/$launch_id/remote-runner.sh --prepare $launch_id" 3>&-
+  "${SSH[@]}" "$REMOTE_HOST" "bash \$HOME/improve/launch/$launch_id/remote-runner.sh --prepare $launch_id" 3>&- \
+    2>"$failure_dir/prepare.err"
 prepare_status=$?
 set -e
 if (( prepare_status == 255 )); then
-  fail 3 "cannot reach the improve host $REMOTE_HOST; approve the connection on the /host-auth page"
+  prepare_output=
+  [[ -s $failure_dir/prepare.err ]] && prepare_output=$(<"$failure_dir/prepare.err")
+  fail_ssh_call 'credential write' "$prepare_output" "ssh exited $prepare_status"
 fi
-(( prepare_status == 0 )) || fail 1 "the runner could not write the round's credentials on $REMOTE_HOST"
+if (( prepare_status != 0 )); then
+  [[ -s $failure_dir/prepare.err ]] && cat -- "$failure_dir/prepare.err" >&2
+  fail 1 "the runner could not write the round's credentials on $REMOTE_HOST"
+fi
 
 # ---------- 5. Start ----------
 set +e

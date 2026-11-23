@@ -16,7 +16,7 @@ use charliebot_registry::{Registry, RegistryError, registration_step};
 
 use charliebot_agents::cli_base::CliHost;
 
-pub use charlie_code_cli::{API_KEY_ENV, BINARY_NAME};
+pub use charlie_code_cli::{API_KEY_ENV, BINARY_NAME, TASK_FILE_NAME};
 
 /// The ledger's source value and the usage page's card title for Charlie Code's usage.
 pub const USAGE_SOURCE: &str = "CLC";

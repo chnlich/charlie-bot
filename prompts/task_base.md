@@ -21,7 +21,11 @@ The codebase has a single user. Apply these principles:
 - **One owner per responsibility**: give each responsibility one owning module. When a change meets scattered
   ownership, consolidate it.
 - **One general mechanism**: serve every backend, tool and field through one general mechanism. A new case then reuses
-  that path, so the code keeps one path to test and maintain.
+  that path, so the code keeps one path to test and maintain. The backend of each call comes from the `backends` config.
+  Code names no model id, option id, pool id, gateway URL or agent CLI as the backend of a call. Instruction text names
+  no model id, option id, pool id or gateway URL as one. `charliebot backend check` refuses such a name at landing, in
+  CI and at each cron fire. At server start it reports such a name to each enabled cron task's bound session and does
+  not stop the server.
 - **Minimal schema**: a schema is the structure that a design stores or transmits: its records, fields, states,
   config keys, command flags and API fields. When a design has two or more workable schemas for what it adds or
   changes, recommend the smallest schema that serves most of the user's stated needs. Schema that the design keeps
@@ -70,21 +74,32 @@ would alter a page, report that it needs rerouting before editing.
 - Capture each window size that `charliebot land --help` lists at device pixel ratio 1, filling each view with the
   longest real content that the page shows in use and capturing the whole screen with every related change applied.
 - Keep the screenshot files out of the commits.
-- For a landing through `charliebot land`, name each screenshot file by its absolute path on this host in the commit
-  or PR body.
+- For a landing through `charliebot land`, name the approved demo in the PR body's Demo line, the full URL (path and
+  query) that opens the changed state with real content in its View line, and each screenshot by absolute path on this
+  host in the commit or PR body.
 - For an improve round, follow `dev/improve/landing.md` Steps 5 and 9 for the screenshots' location, the pull request's
   naming of them and their delivery to the user.
 
-When you review such a change, check each screenshot it names before you land it, wherever the landing keeps the file.
+When you review such a change, check each screenshot it names before you land it, wherever the landing keeps the file,
+judging it against the demo the change names (or for an improve round against the same round's before screenshot and
+direction file) and pass it only when it matches that reference and every region outside the change keeps room for its
+content.
 - Look for overlap with page content, clipping and missing controls in every state the screenshots show.
 - Report the landing as blocked instead of landing it when a screenshot is missing or shows one of these defects.
 
 `charliebot land` refuses a landing whose diff changes a file that a CharlieBot page serves, or a page template under
-`prompts/`, unless its PR body names the approved demo on a `Demo:` line, the changed view's URL path on a `View:` line,
-and a screenshot at each window size `charliebot land --help` lists by absolute path. The view that a `View:` line names
-exists on the live server. A `/?session=<id>` view names a session the server knows. An improve round merges through
+`prompts/`, unless its PR body names the approved demo on a `Demo:` line, a `View:` line, and a screenshot at each
+window size `charliebot land --help` lists by absolute path. A `View:` line names the full URL, path and query, that
+opens the changed state with real content on the live server, such as
+`/diff?repo=~/workspace/charlie-bot&base=<sha>~1&head=<sha>` or `/?session=<id>`. A `/?session=<id>` view names a
+session the server knows. An improve round merges through
 `dev/improve/github-post.sh pr-merge`, which refuses a web page change whose evidence directory lacks a screenshot at
 each window size or whose PR body lacks its `View:` line.
+
+After the release switch, compare each live screenshot that `scripts/switch-server.sh` prints for a commit with the demo
+before you report the change delivered. When the switch exits 7 with `not-visible` on a commit whose change only opens
+through interaction, confirm that change from the screenshots its landing named, and name those screenshots and the
+check's reason in the delivery report; a `broken` verdict or failed check requires a fix instead.
 
 <!-- section: skills_discovery -->
 ## Skills Discovery

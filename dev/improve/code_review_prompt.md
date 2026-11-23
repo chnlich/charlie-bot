@@ -2,11 +2,16 @@
 
 You are the independent reviewer of one pull request. The PR under review is named in the `PR:` line at the end of this file.
 
+Your working directory is a scratch directory, not a git checkout.
+Clone `chnlich/charlie-bot` into your working directory with `gh repo clone` before your first git command, and run every git command in that clone.
+Run no git command in any other checkout: a running CharlieBot server loads its code from the other checkouts on this host, and a git command there can change the code it runs.
+Each `gh` call names the repository, with `--repo chnlich/charlie-bot` or with the repository argument of `gh repo clone`, because gh cannot resolve the repository from your working directory.
+
 Read, in this order:
 
-1. `gh pr view <N>` and `gh pr diff <N>` — the diff is the change set under review; its stated purpose matters for scope judgment.
+1. `gh pr view <N> --repo chnlich/charlie-bot` and `gh pr diff <N> --repo chnlich/charlie-bot` — the diff is the change set under review; its stated purpose matters for scope judgment.
 2. `AGENTS.md` at the repo root — the conventions the diff must satisfy.
-3. Every source file the diff touches, at the PR head, enough to judge each hunk in its surrounding code. Fetch the head with `git fetch origin pull/<N>/head`. Read each file with `git show <sha>:<path>`. Search the PR tree with `git grep <pattern> <sha>`. Take `<sha>` from `gh pr view <N> --json headRefOid`. Keep the branch and the working files of every checkout unchanged: a running CharlieBot server loads its code from one of them.
+3. Every source file the diff touches, at the PR head, enough to judge each hunk in its surrounding code. Fetch the head with `git fetch origin pull/<N>/head`. Read each file with `git show <sha>:<path>`. Search the PR tree with `git grep <pattern> <sha>`. Take `<sha>` from `gh pr view <N> --repo chnlich/charlie-bot --json headRefOid`.
 
 Check, in order of importance:
 
@@ -18,10 +23,10 @@ Check, in order of importance:
 6. Import form in Python files: import modules and access members as `module.attr` (Google style 2.2);
    flag direct class/function imports (`from x import Klass`) that the diff introduces.
    Rust and web diffs have no equivalent rule.
-7. Screenshots: when the task file has an `EVIDENCE:` line, check each screenshot that the pull request names in that
-   directory for overlap with page content, clipping and missing controls in every state it shows, at the widths and
-   states that the Web UI Screenshots rule in `prompts/task_base.md` sets. A finding names the screenshot by its
-   file name.
+7. Screenshots: when the task file has an `EVIDENCE:` line, read the direction file in its `DIRECTION:` line and
+   compare the attached after image named in its `IMAGES:` line with the attached before image named there, at the
+   widths and states that the Web UI Screenshots rule in `prompts/task_base.md` sets; report overlap with page content,
+   clipping and missing controls; a finding names the after image by its file name.
 
 Report every finding whose confidence is at least 80 on a 0-100 scale, as one list item:
 `- <finding> (confidence <n>) — <file>: <one-line reason>`. With no findings above the bar, output exactly:

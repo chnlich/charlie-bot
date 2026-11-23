@@ -8,14 +8,15 @@
 # is rewritten by the caller and resubmitted. A credential hit stops the round:
 # the scanner names the kind, and nothing is rewritten.
 #
-# The push subcommand's diffs are checked by the pre-push hook of the clone
-# (dev/git-hooks/pre-push), which this script runs through git push.
+# The push subcommand checks the pushed text in-process before calling git push — names, commits, diffs,
+# decompressed blobs and docs — and the pre-push hook of the clone (dev/git-hooks/pre-push) applies the same
+# checks inside git push, so a clone without the hooks path is still covered.
 #
 # Calls that carry no round-written text stay bare gh: gh pr update-branch,
 # gh run rerun, and the read-only calls. A merge goes through pr-merge, which
-# refuses a web page change whose evidence directory fails the screenshot check
-# or whose pull request body names no View line, and carries the View lines into
-# the squash commit message.
+# refuses a draft pull request, a web page change whose evidence directory fails
+# the screenshot check, whose body lacks a full-URL View line, or whose View value
+# does not start with `/`, and carries the View lines into the squash commit message.
 #
 # pr-edit does not call gh pr edit: on gh 2.45 that fails on the Projects
 # (classic) lookup. It reads the PR's URL with gh pr view, then sends the
@@ -39,21 +40,18 @@ usage() {
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 scanner="$repo_root/dev/check-skills-host-leak.sh"
+source "$repo_root/dev/push-text-lists.sh"
 
 tmp_dir=$(mktemp -d)
 trap 'rm -rf "$tmp_dir"' EXIT
 
-# The pattern file lives in the profile home, resolved the way
-# dev/leak-patterns.sh resolves it: CHARLIEBOT_HOME when set (blank counts as
-# unset), ~/.charliebot otherwise, a leading ~ in the value is HOME. Missing or
-# unreadable is a refusal, not a silent pass: nothing goes out unchecked.
-profile_home=${CHARLIEBOT_HOME:-$HOME/.charliebot}
-patterns_file="${profile_home/#\~/$HOME}/skills_leak_patterns.local.txt"
-if [[ ! -r "$patterns_file" ]]; then
-  printf 'Leak pattern file is absent or unreadable: %s\n' "$patterns_file" >&2
-  exit 2
-fi
-export EXTRA_PATTERNS_FILE="$patterns_file"
+# The local pattern file must hold a pattern before any text leaves: missing, unreadable or empty outside
+# comments is a refusal, not a silent pass, so nothing goes out with its host rules silently dropped.
+tmp_patterns="$tmp_dir/patterns"
+: > "$tmp_patterns"
+source "$repo_root/dev/leak-patterns.sh"
+load_host_patterns --require
+export EXTRA_PATTERNS_FILE="$extra_patterns_file"
 
 # The credential values of this process, read once: a setup refusal (exit 2) sends nothing.
 credential_values="$tmp_dir/credential-values"
@@ -74,7 +72,7 @@ check_text() {
   fi
   [[ "$status" -eq 0 ]] || exit "$status"
   set +e
-  "$scanner" --stdin < "$file"
+  "$scanner" --require-local-patterns --stdin < "$file"
   status=$?
   set -e
   if [[ "$status" -eq 0 ]]; then
@@ -206,7 +204,7 @@ case "$subcommand" in
   pr-merge)
     # The round's merge. A web page change passes the screenshot check of
     # `charliebot screenshots check`, which reads the changed paths on stdin, and
-    # its pull request body must carry a View line. The check prints a
+    # its pull request body must carry a full-URL View line starting with `/`. The check prints a
     # `web page change:` line exactly when the change alters a web page, so this
     # script keeps no second copy of the rule. The View lines go into the squash
     # commit message as trailers, which the release switch reads back to capture
@@ -250,6 +248,22 @@ case "$subcommand" in
     [[ -n "$pr_selector" ]] || { usage; exit 2; }
     repo_args=()
     [[ -z "$pr_repo" ]] || repo_args=(--repo "$pr_repo")
+    # A draft waits for its measurements, so this check stays ahead of every read and merge of the pull request.
+    draft_state=$(gh pr view "$pr_selector" "${repo_args[@]}" --json isDraft --jq .isDraft) || {
+      printf 'Cannot read the draft state of PR %s; nothing was merged.\n' "$pr_selector" >&2
+      exit 2
+    }
+    case "$draft_state" in
+      false) ;;
+      true)
+        printf 'PR %s is a draft: a draft waits for its measurements; nothing was merged.\n' "$pr_selector" >&2
+        exit 2
+        ;;
+      *)
+        printf 'Cannot read the draft state of PR %s; nothing was merged.\n' "$pr_selector" >&2
+        exit 2
+        ;;
+    esac
     changed=$(gh pr diff --name-only "$pr_selector" "${repo_args[@]}") || {
       printf 'Cannot read the changed paths of PR %s; nothing was merged.\n' "$pr_selector" >&2
       exit 2
@@ -283,9 +297,17 @@ case "$subcommand" in
       }
       sed -n 's/^View:[[:space:]]*//p' "$tmp_dir/pr-body" > "$tmp_dir/views"
       if [[ ! -s "$tmp_dir/views" ]]; then
-        printf 'PR %s changes a web page, so its body must carry a View: line; nothing was merged.\n' "$pr_selector" >&2
+        printf 'PR %s changes a web page, so its body must carry a `View: <URL>` line naming the full URL, path and query, that opens the changed state; nothing was merged.\n' \
+          "$pr_selector" >&2
         exit 2
       fi
+      while IFS= read -r view; do
+        if [[ "$view" != /* ]]; then
+          printf 'PR %s changes a web page, so each `View: <URL>` line naming the full URL, path and query, that opens the changed state must start with `/`; nothing was merged.\n' \
+            "$pr_selector" >&2
+          exit 2
+        fi
+      done < "$tmp_dir/views"
       # The View lines move to the message's end, so the squash commit carries each exactly once, as a trailer
       # block; a duplicate line would capture the live page twice at the release switch.
       { sed '/^View:/d' "$tmp_dir/pr-body"; printf '\n'; sed 's/^/View: /' "$tmp_dir/views"; } > "$tmp_dir/merge-body"
@@ -296,11 +318,11 @@ case "$subcommand" in
     gh "${merge_args[@]}"
     ;;
   push)
-    # The pushed branch name (each refspec side) and the current branch, then
-    # every commit message in origin/main..HEAD. The commit text lands on main
-    # through the squash merge, so it is checked like a pull-request body.
-    current_branch=$(git branch --show-current)
-    [[ -z "$current_branch" ]] || check_string 'branch name' "$current_branch"
+    # The pushed text is checked in-process before git push runs, so a clone without the hooks path is covered
+    # too: the source ref of each refspec (HEAD when the call names no refspec), the ref and branch names, and
+    # every commit the push publishes — its message, identity, diff, decompressed `*.gz` blobs and designated
+    # doc blobs. Credentials first, then the host patterns over all of it, then the generic rules over the
+    # messages and docs. The pre-push hook still runs inside git push and applies the same stages.
     value_opts='^(-o|--push-option|--receive-pack|--exec|--repo)$'
     positional=()
     skip_next=0
@@ -315,35 +337,83 @@ case "$subcommand" in
       fi
       [[ "$arg" == -* ]] || positional+=("$arg")
     done
+    # The first positional is the remote; the rest are refspecs. A lone remote means HEAD, and a refspec's
+    # source side is what its commits publish under — `feat`, `feat:main` or `+feat:main`. A `:dst` deletion
+    # publishes no content.
     specs=()
     if [[ ${#positional[@]} -ge 2 ]]; then
       specs=("${positional[@]:1}")
-    elif [[ ${#positional[@]} -eq 1 && "${positional[0]}" != *:* ]]; then
-      specs=("${positional[0]}")
+    fi
+    srcs=()
+    names_file="$tmp_dir/push-names"
+    : > "$names_file"
+    if [[ ${#specs[@]} -eq 0 ]]; then
+      srcs=(HEAD)
+      git branch --show-current >> "$names_file" || {
+        printf 'Cannot read the current branch name for the push check; nothing was pushed.\n' >&2
+        exit 2
+      }
     fi
     for spec in "${specs[@]}"; do
-      sides=("${spec%%:*}")
+      spec=${spec#+}
+      src=${spec%%:*}
       if [[ "$spec" == *:* ]]; then
-        sides+=("${spec#*:}")
+        printf '%s\n%s\n' "$src" "${spec#*:}" >> "$names_file"
+      else
+        printf '%s\n' "$src" >> "$names_file"
       fi
-      for side in "${sides[@]}"; do
-        side=${side#+}
-        side=${side#refs/heads/}
-        [[ -z "$side" ]] || check_string 'branch name' "$side"
-      done
+      if [[ "$src" == HEAD ]]; then
+        git branch --show-current >> "$names_file" || {
+          printf 'Cannot read the current branch name for the push check; nothing was pushed.\n' >&2
+          exit 2
+        }
+      fi
+      [[ -n "$src" ]] && srcs+=("$src")
     done
-    # A failed listing must stop the push: a process substitution would hide the failure and push unchecked.
-    commits=$(git rev-list origin/main..HEAD) || {
-      printf 'Cannot list origin/main..HEAD for the commit check; nothing was pushed.\n' >&2
-      exit 2
-    }
-    while IFS= read -r sha; do
-      [[ -n "$sha" ]] || continue
-      git show -s --format=%B "$sha" > "$tmp_dir/field"
-      check_text "commit $sha message" "$tmp_dir/field"
-    done <<< "$commits"
-    # The pre-push hook checks each pushed diff. Its refusal exits git's push with 1, so the hook also writes the
-    # credential hit to this file, and the round's exit names the hit with code 3.
+
+    cred_list="$tmp_dir/cred.list"
+    all_list="$tmp_dir/all.list"
+    doc_list="$tmp_dir/doc.list"
+    printf 'branch name\t%s\n' "$names_file" > "$cred_list"
+    printf 'branch name\t%s\n' "$names_file" > "$all_list"
+    : > "$doc_list"
+    index=0
+    for src in "${srcs[@]}"; do
+      # The commits a push publishes: origin/main..src when main is an ancestor, or every commit no remote ref
+      # reaches for a new branch. A failed listing stops the push.
+      if git merge-base --is-ancestor origin/main "$src" 2>/dev/null; then
+        commits=$(git rev-list "origin/main..$src") || {
+          printf 'Cannot list origin/main..%s for the push check; nothing was pushed.\n' "$src" >&2
+          exit 2
+        }
+      else
+        commits=$(git rev-list "$src" --not --remotes) || {
+          printf 'Cannot list the commits of %s for the push check; nothing was pushed.\n' "$src" >&2
+          exit 2
+        }
+      fi
+      while IFS= read -r sha; do
+        [[ -n "$sha" ]] || continue
+        collect_commit_texts "$sha" "$tmp_dir" "$index" "$cred_list" "$all_list" "$doc_list"
+        index=$((index + 1))
+      done <<< "$commits"
+    done
+
+    status=0
+    "$scanner" --credential-check-list "$credential_values" "$cred_list" > "$tmp_dir/hit" || status=$?
+    if [[ "$status" -eq 3 ]]; then
+      cat -- "$tmp_dir/hit" >&2
+      printf 'nothing was pushed; the round stops here: the kind named above is the reason.\n' >&2
+      exit 3
+    elif [[ "$status" -ne 0 ]]; then
+      cat -- "$tmp_dir/hit" >&2
+      exit "$status"
+    fi
+    "$scanner" --require-local-patterns --host-patterns-only --check-list "$all_list"
+    "$scanner" --require-local-patterns --check-list "$doc_list"
+
+    # The pre-push hook applies the same checks inside git push. Its refusal exits git's push with 1, so the
+    # hook also writes the credential hit to this file, and the round's exit names the hit with code 3.
     hit_file="$tmp_dir/credential-hit"
     push_status=0
     CHARLIEBOT_CREDENTIAL_HIT_FILE="$hit_file" git push "${orig_args[@]}" || push_status=$?

@@ -9,7 +9,7 @@ use charliebot_agents::runner::EventFn;
 use charliebot_agents::transport::follow::SilenceCallback;
 use charliebot_agents::transport::spawn;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
-use charliebot_registry::backend::{EXTRA_FLAGS_BACKEND_KWARG, RecoverySilence, ResumeStyle};
+use charliebot_registry::backend::{EXTRA_FLAGS_BACKEND_KWARG, RecoverySilence};
 use charliebot_registry::context::FeatureContext;
 use serde_json::{Map, Value};
 use tokio::sync::{mpsc, oneshot};
@@ -68,22 +68,8 @@ pub(crate) fn route_resume_session(
   option: &BackendOption,
   cc_session_id: Option<&str>,
 ) -> anyhow::Result<(Vec<String>, Option<String>)> {
-  let registration = features
-    .registry
-    .backend_type_of(&option.backend_type)
-    .with_context(|| format!("unknown backend type {}", option.backend_type))?;
-  route_resume_session_style(registration.traits.resume, cc_session_id)
-}
-
-pub(crate) fn route_resume_session_style(
-  style: ResumeStyle,
-  cc_session_id: Option<&str>,
-) -> anyhow::Result<(Vec<String>, Option<String>)> {
   let Some(cc_session_id) = cc_session_id.filter(|id| !id.is_empty()) else { return Ok((Vec::new(), None)) };
-  match style {
-    ResumeStyle::CliFlag => Ok((vec!["--resume".to_string(), cc_session_id.to_string()], None)),
-    ResumeStyle::NativeId => Ok((Vec::new(), Some(cc_session_id.to_string()))),
-  }
+  features.registry.resume_parts(&option.backend_type, cc_session_id)
 }
 
 /// The follow's silence callback for a recovered serve turn, from the deadline the serve transport reported.

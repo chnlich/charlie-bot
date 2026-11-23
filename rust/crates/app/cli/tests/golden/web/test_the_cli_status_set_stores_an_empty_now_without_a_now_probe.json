@@ -1,0 +1,33 @@
+{
+  "argv": ["web", "status", "set", "--file", "{root}/status.json", "--session", "abc"],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "status.json": "{\"now\": \"\"}"
+  },
+  "responses": [
+    {"status": 200, "body": {"unread": []}},
+    {"status": 200, "body": {"stored": true}}
+  ],
+  "expect": {
+    "stdout": "{\"stored\": true}\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/web/status/unread",
+        "query": "",
+        "headers": {"Authorization": null, "X-CharlieBot-Caller-Session": null, "Content-Type": "application/json"},
+        "body": {"session_id": "abc", "text": "{\"now\": \"\"}"}
+      },
+      {
+        "method": "POST",
+        "path": "/api/internal/web/status",
+        "query": "",
+        "headers": {"Authorization": null, "X-CharlieBot-Caller-Session": null, "Content-Type": "application/json"},
+        "body": {"session_id": "abc", "text": "{\"now\": \"\"}"}
+      }
+    ]
+  }
+}

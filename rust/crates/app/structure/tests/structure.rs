@@ -33,11 +33,12 @@ const CHAT_CHANNELS: [&str; 3] = ["slack", "discord", "feishu"];
 ///
 /// A runtime crate depends only on its own layer or a lower layer. The table must cover every runtime crate and name
 /// no missing one.
-const RUNTIME_LAYERS: [(&str, usize); 8] = [
+const RUNTIME_LAYERS: [(&str, usize); 9] = [
   ("store", 1),
   ("registry", 2),
   ("user_text_checks", 3),
   ("usage", 3),
+  ("backend_check", 3),
   ("agents", 4),
   ("tasks", 5),
   ("triggers", 6),
@@ -373,6 +374,7 @@ fn group_of_dir(dir_rel: &str) -> Option<String> {
   match parts[1] {
     "infra" | "runtime" | "app" => Some(parts[1].to_string()),
     "backends" | "features" => Some(format!("{}.{}", parts[1], parts[2])),
+    // `group_failures` reports a crate that no group names, so None is that error path.
     _ => None,
   }
 }
@@ -1450,6 +1452,24 @@ const EXACT_LITERAL_OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_chat_threads::thread_read::PERSON`; every message view in a thread read names the person \
            field from it.",
   },
+  OwnerRow {
+    name: "session_backend",
+    owner: "runtime/agents",
+    hint: "Use `charliebot_agents::backend_pool::ROUTER_SESSION_BACKEND_FIELD`; the backend router request names the \
+           delegating session's backend under it.",
+  },
+  OwnerRow {
+    name: "cooling_until",
+    owner: "runtime/agents",
+    hint: "Use `charliebot_agents::backend_pool::ROUTER_CANDIDATE_COOLING_UNTIL_FIELD`; the backend router candidate \
+           object carries its recovery time under it.",
+  },
+  OwnerRow {
+    name: "routed",
+    owner: "runtime/agents",
+    hint: "Use `charliebot_agents::backend_pool::RouterAnswer` and `ROUTER_ROUTED_FIELD`; the backend router answers \
+           through them.",
+  },
 ];
 
 /// The phrases that one crate owns: the response detail sentences that a route answers with, and the log event
@@ -2300,12 +2320,13 @@ fn collect_macro_statics(tokens: TokenStream, statics: &mut Vec<StaticRecord>) {
 fn has_visibility_before(trees: &[TokenTree], index: usize) -> bool {
   let before = index.checked_sub(1).and_then(|position| trees.get(position));
   let group_before = index.checked_sub(2).and_then(|position| trees.get(position));
-  match (before, group_before) {
-    (Some(TokenTree::Ident(ident)), _) => ident == "pub",
-    (Some(TokenTree::Group(group)), Some(TokenTree::Ident(ident))) => {
-      group.delimiter() == Delimiter::Parenthesis && ident == "pub"
+  match before {
+    Some(TokenTree::Ident(ident)) => ident == "pub",
+    Some(TokenTree::Group(group)) => {
+      matches!(group_before, Some(TokenTree::Ident(ident)) if ident == "pub")
+        && group.delimiter() == Delimiter::Parenthesis
     }
-    _ => false,
+    Some(TokenTree::Punct(_) | TokenTree::Literal(_)) | None => false,
   }
 }
 
@@ -2758,6 +2779,7 @@ fn the_checks_find_each_break() {
     "crates/runtime/store",
     "crates/runtime/registry",
     "crates/runtime/usage",
+    "crates/runtime/backend_check",
     "crates/runtime/agents",
     "crates/runtime/tasks",
     "crates/runtime/triggers",
@@ -2775,6 +2797,7 @@ fn the_checks_find_each_break() {
       ("crates/runtime/store/Cargo.toml", crate_manifest("store-crate", &[("triggers-crate", "../triggers")], &[])),
       ("crates/runtime/registry/Cargo.toml", crate_manifest("registry-crate", &[], &[])),
       ("crates/runtime/usage/Cargo.toml", crate_manifest("usage-crate", &[], &[])),
+      ("crates/runtime/backend_check/Cargo.toml", crate_manifest("backend-check-crate", &[], &[])),
       ("crates/runtime/agents/Cargo.toml", crate_manifest("agents-crate", &[], &[])),
       ("crates/runtime/tasks/Cargo.toml", crate_manifest("tasks-crate", &[], &[])),
       ("crates/runtime/triggers/Cargo.toml", crate_manifest("triggers-crate", &[], &[])),
@@ -3776,7 +3799,7 @@ fn scan_tokens(tokens: &TokenStream, line: usize, paths: &mut Vec<PathRecord>, i
         }
       }
       TokenTree::Group(group) => scan_tokens(&group.stream(), line, paths, idents),
-      _ => {}
+      TokenTree::Punct(_) | TokenTree::Literal(_) => {}
     }
     index += 1;
   }
@@ -3792,7 +3815,7 @@ fn is_cfg_test(attrs: &[Attribute]) -> bool {
     attr.path().is_ident("cfg")
       && match &attr.meta {
         Meta::List(list) => list.tokens.to_string().replace(' ', "") == "test",
-        _ => false,
+        Meta::Path(_) | Meta::NameValue(_) => false,
       }
   })
 }
@@ -3968,7 +3991,7 @@ fn collect_token_literals(tokens: TokenStream, literals: &mut Vec<Literal>) {
 fn is_path_constructor(path: &syn::Path) -> bool {
   match path_segments(path).as_slice() {
     [.., owner, function] => matches!((owner.as_str(), function.as_str()), ("Path", "new") | ("PathBuf", "from")),
-    _ => false,
+    [] | [_] => false,
   }
 }
 

@@ -870,3 +870,20 @@ fn list_price_equivalent_includes_ledger_aliases() {
   assert_usd(models["gemini-4-argon-high"]["usd"].as_f64().unwrap(), 24.0, "Gemini alias");
   assert_usd(models["swe-2-max"]["usd"].as_f64().unwrap(), 18.0, "SWE alias");
 }
+
+#[test]
+fn list_price_equivalent_prices_claude_opus_5_and_gemini_4_neon() {
+  let last = vec![
+    row(CC, "claude-opus-5", [1_000_000, 1_000_000, 1_000_000, 0, 1_000_000], vec![]),
+    row(CC, "claude-opus-5-5", [1_000_000, 0, 0, 0, 0], vec![]),
+    row(CC, "gemini-4-neon", [1_000_000, 0, 1_000_000, 0, 1_000_000], vec![]),
+  ];
+  let context = priced_week(last, vec![]);
+  assert_eq!(context["ctx"]["week"]["usd_left_out"], "0");
+  let models = week_payload(&context);
+  assert_usd(models["claude-opus-5-5"]["usd"].as_f64().unwrap(), 4.0, "Opus 5.5 keeps its own rate");
+  // Opus 5 at $5 input, $6.25 cache write, $0.50 cache read and $25 output per million tokens.
+  assert_usd(models["claude-opus-5"]["usd"].as_f64().unwrap(), 36.75, "Claude Opus 5");
+  // Neon at $3 input, $0.15 cache read and $15 output per million tokens.
+  assert_usd(models["gemini-4-neon"]["usd"].as_f64().unwrap(), 18.15, "Gemini 4 Neon");
+}

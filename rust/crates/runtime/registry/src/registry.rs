@@ -494,11 +494,13 @@ impl Registry {
   }
 }
 
-/// How a backend type resumes its conversation: a CLI flag, or the backend's own session id in its constructor.
+/// How a backend type resumes its conversation: a CLI flag, the backend's own session id in its constructor, or no way
+/// to resume at all.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResumeStyle {
   CliFlag,
   NativeId,
+  Unsupported,
 }
 
 /// The behaviors that runtime code reads by backend type (`backend_type_registration.BackendTraits`).
@@ -758,6 +760,12 @@ pub trait BackendFactory: Send + Sync {
     cfg: &CharlieBotConfig,
     launch: LaunchArgs,
   ) -> anyhow::Result<Box<dyn AgentBackend>>;
+
+  /// Whether this backend type has a native one-shot that runs without tools. The CLI checks this before building the
+  /// backend, so an unsupported type is refused even when its executable is unavailable.
+  fn one_shot_is_tool_less(&self) -> bool {
+    false
+  }
 }
 
 /// How the runner reads a process's output.
@@ -848,7 +856,7 @@ pub trait AgentBackend: Send {
   fn finish_final_stdout(&mut self, _stdout: &str, _stderr: &str, _exit_code: i32) -> FinalStdoutOutcome {
     panic!("finish_final_stdout is called only for a FinalStdout transport")
   }
-  /// The CLI-native one-shot, tool-less, or `None` when the backend has none. The dispatcher
+  /// The CLI-native one-shot, or `None` when the backend has none. The dispatcher
   /// `charliebot_agents::one_shot_text` runs the tool-capable one-shot for `None`.
   fn one_shot_text<'a>(
     &'a mut self,
@@ -1300,6 +1308,27 @@ impl Registry {
   /// The registration of `backend_type`, or `None` when no package registered it.
   pub fn backend_type_of(&self, backend_type: &str) -> Option<&BackendTypeRegistration> {
     self.backend_types.get(backend_type)
+  }
+
+  /// The launch parts that resuming `session_id` takes on `backend_type`: the flags that go before the launch's own
+  /// flags, and the native id the launch carries. A type whose style has no resume path, or an unregistered type,
+  /// fails and names the type.
+  pub fn resume_parts(&self, backend_type: &str, session_id: &str) -> anyhow::Result<(Vec<String>, Option<String>)> {
+    let Some(registration) = self.backend_types.get(backend_type) else {
+      bail!("Unknown backend type: {backend_type}");
+    };
+    match registration.traits.resume {
+      ResumeStyle::CliFlag => Ok((vec!["--resume".to_string(), session_id.to_string()], None)),
+      ResumeStyle::NativeId => Ok((Vec::new(), Some(session_id.to_string()))),
+      ResumeStyle::Unsupported => {
+        bail!("backend type {backend_type} has no resume path, so it cannot continue session {session_id}")
+      }
+    }
+  }
+
+  /// True when a registered backend type has a native one-shot that runs without tools.
+  pub fn backend_type_has_tool_less_one_shot(&self, backend_type: &str) -> bool {
+    self.backend_types.get(backend_type).is_some_and(|registration| registration.factory.one_shot_is_tool_less())
   }
 
   /// The lifecycle of `backend_type`: its registered lifecycle, or the default one. An unregistered type fails.
@@ -2485,6 +2514,65 @@ mod tests {
   use axum::body::Body;
   use axum::response::Response;
   use futures_util::future::BoxFuture;
+
+  struct NoBuild;
+
+  impl BackendFactory for NoBuild {
+    fn build(
+      &self,
+      _option: Option<&BackendOption>,
+      _cfg: &CharlieBotConfig,
+      _launch: LaunchArgs,
+    ) -> anyhow::Result<Box<dyn AgentBackend>> {
+      bail!("the resume routing tests build no backend")
+    }
+  }
+
+  fn register_resume_styles(registry: &mut Registry) -> Result<(), RegistryError> {
+    for (type_name, resume) in [
+      ("synthetic-cli-flag", ResumeStyle::CliFlag),
+      ("synthetic-native-id", ResumeStyle::NativeId),
+      ("synthetic-no-resume", ResumeStyle::Unsupported),
+    ] {
+      registry.backend_type(BackendTypeRegistration {
+        type_name,
+        traits: BackendTraits {
+          resume,
+          restart_reattach: false,
+          preassigned_session_id: false,
+          family_prefix: None,
+          manual_compact: false,
+          compact_hint: None,
+        },
+        option_model: |_| Ok(()),
+        factory: Arc::new(NoBuild),
+        lifecycle: None,
+        translate_fallback: false,
+      })?;
+    }
+    Ok(())
+  }
+
+  /// A resume continues the session through the type's style: a CLI flag, or the native id; a type without a resume
+  /// path refuses by name, and an unregistered type fails.
+  #[test]
+  fn resume_parts_follow_the_registered_style() {
+    let mut registry = Registry::new();
+    registry.register_package("synthetic.resume", register_resume_styles).unwrap();
+
+    assert_eq!(
+      registry.resume_parts("synthetic-cli-flag", "session-1").unwrap(),
+      (vec!["--resume".to_string(), "session-1".to_string()], None)
+    );
+    assert_eq!(
+      registry.resume_parts("synthetic-native-id", "session-1").unwrap(),
+      (Vec::new(), Some("session-1".to_string()))
+    );
+    let refusal = registry.resume_parts("synthetic-no-resume", "session-1").unwrap_err().to_string();
+    assert!(refusal.contains("synthetic-no-resume"), "{refusal}");
+    let unknown = registry.resume_parts("synthetic-unregistered", "session-1").unwrap_err().to_string();
+    assert!(unknown.contains("synthetic-unregistered"), "{unknown}");
+  }
 
   fn no_routes(_features: &Arc<FeatureContext>) -> axum::Router {
     axum::Router::new()

@@ -10,13 +10,22 @@ Its rules govern the diff this round produces.
 `main` takes no direct pushes: every change lands through a pull request.
 The pull request is the triage record, and CI is the full test run.
 
+Category rule: a pull request whose body names pending measurements is a draft.
+Its runner marks it ready for review once its body records the results.
+A round adopts only a pull request that is ready for review.
+A round merges only a pull request that is ready for review.
+A draft is left to its runner, and a round does not count a draft as the started topic.
+When a round opens a pull request whose body names pending measurements, the pull request opens as a draft.
+
 Every text the round writes to GitHub — a pull-request title, body, comment, commit message or branch name — goes through `dev/improve/github-post.sh`, which checks it against the leak rules and the round's credential values before it sends anything.
 Every push and every `gh` call of the round passes the same credential check: the clone's pre-push hook checks each pushed commit's message and diff, and the round's `gh` checks every argument and file argument.
 A credential value never enters any text the round writes, and no write reaches GitHub while the check holds a hit.
 A leak-rule hit is the only hit the round rewrites: the round removes the matched content from the text, rewrites it, and runs the subcommand again.
 The script sends nothing on a hit, so the posted text is always text that passed.
 A credential hit stops the round. The kind that the check names is the round's stop reason, and the round writes no rewrite of the text.
-A merge goes through the posting script's `pr-merge`, which refuses a web page change whose evidence directory fails the screenshot check or whose pull request body names no `View:` line, and carries the `View:` lines into the squash commit message.
+A merge goes through the posting script's `pr-merge`, which refuses a web page change whose evidence directory fails
+the screenshot check or whose pull request body names no `View:` line, and carries the `View:` lines into the squash
+commit message. Each `View:` line follows the View contract of the Web UI Screenshots rule in `prompts/task_base.md`.
 `gh pr update-branch`, `gh run rerun` and the read-only calls stay bare: they carry no text of the round, and the `gh` shim still checks their arguments.
 
 ## The round's login and the launch's exit codes
@@ -63,8 +72,9 @@ These scripts run from the server's checkout at each launch, so a change reaches
 
 ## Step 1: set the clone
 
-The whole round runs on the remote host, in the direction's own clone, `~/improve/<direction>/charlie-bot`.
-Every command of the round runs there, so this host's profile home and runtime clone stay out of reach.
+The round runs on the remote host. Topic work uses the direction's clone,
+`~/improve/<direction>/charlie-bot`; Step 6's reviewer uses a separate scratch clone.
+This keeps this host's profile home and runtime clone out of reach.
 The write boundary allows writes in that clone, in the evidence directory and in two scratch directories.
 The scratch directories are `/tmp/improve-<direction>/` and the session TMPDIR, `/tmp/improve-<direction>-tmp/`.
 Two rounds of one direction never run together: the runner's scope name, `improve-<direction>.scope`, refuses the second round.
@@ -75,7 +85,8 @@ The runner makes the round's `TMPDIR` as a new directory under the session TMPDI
 A round deletes a path only when the round created that path with `mktemp -d` during the same round.
 No round removes either scratch directory by name.
 The runner owns `codex-home/` under `/tmp/improve-<direction>/`, and a round leaves it in place.
-A killed round's scratch goes when the next round of its direction starts: the runner removes the `TMPDIR` directories that it made for earlier rounds.
+Each round's `TMPDIR` goes when the next round of its direction starts: before the round's agent starts, the runner removes the `TMPDIR` directories that earlier rounds made.
+Each review's scratch directory sits under one of those `TMPDIR` directories.
 
 Before the round's agent starts, the runner sets the clone to `origin/main`: it fetches `origin` and detaches the clone's HEAD there, so the clone's hooks come from `main`.
 The runner keeps the clone's local branches and its uncommitted changes.
@@ -103,10 +114,10 @@ Then enter the clone, fetch `origin`, and start every branch from `origin/main`:
 
 ## Step 2: adopt an open pull request
 
-List the open pull requests whose head branch starts with `improve/<direction>/`:
+List the open pull requests whose head branch starts with `improve/<direction>/` and that are ready for review (category rule):
 
-    gh pr list --state open --limit 50 --json number,headRefName,createdAt --jq \
-      '.[] | select(.headRefName | startswith("improve/<direction>/"))'
+    gh pr list --state open --limit 50 --json number,headRefName,createdAt,isDraft --jq \
+      '.[] | select(.headRefName | startswith("improve/<direction>/")) | select(.isDraft | not)'
 
 When more than one is open, take the oldest.
 An adopted pull request is the whole round.
@@ -116,7 +127,7 @@ When its newest comment starts `improve-waiting:`, read Step 8 first.
 End the round after it closes, merged or abandoned, and open no new pull request.
 This rule finishes a started topic before a new one.
 
-Go to Step 3 only when no such pull request is open, because an adopted pull request holds the round.
+Go to Step 3 only when the list is empty, because an adopted pull request holds the round, and a draft is not adopted.
 
 ## Step 3: avoid in-flight files and abandoned topics
 
@@ -186,6 +197,7 @@ Before a `trial.sh --serve` run, set `CHARLIEBOT_RELEASE_RUN_DIR` to that round 
 
 The trial writes its own evidence under that directory.
 Without the variable the trial writes `~/charliebot-release-logs`, which the write boundary refuses, so the step fails.
+The round's runner sets `CHARLIEBOT_TRIAL_PROBE_ANSWER` to the launch's probe answer, so the trial takes its probe model from that file: the round's host runs no server to resolve `backends.calls.probe`.
 
 The pull request names each screenshot by its file name and width, at the widths and states that the Web UI Screenshots rule in `prompts/task_base.md` sets.
 The pull request names no link to an evidence file and no host path; the evidence text stands on its own.
@@ -195,6 +207,8 @@ Push the branch and open one pull request against `main` through the posting scr
 
     dev/improve/github-post.sh push -u origin improve/<direction>/<topic slug>
     dev/improve/github-post.sh pr-create --title "<topic>" --body-file <body file> --base main --head improve/<direction>/<topic slug>
+
+When the body names pending measurements, add `--draft` to the pr-create command (category rule).
 
 The body carries the direction's evidence under a `## Evidence` heading; the CI contract check rejects a pull request without it.
 One pull request per round is the unit that CI and the reviewer check.
@@ -208,13 +222,16 @@ The round passes this launch's review directory, `$IMPROVE_LAUNCH_DIR/review`, a
 The review receives `dev/improve/code_review_prompt.md` and the pull request reference.
 When the pull request names screenshots, the review also receives the round's evidence directory.
 The review's credential reaches only the review process.
-The review runs in a scratch directory outside the clone, so the reviewer's git checkouts stay away from the clone's HEAD.
+The review's working directory is a scratch directory outside the clone, and it is not a git checkout.
+The review prompt has the reviewer clone the repository into that directory, and the reviewer's git commands run only in that clone.
+The review's `gh` calls name the repository, because gh cannot resolve it from the scratch directory.
 The round makes the scratch directory with `mktemp -d` under its TMPDIR.
 The write boundary allows the scratch directory and the session directory, and denies every other write.
 The verdict is the review's final text on stdout.
 The raw event stream stays in the review's working directory as `events.ndjson`.
 A review that fails names its reason and its resume handle on stderr, and the round quotes that reason verbatim in the final message.
-A failed review's scratch directory and its `events.ndjson` stay on disk until the next round's start (Step 1), and the round names them in its final message.
+Each review's scratch directory and its `events.ndjson` stay on disk until the next round's start (Step 1), whether the review passed or failed.
+A failed review's scratch directory and its `events.ndjson` are named in the round's final message.
 
 The round posts the verdict as one pull-request comment through `dev/improve/github-post.sh pr-comment`, and the comment carries the verdict without the event stream.
 Act on every finding on the same branch before the merge.
@@ -226,8 +243,9 @@ A silent skip breaks the protocol.
 
 ## Step 7: land the pull request or abandon it
 
-Merge only when the pull request carries a review verdict comment.
+Merge only when the pull request carries a review verdict comment and is ready for review (category rule).
 A pull request without one waits: the round that posted no verdict leaves it open, and Step 2 adopts it in the next round to run the review first.
+When the pull request is a draft, leave it open for its runner and end the round after its verdict.
 
 Before the merge, the pull request's title and body describe its final commits.
 When the branch gained commits after the description was written, update the title and body through `dev/improve/github-post.sh pr-edit`.
@@ -303,7 +321,9 @@ Each step either clears the failure or names the main run that blocks the merge.
 
 Main's CI state is the newest CI run on `main`:
 
-    gh run list --branch main --workflow CI --limit 1 --json databaseId,status,conclusion,headSha
+    gh run list --branch main --workflow ci.yml --limit 1 --json databaseId,status,conclusion,headSha
+
+`--workflow` takes the workflow's file name: `ci.yml` resolves, and the display name `CI` does not.
 
 When that run is in progress, wait for it with `gh run watch <run-id>`.
 
@@ -362,16 +382,11 @@ When the main run failed, repair main by the steps above.
 When the repair returns with main still failed, end the round with no change.
 When the main run passed, start at step 1 of the outside-diff steps above.
 
-## Cleanup before the report
-
-Delete each completed review's scratch directory, through the exact path `mktemp` returned.
-Copies of session data and other large scratch live only there, and deleting by a rebuilt path risks the wrong directory.
-The evidence directory stays: it holds the round's screenshots and measurement logs.
-
 ## Step 9: report once at the end
 
 Before the round ends, write the round's final report to `report.md` in its evidence directory.
 The report carries the same content as the final message, so it survives a lost final message.
+The evidence directory stays after the round: it holds the round's screenshots and measurement logs.
 
 Write one final message at the end of the round.
 It names:

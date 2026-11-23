@@ -1,6 +1,6 @@
 //! The cold-read run's shared contract: the prompt texts, the probe input, and the report body.
 //!
-//! `prompts/cold_read.md` is the only home of the cold-reader instructions and the seven questions. The artifact check
+//! `prompts/cold_read.md` is the only home of the cold-reader instructions and questions. The artifact check
 //! and the cold-read child session both build from here, so the foreground output and the completion report carry the
 //! same lines.
 
@@ -29,6 +29,12 @@ const ASK_SYSTEM_SECTION: &str = "ask_system_prompt";
 const ASK_QUESTIONS_SECTION: &str = "ask_questions";
 const REPLY_SYSTEM_SECTION: &str = "reply_system_prompt";
 const REPLY_QUESTIONS_SECTION: &str = "reply_questions";
+/// The Now-status prompt pair under `prompts/cold_read.md`.
+pub const NOW_SYSTEM_SECTION: &str = "now_system_prompt";
+pub const NOW_QUESTIONS_SECTION: &str = "now_questions";
+/// The question counts of the Now-status and web-reply prompt pairs.
+pub const NOW_QUESTION_COUNT: usize = 1;
+pub const REPLY_QUESTION_COUNT: usize = 3;
 /// The bounded timeout for one cold read probe attempt.
 pub const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 /// The item JSON an ask probe carries: non-ASCII characters unescaped, two-space indentation.
@@ -52,18 +58,27 @@ pub fn page_sha256(page_bytes: &[u8]) -> String {
   format!("{:x}", Sha256::digest(page_bytes))
 }
 
-/// The system prompt and the seven questions, read fresh from `prompts/cold_read.md`. Trailing newlines stay out of
-/// both, so the probe input is byte-identical to the file's section text.
-pub fn load_texts(repo: &Path) -> anyhow::Result<(String, String)> {
+/// The system prompt and questions named by one pair of sections, read fresh from `prompts/cold_read.md`. Trailing
+/// newlines stay out of both, so the probe input is byte-identical to the file's section text.
+pub fn load_prompt_pair(
+  repo: &Path,
+  system_section: &str,
+  questions_section: &str,
+) -> anyhow::Result<(String, String)> {
   let sections = spawner_prompt::load_marker_sections(
     &repo.join("prompts").join(PROMPT_FILENAME),
-    &[SYSTEM_SECTION, QUESTIONS_SECTION],
+    &[system_section, questions_section],
     "cold-read",
   )?;
   Ok((
-    sections[SYSTEM_SECTION].trim_end_matches('\n').to_string(),
-    sections[QUESTIONS_SECTION].trim_end_matches('\n').to_string(),
+    sections[system_section].trim_end_matches('\n').to_string(),
+    sections[questions_section].trim_end_matches('\n').to_string(),
   ))
+}
+
+/// The system prompt and questions for the artifact-page check, read fresh from `prompts/cold_read.md`.
+pub fn load_texts(repo: &Path) -> anyhow::Result<(String, String)> {
+  load_prompt_pair(repo, SYSTEM_SECTION, QUESTIONS_SECTION)
 }
 
 /// The block a probe adds after the full source: the text the reader sees at page open, folded blocks closed.
@@ -337,15 +352,7 @@ pub fn probe_input(page_text: &str, questions: &str, trigger: &str) -> anyhow::R
 /// The system prompt and the five questions one Waiting on you item is cold-read with, read fresh from
 /// `prompts/cold_read.md` (`load_ask_texts`).
 pub fn load_ask_texts(repo: &Path) -> anyhow::Result<(String, String)> {
-  let sections = spawner_prompt::load_marker_sections(
-    &repo.join("prompts").join(PROMPT_FILENAME),
-    &[ASK_SYSTEM_SECTION, ASK_QUESTIONS_SECTION],
-    "cold-read",
-  )?;
-  Ok((
-    sections[ASK_SYSTEM_SECTION].trim_end_matches('\n').to_string(),
-    sections[ASK_QUESTIONS_SECTION].trim_end_matches('\n').to_string(),
-  ))
+  load_prompt_pair(repo, ASK_SYSTEM_SECTION, ASK_QUESTIONS_SECTION)
 }
 
 /// The ask probe's whole input: the item JSON, the host-served page text with every `data:` URI replaced by a size
@@ -365,32 +372,21 @@ pub fn ask_probe_input(item: &Value, linked_page: Option<&str>, questions: &str)
 /// The system prompt and the questions one web reply is cold-read with, read fresh from `prompts/cold_read.md`
 /// (`load_reply_texts`).
 pub fn load_reply_texts(repo: &Path) -> anyhow::Result<(String, String)> {
-  let sections = spawner_prompt::load_marker_sections(
-    &repo.join("prompts").join(PROMPT_FILENAME),
-    &[REPLY_SYSTEM_SECTION, REPLY_QUESTIONS_SECTION],
-    "cold-read",
-  )?;
-  Ok((
-    sections[REPLY_SYSTEM_SECTION].trim_end_matches('\n').to_string(),
-    sections[REPLY_QUESTIONS_SECTION].trim_end_matches('\n').to_string(),
-  ))
+  load_prompt_pair(repo, REPLY_SYSTEM_SECTION, REPLY_QUESTIONS_SECTION)
 }
 
-/// The reply probe's whole input: the reply text followed by the questions (`reply_probe_input`).
-pub fn reply_probe_input(reply_text: &str, questions: &str) -> String {
-  format!("{reply_text}\n\n{questions}")
+/// The whole input for a cold read of plain text, followed by its questions (`text_probe_input`).
+pub fn text_probe_input(text: &str, questions: &str) -> String {
+  format!("{text}\n\n{questions}")
 }
 
-/// The questions a web reply's cold read answers, in order: identifiers, agent-work terms, and the decision facts.
-const REPLY_QUESTION_COUNT: usize = 3;
-
-/// The findings parsed from a cold-read answer of a web reply (`parse_reply_findings`).
-pub fn parse_reply_findings(answer: &str) -> anyhow::Result<Vec<String>> {
-  let mut answers: [Option<String>; REPLY_QUESTION_COUNT] = Default::default();
+/// The findings parsed from a numbered cold-read answer with `question_count` questions.
+pub fn parse_reply_findings(answer: &str, question_count: usize) -> anyhow::Result<Vec<String>> {
+  let mut answers: Vec<Option<String>> = vec![None; question_count];
   let mut active = None;
   for line in answer.lines() {
     let trimmed = line.trim();
-    let labelled = (0..REPLY_QUESTION_COUNT).find_map(|index| {
+    let labelled = (0..question_count).find_map(|index| {
       let number = index + 1;
       [format!("({number})"), format!("{number}."), format!("（{number}）"), format!("{number}、")]
         .into_iter()
@@ -415,7 +411,7 @@ pub fn parse_reply_findings(answer: &str) -> anyhow::Result<Vec<String>> {
   }
   anyhow::ensure!(
     answers.iter().all(Option::is_some),
-    "cold-read reply answer must answer questions (1), (2) and (3); raw answer:\n{answer}"
+    "cold-read reply answer must answer all {question_count} numbered questions; raw answer:\n{answer}"
   );
 
   let mut findings = Vec::new();
@@ -911,11 +907,11 @@ BBBB
   #[test]
   fn reply_findings_parser_extracts_findings_and_ignores_none_answers() {
     let clean = "(1) none\n(2) none\n(3) none";
-    assert!(parse_reply_findings(clean).unwrap().is_empty());
+    assert!(parse_reply_findings(clean, REPLY_QUESTION_COUNT).unwrap().is_empty());
 
     let with_findings = "(1) 0a1c1ef stands without a name.\n(2) 「读回」is a rule-defined agent term.\n(3) none";
     assert_eq!(
-      parse_reply_findings(with_findings).unwrap(),
+      parse_reply_findings(with_findings, REPLY_QUESTION_COUNT).unwrap(),
       vec!["0a1c1ef stands without a name", "「读回」is a rule-defined agent term"]
     );
   }
@@ -925,7 +921,7 @@ BBBB
     let answer = "(1) none\n(2) none\n(3) The cost of option B is not stated; the deadline is missing.";
 
     assert_eq!(
-      parse_reply_findings(answer).unwrap(),
+      parse_reply_findings(answer, REPLY_QUESTION_COUNT).unwrap(),
       vec!["The cost of option B is not stated; the deadline is missing"]
     );
   }
@@ -935,7 +931,7 @@ BBBB
     let answers =
       ["（1）none\n（2）none\n（3）none", "（1）：none\n（2）：none\n（3）：none", "1、none\n2、none\n3、none"];
     for answer in answers {
-      assert!(parse_reply_findings(answer).unwrap().is_empty(), "{answer}");
+      assert!(parse_reply_findings(answer, REPLY_QUESTION_COUNT).unwrap().is_empty(), "{answer}");
     }
   }
 
@@ -950,7 +946,7 @@ BBBB
 
     for answer in clean_answers {
       let response = format!("(1) {answer}\n(2) none\n(3) none");
-      assert!(parse_reply_findings(&response).unwrap().is_empty(), "{response}");
+      assert!(parse_reply_findings(&response, REPLY_QUESTION_COUNT).unwrap().is_empty(), "{response}");
     }
   }
 
@@ -960,21 +956,51 @@ BBBB
 (2) none
 (3) none"#;
 
-    assert_eq!(parse_reply_findings(answer).unwrap(), [r#"有三个：一是 "session" stands bare. None"#]);
+    assert_eq!(
+      parse_reply_findings(answer, REPLY_QUESTION_COUNT).unwrap(),
+      [r#"有三个：一是 "session" stands bare. None"#]
+    );
   }
 
   #[test]
   fn reply_findings_parser_rejects_an_incomplete_answer() {
-    assert!(parse_reply_findings("(1) none").is_err());
-    assert!(parse_reply_findings("(1) none\n(2) none").is_err());
-    assert!(parse_reply_findings("No findings.").is_err());
+    assert!(parse_reply_findings("(1) none", REPLY_QUESTION_COUNT).is_err());
+    assert!(parse_reply_findings("(1) none\n(2) none", REPLY_QUESTION_COUNT).is_err());
+    assert!(parse_reply_findings("No findings.", REPLY_QUESTION_COUNT).is_err());
   }
 
   #[test]
   fn reply_findings_parser_reports_an_unlabelled_answer() {
     let answer = "无。这条回复里没有 commit、session id ... 不构成裸标识符。";
-    let error = parse_reply_findings(answer).unwrap_err().to_string();
+    let error = parse_reply_findings(answer, REPLY_QUESTION_COUNT).unwrap_err().to_string();
 
     assert!(error.contains(answer), "{error}");
+  }
+
+  #[test]
+  fn now_findings_parser_accepts_one_question_and_rejects_unparseable_answers() {
+    assert!(parse_reply_findings("(1) none.", NOW_QUESTION_COUNT).unwrap().is_empty());
+    assert_eq!(
+      parse_reply_findings("(1) \"Please approve the change.\"", NOW_QUESTION_COUNT).unwrap(),
+      vec!["\"Please approve the change.\""]
+    );
+    assert!(parse_reply_findings("The status is clear.", NOW_QUESTION_COUNT).is_err());
+  }
+
+  #[test]
+  fn prompt_pair_loader_reads_the_requested_section_names() {
+    let repo = tempfile::tempdir().unwrap();
+    let prompt_dir = repo.path().join("prompts");
+    std::fs::create_dir_all(&prompt_dir).unwrap();
+    std::fs::write(
+      prompt_dir.join(PROMPT_FILENAME),
+      "<!-- section: now_system_prompt -->\nNow system\n<!-- section: now_questions -->\nNow question\n",
+    )
+    .unwrap();
+
+    assert_eq!(
+      load_prompt_pair(repo.path(), NOW_SYSTEM_SECTION, NOW_QUESTIONS_SECTION).unwrap(),
+      ("Now system".to_string(), "Now question".to_string())
+    );
   }
 }

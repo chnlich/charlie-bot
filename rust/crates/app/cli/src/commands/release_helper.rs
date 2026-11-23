@@ -16,6 +16,8 @@ use std::process::{Command, exit};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+use charliebot_agents::call_resolve::{self, RESOLVE_PATH};
+use charliebot_cli_common::client;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::route;
 use charliebot_cli_common::skew;
@@ -49,13 +51,14 @@ const RUN_STATE_SUCCESS: &str = "success";
 /// The verbs and the number of arguments each takes; `--help` prints the list.
 const VERBS: &[(&str, &str)] = &[
   ("assistant-reply", "EVENTS_PATH EXPECTED_WORD"),
-  ("backend-option", "CONFIG_PATH"),
   ("cgroup-clean", "CGROUP_PATH TREE"),
   ("cgroup-enabled", "SERVER_LOG"),
   ("child-workers", "SESSIONS_DIR PARENT_ID"),
   ("created-cgroups", "SERVER_LOG"),
   ("credential-key", "CREDENTIALS_PATH SECTION"),
   ("delegation-error", "SESSIONS_DIR MANAGER_ID"),
+  ("disable-cron-tasks", "HOME REPO_ROOT"),
+  ("endpoint-option", "HOME CALL_CLASS"),
   ("event", "SERVER_LOG EVENT_NAME"),
   ("event-type-count", "EVENTS_PATH EVENT_TYPE"),
   ("free-port", "MIN MAX"),
@@ -72,6 +75,8 @@ const VERBS: &[(&str, &str)] = &[
   ("self-test", ""),
   ("session-id", "RESPONSE_PATH"),
   ("session-ids", "SESSIONS_DIR"),
+  ("session-weights", "CONFIG_PATH"),
+  ("stand-in-options", "CRON_DEFAULTS CONFIG_EXAMPLE"),
   ("sweep-check", "SERVER_LOG SESSIONS_DIR"),
   ("version-sha", "RESPONSE_PATH"),
   ("websocket", "BASE_URL SESSION CREDENTIALS_PATH OUTPUT_PATH"),
@@ -114,13 +119,14 @@ fn print_usage() {
 fn dispatch(name: &str, args: &[String]) -> Result<i32, String> {
   match name {
     "assistant-reply" => assistant_reply(args),
-    "backend-option" => backend_option(args),
     "cgroup-clean" => cgroup_clean(args),
     "cgroup-enabled" => cgroup_enabled(args),
     "child-workers" => child_workers(args),
     "created-cgroups" => created_cgroups(args),
     "credential-key" => credential_key(args),
     "delegation-error" => delegation_error(args),
+    "disable-cron-tasks" => disable_cron_tasks(args),
+    "endpoint-option" => endpoint_option(args),
     "event" => event(args),
     "event-type-count" => event_type_count(args),
     "free-port" => free_port(args),
@@ -137,6 +143,8 @@ fn dispatch(name: &str, args: &[String]) -> Result<i32, String> {
     "self-test" => self_test(args),
     "session-id" => session_id(args),
     "session-ids" => session_ids(args),
+    "session-weights" => session_weights(args),
+    "stand-in-options" => stand_in_options(args),
     "sweep-check" => sweep_check(args),
     "version-sha" => version_sha(args),
     "websocket" => websocket(args),
@@ -978,49 +986,132 @@ fn cgroup_clean(args: &[String]) -> Result<i32, String> {
 
 // ---- the preflight reads --------------------------------------------------------------------------------------------
 
-/// A live `config.yaml` as the JSON document the release verbs read.
-fn live_config_document(config_path: &str) -> Result<Value, String> {
-  let document = config::read_yaml_document(Path::new(config_path)).map_err(|error| error.to_string())?;
+/// A YAML file as the JSON document the release verbs read.
+fn yaml_document_json(path: &str) -> Result<Value, String> {
+  let document = config::read_yaml_document(Path::new(path)).map_err(|error| error.to_string())?;
   config::yaml_to_json(&document)
 }
 
-/// The first `backends.options` entry whose `api_base` is set: the operator's own model endpoint, which the trial runs
-/// against. The entry's `credential` names the `credentials.yaml` section that holds the endpoint's
-/// key; an endpoint that needs no client-side key has none.
-fn backend_choice(document: &Value) -> Option<(String, Option<String>)> {
-  let options = document.get("backends").and_then(|backends| backends.get("options")).and_then(Value::as_array)?;
-  for option in options {
-    let Some(api_base) = option.get(config::API_BASE_KEY).filter(|value| text_repr::is_truthy(value)) else {
-      continue;
-    };
-    let credential =
-      option.get(config::CREDENTIAL_KEY).filter(|value| text_repr::is_truthy(value)).map(text_repr::value_str);
-    return Some((text_repr::value_str(api_base), credential));
+/// The cpu and io session-weight switches of a live config, as the server reads them: an absent switch takes its
+/// default. The trial copies both into its config.
+fn session_weight_lines(config_path: &str) -> Result<[String; 2], String> {
+  let (cpu, io) =
+    config::session_weight_switches(&yaml_document_json(config_path)?).map_err(|error| error.to_string())?;
+  Ok([cpu.to_string(), io.to_string()])
+}
+
+fn session_weights(args: &[String]) -> Result<i32, String> {
+  let [path] = arguments::<1>(args, "session-weights")?;
+  for line in session_weight_lines(path)? {
+    println!("{line}");
   }
-  None
+  Ok(0)
 }
 
-/// The four lines `backend-option` prints: the chosen entry's `api_base`, its credential (empty when it names none),
-/// then the cpu and io session-weight switches. `None` when no entry sets an `api_base`.
-fn backend_option_lines(document: &Value) -> Result<Option<[String; 4]>, String> {
-  let Some((api_base, credential)) = backend_choice(document) else { return Ok(None) };
-  let (cpu, io) = config::session_weight_switches(document).map_err(|error| error.to_string())?;
-  Ok(Some([api_base, credential.unwrap_or_default(), cpu.to_string(), io.to_string()]))
-}
+/// The scheduled task whose step backends name the trial's stand-in options.
+const STAND_IN_TASK: &str = "memory-curator";
 
-/// Prints `backend_option_lines` for a live config. The trial reads these lines into its config, so it carries the live
-/// entry and the live weight switches the same way.
-fn backend_option(args: &[String]) -> Result<i32, String> {
-  let [path] = arguments::<1>(args, "backend-option")?;
-  match backend_option_lines(&live_config_document(path)?)? {
-    Some(lines) => {
-      for line in lines {
-        println!("{line}");
-      }
-      Ok(0)
+/// The option records the trial's stand-ins copy: the step backends of `STAND_IN_TASK` in `cron_defaults`, in step
+/// order, each as the record of the same id in `config_example`. A step backend that the example does not define fails.
+fn stand_in_records(cron_defaults: &str, config_example: &str) -> Result<Vec<Value>, String> {
+  let cron = yaml_document_json(cron_defaults)?;
+  let example = yaml_document_json(config_example)?;
+  let task = cron["scheduled_tasks"]
+    .as_array()
+    .and_then(|tasks| tasks.iter().find(|task| task["name"] == STAND_IN_TASK))
+    .ok_or_else(|| format!("{cron_defaults} has no scheduled task named {STAND_IN_TASK}"))?;
+  let mut ids: Vec<&str> = Vec::new();
+  for step in task["steps"].as_array().into_iter().flatten() {
+    if let Some(id) = step["backend"].as_str().filter(|id| !ids.contains(id)) {
+      ids.push(id);
     }
-    None => Ok(1),
   }
+  if ids.is_empty() {
+    return Err(format!("the {STAND_IN_TASK} task in {cron_defaults} names no step backend"));
+  }
+  let options: &[Value] = example["backends"]["options"].as_array().map_or(&[], Vec::as_slice);
+  ids
+    .iter()
+    .map(|id| {
+      options.iter().find(|option| option["id"] == *id).cloned().ok_or_else(|| {
+        format!("{config_example} has no option {id}, which the {STAND_IN_TASK} task in {cron_defaults} names")
+      })
+    })
+    .collect()
+}
+
+/// `stand-in-options <cron-defaults> <config-example>`: the stand-in records as a YAML list, for the trial's config.
+fn stand_in_options(args: &[String]) -> Result<i32, String> {
+  let [cron_defaults, config_example] = arguments::<2>(args, "stand-in-options")?;
+  let records = stand_in_records(cron_defaults, config_example)?;
+  print!("{}", serde_yaml::to_string(&records).map_err(|error| error.to_string())?);
+  Ok(0)
+}
+
+/// `disable-cron-tasks <home> <repo-root>`: seeds the repo's default cron tasks into the home, disables every cron task
+/// file of the home, and prints the disabled names. The trial runs it before its server starts.
+fn disable_cron_tasks(args: &[String]) -> Result<i32, String> {
+  let [home, repo_root] = arguments::<2>(args, "disable-cron-tasks")?;
+  let registry = charliebot_packages::registry().map_err(|error| error.to_string())?;
+  let cfg = registry.load_config(Path::new(home)).map_err(|error| error.to_string())?;
+  for name in charliebot_cron::seed::disable_cron_tasks(&cfg, Path::new(repo_root))? {
+    println!("{name}");
+  }
+  Ok(0)
+}
+
+/// `endpoint-option <home> <call-class>`: the resolve answer of the first member of the class's target whose record
+/// names an `api_base`, printed as `{"option": ...}`. A serve trial runs a charlie-code endpoint, and the class's own
+/// pick need not name one, so the trial reads this answer instead.
+fn endpoint_option(args: &[String]) -> Result<i32, String> {
+  let [home, class] = arguments::<2>(args, "endpoint-option")?;
+  let class = config::CallClass::from_key(class).ok_or_else(|| {
+    let keys = config::CallClass::ALL.map(config::CallClass::key).join(", ");
+    format!("unknown call class '{class}'; the keys are {keys}")
+  })?;
+  let registry = charliebot_packages::registry().map_err(|error| error.to_string())?;
+  let cfg = registry.load_config(Path::new(home)).map_err(|error| error.to_string())?;
+  let (target, members) = call_resolve::call_target_members(&cfg, class).map_err(|error| error.to_string())?;
+  let subject = format!("backends.calls.{} target '{target}'", class.key());
+  let answer = first_endpoint_member(&subject, &members, |member| {
+    client::post(RESOLVE_PATH, json!({ "backend": member }), None, &[]).map_err(|exit| cli_exit_message(&exit))
+  })?;
+  println!("{}", text_repr::json_dumps(&answer, &text_repr::DEFAULT_JSON));
+  Ok(0)
+}
+
+/// The first resolve answer whose `option.api_base` is non-empty, checking members in order. If no member qualifies,
+/// the error includes every resolve failure.
+fn first_endpoint_member(
+  subject: &str,
+  members: &[String],
+  mut resolve: impl FnMut(&str) -> Result<Value, String>,
+) -> Result<Value, String> {
+  let mut resolve_errors = Vec::new();
+  for member in members {
+    let answer = match resolve(member) {
+      Ok(answer) => answer,
+      Err(error) => {
+        resolve_errors.push(format!("{member}: {error}"));
+        continue;
+      }
+    };
+    let api_base = answer.get("option").and_then(|option| option.get(config::API_BASE_KEY)).and_then(Value::as_str);
+    if api_base.is_some_and(|api_base| !api_base.is_empty()) {
+      return Ok(answer);
+    }
+  }
+  let failure = format!("{subject} has no member with an api_base; members: {}", members.join(", "));
+  if resolve_errors.is_empty() {
+    Err(failure)
+  } else {
+    Err(format!("{failure}; resolve errors: {}", resolve_errors.join("; ")))
+  }
+}
+
+/// The message a failed internal-API call carries, for a helper that reports plain text.
+fn cli_exit_message(exit: &CliExit) -> String {
+  exit.body.get("error").map(text_repr::value_str).unwrap_or_else(|| exit.body.to_string())
 }
 
 /// `credentials.yaml`'s `section.api_key`, or `None` when the file has no such key.
@@ -1330,6 +1421,76 @@ mod tests {
   const SERVER_LOCATION: &str = "server/main.rs:307";
 
   #[test]
+  fn first_endpoint_member_takes_the_first_member_with_an_api_base() {
+    let members = vec!["no-base".to_string(), "endpoint".to_string(), "later".to_string()];
+    let mut asked = Vec::new();
+
+    let answer = first_endpoint_member("backends.calls.probe target 'fast'", &members, |member| {
+      asked.push(member.to_string());
+      Ok(match member {
+        "no-base" => json!({"option": {"id": "no-base"}}),
+        other => json!({"option": {"id": other, "api_base": "https://endpoint.example/v1"}}),
+      })
+    })
+    .unwrap();
+
+    assert_eq!(asked, vec!["no-base".to_string(), "endpoint".to_string()]);
+    assert_eq!(answer["option"]["id"], "endpoint");
+  }
+
+  #[test]
+  fn first_endpoint_member_skips_members_whose_resolve_fails() {
+    let members = vec!["first".to_string(), "second".to_string(), "third".to_string()];
+    let mut asked = Vec::new();
+
+    let answer = first_endpoint_member("target", &members, |member| {
+      asked.push(member.to_string());
+      match member {
+        "first" => Err("quota_error".to_string()),
+        "second" => Ok(json!({"member": member, "option": {"api_base": "non-empty"}})),
+        other => Ok(json!({"member": other})),
+      }
+    })
+    .unwrap();
+
+    assert_eq!(asked, vec!["first".to_string(), "second".to_string()]);
+    assert_eq!(answer["member"], "second");
+  }
+
+  #[test]
+  fn first_endpoint_member_reports_every_resolve_error_when_no_member_has_an_api_base() {
+    let members = vec!["a".to_string(), "b".to_string()];
+
+    let error = first_endpoint_member("target", &members, |member| match member {
+      "a" => Err("quota_error".to_string()),
+      "b" => Err("connection refused".to_string()),
+      _ => unreachable!(),
+    })
+    .unwrap_err();
+
+    assert_eq!(
+      error,
+      "target has no member with an api_base; members: a, b; resolve errors: a: quota_error; b: connection refused"
+    );
+  }
+
+  #[test]
+  fn first_endpoint_member_names_the_target_and_its_members_when_none_names_an_api_base() {
+    let members = vec!["a".to_string(), "b".to_string()];
+
+    let error = first_endpoint_member("backends.calls.probe target 'fast'", &members, |member| {
+      Ok(if member == "a" {
+        json!({"option": {"id": member}})
+      } else {
+        json!({"option": {"id": member, "api_base": ""}})
+      })
+    })
+    .unwrap_err();
+
+    assert_eq!(error, "backends.calls.probe target 'fast' has no member with an api_base; members: a, b");
+  }
+
+  #[test]
   fn the_sweep_line_is_read_from_text_and_json_logs() {
     // The server's `names = ?removed`: the Debug text of the list.
     let removed = format!("{:?}", ["charliebot-sess-aaaaaaaa", "charliebot-sess-bbbbbbbb"]);
@@ -1463,78 +1624,14 @@ mod tests {
     assert_eq!(event(&[log, "task_recovery_resume".to_string()]), Ok(1));
   }
 
+  /// The session-weight lines carry the live switches, and an absent switch reads the server's default.
   #[test]
-  fn the_backend_choice_skips_entries_without_an_api_base_and_takes_the_first_that_has_one() {
+  fn the_session_weight_lines_carry_the_live_switches_and_an_absent_one_reads_its_default() {
     let directory = temporary();
     let config = directory.path().join("config.yaml");
-    fs::write(
-      &config,
-      concat!(
-        "backends:\n",
-        "  options:\n",
-        "    - id: subscription\n      type: claude\n",
-        "    - id: blank\n      api_base: \"\"\n",
-        "    - id: upstream\n      api_base: http://second.invalid\n      credential: upstream\n",
-        "    - id: later\n      api_base: http://third.invalid\n",
-      ),
-    )
-    .unwrap();
+    fs::write(&config, "server:\n  enable_session_io_weight: false\n").unwrap();
 
-    assert_eq!(
-      backend_choice(&live_config_document(&config.to_string_lossy()).unwrap()),
-      Some(("http://second.invalid".to_string(), Some("upstream".to_string())))
-    );
-  }
-
-  #[test]
-  fn the_backend_option_lines_carry_the_weight_switches_and_an_absent_one_reads_its_default() {
-    let directory = temporary();
-    let config = directory.path().join("config.yaml");
-    fs::write(
-      &config,
-      concat!(
-        "server:\n  enable_session_io_weight: false\n",
-        "backends:\n  options:\n",
-        "    - id: upstream\n      api_base: http://second.invalid\n      credential: upstream\n",
-      ),
-    )
-    .unwrap();
-
-    assert_eq!(
-      backend_option_lines(&live_config_document(&config.to_string_lossy()).unwrap()).unwrap(),
-      Some(["http://second.invalid".to_string(), "upstream".to_string(), "true".to_string(), "false".to_string()])
-    );
-  }
-
-  #[test]
-  fn the_backend_choice_accepts_an_endpoint_without_a_credential() {
-    let directory = temporary();
-    let config = directory.path().join("config.yaml");
-    fs::write(
-      &config,
-      concat!(
-        "backends:\n",
-        "  options:\n",
-        "    - id: forwarder\n      api_base: http://first.invalid\n",
-        "    - id: upstream\n      api_base: http://second.invalid\n      credential: upstream\n",
-      ),
-    )
-    .unwrap();
-
-    assert_eq!(
-      backend_choice(&live_config_document(&config.to_string_lossy()).unwrap()),
-      Some(("http://first.invalid".to_string(), None))
-    );
-  }
-
-  #[test]
-  fn the_backend_option_verb_fails_when_no_option_sets_an_api_base() {
-    let directory = temporary();
-    let config = directory.path().join("config.yaml");
-    fs::write(&config, "backends:\n  options:\n    - id: subscription\n      type: claude\n").unwrap();
-
-    assert_eq!(backend_option_lines(&live_config_document(&config.to_string_lossy()).unwrap()).unwrap(), None);
-    assert_eq!(backend_option(&[config.to_string_lossy().into_owned()]).unwrap(), 1);
+    assert_eq!(session_weight_lines(&config.to_string_lossy()).unwrap(), ["true".to_string(), "false".to_string()]);
   }
 
   #[test]
@@ -1607,5 +1704,53 @@ mod tests {
   fn a_session_whose_web_reply_and_assistant_texts_differ_from_the_word_does_not_answer_it() {
     let events = [assistant_text_row("DONE soon"), web_reply_row("DONE soon")];
     assert_eq!(reply_form(&events, "DONE"), ReplyForm::NoMatch);
+  }
+
+  /// The stand-ins are the memory-curator's step backends in step order, each copied from the example config by id.
+  #[test]
+  fn the_stand_ins_copy_the_memory_curator_steps_records_from_the_example() {
+    let dir = tempfile::tempdir().unwrap();
+    let cron = dir.path().join("cron.yaml");
+    let example = dir.path().join("example.yaml");
+    fs::write(
+      &cron,
+      concat!(
+        "scheduled_tasks:\n  - name: other\n    steps:\n      - backend: gamma\n",
+        "  - name: memory-curator\n    steps:\n",
+        "      - name: selector\n        backend: beta\n",
+        "      - name: reviewer\n        backend: alpha\n        distinct_backend_from: selector\n",
+        "      - name: again\n        backend: beta\n",
+      ),
+    )
+    .unwrap();
+    fs::write(
+      &example,
+      concat!(
+        "backends:\n  options:\n",
+        "    - id: alpha\n      type: cc-claude\n      model: model-alpha\n",
+        "    - id: beta\n      type: cc-claude\n      model: model-beta\n      effort: xhigh\n",
+        "    - id: gamma\n      type: cc-claude\n      model: model-gamma\n",
+      ),
+    )
+    .unwrap();
+    let records = stand_in_records(cron.to_str().unwrap(), example.to_str().unwrap()).unwrap();
+    let ids: Vec<&str> = records.iter().map(|record| record["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["beta", "alpha"]);
+    assert_eq!(records[0]["effort"], "xhigh");
+    assert_eq!(records[1]["model"], "model-alpha");
+
+    fs::write(&example, "backends:\n  options: []\n").unwrap();
+    let error = stand_in_records(cron.to_str().unwrap(), example.to_str().unwrap()).unwrap_err();
+    assert!(error.contains("beta"), "{error}");
+  }
+
+  /// The repository's own configs name stand-ins that the example config defines.
+  #[test]
+  fn the_default_memory_curator_names_stand_ins_the_example_config_defines() {
+    let cron = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../configs/cron.default.yaml");
+    let example = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../configs/config.example.yaml");
+    let records = stand_in_records(cron, example).unwrap();
+    assert!(!records.is_empty());
+    assert!(records.iter().all(|record| record["type"] == "cc-claude"), "{records:?}");
   }
 }

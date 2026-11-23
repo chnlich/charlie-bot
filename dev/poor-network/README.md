@@ -32,7 +32,7 @@ dev/remote-run/run.sh dev/poor-network/run.sh --side both --before-clone "$CLONE
 | `--open-conditions LIST` | Open cells: any of `link,held,reset,flaps,offline,release,release-offline,replied-offline`; default all. |
 | `--open-cpu-rate RATE` | Run every side's open cells at `RATE` instead of a derived rate (see CPU rate below). |
 | `--assets-dir DIR` | Where the CDN copies are kept (default `DIR/assets`). |
-| `--lock-wait SECONDS` | How long each take of the bench lock waits (default 7200). An improve round passes 900. |
+| `--lock-wait SECONDS` | How long each take of the bench lock waits (default 7200, from `BENCH_LOCK_WAIT_SECONDS` in `lock.sh`). No improve caller passes it: `dev/improve/trial-side.sh` takes the lock itself, waiting `IMPROVE_TRIAL_LOCK_WAIT_SECONDS` (default 900). |
 | `--seed-home DIR` | The view home that the run copies as its seed (default: the shared home under `~/improve/mock-home`). A run with a pinned home names it here; each side still checks the copy's content hash. |
 | `--detach` | Start a transient systemd user unit and return; the log is `DIR/pn-<id>.log`. |
 | `--seed-only` | Size the sessions on each side the run names, write each side's sizes to its JSON, and stop: no scenario, no store update, no report. |

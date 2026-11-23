@@ -247,6 +247,21 @@ pub(crate) async fn git_stdout(
   }
 }
 
+/// Run a git command with a timeout and return the raw stdout bytes: the variant of [`git_stdout`]
+/// for output that is not text, such as a blob read for decompression.
+pub(crate) async fn git_bytes(
+  repo_path: &Path,
+  args: &[&str],
+  limit: Duration,
+  timeout_label: &str,
+) -> (bool, Vec<u8>, String) {
+  match git_proc_bytes(repo_path, args, limit).await {
+    Ok(proc) if proc.returncode == 0 => (true, proc.stdout, String::new()),
+    Ok(proc) => (false, proc.stdout, trimmed(&proc.stderr)),
+    Err(_) => (false, Vec::new(), format!("{timeout_label} timed out after {}s", secs_text(limit))),
+  }
+}
+
 /// Resolve a ref to a commit SHA; `None` when it does not resolve.
 pub(crate) async fn git_rev_parse_optional(repo_path: &Path, reference: &str) -> Option<String> {
   let (ok, out, _) = git_stdout(

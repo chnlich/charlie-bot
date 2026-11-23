@@ -24,8 +24,9 @@ const ABOUT: &str = "Land an implement task: rebase, push the task branch, keep 
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   let window_sizes = charliebot_tasks::web_screenshots::window_sizes_text();
   let body_requirement = format!(
-    "A diff that changes a web page needs it to name the approved demo on a `Demo: <absolute path>` line, the \
-     changed view's URL path on a `View: <URL path>` line, and a screenshot at each CSS window size \
+    "A diff that changes a web page needs it to name the approved demo on a `Demo: <absolute path>` line, a \
+     `View: <URL>` line naming the full URL, path and query, that opens the changed state, and a screenshot at each \
+     CSS window size \
      ({window_sizes}) by absolute path"
   );
   let body_help = format!("PR body; required with --title when the branch holds several commits. {body_requirement}");
@@ -69,11 +70,12 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   let task = matches.get_one::<String>("task").map(String::as_str);
   let session_id = resolve::resolve_from_env(task)?;
   let home = home_dir()?;
+  let registry = charliebot_packages::registry().map_err(|error| CliExit::error(format!("{error:#}")))?;
   let runtime = tokio::runtime::Builder::new_current_thread()
     .enable_all()
     .build()
     .map_err(|error| CliExit::error(format!("tokio runtime failed to start: {}", exit::source_chain(&error))))?;
-  match runtime.block_on(charliebot_tasks::land::land(&home, &session_id, &options)) {
+  match runtime.block_on(charliebot_tasks::land::land(&registry, &home, &session_id, &options)) {
     Ok(record) => {
       let exit_code = charliebot_tasks::land::LandState::try_from(record.state.as_str())
         .map_err(|error| CliExit::error(format!("landing record holds an unknown state: {error}")))?

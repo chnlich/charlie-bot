@@ -55,8 +55,9 @@ that belongs to one machine. The runner reads the CharlieBot `config.yaml` on ea
 | `server.public_url` | the CharlieBot `config.yaml`, read with `charliebot config get server.public_url` | The address a person reaches the CharlieBot server at. The stop text links `<public_url>/host-auth`. It has no default; the host sets it. |
 
 The build host's state layout, under its `$HOME` and the remote base: `trees/<tree name>` for the
-synced trees, `tree-owners/` for the local root each tree belongs to, `slots/` for the four build
-slot locks, `slot-waits.log` for the slot wait record, `cargo/` and `rustup/` for the toolchain,
+synced trees, `tree-owners/<tree name>` for `host=<caller hostname>` and `root=<local absolute path>`,
+`slots/` for the four build slot locks, `slot-waits.log` for the slot wait record, `cargo/` and
+`rustup/` for the toolchain,
 `bin/` for uv and sccache, `node/` for Node, `python/` and `cache/` for the uv and sccache
 caches, and one `remote-exec-<hash>.pl` for each `remote-exec.pl` content a run has synced. A run
 executes the copy named for its own checkout's content hash.
@@ -66,10 +67,14 @@ executes the copy named for its own checkout's content hash.
 1. The connectivity check: `ssh <host> true`, limited to 60 seconds. See "Exit codes".
 2. Preflights: the build host has node, npm, cargo, uv, rsync, git, flock, nice, perl, and
    rustc; a project with `pyproject.toml` has a matching CPython patch release on the build host.
-3. The sweep: remote trees whose recorded local root is gone are removed, the tree the run syncs
-   into included, so a stale tree under the current name never blocks the sync; a remote tree whose
-   recorded root is a different live directory refuses the run, so two local trees never share one
-   remote tree.
+3. The sweep: it checks local roots only for records whose caller hostname matches this machine.
+   Records for other hosts stay untouched. A path-only record from an older runner has no host and
+   stays untouched; a same-name legacy tree refuses the sync because its owner cannot be proved.
+   Before removing an owned tree or replacing its contents, `remote-exec.pl` sends TERM to every
+   same-owner process whose cwd or executable path is inside the tree, waits two seconds, then sends
+   KILL to survivors. It reports the stopped pids and removes or syncs the tree only after no matching
+   process remains. A process inspection, stop, or removal error leaves the tree in place and fails the
+   run.
 4. The upload: rsync with the tree's `.gitignore` as filters, excluding `.git`, `.venv`,
    `__pycache__`, and `rust/target`. A remote path the local tree ignores is protected from the
    sync's delete. After a cargo upload, the local `rust/target` is deleted: the build host owns
@@ -91,16 +96,18 @@ executes the copy named for its own checkout's content hash.
 
 `remote-exec.pl` makes itself a child subreaper on the build host, so daemons the command starts,
 tmux servers included, are adopted instead of reparented away. It stops every descendant when the
-command ends: SIGTERM, SIGKILL two seconds later, and a stop after eight seconds that names what
-outlived it. Its TMPDIR directories under `/dev/shm` carry the owning process id and start time,
-and a later run reclaims the ones no process holds.
+command exits or receives a signal, and treats a closed SSH output channel as a caller disconnect.
+Stopping sends SIGTERM, then SIGKILL two seconds later; any process still alive after eight seconds
+is named in the error output. Its tree-stop and tree-removal modes check process cwd and executable
+paths before syncing an owned tree or deleting a stale tree. Its TMPDIR directories under `/dev/shm`
+carry the owning process id and start time, and a later run reclaims the ones no process holds.
 
 ## Exit codes
 
 | Code | Meaning |
 |---|---|
 | command's own code | The connectivity check passed; the exit code comes back unchanged, 255 included. |
-| 2 | The runner's own argument or configuration check refused the run: no command, an unset `remote_run.host`, an unsafe `remote_run.remote_base`, an unsafe directory name, or a tree ownership conflict. |
+| 2 | The runner refused the run because an argument, configuration, ownership, process inspection, stop, or removal check failed. |
 | 86 | The connectivity check saw a Tailscale login link. The runner prints a stop text that tells the agent to end the run and report the blocker, with the full `/host-auth` page URL. |
 | 87 | The connectivity check failed any other way, or ran past its 60-second limit. The same stop text is printed. |
 

@@ -23,6 +23,7 @@ const HEAD_TEXT: &str = "head-text";
 const SECTIONS_NUMBERED: &str = "sections-numbered";
 const SCHEMA_DROPPED: &str = "schema-dropped";
 pub(crate) const NON_GOALS_LINE: &str = "non-goals-line";
+const ADDED_STATE: &str = "added-state";
 const FOOT_PRESENT: &str = "foot-present";
 const EXPLAIN_TRIAD: &str = "explain-triad";
 const EXPLAIN_FIGURES: &str = "explain-figures";
@@ -153,6 +154,7 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
       SECTIONS_NUMBERED,
       SCHEMA_DROPPED,
       NON_GOALS_LINE,
+      ADDED_STATE,
       FOOT_PRESENT,
       FORK_OPEN_SHAPE,
       FORK_OPTIONS,
@@ -425,6 +427,7 @@ fn run_assertions_sync_with_user_text(
       SECTIONS_NUMBERED => check_sections_numbered,
       SCHEMA_DROPPED => check_schema_dropped,
       NON_GOALS_LINE => check_non_goals_line,
+      ADDED_STATE => check_added_state,
       FOOT_PRESENT => check_foot_present,
       EXPLAIN_TRIAD => check_explain_triad,
       EXPLAIN_FIGURES => check_explain_figures,
@@ -858,6 +861,38 @@ fn check_non_goals_line(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOu
     failures.push(outcome(NON_GOALS_LINE, true, ""));
   }
   Ok(failures)
+}
+
+/// `added-state`: section 3 carries one `p.added-state` paragraph outside every fold, non-empty, naming the state the
+/// design adds with the reason a stateless form is impractical, or stating that the design adds none.
+fn check_added_state(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcome>> {
+  let Some(solution) = numbered_section(&context.nodes, "High Level Solution") else {
+    return Ok(vec![outcome(ADDED_STATE, false, "missing High Level Solution section")]);
+  };
+  let paragraphs = find(&context.nodes, solution, "p", &["added-state"]);
+  let paragraph = match paragraphs.as_slice() {
+    [] => return Ok(vec![outcome(ADDED_STATE, false, "missing p.added-state in High Level Solution")]),
+    [paragraph] => *paragraph,
+    [_, _, ..] => {
+      return Ok(vec![outcome(
+        ADDED_STATE,
+        false,
+        format!("more than one p.added-state in High Level Solution (found {})", paragraphs.len()),
+      )]);
+    }
+  };
+  let mut ancestor = context.nodes[paragraph].parent;
+  while let Some(index) = ancestor {
+    if context.nodes[index].tag == "details" {
+      return Ok(vec![outcome(ADDED_STATE, false, "p.added-state is inside a fold")]);
+    }
+    ancestor = context.nodes[index].parent;
+  }
+  if element_text(&context.nodes, paragraph).trim().is_empty() {
+    Ok(vec![outcome(ADDED_STATE, false, "p.added-state is empty")])
+  } else {
+    Ok(vec![outcome(ADDED_STATE, true, "")])
+  }
 }
 
 /// Whether the page's header meta chips reference an `understanding_*.html` page: a chip's text or attribute names it.
@@ -2084,6 +2119,80 @@ mod tests {
     assert!(result.passed, "{result:#?}");
   }
 
+  fn added_state_outcome(source: &str) -> AssertionOutcome {
+    let nodes = parse_dom(source).unwrap();
+    let context = Context { genre: "plan", artifact: Path::new(""), chrome_bin: "", repo_root: Path::new(""), nodes };
+    check_added_state(&context).unwrap().into_iter().next().unwrap()
+  }
+
+  #[test]
+  fn added_state_fails_when_missing_in_section_3() {
+    let page = non_goals_page("<p class=\"non-goals\">Non-goals: none.</p>", "<p class=\"added-state\">None.</p>");
+    let result = added_state_outcome(&page);
+    assert_eq!(result.name, ADDED_STATE);
+    assert!(!result.passed);
+    assert_eq!(result.detail, "missing p.added-state in High Level Solution");
+  }
+
+  #[test]
+  fn added_state_fails_when_more_than_one() {
+    let solution = concat!(
+      r#"<p class="added-state">First.</p><p class="added-state">Second.</p>"#,
+      r#"<p class="non-goals">Non-goals: none.</p>"#,
+    );
+    let result = added_state_outcome(&non_goals_page(solution, ""));
+    assert!(!result.passed);
+    assert_eq!(result.detail, "more than one p.added-state in High Level Solution (found 2)");
+  }
+
+  #[test]
+  fn added_state_fails_when_inside_a_fold() {
+    let solution = concat!(
+      r#"<details class="details-layer"><summary>Fold</summary>"#,
+      r#"<p class="added-state">Added state: none.</p></details><p class="non-goals">Non-goals: none.</p>"#,
+    );
+    let result = added_state_outcome(&non_goals_page(solution, ""));
+    assert!(!result.passed);
+    assert_eq!(result.detail, "p.added-state is inside a fold");
+  }
+
+  #[test]
+  fn added_state_fails_when_empty() {
+    let solution = "<p class=\"added-state\">  </p><p class=\"non-goals\">Non-goals: none.</p>";
+    let result = added_state_outcome(&non_goals_page(solution, ""));
+    assert!(!result.passed);
+    assert_eq!(result.detail, "p.added-state is empty");
+  }
+
+  #[test]
+  fn added_state_passes_with_one_nonempty_paragraph_in_section_3() {
+    let solution = "<p class=\"added-state\">Added state: none.</p><p class=\"non-goals\">Non-goals: none.</p>";
+    let result = added_state_outcome(&non_goals_page(solution, ""));
+    assert_eq!(result.name, ADDED_STATE);
+    assert!(result.passed, "{result:#?}");
+  }
+
+  #[test]
+  #[ignore = "integration"]
+  fn plan_page_without_added_state_fails_and_with_it_passes() {
+    let directory = tempfile::tempdir().unwrap();
+    let chrome = stub_chrome(directory.path(), 800);
+    let chrome_str = chrome.to_str().unwrap();
+    let with_slot = write_page(directory.path(), "with_state.html", &plan_page("Ship the fix."));
+    let outcomes = run_plan(&with_slot, chrome_str);
+    assert!(outcomes.iter().all(|outcome| outcome.passed), "{outcomes:#?}");
+
+    let without_slot = write_page(
+      directory.path(),
+      "without_state.html",
+      &plan_page("Ship the fix.").replace("<p class=\"added-state\">Added state: none.</p>", ""),
+    );
+    let outcomes = run_plan(&without_slot, chrome_str);
+    let failures: Vec<&str> =
+      outcomes.iter().filter(|outcome| !outcome.passed).map(|outcome| outcome.name.as_str()).collect();
+    assert_eq!(failures, [ADDED_STATE]);
+  }
+
   fn stub_chrome(directory: &Path, height: i32) -> PathBuf {
     chrome_program(
       directory,
@@ -2144,12 +2253,13 @@ mod tests {
       };
       let chrome_text = chrome.to_string_lossy().into_owned();
       let outcomes = run_assertions_sync("plan", &page, &chrome_text, &repo_root()).unwrap();
-      // The fixture predates the fork, schema-dropped, non-goals-line and head-text assertions, so those outcomes
-      // have no recorded counterpart.
+      // The fixture predates the fork, schema-dropped, non-goals-line, added-state and head-text assertions, so those
+      // outcomes have no recorded counterpart.
       let actual = outcomes
         .iter()
         .filter(|outcome| {
-          ![FORK_OPTIONS, FORK_DEMOS, SCHEMA_DROPPED, NON_GOALS_LINE, HEAD_TEXT].contains(&outcome.name.as_str())
+          ![FORK_OPTIONS, FORK_DEMOS, SCHEMA_DROPPED, NON_GOALS_LINE, ADDED_STATE, HEAD_TEXT]
+            .contains(&outcome.name.as_str())
         })
         .map(outcome_value)
         .collect::<Vec<_>>();
@@ -2203,7 +2313,7 @@ mod tests {
     let chrome = stub_chrome(directory.path(), 800);
     let page = repo_root().join(PLAN_TEMPLATE_PATH);
     let outcomes = run_plan(&page, chrome.to_str().unwrap());
-    assert_eq!(outcomes.len(), 17);
+    assert_eq!(outcomes.len(), 18);
     assert!(outcomes.iter().all(|outcome| outcome.passed), "{outcomes:#?}");
   }
 

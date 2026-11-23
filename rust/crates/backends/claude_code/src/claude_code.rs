@@ -21,7 +21,7 @@ use charliebot_agents::cli_base::{CapturedEvents, SKIP_PERMISSIONS_FLAG};
 use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_agents::transport::kill::kill_process_group;
 use charliebot_agents::transport::spawn::{ChildStdin, SpawnSetup, SpawnSpec, spawn_with_setup};
-use charliebot_core::event_types::{self, EDIT_TOOL, GLOB_TOOL, GREP_TOOL, READ_TOOL, SKILL_TOOL, WRITE_TOOL};
+use charliebot_core::event_types::{self, SKILL_TOOL};
 use charliebot_core::headers::AUTHORIZATION;
 use charliebot_core::int_text;
 use charliebot_core::proc_status;
@@ -323,6 +323,12 @@ impl ClaudeCodeBackend {
     let headless = claude_launch::headless_claude_env(self.run_kind, &env);
     let mut env = without_gateway_env(&env);
     env.extend(headless);
+    self.insert_config_dir(&mut env)?;
+    Ok(env)
+  }
+
+  /// Point `CLAUDE_CONFIG_DIR` at the entry's account directory, when the entry names one.
+  fn insert_config_dir(&self, env: &mut Env) -> anyhow::Result<()> {
     if let Some(config_dir) = &self.claude_config_dir {
       let home = env.get("HOME").map(String::as_str);
       env.insert(
@@ -330,11 +336,15 @@ impl ClaudeCodeBackend {
         login_dirs::config_dir_path(config_dir, home)?.to_string_lossy().into_owned(),
       );
     }
-    Ok(env)
+    Ok(())
   }
 
-  fn one_shot_env(&self, base_env: &Env) -> Env {
-    without_gateway_env(base_env)
+  /// The one-shot environment: the base environment without the gateway variables, on the entry's account directory,
+  /// so a one-shot answers from the account its runs use.
+  fn one_shot_env(&self, base_env: &Env) -> anyhow::Result<Env> {
+    let mut env = without_gateway_env(base_env);
+    self.insert_config_dir(&mut env)?;
+    Ok(env)
   }
 
   /// The model-selection flags of this backend's one-shot: a cc-claude entry names its model with `--model`.
@@ -358,7 +368,7 @@ impl ClaudeCodeBackend {
   ) -> anyhow::Result<String> {
     let system_file = SystemPromptFile::write(system)?;
     let command = self.one_shot_command(&system_file.path);
-    let env = self.one_shot_env(base_env);
+    let env = self.one_shot_env(base_env)?;
     run_one_shot_process(&command, &env, prompt, timeout, self.cgroup_session_id.as_deref(), &self.cgroup_config).await
   }
 }
@@ -413,13 +423,13 @@ async fn run_one_shot_process(
   Ok(String::from_utf8(output.stdout)?.trim().to_string())
 }
 
-/// The `--disallowed-tools` value of a text one-shot: every file tool, a shell, and the subagent tool.
+/// The `--disallowed-tools` value of a text one-shot: every built-in tool.
 fn one_shot_disallowed_tools() -> String {
-  ["Bash", READ_TOOL, WRITE_TOOL, EDIT_TOOL, GLOB_TOOL, GREP_TOOL, AGENT_TOOL].join(",")
+  "*".to_string()
 }
 
-/// The argv of a `claude -p` text one-shot: no session persistence, tools disabled, the caller's model flags, and the
-/// system prompt file that `--system-prompt-file` reads. The prompt goes to stdin.
+/// The argv of a `claude -p` text one-shot: no session persistence, no built-in or inherited MCP tools, the caller's
+/// model flags, and the system prompt file that `--system-prompt-file` reads. The prompt goes to stdin.
 fn one_shot_argv(model_args: &[String], system_file: &str) -> Vec<String> {
   let mut command = vec![
     "claude".to_string(),
@@ -432,6 +442,9 @@ fn one_shot_argv(model_args: &[String], system_file: &str) -> Vec<String> {
   command.extend([
     "--system-prompt-file".to_string(),
     system_file.to_string(),
+    "--tools".to_string(),
+    String::new(),
+    "--strict-mcp-config".to_string(),
     DISALLOWED_TOOLS_FLAG.to_string(),
     one_shot_disallowed_tools(),
   ]);
@@ -1195,6 +1208,28 @@ mod tests {
     assert_eq!(env["UNRELATED_INHERITED_VAR"], "kept");
   }
 
+  /// The one-shot spawns on the entry's account directory, the one its runs use, so a resolved account is not dropped.
+  #[ignore = "integration"]
+  #[tokio::test]
+  async fn one_shot_text_runs_on_the_entry_account_dir() {
+    let root = tempfile::tempdir().unwrap();
+    let (bin, _argv, env_file) = stage_fake_claude(root.path());
+    let base_env = inherited_env(&bin);
+    let mut backend = ClaudeCodeBackend::from_launch(
+      Some("claude-haiku-5-5".to_string()),
+      None,
+      false,
+      false,
+      Some("/synthetic/account-dir".to_string()),
+      LaunchArgs::default(),
+      zero_limits(),
+    )
+    .unwrap();
+
+    assert_eq!(backend.one_shot_text(&base_env, "prompt", "system", None).unwrap().await.unwrap(), "ok");
+    assert_eq!(recorded_env(&env_file)["CLAUDE_CONFIG_DIR"], "/synthetic/account-dir");
+  }
+
   /// A 200 KiB prompt reaches claude on stdin, and a 200 KiB system prompt is named by a file. No argv element is over
   /// 128 KiB. The stub records stdin to `stdin.txt` under the same root.
   #[ignore = "integration"]
@@ -1362,6 +1397,9 @@ mod tests {
         "claude-fable-5-1",
         "--system-prompt-file",
         "/synthetic/system.txt",
+        "--tools",
+        "",
+        "--strict-mcp-config",
         "--disallowed-tools",
         disallowed.as_str()
       ]
@@ -1440,6 +1478,9 @@ mod tests {
         "--no-session-persistence",
         "--system-prompt-file",
         "/synthetic/system.txt",
+        "--tools",
+        "",
+        "--strict-mcp-config",
         "--disallowed-tools",
         disallowed.as_str()
       ]
@@ -1451,7 +1492,7 @@ mod tests {
   #[test]
   fn only_the_manager_work_and_iteration_lists_lose_agent_with_the_switch_on() {
     let one_shot = one_shot_argv(&[], "/synthetic/system.txt");
-    assert!(disallowed_tools_value(&one_shot).split(',').any(|tool| tool == AGENT_TOOL), "the one-shot list");
+    assert_eq!(disallowed_tools_value(&one_shot), "*", "the one-shot list");
     let compaction = crate::claude_compaction::compaction_command("cc-session", "charlie-session", "claude-sonnet-5");
     assert!(disallowed_tools_value(&compaction).split(',').any(|tool| tool == AGENT_TOOL), "the compaction list");
 

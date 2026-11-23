@@ -32,10 +32,10 @@ Source code: the server and the `charliebot` CLI are `rust/crates/`.
    gate does not apply, the landing does not wait for CI and reports `landed-no-ci`. `landed` and `landed-no-ci` exit
    0 and leave the task branch's PR merged or closed. Every other state leaves the change unlanded and names what
    holds it. Before any push, a diff that changes a web page (a file that a CharlieBot page serves, or a page template
-   directly under `prompts/`) is refused unless its PR body names the approved demo on a `Demo:` line, the changed view's URL path on
-   a `View:` line, and a screenshot at each CSS window size `charliebot land --help` lists by absolute path. Each
-   `View:` line is written into the landed commit as a trailer, which the release switch reads back to capture the live
-   page.
+   directly under `prompts/`) is refused unless its PR body names the approved demo on a `Demo:` line, a `View:` line
+   with the full URL that opens the changed state, and a screenshot at each CSS window size `charliebot land --help`
+   lists by absolute path. Each `View:` line is written into the landed commit as a trailer, which the release switch
+   reads back to capture the live page and to check that the capture shows the change.
 5. On landing → master agent gets summary
 
 ### Merge-back failover
@@ -46,6 +46,10 @@ reviewer — lands it. A blocked landing after a moved base, failed or unstarted
 work branch, PR, and worktree. A manager recovers a blocked landing by a new implement delegation that carries the kept
 branch's commits onto the current base; the new task's reviewer lands it, resolving any rebase conflict inside that
 task. Never hand-push.
+
+A landing also refuses before any push when a file its branch changes holds a hardcoded backend choice: the refusal
+names each `file:line` and the matched value. The call takes its backend from `backends.calls.<class>` through
+`charliebot backend resolve`.
 
 When the CI gate applies, delivery blocks a base-branch commit without a `landing.json` record in state `landed`.
 
@@ -94,17 +98,27 @@ Include code in a task spec only after verifying it. Otherwise describe the chec
 
 ### Don't include improve-loop revert semantics in delegate prompts
 
-Never include revert/keep-only-report decision rules in delegate prompts — those are improve-loop semantics. The delegate worker's code change IS the artifact regardless of run outcome; failed attempts must still commit. Be specific in the task spec (file paths, function names, acceptance criteria); one task per delegation.
+Never include revert/keep-only-report decision rules in delegate prompts — those are improve-loop semantics. The delegate worker's code change IS the artifact regardless of run outcome; failed attempts must still commit. Each delegation carries one task.
 
 ### Delegation spec hard format
 
-Delegation specs require `## Goal`, `## Source Files`, `## Required Behavior`, `## Acceptance Tests`,
-`## Reviewer Checklist`, and `## Out of Scope`. List existing absolute paths or `- (none)` under `Source Files`.
+`charliebot delegate --help` states the six sections of a delegation spec and the Source Files rule.
 Put patch-created files in a side note.
 
 Specs must not forbid test edits: tests asserting removed behavior get updated or deleted with it.
 
-Spec precision follows the task kind: an exploratory or judgment-heavy task (a cleanup whose extent is a judgment call, a review, a comment or doc rewrite) states the goal, the reason in the requester's words, the judging standard, the invariants, and the scope, and stops there - an enumerated change list caps the result at what the master already found. A fixed mechanical contract keeps its executable contract and acceptance assertions: there the precision is the deliverable.
+Spec precision follows the task kind.
+A judgment task is a task whose deliverable content comes from material that the worker reads, pages and reports
+included. A fixed mechanical contract, whose spec fixes the deliverable in advance, is not a judgment task.
+A judgment task's spec fills the sections of `charliebot delegate --help` with these five items, and each section keeps its heading:
+- the goal, in ## Goal;
+- the reason, in the requester's words, in ## Requester Words (optional: the CLI accepts a spec without it);
+- the judging standard, in ## Acceptance Tests;
+- the invariants, in ## Required Behavior;
+- the scope, in ## Out of Scope.
+An enumerated change list caps the result at what the master already found.
+A fixed mechanical contract keeps its executable contract and acceptance assertions: there the precision is the
+deliverable.
 
 A spec for one of the kinds of work listed under Requester Words in `charliebot delegate --help` carries that section; the help gives the rule and the line format.
 
@@ -425,6 +439,7 @@ The fired message is prefixed with the reason; per-target detail is in the suffi
 - Cron config lives one job per file under `$CHARLIEBOT_HOME/config.d/cron.d/<name>.yaml`, and the loader hot-reloads on a file or `prompt_file` mtime change — no restart is needed. A broken file yields an error entry for that job alone (logged as `cron_task_load_failed`) while every other job keeps loading, scheduling, and rendering through `GET /api/cron/tasks`.
 - The cron timezone defaults to `America/Los_Angeles` in the config model and the API: pin it explicitly for local tasks. Reread `config.d/cron.d/` at implementation time — concurrent sessions may mutate it.
 - At each due fire of a `prompt_file` or `steps` task, the server first checks the bound session's backend. When that backend names no current option or pool id, the fire records `failed`, posts the error to that session, and queues no input. A `handler` task uses no backend, so its fire runs whatever the bound session's backend names. Every fire that the backend check does not fail follows the skip rules and the source rules below.
+- Before every fire and every manual run, the server runs the backend-literal check (`charliebot backend check`) over the profile's `improve`, `prompts`, `scripts` and `skills` directories and over the task's own `prompt_file` and step prompt files. Each site it finds records the fire `failed`, posts one `file:line` line per site to the bound session, and queues no input; a check that cannot run does the same with its error. At server start the same sites go to the bound session of each enabled task, and the server starts anyway.
 - The server handles each cron fire that the backend check does not fail and that it does not skip by the task's source:
   - `prompt_file`: the fire goes to the bound session as a `[Scheduled trigger]` input. The input of a `mode: master` task is its prompt. The input of any other `prompt_file` task names the task on its first line and carries the category template: round.md for a task with a repo, repo_less.md for one without.
   - `steps`: the server runs the steps in order; each step starts after the previous step exits 0. The bound session receives one report when the steps finish or stop.

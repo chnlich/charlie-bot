@@ -3,6 +3,7 @@
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { after, before, test } from 'node:test';
@@ -11,6 +12,8 @@ import { fileURLToPath } from 'node:url';
 import { mergeFiles, FILE_CAP } from '../lib/files.mjs';
 import { PACKET_LIMIT, buildChildPackets } from '../lib/packets.mjs';
 import { VERDICTS, checkAnswers, parseAnswers, runPool, splitAnswers } from '../lib/judge.mjs';
+import { resolveCall } from '../lib/backend.mjs';
+import { labelWindow } from '../lib/label.mjs';
 import { readCredential } from '../lib/gateway.mjs';
 import { sampleIndices } from '../lib/rejudge.mjs';
 import { summarize } from '../lib/tally.mjs';
@@ -225,4 +228,124 @@ test('a pool rejects with the first failure while every in-flight task settles',
     /first failure/,
   );
   assert.equal(ran, true, 'the task already in flight still ran to its end');
+});
+
+// A stub `charliebot` whose `backend resolve` answer is `body`, so these tests read no server and no config.
+function writeCliStub(name, body) {
+  const file = path.join(scratch, name);
+  writeFile(file, `#!/bin/sh\n${body}\n`);
+  fs.chmodSync(file, 0o755);
+  return file;
+}
+
+// Runs `fn` with CHARLIEBOT_BIN naming `cli`, and restores the variable afterwards.
+async function withCli(cli, fn) {
+  const saved = process.env.CHARLIEBOT_BIN;
+  process.env.CHARLIEBOT_BIN = cli;
+  try {
+    return await fn();
+  } finally {
+    if (saved === undefined) delete process.env.CHARLIEBOT_BIN;
+    else process.env.CHARLIEBOT_BIN = saved;
+  }
+}
+
+const homeOf = (name) => path.join(scratch, name);
+
+test('an empty CHARLIEBOT_BIN is refused instead of falling back to PATH', async () => {
+  await withCli('', () => assert.throws(() => resolveCall('judge'), /CHARLIEBOT_BIN is empty/));
+});
+
+function labelOptions(home, out, credentialsPath) {
+  return {
+    home,
+    from: '2026-01-01T00:00:00Z',
+    to: '2026-01-03T00:00:00Z',
+    reportsUntil: '2026-01-03T00:00:00Z',
+    out,
+    credentialsPath,
+    parallel: 1,
+    prompts: { manager: 'manager instructions', worker: 'worker instructions' },
+  };
+}
+
+test('label refuses an unset judge key before it reads the store, and the failure names the key', async () => {
+  syntheticHome('unset-judge');
+  const out = path.join(scratch, 'unset-judge-out');
+  const cli = writeCliStub(
+    'unset-judge-cli',
+    "printf '%s\\n' 'backends.calls.judge is unset; name a backends.options or backends.pools id for it' >&2\nexit 1",
+  );
+  await withCli(cli, () =>
+    assert.rejects(labelWindow(labelOptions(homeOf('unset-judge'), out, 'unused')), /backends\.calls\.judge is unset/),
+  );
+  assert.equal(fs.existsSync(out), false, 'no output is written before the judge resolves');
+});
+
+test('label judges each packet through the option the server resolves, and records that option id', async () => {
+  const root = syntheticHome('judged');
+  // Parent Q of child D has no messages in the window, but label reads every parent's log.
+  writeFile(path.join(root, 'Q', 'data', 'chat_events.jsonl'), '');
+  const calls = [];
+  const gateway = http.createServer((request, response) => {
+    let body = '';
+    request.on('data', (chunk) => {
+      body += chunk;
+    });
+    request.on('end', () => {
+      const payload = JSON.parse(body);
+      calls.push({ url: request.url, auth: request.headers.authorization, model: payload.model });
+      const answers = [...payload.messages[0].content.matchAll(/PARENT_MESSAGE id=(\S+)/g)].map(([, id]) => ({
+        id,
+        verdict: 'needed',
+        off_goal_percent: 0,
+        off_goal_kinds: [],
+        off_goal_quote: '',
+        reason: 'fixture',
+      }));
+      const content = `\`\`\`json\n${JSON.stringify(answers)}\n\`\`\``;
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify({ choices: [{ message: { content } }] }));
+    });
+  });
+  await new Promise((resolve) => gateway.listen(0, '127.0.0.1', resolve));
+  try {
+    const option = {
+      id: 'fixture-judge',
+      api_base: `http://127.0.0.1:${gateway.address().port}`,
+      model: 'fixture-model',
+      credential: 'fixture-entry',
+    };
+    const credentials = path.join(scratch, 'judge-credentials.yaml');
+    writeFile(credentials, 'fixture-entry:\n  api_key: fixture-key\n');
+    const cli = writeCliStub('judge-cli', `printf '%s\\n' '${JSON.stringify({ option })}'`);
+    const home = homeOf('judged');
+    const out = path.join(scratch, 'judged-out');
+    const { run, records } = await withCli(cli, () =>
+      labelWindow(labelOptions(home, out, credentials)),
+    );
+    assert.ok(records.length > 0, 'the window holds messages to label');
+    assert.ok(records.every((record) => record.judge_backend === 'fixture-judge' && record.verdict === 'needed'));
+    assert.equal(run.judge_backend, 'fixture-judge');
+    assert.equal(run.judge_model, 'fixture-model');
+    assert.ok(calls.length > 0, 'the packets reached the gateway');
+    const expected = { url: '/v1/chat/completions', auth: 'Bearer fixture-key', model: 'fixture-model' };
+    assert.deepEqual(calls, calls.map(() => expected));
+
+    const changedModelCli = writeCliStub(
+      'changed-model-judge-cli',
+      `printf '%s\\n' '${JSON.stringify({ option: { ...option, model: 'changed-model' } })}'`,
+    );
+    const callsBeforeResume = calls.length;
+    await withCli(changedModelCli, () =>
+      assert.rejects(
+        labelWindow(labelOptions(home, out, credentials)),
+        /saved judgments came from fixture-judge \(fixture-model\), not fixture-judge \(changed-model\)/,
+      ),
+    );
+    assert.equal(calls.length, callsBeforeResume, 'a changed model does not reuse or replace cached judgments');
+  } finally {
+    gateway.closeAllConnections();
+    gateway.close();
+  }
 });

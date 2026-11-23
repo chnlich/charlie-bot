@@ -58,7 +58,7 @@ impl ClaudeCliLifecycle {
 }
 
 /// The launch arguments one Claude process receives: its run kind, the manager turn's flags, and the run id. A manager
-/// turn's run id names its read-budget hook entries; a task run's run id names its compaction-context hook, so a task
+/// turn's run id names its read-budget hook entries. A task run's run id names its compaction-context hook, so a task
 /// launch without one fails. A relayed process continues the same run.
 fn launch_kwargs(ctx: &LaunchContext, first_process: bool) -> anyhow::Result<Map<String, Value>> {
   let mut kwargs = Map::new();
@@ -142,7 +142,7 @@ struct PooledLaunch {
   relays: usize,
   decision: Arc<Mutex<Option<String>>>,
   /// The reservation the run's placement took on `account`. Held until the launch drops, so the login counts the
-  /// run until the round ends or the relay replaces the launch. Nothing reads it; holding it is the point.
+  /// run until the round ends or the relay replaces the launch. Nothing reads it. Holding it is the point.
   #[allow(dead_code)]
   handle: Option<Arc<claude_accounts::ReservationHandle>>,
 }
@@ -748,7 +748,7 @@ mod tests {
     fs::File::options().write(true).open(path).unwrap().set_modified(modified).unwrap();
   }
 
-  /// Pool order names login "a" first, and its copy is the older one; login "b" holds the newer copy.
+  /// Pool order names login "a" first, and its copy is the older one. Login "b" holds the newer copy.
   fn split_copies(root: &Path) -> (CharlieBotConfig, PathBuf, PathBuf) {
     let account_a = root.join("account-a");
     let account_b = root.join("account-b");

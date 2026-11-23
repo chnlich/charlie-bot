@@ -108,6 +108,11 @@ const EXCEPTIONS = [
   ...byFile('rust/crates/features/usage/src/page_memo.rs', [
     ["week: \"2026-11-02 → 2026-11-08\".to_string(),", PROSE_REASON],
   ]),
+  ...byFile('rust/crates/features/taste/src/lib.rs', [
+    ["\"This should not be a question → Deploy config change\"", PROSE_REASON],
+    ["▸ Q1: Which rollout action?", CHAT_TEXT_REASON],
+    ["↳ {PICK_ANSWER}", CHAT_TEXT_REASON],
+  ]),
   ...byFile('rust/crates/features/usage/src/page_rows.rs', [
     ["is_empty() { String::new() } else { format!(\"{first} → {last}\") },", PROSE_REASON],
   ]),

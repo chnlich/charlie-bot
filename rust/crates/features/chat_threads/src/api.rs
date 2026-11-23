@@ -39,7 +39,7 @@ pub(crate) fn matches(path: &str) -> bool {
 }
 
 /// The active corpus's rows that the `threads` view holds, newest first. The Workspace list is the complement over the
-/// same corpus; a view that holds no row answers without building that corpus.
+/// same corpus. A view that holds no row answers without building that corpus.
 ///
 /// With `ids`, the route answers those named rows alone, as the sidebar's row refresh: the ids the view no longer holds
 /// come back in `gone`, and the rest in the compact column form the full list's rows take.

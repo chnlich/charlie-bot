@@ -55,7 +55,7 @@ pub const EXTRA_BODY_KEY: &str = "extra_body";
 const RETIRED_BACKENDS_KEYS: &[&str] = &["preference", "worker_default", "auto", "pool"];
 
 /// The top-level names `CharlieBotConfig` declares as fields.
-const FIELD_NAMES: &[&str] =
+pub const TOP_LEVEL_CONFIG_FIELD_NAMES: &[&str] =
   &["charliebot_home", "headless_chrome_bin", "server", "paths", "backends", "ui", "telegram", "remote_run", "github"];
 
 /// `CORE_LEGACY_KEYS`: the retired top-level keys the core config names, each with its new location.
@@ -485,7 +485,8 @@ pub enum CallClass {
   Compaction,
   /// The web search tool; one option with an endpoint and a credential.
   WebSearch,
-  /// Week labelling and week review; one option with an endpoint and a credential, never a pool.
+  /// Week labelling, week review, and release-switch live screenshot checks; one vision-capable option with an
+  /// endpoint and a credential, never a pool.
   Judge,
 }
 
@@ -821,8 +822,18 @@ fn legacy_destination(key: &str, schema: &ConfigSchema) -> Option<String> {
 /// missing or empty file loads as the schema defaults. Each registered section is parsed; a parse error
 /// fails the load.
 pub fn load_config(home: &Path, schema: &ConfigSchema) -> Result<CharlieBotConfig, ConfigError> {
-  let config_path = home.join(CONFIG_FILENAME);
-  let config_path_text = paths::display(&config_path);
+  load_config_file(home, &home.join(CONFIG_FILENAME), schema)
+}
+
+/// Load the config file at `config_path` as the config of the profile home `home`, against the registered packages'
+/// `schema`. [`load_config`] reads `<home>/config.yaml`; a tool that reads a config file outside a profile home, such
+/// as the repository's configuration example, loads it through this entry with the same checks.
+pub fn load_config_file(
+  home: &Path,
+  config_path: &Path,
+  schema: &ConfigSchema,
+) -> Result<CharlieBotConfig, ConfigError> {
+  let config_path_text = paths::display(config_path);
 
   let config_d = home.join(CONFIG_D_DIR_NAME);
   if config_d.is_dir() {
@@ -843,7 +854,7 @@ pub fn load_config(home: &Path, schema: &ConfigSchema) -> Result<CharlieBotConfi
     }
   }
 
-  let data = read_yaml_mapping(&config_path)?;
+  let data = read_yaml_mapping(config_path)?;
 
   let legacy_hits: Vec<(String, String)> = data
     .keys()
@@ -883,9 +894,9 @@ pub fn load_config(home: &Path, schema: &ConfigSchema) -> Result<CharlieBotConfi
   let unknown: Vec<String> = data
     .keys()
     .filter(|key| {
-      !key
-        .as_str()
-        .is_some_and(|name| FIELD_NAMES.contains(&name) || schema.sections.iter().any(|section| section.key == name))
+      !key.as_str().is_some_and(|name| {
+        TOP_LEVEL_CONFIG_FIELD_NAMES.contains(&name) || schema.sections.iter().any(|section| section.key == name)
+      })
     })
     .map(yaml_key_repr)
     .collect();
@@ -1952,22 +1963,21 @@ voice: {}
     assert!(cfg.backends.call_option(CallClass::WebSearch).is_none());
   }
 
-  /// The option entries and `calls` keys that restore the pre-f0b9a7a206 targets on the live config: new sessions on
-  /// the first option, compaction on the `claude-sonnet-5` model, web search on Google's REST base with the `gemini`
-  /// credential. The review model is the one improve rounds read before a445788683 (`REVIEW_OPTION`). The values are
-  /// the ones the old code hard-coded.
+  /// The option entries and `calls` keys that name the call targets of the live config: new sessions on the first
+  /// option, compaction on the `claude-sonnet-5` model, web search on Google's REST base with the `gemini` credential,
+  /// and the improve review on `claude-code-deepseek-flash`.
   #[test]
-  fn the_restored_call_entries_name_the_pre_commit_targets() {
+  fn the_call_entries_name_their_targets() {
     let home = home_with(concat!(
       "backends:\n  options:\n",
       "    - {id: claude-opus-5, label: O, type: cc-claude, model: claude-opus-5-5}\n",
       "    - {id: claude-sonnet-compaction, label: S, type: cc-claude, model: claude-sonnet-5}\n",
       "    - {id: claude-code-gemini-search, label: W, type: cc-openai-compatible, model: gemini-4-hydrogen, ",
       "api_base: 'https://generativelanguage.googleapis.com/v1beta', credential: gemini}\n",
-      "    - {id: claude-code-kimi-k3.1-pro, label: Review, type: cc-anthropic-compatible, ",
-      "model: kimi-k3.1-pro, api_base: 'https://gateway.test', credential: gw, effort: high}\n",
+      "    - {id: claude-code-deepseek-flash, label: Review, type: cc-anthropic-compatible, ",
+      "model: deepseek-flash, api_base: 'https://gateway.test', credential: gw, effort: high}\n",
       "  calls:\n    new_session: claude-opus-5\n    compaction: claude-sonnet-compaction\n",
-      "    web_search: claude-code-gemini-search\n    improve_review: claude-code-kimi-k3.1-pro\n",
+      "    web_search: claude-code-gemini-search\n    improve_review: claude-code-deepseek-flash\n",
     ));
     let schema = ConfigSchema {
       sections: Vec::new(),
@@ -1990,10 +2000,10 @@ voice: {}
     assert_eq!(search.type_fields.get("credential").and_then(|value| value.as_str()), Some("gemini"));
     assert_eq!(
       cfg.backends.calls.get(CallClass::ImproveReview),
-      Some(&CallTarget::Backend("claude-code-kimi-k3.1-pro".to_string()))
+      Some(&CallTarget::Backend("claude-code-deepseek-flash".to_string()))
     );
-    let review = cfg.get_backend_option("claude-code-kimi-k3.1-pro").expect("the review option");
-    assert_eq!(review.model, "kimi-k3.1-pro");
+    let review = cfg.get_backend_option("claude-code-deepseek-flash").expect("the review option");
+    assert_eq!(review.model, "deepseek-flash");
     assert_eq!(review.type_fields.get("api_base").and_then(|value| value.as_str()), Some("https://gateway.test"));
     assert_eq!(review.type_fields.get("credential").and_then(|value| value.as_str()), Some("gw"));
   }

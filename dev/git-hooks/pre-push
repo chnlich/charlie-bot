@@ -1,58 +1,81 @@
 #!/usr/bin/env bash
-# The pre-push hook: refuses a push whose ref names, commit messages or diffs carry the exact value of a credential
-# that this process holds. The clone's hooks path runs it for every push, so the round's own pushes are checked too.
+# The pre-push hook: refuses a push whose ref names, commit messages, identities, diffs or added or modified blobs
+# carry the exact value of a credential that this process holds, a host pattern of the local pattern file, or a
+# generic leak in a commit message or a designated doc blob. The clone's hooks path runs it for every push, so the
+# round's own pushes are checked too.
 #
 # git gives one line per ref: <local ref> <local sha> <remote ref> <remote sha>. The commits that a push publishes are
 # those the remote does not hold yet: remote..local, or, for a new branch, every commit that no remote ref reaches. Each
 # such commit's message and diff are checked, because a later commit that removes a value still publishes it in history.
 #
-# A credential hit prints the kind and the field, then exits 3; git's push then exits 1. When
-# CHARLIEBOT_CREDENTIAL_HIT_FILE names a file, the hit is also written there, so the caller of git push can pass the exit
-# code 3 through.
+# Credential checks run first: a credential hit prints the kind and the field, then exits 3; git's push then exits 1.
+# When CHARLIEBOT_CREDENTIAL_HIT_FILE names a file, the hit is also written there, so the caller of git push can pass
+# the exit code 3 through. The host-pattern and doc scans run after, through check-skills-host-leak.sh --check-list, so
+# every text of the push is scanned in two scanner processes. Exit 1 is a leak hit and exit 2 a setup refusal; both
+# stop the push.
 set -euo pipefail
 
 helper_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 scanner="$helper_dir/check-skills-host-leak.sh"
+source "$helper_dir/push-text-lists.sh"
 
 tmp_dir=$(mktemp -d)
 trap 'rm -rf "$tmp_dir"' EXIT
 "$scanner" --credential-values > "$tmp_dir/values" || exit 2
 
-# check_text <field> <file>: exit 3 on a credential hit, and stop the push there.
-check_text() {
-  local field=$1 file=$2 status=0
-  "$scanner" --credential-check "$tmp_dir/values" "$field" < "$file" > "$tmp_dir/hit" || status=$?
-  case "$status" in
-    0) return 0 ;;
-    3)
-      cat -- "$tmp_dir/hit" >&2
-      printf 'nothing was pushed\n' >&2
-      if [[ -n "${CHARLIEBOT_CREDENTIAL_HIT_FILE:-}" ]]; then
-        cp -- "$tmp_dir/hit" "$CHARLIEBOT_CREDENTIAL_HIT_FILE"
-      fi
-      exit 3
-      ;;
-    *) exit "$status" ;;
-  esac
+# The texts a push publishes, collected as `field<TAB>path` lines. cred.list is the credential stage: ref names,
+# messages, diffs and decompressed blobs. all.list adds the identities for the host-pattern stage. doc.list holds the
+# messages and the designated doc blobs for the generic stage.
+cred_list="$tmp_dir/cred.list"
+all_list="$tmp_dir/all.list"
+doc_list="$tmp_dir/doc.list"
+: > "$cred_list"
+: > "$all_list"
+: > "$doc_list"
+serial=0
+index=0
+
+list_shas() {  # <local ref> <local sha> <remote sha>
+  if [[ "$3" =~ ^0+$ ]]; then
+    git rev-list "$2" --not --remotes
+  else
+    git rev-list "$3..$2"
+  fi
 }
 
 while read -r local_ref local_sha remote_ref remote_sha; do
   # A deletion publishes no content.
   [[ ! "$local_sha" =~ ^0+$ ]] || continue
-  printf '%s\n%s\n' "$local_ref" "$remote_ref" > "$tmp_dir/refs"
-  check_text 'ref name' "$tmp_dir/refs"
-  if [[ "$remote_sha" =~ ^0+$ ]]; then
-    shas=$(git rev-list "$local_sha" --not --remotes) \
-      || { printf 'cannot list the commits of %s for the credential check\n' "$local_ref" >&2; exit 2; }
-  else
-    shas=$(git rev-list "$remote_sha..$local_sha") \
-      || { printf 'cannot list the commits of %s for the credential check\n' "$local_ref" >&2; exit 2; }
-  fi
+  refs_file="$tmp_dir/refs-$serial"
+  serial=$((serial + 1))
+  printf '%s\n%s\n' "$local_ref" "$remote_ref" > "$refs_file"
+  printf 'ref name\t%s\n' "$refs_file" >> "$cred_list"
+  printf 'ref name\t%s\n' "$refs_file" >> "$all_list"
+
+  shas=$(list_shas "$local_ref" "$local_sha" "$remote_sha") \
+    || { printf 'cannot list the commits of %s for the push check\n' "$local_ref" >&2; exit 2; }
   while IFS= read -r sha; do
     [[ -n "$sha" ]] || continue
-    git show -s --format=%B "$sha" > "$tmp_dir/message"
-    check_text "commit $sha message" "$tmp_dir/message"
-    git show --format= --patch --no-color --no-ext-diff "$sha" > "$tmp_dir/diff"
-    check_text "commit $sha diff" "$tmp_dir/diff"
+    collect_commit_texts "$sha" "$tmp_dir" "$index" "$cred_list" "$all_list" "$doc_list"
+    index=$((index + 1))
   done <<< "$shas"
 done
+
+# Credential checks first: a hit exits 3 so git reports 1 for the push, and the hit file lets the caller of git
+# push recover the 3. Any other nonzero outcome stops the push with the scanner's own code.
+status=0
+"$scanner" --credential-check-list "$tmp_dir/values" "$cred_list" > "$tmp_dir/hit" || status=$?
+if (( status == 3 )); then
+  cat -- "$tmp_dir/hit" >&2
+  printf 'nothing was pushed\n' >&2
+  [[ -z "${CHARLIEBOT_CREDENTIAL_HIT_FILE:-}" ]] || cp -- "$tmp_dir/hit" "$CHARLIEBOT_CREDENTIAL_HIT_FILE"
+  exit 3
+elif (( status != 0 )); then
+  cat -- "$tmp_dir/hit" >&2
+  exit "$status"
+fi
+
+status=0
+"$scanner" --require-local-patterns --host-patterns-only --check-list "$all_list" || status=$?
+(( status == 0 )) || exit "$status"
+"$scanner" --require-local-patterns --check-list "$doc_list"

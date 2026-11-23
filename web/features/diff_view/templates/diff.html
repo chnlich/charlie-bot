@@ -94,18 +94,16 @@
       .diff-file-row:has(.diff-file-dir):has(.diff-file-rename) .diff-file-chevron,
       .diff-file-row:has(.diff-file-dir):has(.diff-file-rename) .diff-file-badge { grid-row: span 3; }
     }
-    /* A phone's line-by-line table stands as wide as its widest line plus the 8.85em number column and
-       diff2html's 8em right padding. The number column holds the line's comment control and a four-digit
-       number, and the right padding holds no control on this page. A 42-character line then measures
-       580 px in the 354 px panel. The reader sees 28 characters and swipes the panel sideways for the
-       rest, with no ellipsis or scrollbar to say the line continues. The page still starts a phone in
-       line-by-line, to keep a changed line whole. This block drops the right padding and wraps the code
-       text at the panel's width, breaking a token no space separates, so the table fits without
-       sideways scrolling. The 1.5em cap keeps the code text clear of the row's +/- prefix, and a
-       wrapped line takes the rows its text needs. Above 768 px a line keeps its one row. A side-by-side
-       table on a phone keeps its own per-pane scroll. */
+    /* diff2html's stylesheet (the CDN bundle this page loads) sets each line's code cell to white-space: nowrap,
+       so the cell's minimum width is its widest line and the table stands as wide as that line. The file row
+       clips what the table overflows, and nothing scrolls it, so a long line is cut at the panel's edge.
+       On a phone this block wraps the code text at the panel's width, breaking a token that no space separates.
+       The code cell takes normal white space, which collapses the whitespace between its elements, so no blank
+       line opens above the code. The 1.5em cap keeps the code text clear of the row's +/- prefix, and a wrapped
+       line takes the rows its text needs. Above 768 px a line keeps its one row. A side-by-side table on a phone
+       keeps its own per-pane scroll. The page starts a phone in line-by-line, so a changed line stays whole. */
     @media (max-width: 768px) {
-      .d2h-diff-table:has(.d2h-code-linenumber) .d2h-code-line { padding-right: 0; width: 100%; }
+      .d2h-diff-table:has(.d2h-code-linenumber) .d2h-code-line { padding-right: 0; width: 100%; white-space: normal; }
       .d2h-diff-table:has(.d2h-code-linenumber) .d2h-code-line .d2h-code-line-ctn {
         white-space: pre-wrap; overflow-wrap: anywhere; max-width: calc(100% - 1.5em); }
       /* The library stylesheet middle-aligns the wrapped line's inline-block code text, and the

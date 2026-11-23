@@ -8,6 +8,7 @@
 mod release_lock;
 mod world;
 
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs;
 use std::io::{Read, Write};
@@ -642,9 +643,72 @@ static TRIAL_RUNS: Mutex<()> = Mutex::new(());
 /// The name prefix of a serve trial's tree root: six random characters follow it.
 const TREE_ROOT_PREFIX: &str = "tr";
 
+/// The access key the serve world's live home and its live server share, so the trial's `backend resolve` is admitted.
+const LIVE_ACCESS_KEY: &str = "serve-test-live-access-key";
+
+/// The live server of a serve world: `charliebot-server` on the live home, which the trial's probe read asks through
+/// `charliebot backend resolve`. It is stopped when the world drops.
+struct LiveServer {
+  child: Child,
+}
+
+impl LiveServer {
+  /// Starts the server on `home` and returns once its log holds `server_ready`.
+  fn start(sandbox: &Sandbox, env: &Env, home: &Path, repo: &Path) -> Self {
+    let log = sandbox.dir("live-logs").join("server.log");
+    let log_file = fs::File::create(&log).expect("the live server log");
+    let mut command = harness::command(harness::built_binary("charliebot-server"), env);
+    command
+      .current_dir(repo)
+      .env("CHARLIEBOT_HOME", home)
+      .env("CHARLIEBOT_REPO_ROOT", repo)
+      .stdout(Stdio::from(log_file.try_clone().expect("the live server log handle")))
+      .stderr(Stdio::from(log_file));
+    let child = command.spawn().expect("the live server starts");
+    let mut server = Self { child };
+    server.wait_until_ready(&log);
+    server
+  }
+
+  fn wait_until_ready(&mut self, log: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+      let text = fs::read_to_string(log).unwrap_or_default();
+      if text.split_whitespace().any(|word| word == "server_ready") {
+        return;
+      }
+      if let Some(status) = self.child.try_wait().expect("the live server's status") {
+        panic!("the live server exited before it was ready: {status}\n{text}");
+      }
+      assert!(Instant::now() < deadline, "the live server logged no server_ready: {text}");
+      thread::sleep(Duration::from_millis(100));
+    }
+  }
+}
+
+impl Drop for LiveServer {
+  fn drop(&mut self) {
+    if let Err(error) = self.child.kill() {
+      eprintln!("stopping the live server: {error}");
+    }
+    if let Err(error) = self.child.wait() {
+      eprintln!("waiting for the live server: {error}");
+    }
+  }
+}
+
+/// A port that is free on 127.0.0.1 at the moment of the call.
+fn free_port() -> u16 {
+  TcpListener::bind("127.0.0.1:0").expect("a free port").local_addr().expect("the port's address").port()
+}
+
+/// The number of ports in a serve world's trial range, the size of the trial's default range.
+const TRIAL_PORT_SPAN: u16 = 20;
+
 /// One serve trial's inputs: a throwaway repository whose origin/main names its commit, the server and the CLI beside
-/// each other, and a live home with one backend option. A stub charlie-code completes the inputs. The trial's evidence
-/// stays under the sandbox; its tree root is `tree_root`, a short directory beside the sandbox.
+/// each other, and a live home with its live server. The live home's backends name a probe member and the two Claude
+/// options the trial copies models from. A stub charlie-code completes the inputs. The trial's evidence stays under the
+/// sandbox; its tree root is `tree_root`, a short directory beside the sandbox.
 struct ServeWorld {
   sandbox: Sandbox,
   repo: PathBuf,
@@ -652,6 +716,7 @@ struct ServeWorld {
   commit: String,
   env: Env,
   trees: TempDir,
+  _live: LiveServer,
 }
 
 impl ServeWorld {
@@ -659,7 +724,7 @@ impl ServeWorld {
     let sandbox = Sandbox::new();
     // The tree root sits directly under the temporary directory, not under the sandbox. A --tree-root trial's Chrome
     // socket path is the root plus 68 bytes, and the sandbox's own name would exceed the limit under the runner's
-    // TMPDIR. RUNNER_TMPDIR's comment states the budget.
+    // TMPDIR. The socket budget is checked by the test_trial_preflight_* tests.
     let trees = tempfile::Builder::new().prefix(TREE_ROOT_PREFIX).tempdir().expect("the tree root");
     let repo = sandbox.dir("repo");
     fs::create_dir_all(repo.join("scripts/release")).expect("the script directory");
@@ -708,17 +773,55 @@ impl ServeWorld {
     symlink(harness::built_binary("charliebot-server"), release.join("charliebot-server")).expect("the server link");
     symlink(harness::built_binary("charliebot"), release.join("charliebot")).expect("the CLI link");
     let live_home = sandbox.dir("live-home");
+    let live_port = free_port();
     fs::write(
       live_home.join("config.yaml"),
-      "server:\n  enable_local_work_guard: false\nbackends:\n  options:\n    - id: charlie-code-serve-test\n      label: Serve test\n      type: charlie-code\n      model: openai/test-model\n      api_base: http://127.0.0.1:9/v1\n      credential: serve-test\n",
+      format!(
+        concat!(
+          "server:\n  host: 127.0.0.1\n  port: {port}\n  session_memory_max_mb: 0\n  min_free_disk_gib: 0\n",
+          "  enable_local_work_guard: false\n",
+          "backends:\n  options:\n",
+          "    - id: charlie-code-serve-test\n      label: Serve test\n      type: charlie-code\n",
+          "      model: openai/test-model\n      api_base: http://127.0.0.1:9/v1\n      credential: serve-test\n",
+          // The default memory-curator seed names claude-opus and claude-fable, so the live server refuses to start
+          // without them.
+          "    - id: claude-opus\n      label: Opus\n      type: cc-claude\n      model: claude-opus-5-5\n",
+          "      effort: xhigh\n",
+          "    - id: claude-fable\n      label: Fable\n      type: cc-claude\n      model: claude-fable-5-1\n",
+          "      effort: xhigh\n",
+          "  calls:\n    new_session: charlie-code-serve-test\n    probe: charlie-code-serve-test\n",
+        ),
+        port = live_port,
+      ),
     )
     .expect("the live config");
-    fs::write(live_home.join("credentials.yaml"), "serve-test:\n  api_key: not-a-real-key\n").expect("the credentials");
+    fs::write(
+      live_home.join("credentials.yaml"),
+      format!("serve-test:\n  api_key: not-a-real-key\ncharliebot:\n  access_key: {LIVE_ACCESS_KEY}\n"),
+    )
+    .expect("the credentials");
     sandbox.stub("charlie-code", "exit 0\n");
 
+    let mut disable_tasks = harness::command(harness::built_binary("charliebot"), &env);
+    disable_tasks
+      .current_dir(&repo)
+      .env("CHARLIEBOT_HOME", &live_home)
+      .arg("release-helper")
+      .arg("disable-cron-tasks")
+      .arg(&live_home)
+      .arg(&repo);
+    let disabled = harness::run(&mut disable_tasks);
+    assert_eq!(disabled.code, 0, "{}", disabled.describe());
+
+    let live = LiveServer::start(&sandbox, &env, &live_home, &repo);
+    // The trial's port range starts at a port the kernel frees for this world, not at the default range, which other
+    // trials on the host share. A foreign listener on the port a trial picked fails that side.
+    let trial_ports = free_port();
+    env.insert("TRIAL_PORT_MIN".to_string(), trial_ports.to_string());
+    env.insert("TRIAL_PORT_MAX".to_string(), (trial_ports + TRIAL_PORT_SPAN - 1).to_string());
     env.insert("CHARLIEBOT_HOME".to_string(), live_home.display().to_string());
     env.insert("CHARLIEBOT_RELEASE_RUN_DIR".to_string(), sandbox.dir("evidence").display().to_string());
-    Self { sandbox, repo, release, commit, env, trees }
+    Self { sandbox, repo, release, commit, env, trees, _live: live }
   }
 
   /// The `--tree-root` of this world's serve trials: an existing directory, removed with the world.
@@ -805,13 +908,6 @@ fn default_tree(tmp: &Path, commit: &str) -> PathBuf {
   tmp.join(format!("charliebot-release-trial-{uid}-{}", &commit[..12]))
 }
 
-/// A maximum-length TMPDIR in dev/remote-run's form: remote-exec.pl's `/dev/shm/` and its 16-byte name, `r`, the process
-/// id in hex, `-` and the start time in hex. remote-exec.pl owns that budget.
-const RUNNER_TMPDIR: &str = "/dev/shm/r50000-fffffffff";
-/// The uid of remote-exec.pl's budget: a 6-digit uid, which the runner's build host uses.
-const BUDGET_UID: &str = "999999";
-/// The first 12 hex characters of a commit, as the trial names its tree.
-const BUDGET_COMMIT: &str = "0123456789ab";
 /// The socket-path limit that trial.sh enforces; the script owns the budget.
 fn trial_socket_path_limit() -> usize {
   let script = fs::read_to_string(harness::repo_root().join("scripts/release/trial.sh")).expect("the trial script");
@@ -820,26 +916,350 @@ fn trial_socket_path_limit() -> usize {
   limits[0].parse().expect("a numeric trial socket-path limit")
 }
 
-/// The longest socket path that a trial creates under the runner's TMPDIR, over its default tree and a serve test's
-/// tree root (TREE_ROOT_PREFIX and six random characters, directly under TMPDIR), is under the sun_path limit.
-#[test]
-fn test_trial_socket_paths_under_the_runner_tmpdir_stay_under_the_sun_path_limit() {
-  let tree_root = format!("{RUNNER_TMPDIR}/{TREE_ROOT_PREFIX}{}", "x".repeat(6));
-  let trial_tree = format!("{tree_root}/trial-{BUDGET_COMMIT}");
-  let default_trial_tree = format!("{RUNNER_TMPDIR}/charliebot-release-trial-{BUDGET_UID}-{BUDGET_COMMIT}");
-  let default_temp_root = format!("{RUNNER_TMPDIR}/trial-tmp-{BUDGET_UID}-{BUDGET_COMMIT}");
-  let sockets = [
-    format!("{trial_tree}/tmux/tmux-{BUDGET_UID}/charliebot"),
-    format!("{trial_tree}/tmp/org.chromium.Chromium.XXXXXX/SingletonSocket"),
-    format!("{default_trial_tree}/tmux/tmux-{BUDGET_UID}/charliebot"),
-    format!("{default_temp_root}/org.chromium.Chromium.XXXXXX/SingletonSocket"),
-  ];
-  let longest = sockets.iter().max_by_key(|path| path.len()).expect("the socket paths");
+/// The uid that the preflight's id stub answers: six digits, the length of the round host's uid. The uid enters the
+/// socket paths only through tmux's `tmux-<uid>` directory, so the budget is checked at this length.
+const PREFLIGHT_UID: &str = "999999";
+
+/// The CLI beside the server: the verbs that the trial calls before its server starts. Any other verb fails the trial.
+/// `release-helper endpoint-option` reads the live home and resolves its target through the live server, so with
+/// PREFLIGHT_SERVER=down it fails as the CLI fails when no server runs.
+const CLI_STUB: &str = r#"#!/usr/bin/env bash
+case "$*" in
+  'release-helper --help') ;;
+  'config get server.enable_local_work_guard') echo false ;;
+  'release-helper endpoint-option '*)
+    if [[ ${PREFLIGHT_SERVER:-up} == down ]]; then
+      echo 'release-helper endpoint-option: cannot resolve backends.calls.probe member claude-code-deepseek-flash: [Errno 111] Connection refused on http://localhost:18498' >&2
+      exit 1
+    fi
+    echo '{"option":{"id":"stub","model":"m","api_base":"http://127.0.0.1:9/v1"}}' ;;
+  'release-helper credential-key '*) echo stub-key ;;
+  'release-helper session-weights '*) printf 'true\ntrue\n' ;;
+  'release-helper stand-in-options '*) printf -- '- id: stub-stand-in\n  type: cc-claude\n  model: stub-model\n' ;;
+  'release-helper disable-cron-tasks '*) printf 'memory-curator\nstub-stand-in\n' ;;
+  'release-helper free-port '*) echo 18650 ;;
+  'release-helper redact-stdin') cat ;;
+  *) echo "charliebot stub: unexpected arguments: $*" >&2; exit 1 ;;
+esac
+"#;
+
+/// The inputs of the socket preflight: a throwaway repository whose origin/main names its commit, the trial script, a
+/// CLI beside a server stand-in, and stubs for charlie-code and id. The stand-in is a copy of /bin/true, so a trial
+/// that passes the preflight stops at its server start with exit 1.
+struct PreflightWorld {
+  sandbox: Sandbox,
+  repo: PathBuf,
+  env: Env,
+  commit: String,
+  server: PathBuf,
+}
+
+impl PreflightWorld {
+  fn new() -> Self {
+    let sandbox = Sandbox::new();
+    let repo = sandbox.dir("repo");
+    fs::create_dir_all(repo.join("scripts/release")).expect("the script directory");
+    harness::copy_file(&harness::repo_root().join("scripts/release/trial.sh"), &repo.join("scripts/release/trial.sh"));
+    fs::write(repo.join("README.md"), "preflight\n").expect("the README");
+    let mut env = sandbox.env();
+    for (name, value) in [
+      ("GIT_AUTHOR_NAME", "preflight-test"),
+      ("GIT_AUTHOR_EMAIL", "preflight-test@example.invalid"),
+      ("GIT_COMMITTER_NAME", "preflight-test"),
+      ("GIT_COMMITTER_EMAIL", "preflight-test@example.invalid"),
+      ("GIT_CONFIG_GLOBAL", "/dev/null"),
+    ] {
+      env.insert(name.to_string(), value.to_string());
+    }
+    git(&env, &repo, &["init", "-q", "-b", "main"]);
+    git(&env, &repo, &["add", "."]);
+    git(&env, &repo, &["commit", "-q", "-m", "the preflight commit"]);
+    let commit = git(&env, &repo, &["rev-parse", "HEAD"]);
+    git(&env, &repo, &["update-ref", "refs/remotes/origin/main", &commit]);
+
+    let release = sandbox.dir("release");
+    harness::copy_file(Path::new("/bin/true"), &release.join("charliebot-server"));
+    harness::write_executable(&release.join("charliebot"), CLI_STUB);
+    sandbox.stub("charlie-code", "exit 0\n");
+    // The id stub answers the uid that each trial sets in PREFLIGHT_UID, so one world can play two users.
+    sandbox.stub(
+      "id",
+      "[[ $* == -u ]] || { echo \"id stub: unexpected arguments: $*\" >&2; exit 1; }\necho \"$PREFLIGHT_UID\"\n",
+    );
+    env.insert("CHARLIEBOT_HOME".to_string(), sandbox.dir("live-home").display().to_string());
+    env.insert("CHARLIEBOT_RELEASE_RUN_DIR".to_string(), sandbox.dir("evidence").display().to_string());
+    let server = release.join("charliebot-server");
+    Self { sandbox, repo, env, commit, server }
+  }
+
+  /// Commits an empty change on the world's HEAD and returns its sha: a second commit that origin/main does not name.
+  fn commit_again(&self) -> String {
+    git(&self.env, &self.repo, &["commit", "-q", "--allow-empty", "-m", "the second preflight commit"]);
+    git(&self.env, &self.repo, &["rev-parse", "HEAD"])
+  }
+
+  /// One trial of the world's commit by the preflight's uid, with `tmpdir` as its TMPDIR and `options` between --serve
+  /// and the commit.
+  fn trial(&self, tmpdir: &Path, options: &[&str]) -> Run {
+    self.trial_of(&self.commit, PREFLIGHT_UID, tmpdir, options)
+  }
+
+  /// One trial of `commit` by the user `uid`, with `tmpdir` as its TMPDIR and `options` between --serve and the commit.
+  fn trial_of(&self, commit: &str, uid: &str, tmpdir: &Path, options: &[&str]) -> Run {
+    self.trial_in(commit, uid, tmpdir, options, &[])
+  }
+
+  /// One trial of the world's commit by the preflight's uid, with `extra` set in its environment beside the world's
+  /// variables, as a round's runner sets them for its agent.
+  fn trial_with(&self, tmpdir: &Path, options: &[&str], extra: &[(&str, &str)]) -> Run {
+    self.trial_in(&self.commit, PREFLIGHT_UID, tmpdir, options, extra)
+  }
+
+  fn trial_in(&self, commit: &str, uid: &str, tmpdir: &Path, options: &[&str], extra: &[(&str, &str)]) -> Run {
+    let mut env = self.env.clone();
+    env.insert("TMPDIR".to_string(), tmpdir.display().to_string());
+    env.insert("PREFLIGHT_UID".to_string(), uid.to_string());
+    for (name, value) in extra {
+      env.insert(name.to_string(), value.to_string());
+    }
+    let mut command = harness::command("bash", &env);
+    command
+      .arg(self.repo.join("scripts/release/trial.sh"))
+      .arg("--serve")
+      .args(options)
+      .arg(commit)
+      .arg(&self.server)
+      .args(["--", "true"]);
+    harness::run(&mut command)
+  }
+}
+
+/// Asserts that the preflight passed `socket` and printed its byte count, which is under the socket-path limit.
+fn assert_socket_passes(run: &Run, socket: &str) {
+  let line = format!("PREFLIGHT PASS socket: {socket} ({} bytes)", socket.len());
+  assert!(run.stdout.contains(&line), "the preflight did not pass {socket}: {}", run.describe());
+}
+
+/// The suffix of a Chrome singleton socket under a temp root: the mkdtemp directory that the preflight measures.
+const CHROME_SOCKET_SUFFIX: &str = "/org.chromium.Chromium.XXXXXX/SingletonSocket";
+
+/// The temp root that a Chrome socket path names under `parent`: `<parent>/t-` and 12 hex digits, the name that
+/// trial.sh gives the default temp root.
+fn temp_root_of(socket: &str, parent: &Path) -> String {
+  let root = socket.strip_suffix(CHROME_SOCKET_SUFFIX).unwrap_or_else(|| panic!("not a Chrome socket path: {socket}"));
+  let key = root
+    .strip_prefix(&format!("{}/t-", parent.display()))
+    .unwrap_or_else(|| panic!("the temp root is not t-<key> under {}: {socket}", parent.display()));
   assert!(
-    longest.len() < trial_socket_path_limit(),
-    "the longest socket path under the runner's TMPDIR is {} bytes, over the trial's limit: {longest}",
-    longest.len()
+    key.len() == 12 && key.bytes().all(|byte| byte.is_ascii_hexdigit()),
+    "the temp root key is not 12 hex digits: {socket}"
   );
+  root.to_string()
+}
+
+/// The Chrome socket path that a trial's preflight passed.
+fn passed_chrome_socket(run: &Run) -> String {
+  run
+    .stdout
+    .lines()
+    .find_map(|line| {
+      let (path, _) = line.strip_prefix("PREFLIGHT PASS socket: ")?.rsplit_once(" (")?;
+      path.ends_with(CHROME_SOCKET_SUFFIX).then(|| path.to_string())
+    })
+    .unwrap_or_else(|| panic!("the preflight passed no Chrome socket: {}", run.describe()))
+}
+
+/// One round's scope TMPDIR shape: `scope.<8 characters>` under `/tmp/improve-<direction>-tmp`. A random direction
+/// component of the same byte length keeps this test's parent private while preserving the round's path length.
+struct RoundScope {
+  scope: TempDir,
+  _round_dir: TempDir,
+}
+
+impl RoundScope {
+  fn new(direction: &str) -> Self {
+    let round_dir = tempfile::Builder::new()
+      .prefix("improve-")
+      .rand_bytes(direction.len())
+      .suffix("-tmp")
+      .tempdir_in("/tmp")
+      .expect("the isolated round's TMPDIR");
+    let scope = tempfile::Builder::new()
+      .prefix("scope.")
+      .rand_bytes(8)
+      .tempdir_in(round_dir.path())
+      .expect("the scope directory");
+    let expected_path = format!("/tmp/improve-{}-tmp/scope.{}", "x".repeat(direction.len()), "x".repeat(8));
+    assert_eq!(scope.path().to_str().expect("the round TMPDIR is UTF-8").len(), expected_path.len());
+    Self { scope, _round_dir: round_dir }
+  }
+
+  fn path(&self) -> &Path {
+    self.scope.path()
+  }
+}
+
+/// A trial under each round's scope TMPDIR passes the socket preflight with a six-digit uid, and it stops at its
+/// server start. The directions are `ux`, the reported round, and `decoupling`, the longest direction name on the round
+/// host. A shorter TMPDIR takes a smaller budget, so dev/remote-run and CI also fit.
+#[test]
+#[ignore = "integration"]
+fn test_trial_preflight_passes_under_each_round_scope_tmpdir() {
+  let world = PreflightWorld::new();
+  let hex = &world.commit[..12];
+  for direction in ["ux", "decoupling"] {
+    let scope = RoundScope::new(direction);
+    let run = world.trial(scope.path(), &["--in-caller-scope"]);
+
+    assert_eq!(run.code, 1, "{direction}: {}", run.describe());
+    let temp = temp_root_of(&passed_chrome_socket(&run), scope.path());
+    assert_socket_passes(&run, &format!("{temp}/tmux/tmux-{PREFLIGHT_UID}/charliebot"));
+    assert_socket_passes(&run, &format!("{temp}{CHROME_SOCKET_SUFFIX}"));
+    assert!(
+      run.stdout.contains("FAIL serve Startup"),
+      "{direction}: the trial did not reach its server start: {}",
+      run.describe()
+    );
+    assert!(!run.stderr.contains("preflight failed"), "{direction}: {}", run.describe());
+    let tree = scope.path().join(format!("charliebot-release-trial-{PREFLIGHT_UID}-{hex}"));
+    assert!(!Path::new(&temp).exists() && !tree.exists(), "{direction}: the trial left its tree or temp root");
+  }
+}
+
+/// Two users, and two commits of one user, each get their own default temp root under one shared TMPDIR. Each trial
+/// passes the preflight and reaches its server start, so each names its root by its own uid and commit. Three full
+/// trials take seconds, so the test is an integration test.
+#[test]
+#[ignore = "integration"]
+fn test_trial_default_temp_root_separates_users_and_commits() {
+  let world = PreflightWorld::new();
+  let second_commit = world.commit_again();
+  let scope = RoundScope::new("ux");
+  let trials =
+    [(world.commit.as_str(), "999999"), (world.commit.as_str(), "888888"), (second_commit.as_str(), "999999")];
+
+  let roots: Vec<String> = trials
+    .iter()
+    .map(|(commit, uid)| {
+      let run = world.trial_of(commit, uid, scope.path(), &["--in-caller-scope"]);
+      assert_eq!(run.code, 1, "uid {uid} at {commit}: {}", run.describe());
+      assert!(run.stdout.contains("FAIL serve Startup"), "uid {uid} at {commit}: {}", run.describe());
+      temp_root_of(&passed_chrome_socket(&run), scope.path())
+    })
+    .collect();
+
+  let distinct: HashSet<&String> = roots.iter().collect();
+  assert_eq!(distinct.len(), roots.len(), "two trials share a default temp root: {roots:?}");
+}
+
+/// A temp root whose Chrome socket path is past the limit refuses the run with exit 2, names the socket and its byte
+/// count, and writes nothing under the TMPDIR. The run starts the preflight script, which takes about 0.1 s alone
+/// on a rust-test runner, so the test is an integration test: the Integration job runs it on main pushes.
+#[test]
+#[ignore = "integration"]
+fn test_trial_preflight_refuses_a_long_tmpdir_and_names_the_chrome_socket() {
+  let world = PreflightWorld::new();
+  let base = world.sandbox.dir(&format!("long-{}", "directory-".repeat(8)));
+
+  let run = world.trial(&base, &["--in-caller-scope"]);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("socket path must stay under 108 bytes"), "{}", run.describe());
+  let refused = run
+    .stderr
+    .lines()
+    .find(|line| line.contains(CHROME_SOCKET_SUFFIX))
+    .unwrap_or_else(|| panic!("the refusal names no Chrome socket: {}", run.describe()));
+  let (socket, count) = refused
+    .rsplit_once(": ")
+    .and_then(|(_, rest)| rest.rsplit_once(" ("))
+    .unwrap_or_else(|| panic!("the refusal gives no socket and byte count: {refused}"));
+  // The socket is the default temp root's Chrome socket under the base: `<base>/t-<12 hex>` and the suffix.
+  temp_root_of(socket, &base);
+  assert_eq!(count, format!("{} bytes)", socket.len()), "{}", run.describe());
+  assert_eq!(fs::read_dir(&base).expect("the base").count(), 0, "the refused run wrote into {}", base.display());
+}
+
+/// A --tree-root trial keeps both sockets under its temp root, inside its tree, and removes its tree when it ends.
+#[test]
+#[ignore = "integration"]
+fn test_trial_preflight_with_tree_root_puts_both_sockets_under_its_temp_root() {
+  let world = PreflightWorld::new();
+  let tree_root = tempfile::Builder::new().prefix(TREE_ROOT_PREFIX).tempdir().expect("the tree root");
+  let root_arg = tree_root.path().display().to_string();
+  let temp = tree_root.path().join(format!("trial-{}", &world.commit[..12])).join("tmp");
+
+  let run = world.trial(tree_root.path(), &["--in-caller-scope", "--tree-root", &root_arg]);
+
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert_socket_passes(&run, &format!("{}/tmux/tmux-{PREFLIGHT_UID}/charliebot", temp.display()));
+  assert_socket_passes(&run, &format!("{}/org.chromium.Chromium.XXXXXX/SingletonSocket", temp.display()));
+  assert_eq!(fs::read_dir(tree_root.path()).expect("the tree root").count(), 0, "the tree root kept its tree");
+}
+
+/// The probe answer that a round's launcher ships with its launch: the option of `backends.calls.probe`, with the
+/// endpoint and the credential name the trial's charlie-code option takes. The answer holds no key.
+const SHIPPED_PROBE_ANSWER: &str = r#"{"option":{"id":"shipped-probe","label":"Shipped probe","type":"charlie-code","model":"shipped-probe-model","api_base":"http://127.0.0.1:9/v1","credential":"shipped-probe-credential"}}"#;
+
+/// A round's host runs no server, so its trial reads the probe answer that the launch shipped. With the server down, a
+/// trial that names the shipped answer passes the probe step and the socket preflight, and it stops at its server start.
+#[test]
+#[ignore = "integration"]
+fn test_trial_preflight_takes_the_probe_from_the_shipped_answer_when_no_server_runs() {
+  let world = PreflightWorld::new();
+  let answer = world.sandbox.dir("launch").join("probe-option.json");
+  fs::write(&answer, SHIPPED_PROBE_ANSWER).expect("the shipped probe answer");
+  let answer_path = answer.display().to_string();
+  let scope = RoundScope::new("ux");
+
+  let run = world.trial_with(
+    scope.path(),
+    &["--in-caller-scope"],
+    &[("PREFLIGHT_SERVER", "down"), ("CHARLIEBOT_TRIAL_PROBE_ANSWER", &answer_path)],
+  );
+
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(!run.stderr.contains("preflight failed"), "{}", run.describe());
+  passed_chrome_socket(&run);
+  assert!(run.stdout.contains("FAIL serve Startup"), "the trial did not reach its server start: {}", run.describe());
+}
+
+/// A trial with neither a shipped answer nor a server refuses at the probe step with exit 2: the refusal names the
+/// missing answer, and the server's reason is printed above it. A named answer file that does not exist refuses the
+/// same way and names the file. Each refusal starts nothing and writes nothing under the TMPDIR. The two trials take it
+/// over rust-test's 0.1 s unit gate alone, as the other script-backed preflight cases do.
+#[test]
+#[ignore = "integration"]
+fn test_trial_preflight_refuses_the_probe_step_without_a_shipped_answer_or_a_server() {
+  let world = PreflightWorld::new();
+  let scope = RoundScope::new("ux");
+
+  let run = world.trial_with(scope.path(), &["--in-caller-scope"], &[("PREFLIGHT_SERVER", "down")]);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("Connection refused"), "the server's reason is missing: {}", run.describe());
+  assert!(
+    run.stderr.contains("preflight failed: no probe answer: CHARLIEBOT_TRIAL_PROBE_ANSWER is unset"),
+    "the refusal names no missing answer: {}",
+    run.describe()
+  );
+  assert_eq!(fs::read_dir(scope.path()).expect("the TMPDIR").count(), 0, "the refused run wrote into its TMPDIR");
+
+  let missing = world.sandbox.dir("launch").join("missing-probe-option.json");
+  let missing_path = missing.display().to_string();
+  let run = world.trial_with(
+    scope.path(),
+    &["--in-caller-scope"],
+    &[("PREFLIGHT_SERVER", "down"), ("CHARLIEBOT_TRIAL_PROBE_ANSWER", &missing_path)],
+  );
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(
+    run.stderr.contains(&format!("CHARLIEBOT_TRIAL_PROBE_ANSWER names a file that cannot be read: {missing_path}")),
+    "the refusal names no unreadable answer file: {}",
+    run.describe()
+  );
+  assert_eq!(fs::read_dir(scope.path()).expect("the TMPDIR").count(), 0, "the refused run wrote into its TMPDIR");
 }
 
 fn mock_home() -> PathBuf {
@@ -909,6 +1329,51 @@ fn test_trial_config_carries_the_live_weight_switches_and_an_absent_one_takes_it
   assert!(config.contains("\n  enable_session_cpu_weight: false\n"), "{config}");
   // The server's default, the value the trial's server starts with.
   assert!(config.contains("\n  enable_session_io_weight: false\n"), "{config}");
+}
+
+/// A serve trial fires no scheduled task: every cron task of its home reads `enabled: false` while the server serves,
+/// the copied seed tasks and the repo's defaults alike, and the server seeded none of the defaults at its start, so the
+/// disabled files were in place before the server started.
+#[test]
+#[ignore = "integration"]
+fn test_trial_disables_every_cron_task_of_its_home_before_its_server_starts() {
+  let world = ServeWorld::new();
+  let seed = world.seed_home("seed", "2");
+  let tree_root = world.tree_root();
+  let copied = world.sandbox.dir("trial-cron");
+  let copied_text = copied.display().to_string();
+
+  let run = world.serve(
+    tree_root,
+    &seed,
+    &["sh", "-c", "cp \"$CHARLIEBOT_HOME\"/config.d/cron.d/*.yaml \"$1\"", "sh", &copied_text],
+  );
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  let disabled_at = run.stdout.find("SERVE PASS CronDisabled: ").expect("the pre-start cron check");
+  let startup_at = run.stdout.find("SERVE PASS Startup ").expect("the ready trial server");
+  assert!(disabled_at < startup_at, "cron tasks were disabled after the server started: {}", run.describe());
+  let mut names = Vec::new();
+  for entry in fs::read_dir(&copied).expect("the copied cron tasks") {
+    let path = entry.expect("a copied cron task").path();
+    let text = fs::read_to_string(&path).expect("a cron task file");
+    let flags: Vec<&str> = text.lines().filter(|line| line.starts_with("enabled:")).collect();
+    assert_eq!(flags, ["enabled: false"], "{}:\n{text}", path.display());
+    names.push(path.file_stem().expect("a task name").to_string_lossy().into_owned());
+  }
+  for task in ["memory-curator", "storage-cool", "proactive-agent", "mock-yearly-review"] {
+    assert!(names.iter().any(|name| name == task), "{task} is a cron task of the trial home: {names:?}");
+  }
+  // The server logs each default it seeds at its start. None was seeded, so the trial's files predated the start.
+  let trial_evidence = fs::read_dir(world.sandbox.dir("evidence"))
+    .expect("the evidence directory")
+    .next()
+    .expect("the trial's evidence")
+    .expect("an evidence entry")
+    .path();
+  let log = fs::read_to_string(trial_evidence.join("server-1.log")).expect("the server log");
+  assert!(log.contains("server_ready"), "{log}");
+  assert!(!log.contains("cron_default_task_seeded"), "the server seeded a default at its start: {log}");
 }
 
 #[test]
@@ -1216,7 +1681,7 @@ fn test_trial_serve_refuses_a_tmux_socket_path_at_the_trial_limit() {
   let seed = world.seed_home("seed", "1");
   let tree_root = world.sandbox.dir(&format!("tree-root-{}", "long-directory-name-".repeat(3)));
   let uid = fs::metadata(&tree_root).expect("the tree root").uid();
-  let socket = format!("{}/trial-{}/tmux/tmux-{uid}/charliebot", tree_root.display(), &world.commit[..12]);
+  let socket = format!("{}/trial-{}/tmp/tmux/tmux-{uid}/charliebot", tree_root.display(), &world.commit[..12]);
   assert!(socket.len() >= trial_socket_path_limit(), "the fixture socket path is too short: {socket}");
 
   let run = world.serve(&tree_root, &seed, &["true"]);

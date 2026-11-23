@@ -1,12 +1,13 @@
 // The week-one review entry point: label a time window of parent-to-child messages, tally the labels, and re-judge a
-// sample with a model from another vendor. Usage and the recovered method are in README.md beside this file.
+// sample with another backend. The judge and the re-judge backend come from the server's resolution (`charliebot
+// backend resolve`), so no model or gateway is named here. Usage and the recovered method are in README.md beside this
+// file.
 //
 //   node dev/week-review/review.mjs label --from <iso> --to <iso> --reports-until <iso> --out <dir> [--home <dir>]
-//                                         [--model claude-opus-5-5] [--parallel 6]
+//                                         [--credentials <file>] [--parallel 6]
 //   node dev/week-review/review.mjs tally --out <dir>
-//   node dev/week-review/review.mjs rejudge --out <dir> --model <gateway model> --gateway <base URL>
-//                                           [--sample 20] [--seed 1] [--credentials <file>]
-//                                           [--credential <entry name>] [--parallel 4]
+//   node dev/week-review/review.mjs rejudge --out <dir> --backend <id>
+//                                           [--sample 20] [--seed 1] [--credentials <file>] [--parallel 4]
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -19,6 +20,9 @@ import { formatTally } from './lib/tally.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
+// The credentials file that holds each gateway key, by entry name.
+const CREDENTIALS_PATH = path.join(os.homedir(), '.charliebot', 'credentials.yaml');
+
 // The flags each command takes, with the value that stands when the flag is absent (`null` means required).
 const COMMANDS = {
   label: {
@@ -28,7 +32,7 @@ const COMMANDS = {
       '--reports-until': null,
       '--out': null,
       '--home': process.env.CHARLIEBOT_HOME || path.join(os.homedir(), '.charliebot'),
-      '--model': 'claude-opus-5-5',
+      '--credentials': CREDENTIALS_PATH,
       '--parallel': '6',
     },
     run: runLabel,
@@ -40,12 +44,10 @@ const COMMANDS = {
   rejudge: {
     flags: {
       '--out': null,
-      '--model': null,
+      '--backend': null,
       '--sample': '20',
       '--seed': '1',
-      '--gateway': null,
-      '--credentials': path.join(os.homedir(), '.charliebot', 'credentials.yaml'),
-      '--credential': 'aigw_charliebot_agents',
+      '--credentials': CREDENTIALS_PATH,
       '--parallel': '4',
     },
     run: runRejudge,
@@ -92,7 +94,7 @@ async function runLabel(argv) {
     to: flags['--to'],
     reportsUntil: flags['--reports-until'],
     out: flags['--out'],
-    model: flags['--model'],
+    credentialsPath: flags['--credentials'],
     parallel: integerFlag('--parallel', flags['--parallel'], 1),
     prompts: loadPrompts(),
   });
@@ -117,12 +119,10 @@ async function runRejudge(argv) {
   const flags = parseFlags('rejudge', argv);
   const text = await rejudgeSample({
     out: flags['--out'],
-    model: flags['--model'],
+    backend: flags['--backend'],
     sample: integerFlag('--sample', flags['--sample'], 1),
     seed: integerFlag('--seed', flags['--seed'], 0),
-    gateway: flags['--gateway'],
     credentialsPath: flags['--credentials'],
-    credentialName: flags['--credential'],
     prompts: loadPrompts(),
     parallel: integerFlag('--parallel', flags['--parallel'], 1),
   });

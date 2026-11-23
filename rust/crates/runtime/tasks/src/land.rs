@@ -6,13 +6,18 @@
 //! the repository's default branch and that branch declares a workflow with a `pull_request`
 //! trigger; every other landing pushes as today and records `landed-no-ci`.
 //!
-//! Before any push and before the PR is created, the call checks the commits' messages and diffs and the PR's title and
-//! body for the exact value of a credential the process holds (`credential_check`, the round's scanner). A hit refuses
-//! the call before anything leaves the host, and the refusal names the kind, never the value.
+//! Before any push and before the PR is created, the call checks the commits' messages and diffs, the decompressed
+//! `*.gz` blobs they add or modify, the branch name and the PR's title and body for the exact value of a credential
+//! the process holds (`outbound_checks`, the round's scanner). A hit refuses the call before anything leaves the
+//! host, and the refusal names the kind, never the value. When the base branch's tree declares
+//! `dev/check-skills-host-leak.sh`, the same check also verifies the configured hooks directory and scans the same
+//! texts plus the commit identities and designated doc blobs for the local host patterns and the generic leak
+//! rules; a repository that never declared the scanner keeps the credential stage alone.
 //!
 //! Before any push, a diff that changes a CharlieBot web page refuses the call unless its PR body names the
-//! approved demo, the changed view's URL path and a screenshot at each window size (`web_screenshots`). The
-//! view paths are written into the head commit's trailer block before the push, so the commit that reaches the
+//! approved demo, a `View: <URL>` line naming the full URL, path and query, that opens the changed state, and a
+//! screenshot at each window size (`web_screenshots`). The View lines are written into the head commit's trailer
+//! block before the push, so the commit that reaches the
 //! base branch carries them for the release switch's live capture.
 //!
 //! Under the gate the call rebases onto `origin/<base>`, pushes the task branch with
@@ -31,14 +36,21 @@
 //! past the pushed commit's base; every other refusal — a hook, a dead transport, a timeout, an
 //! auth error — ends the call at once with git's stderr verbatim.
 
+use std::collections::BTreeSet;
 use std::fs::DirBuilder;
-use std::os::unix::fs::DirBuilderExt;
+use std::io::Read as _;
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
+use anyhow::Context as _;
+use charliebot_backend_check::{Vocabulary, gate};
 use charliebot_core::git::ancestry_args;
 use charliebot_core::home::CHARLIEBOT_HOME_ENV;
+use charliebot_core::text_repr::string_field;
+use charliebot_registry::Registry;
+use charliebot_registry::pages::WEB_DIR_NAME;
 use charliebot_store::layout;
 use charliebot_store::metadata::{read_metadata_value, read_session_metadata};
 use charliebot_store::run_records::{self, RunRecord};
@@ -358,26 +370,33 @@ async fn run_scanner(stage: &LeakStage, args: &[&str], input: Option<&Path>) -> 
   Ok((code, output.stdout, String::from_utf8_lossy(&output.stderr).trim().to_string()))
 }
 
-/// One text of the landing that the credential check scans, with the field its hit would name.
+/// One text of the landing that a check scans, with the field its hit would name. The text is bytes so a
+/// decompressed `*.gz` blob checks the same way as a commit message.
 struct CheckedText {
   field: String,
-  text: String,
+  text: Vec<u8>,
+}
+
+/// Writes each text into the stage and returns its `field<TAB>path` list file there.
+fn write_check_list(stage: &LeakStage, name: &str, texts: &[CheckedText]) -> anyhow::Result<PathBuf> {
+  let mut list = String::new();
+  for (index, checked) in texts.iter().enumerate() {
+    let path = stage.dir.join(format!("{name}-text-{index}"));
+    std::fs::write(&path, &checked.text)
+      .map_err(|error| anyhow::anyhow!("cannot write the text for the leak check {}: {error}", path.display()))?;
+    list.push_str(&format!("{}\t{}\n", checked.field, path.display()));
+  }
+  let list_path = stage.dir.join(format!("{name}-list"));
+  std::fs::write(&list_path, list)
+    .map_err(|error| anyhow::anyhow!("cannot write the leak check list {}: {error}", list_path.display()))?;
+  Ok(list_path)
 }
 
 /// Checks the landing's texts for the exact value of a credential this process holds, in one scanner call: the
 /// scanner's `--credential-check-list` reads each field's text from a file of the private stage. A hit refuses the
 /// landing, and the message names the kind and the field that the scanner printed; the value never appears in it.
 async fn check_texts(stage: &LeakStage, texts: &[CheckedText]) -> anyhow::Result<()> {
-  let mut list = String::new();
-  for (index, checked) in texts.iter().enumerate() {
-    let path = stage.dir.join(format!("text-{index}"));
-    std::fs::write(&path, &checked.text)
-      .map_err(|error| anyhow::anyhow!("cannot write the text for the leak check {}: {error}", path.display()))?;
-    list.push_str(&format!("{}\t{}\n", checked.field, path.display()));
-  }
-  let list_path = stage.dir.join("check-list");
-  std::fs::write(&list_path, list)
-    .map_err(|error| anyhow::anyhow!("cannot write the leak check list {}: {error}", list_path.display()))?;
+  let list_path = write_check_list(stage, "cred", texts)?;
   let values = stage.values().display().to_string();
   let list_path = list_path.display().to_string();
   let (code, stdout, stderr) = run_scanner(stage, &["--credential-check-list", &values, &list_path], None).await?;
@@ -391,14 +410,129 @@ async fn check_texts(stage: &LeakStage, texts: &[CheckedText]) -> anyhow::Result
   }
 }
 
-/// The credential check of a landing, run before each push and before the pull request is created. It checks the
-/// message and the diff of every commit the task branch holds ahead of `base_ref`, and the title and body of
-/// `pr_text` when a pull request is created. The values are the profile home's credentials and the process's tokens,
-/// read by the scanner's `--credential-values`. A source that cannot be read refuses the landing; nothing goes out
-/// unchecked.
-async fn credential_check(
+/// Checks the landing's texts with the scanner's leak rules in one `--check-list` call: the local host patterns,
+/// plus the built-in rules unless *host_patterns_only*. `--require-local-patterns` makes the scan fail closed when
+/// the profile home's pattern file is missing, unreadable or empty. A pattern hit refuses the landing with the
+/// scanner's own `Leak hit in <field>` report; a setup refusal (exit 2) refuses it the same way.
+async fn check_leak_texts(
+  stage: &LeakStage,
+  name: &str,
+  texts: &[CheckedText],
+  host_patterns_only: bool,
+) -> anyhow::Result<()> {
+  let list_path = write_check_list(stage, name, texts)?.display().to_string();
+  let mut args = vec!["--require-local-patterns"];
+  if host_patterns_only {
+    args.push("--host-patterns-only");
+  }
+  args.extend(["--check-list", list_path.as_str()]);
+  let (code, stdout, stderr) = run_scanner(stage, &args, None).await?;
+  match code {
+    0 => Ok(()),
+    1 => anyhow::bail!("landing refused before any push or PR create: {}", String::from_utf8_lossy(&stdout).trim()),
+    _ => anyhow::bail!("the leak scanner refused the {name} check (exit {code}): {stderr}"),
+  }
+}
+
+/// Whether the landing's base ref declares the repository leak scanner: `git cat-file -e
+/// <base_ref>:dev/check-skills-host-leak.sh`. The declaration lives in the base's tree, not the task branch's, so
+/// deleting the scanner on the branch does not switch the host-pattern, doc and hook checks off — while a
+/// repository that never declared it (a private one, which its own hostnames describe) keeps the credential
+/// checks alone.
+async fn base_declares_scanner(worktree: &Path, base_ref: &str) -> bool {
+  let spec = format!("{base_ref}:dev/check-skills-host-leak.sh");
+  git::git_stdout(worktree, &["cat-file", "-e", &spec], GIT_READ_TIMEOUT, "git cat-file").await.0
+}
+
+/// The text a commit's patch adds to the remote: its added lines and file headers. A removed line adds no bytes to the
+/// remote, and a cleanup that deletes a leaked literal must not be refused for the literal it deletes.
+fn added_text(patch: &str) -> String {
+  let mut text = String::new();
+  for line in patch.lines() {
+    if line.starts_with("+++ ") || line.starts_with("diff --git ") {
+      text.push_str(line);
+    } else if let Some(added) = line.strip_prefix('+') {
+      text.push_str(added);
+    } else {
+      continue;
+    }
+    text.push('\n');
+  }
+  text
+}
+
+/// When the checkout pins `core.hooksPath`, every commit and push of this repository runs its hooks — a stale
+/// directory or a missing hook would skip them silently, so the landing verifies the configured directory before
+/// trusting the push. An unset `core.hooksPath` is not an error: a checkout without hooks pins nothing.
+async fn check_hooks_path(repo_path: &Path) -> anyhow::Result<()> {
+  let (ok, configured, _) =
+    git::git_stdout(repo_path, &["config", "--get", "core.hooksPath"], GIT_READ_TIMEOUT, "git config").await;
+  if !ok || configured.is_empty() {
+    return Ok(());
+  }
+  let dir = PathBuf::from(&configured);
+  let dir = if dir.is_absolute() { dir } else { repo_path.join(dir) };
+  if !dir.is_dir() {
+    anyhow::bail!(
+      "core.hooksPath of {} names {configured}, which resolves to no directory; the push hooks would not run",
+      repo_path.display()
+    );
+  }
+  for hook in ["pre-commit", "commit-msg", "pre-push"] {
+    let executable = std::fs::metadata(dir.join(hook))
+      .map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+      .unwrap_or(false);
+    if !executable {
+      anyhow::bail!(
+        "core.hooksPath of {} names {configured}, which lacks an executable {hook}; the push hooks would not run",
+        repo_path.display()
+      );
+    }
+  }
+  Ok(())
+}
+
+/// The decompressed content of a gzip blob; an empty or corrupt member is a refusal, so a push never skips its
+/// content. `MultiGzDecoder` reads concatenated members so trailing data cannot hide past the first member.
+fn gunzip(name: &str, blob: &[u8]) -> anyhow::Result<Vec<u8>> {
+  if blob.is_empty() {
+    anyhow::bail!("cannot decompress {name} for the leak check: unexpected end of file");
+  }
+  let mut plain = Vec::new();
+  flate2::read::MultiGzDecoder::new(blob)
+    .read_to_end(&mut plain)
+    .map_err(|error| anyhow::anyhow!("cannot decompress {name} for the leak check: {error}"))?;
+  Ok(plain)
+}
+
+/// Whether *path* is a designated doc blob of the commit: `skills/**/*.md`, `prompts/**/*.md`, or a path the
+/// commit's `web/features/*/leak_scan_files.txt` manifests name.
+fn designated_doc(path: &str, manifest_paths: &std::collections::BTreeSet<String>) -> bool {
+  ((path.starts_with("skills/") || path.starts_with("prompts/")) && path.ends_with(".md"))
+    || manifest_paths.contains(path)
+}
+
+/// Reads the blob of *path* at *sha*; a read failure is an error that names both.
+async fn blob_at(worktree: &Path, sha: &str, path: &str) -> anyhow::Result<Vec<u8>> {
+  let spec = format!("{sha}:{path}");
+  let (ok, blob, err) = git::git_bytes(worktree, &["show", &spec], GIT_READ_TIMEOUT, "git show").await;
+  if !ok {
+    anyhow::bail!("git show {spec} failed in {}: {err}", worktree.display());
+  }
+  Ok(blob)
+}
+
+/// The outbound checks of a landing, run before each push and before the pull request is created. The credential
+/// stage checks every repository: the message and diff of each commit ahead of `base_ref`, the decompressed
+/// `*.gz` blobs those commits add or modify, the task branch name, and the PR title and body when given. When the
+/// base ref declares `dev/check-skills-host-leak.sh`, the same stage also verifies the configured hooks path and
+/// runs the scanner's leak rules — the local host patterns over every text and identity, and the generic rules
+/// over the messages, PR text and designated doc blobs. Any refusal stops the call before a byte leaves the host.
+async fn outbound_checks(
   home: &Path,
   worktree: &Path,
+  repo_path: &Path,
+  branch_name: &str,
   base_ref: &str,
   pr_text: Option<&ResolvedPrText>,
 ) -> anyhow::Result<()> {
@@ -410,7 +544,10 @@ async fn credential_check(
   std::fs::write(stage.values(), values)
     .map_err(|error| anyhow::anyhow!("cannot write the credential values {}: {error}", stage.values().display()))?;
 
-  let mut texts: Vec<CheckedText> = Vec::new();
+  let declared = base_declares_scanner(worktree, base_ref).await;
+  let mut cred_texts: Vec<CheckedText> = Vec::new();
+  let mut all_texts: Vec<CheckedText> = Vec::new();
+  let mut doc_texts: Vec<CheckedText> = Vec::new();
   let range = format!("{base_ref}..HEAD");
   let (ok, shas, err) = git::git_stdout(worktree, &["rev-list", &range], GIT_READ_TIMEOUT, "git rev-list").await;
   if !ok {
@@ -422,7 +559,19 @@ async fn credential_check(
     if !ok {
       anyhow::bail!("git show {sha} failed in {}: {err}", worktree.display());
     }
-    texts.push(CheckedText { field: format!("commit {sha} message"), text: message });
+    let field = format!("commit {sha} message");
+    cred_texts.push(CheckedText { field: field.clone(), text: message.clone().into_bytes() });
+    if declared {
+      all_texts.push(CheckedText { field: field.clone(), text: message.clone().into_bytes() });
+      doc_texts.push(CheckedText { field, text: message.into_bytes() });
+      let (ok, identity, err) =
+        git::git_stdout(worktree, &["show", "-s", "--format=%an <%ae>%n%cn <%ce>", sha], GIT_READ_TIMEOUT, "git show")
+          .await;
+      if !ok {
+        anyhow::bail!("git show identity {sha} failed in {}: {err}", worktree.display());
+      }
+      all_texts.push(CheckedText { field: format!("commit {sha} identity"), text: identity.into_bytes() });
+    }
     let (ok, diff, err) = git::git_stdout(
       worktree,
       &["show", "--format=", "--patch", "--no-color", "--no-ext-diff", sha],
@@ -433,17 +582,150 @@ async fn credential_check(
     if !ok {
       anyhow::bail!("git show --patch {sha} failed in {}: {err}", worktree.display());
     }
-    texts.push(CheckedText { field: format!("commit {sha} diff"), text: diff });
+    let field = format!("commit {sha} diff");
+    if declared {
+      all_texts.push(CheckedText { field: field.clone(), text: added_text(&diff).into_bytes() });
+    }
+    cred_texts.push(CheckedText { field, text: diff.into_bytes() });
+
+    // The commit's designated doc paths: the skills and prompts glob plus the paths its own
+    // web/features/*/leak_scan_files.txt manifests name.
+    let mut manifest_paths = std::collections::BTreeSet::new();
+    if declared {
+      let manifest_glob = format!("{WEB_DIR_NAME}/features/*/leak_scan_files.txt");
+      let (ok, manifests, err) = git::git_stdout(
+        worktree,
+        &["ls-tree", "-r", "--name-only", sha, "--", manifest_glob.as_str()],
+        GIT_READ_TIMEOUT,
+        "git ls-tree",
+      )
+      .await;
+      if !ok {
+        anyhow::bail!("git ls-tree {sha} failed in {}: {err}", worktree.display());
+      }
+      for manifest in manifests.lines().filter(|line| !line.is_empty()) {
+        let text = String::from_utf8(blob_at(worktree, sha, manifest).await?)
+          .map_err(|_| anyhow::anyhow!("the doc manifest {sha}:{manifest} is not UTF-8"))?;
+        manifest_paths.extend(text.lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_string));
+      }
+    }
+
+    let (ok, touched, err) = git::git_stdout(
+      worktree,
+      &["diff-tree", "--root", "--no-commit-id", "--name-only", "-r", "--diff-filter=ACMR", sha],
+      GIT_READ_TIMEOUT,
+      "git diff-tree",
+    )
+    .await;
+    if !ok {
+      anyhow::bail!("git diff-tree {sha} failed in {}: {err}", worktree.display());
+    }
+    for path in touched.lines().filter(|line| !line.is_empty()) {
+      if path.ends_with(".gz") {
+        let blob = blob_at(worktree, sha, path).await?;
+        let plain = gunzip(&format!("{sha}:{path}"), &blob)?;
+        let field = format!("commit {sha} blob {path}");
+        cred_texts.push(CheckedText { field: field.clone(), text: plain.clone() });
+        if declared {
+          all_texts.push(CheckedText { field, text: plain });
+        }
+      }
+      if declared && designated_doc(path, &manifest_paths) {
+        let blob = blob_at(worktree, sha, path).await?;
+        doc_texts.push(CheckedText { field: format!("commit {sha} doc {path}"), text: blob });
+      }
+    }
+  }
+  cred_texts.push(CheckedText { field: "branch name".to_string(), text: branch_name.as_bytes().to_vec() });
+  if declared {
+    all_texts.push(CheckedText { field: "branch name".to_string(), text: branch_name.as_bytes().to_vec() });
   }
   if let Some(text) = pr_text {
-    texts.push(CheckedText { field: "PR title".to_string(), text: text.title.clone() });
-    texts.push(CheckedText { field: "PR body".to_string(), text: text.body.clone() });
+    cred_texts.push(CheckedText { field: "PR title".to_string(), text: text.title.clone().into_bytes() });
+    cred_texts.push(CheckedText { field: "PR body".to_string(), text: text.body.clone().into_bytes() });
+    if declared {
+      all_texts.push(CheckedText { field: "PR title".to_string(), text: text.title.clone().into_bytes() });
+      all_texts.push(CheckedText { field: "PR body".to_string(), text: text.body.clone().into_bytes() });
+      doc_texts.push(CheckedText { field: "PR title".to_string(), text: text.title.clone().into_bytes() });
+      doc_texts.push(CheckedText { field: "PR body".to_string(), text: text.body.clone().into_bytes() });
+    }
   }
-  check_texts(&stage, &texts).await
+
+  check_texts(&stage, &cred_texts).await?;
+  if declared {
+    check_hooks_path(repo_path).await?;
+    check_leak_texts(&stage, "all", &all_texts, true).await?;
+    check_leak_texts(&stage, "doc", &doc_texts, false).await?;
+  }
+  Ok(())
 }
 
-/// Run one landing: the whole flow, ending in a written `landing.json` and the record returned.
-pub async fn land(home: &Path, task_session_id: &str, options: &LandOptions) -> anyhow::Result<LandingRecord> {
+/// The paths the backend-literal check reads for a landing: each changed file that still exists, and for a changed Rust
+/// file its crate. A `cfg(test)` module is test code by the declaration in its parent file, and that parent may be
+/// unchanged, so the crate's sources are read together. A file the diff removed is left out; any other failure to stat
+/// a changed path is an error, so a file the check cannot see never passes.
+fn literal_check_paths(worktree: &Path, changed: &[String]) -> anyhow::Result<Vec<PathBuf>> {
+  let mut paths = BTreeSet::new();
+  for relative in changed {
+    let file = worktree.join(relative);
+    match std::fs::metadata(&file) {
+      Ok(meta) if !meta.is_file() => continue,
+      Ok(_) => {}
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+      Err(error) => return Err(error).with_context(|| format!("cannot read the changed path {}", file.display())),
+    }
+    let is_rust = file.extension().is_some_and(|ext| ext == "rs");
+    let path = if is_rust { crate_of(&file, worktree)?.unwrap_or(file) } else { file };
+    paths.insert(path);
+  }
+  Ok(paths.into_iter().collect())
+}
+
+/// The directory of the nearest crate above `file` inside `worktree`: the first ancestor that holds a `Cargo.toml`.
+fn crate_of(file: &Path, worktree: &Path) -> anyhow::Result<Option<PathBuf>> {
+  for dir in file.ancestors().skip(1).take_while(|dir| dir.starts_with(worktree)) {
+    let manifest = dir.join("Cargo.toml");
+    if manifest.try_exists().with_context(|| format!("cannot read {}", manifest.display()))? {
+      return Ok(Some(dir.to_path_buf()));
+    }
+  }
+  Ok(None)
+}
+
+/// Refuses a landing whose `paths` hold a hardcoded backend choice that the check does not exempt, and names each site.
+/// The check reads the host's vocabulary: the registered packages and the profile's `config.yaml`.
+fn refuse_backend_literals(registry: &Registry, home: &Path, worktree: &Path, paths: &[PathBuf]) -> anyhow::Result<()> {
+  let roots = gate::roots(Some(worktree), home)?;
+  let vocab = Vocabulary::load(registry, home, None)?;
+  let hits = gate::open_hits(&vocab, &roots, paths)?;
+  if hits.is_empty() {
+    return Ok(());
+  }
+  anyhow::bail!(
+    "landing refused before any push or PR create: a hardcoded backend choice in the changed files:\n{}",
+    gate::report(&hits, roots.repo.as_deref())
+  )
+}
+
+/// The backend-literal check of a landing: the files the task branch changes against the base.
+async fn backend_literal_check(
+  registry: &Registry,
+  home: &Path,
+  worktree: &Path,
+  base_ref: &str,
+) -> anyhow::Result<()> {
+  let changed = changed_paths(worktree, base_ref).await?;
+  refuse_backend_literals(registry, home, worktree, &literal_check_paths(worktree, &changed)?)
+}
+
+/// Run one landing: the whole flow, ending in a written `landing.json` and the record returned. The backend-literal
+/// check runs on the head that the landing pushes, before either push.
+pub async fn land(
+  registry: &Registry,
+  home: &Path,
+  task_session_id: &str,
+  options: &LandOptions,
+) -> anyhow::Result<LandingRecord> {
   options.validate()?;
   let ctx = TaskLanding::load(home, task_session_id).await?;
   let published = review_text::review_published_branch(&ctx.base_branch);
@@ -495,6 +777,7 @@ pub async fn land(home: &Path, task_session_id: &str, options: &LandOptions) -> 
     first_round = false;
 
     carry_view_trailers(&ctx.worktree, &views).await?;
+    backend_literal_check(registry, home, &ctx.worktree, &base_ref).await?;
     let sha = head_sha(&ctx.worktree).await?;
     let push_base_sha = git::git_rev_parse(&ctx.worktree, &base_ref)
       .await
@@ -503,7 +786,7 @@ pub async fn land(home: &Path, task_session_id: &str, options: &LandOptions) -> 
 
     if !gated {
       // No gate: land as today — one fast-forward push of the head onto the base branch.
-      credential_check(home, &ctx.worktree, &base_ref, None).await?;
+      outbound_checks(home, &ctx.worktree, &ctx.repo_path, &ctx.branch_name, &base_ref, None).await?;
       let (ok, _, err) = git::git_stdout(
         &ctx.worktree,
         &["push", "origin", &format!("{sha}:refs/heads/{published}")],
@@ -553,7 +836,7 @@ pub async fn land(home: &Path, task_session_id: &str, options: &LandOptions) -> 
     }
 
     let pr_text = resolve_draft_pr_text(&ctx.worktree, published, options).await?;
-    credential_check(home, &ctx.worktree, &base_ref, Some(&pr_text)).await?;
+    outbound_checks(home, &ctx.worktree, &ctx.repo_path, &ctx.branch_name, &base_ref, Some(&pr_text)).await?;
     push_task_branch(&ctx, &ctx.branch_name).await?;
     let (pr_url, pr_number) = ensure_draft_pr(&ctx, &ctx.repo, published, &pr_text).await?;
     let expected = expected_workflow_paths(&workflow_files_at(&ctx.worktree, &sha).await?)?;
@@ -1203,10 +1486,6 @@ pub enum CiVerdict {
   Failed { failing: Vec<CheckRow> },
 }
 
-fn string_field(value: &Value, field: &str) -> Option<String> {
-  value.get(field).and_then(Value::as_str).map(str::to_string)
-}
-
 /// Whether a rebase that rewrote the head counts as a retry: the landing's first rebase of a task
 /// without a previous round is the initial base, not a loss against main; every later rewrite —
 /// a push rejection's re-rebase, or a rebase after main moved — counts one.
@@ -1620,6 +1899,12 @@ mod tests {
       run["conclusion"] = json!(conclusion);
     }
     run
+  }
+
+  #[test]
+  fn a_removed_line_is_left_out_of_the_added_text() {
+    let patch = "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old fictionalmarker\n+new text\n";
+    assert_eq!(added_text(patch), "diff --git a/x b/x\n+++ b/x\nnew text\n");
   }
 
   #[test]
@@ -2117,6 +2402,46 @@ esac
     assert_eq!(repo_from_remote_url("https://github.com/owner/repo/"), Some("owner/repo".to_string()));
     assert_eq!(repo_from_remote_url("not-a-remote"), None);
   }
+
+  /// The check reads each changed file that still exists, and a changed Rust file's whole crate, so a `cfg(test)`
+  /// module declared in an unchanged parent is test code. A file the diff removed is left out.
+  #[test]
+  fn the_literal_check_reads_the_changed_files_and_the_crates_of_changed_rust_files() {
+    use std::fs;
+    let root = tempfile::tempdir().unwrap();
+    let worktree = root.path();
+    let crate_dir = worktree.join("rust/crates/x/y");
+    fs::create_dir_all(crate_dir.join("src")).unwrap();
+    fs::write(crate_dir.join("Cargo.toml"), "[package]\n").unwrap();
+    fs::write(crate_dir.join("src/lib.rs"), "").unwrap();
+    fs::write(crate_dir.join("src/extra.rs"), "").unwrap();
+    fs::create_dir_all(worktree.join("scripts")).unwrap();
+    fs::write(worktree.join("scripts/run.sh"), "").unwrap();
+    fs::write(worktree.join("scripts/notes.txt"), "").unwrap();
+    let changed =
+      ["rust/crates/x/y/src/extra.rs".to_string(), "scripts/run.sh".to_string(), "scripts/removed.sh".to_string()];
+    assert_eq!(literal_check_paths(worktree, &changed).unwrap(), vec![crate_dir, worktree.join("scripts/run.sh")]);
+    // A path under a regular file fails to stat with something other than "not found": that is an error, not a skip.
+    assert!(literal_check_paths(worktree, &["scripts/notes.txt/run.sh".to_string()]).is_err());
+  }
+
+  /// A changed file that holds a backend literal refuses the landing and names its file and line; once the literal is
+  /// gone the same file passes.
+  #[test]
+  fn a_backend_literal_in_a_changed_file_refuses_the_landing_and_a_clean_file_passes() {
+    use std::fs;
+    let root = tempfile::tempdir().unwrap();
+    let worktree = root.path();
+    fs::create_dir_all(worktree.join("scripts")).unwrap();
+    fs::write(worktree.join("scripts/run.sh"), "echo ok\nmodel=claude-opus-5-5\n").unwrap();
+    let paths = [worktree.join("scripts/run.sh")];
+    let text =
+      format!("{:#}", refuse_backend_literals(&Registry::new(), &worktree.join("home"), worktree, &paths).unwrap_err());
+    assert!(text.contains("scripts/run.sh:2") && text.contains("claude-opus-5-5"), "{text}");
+
+    fs::write(worktree.join("scripts/run.sh"), "echo ok\n").unwrap();
+    refuse_backend_literals(&Registry::new(), &worktree.join("home"), worktree, &paths).expect("a clean file passes");
+  }
 }
 
 // Every test in this module launches git, and each credential check also launches the bash leak scanner. A test that
@@ -2243,11 +2568,41 @@ mod synthetic_repo_tests {
     let repo = synthetic_repo(root.path(), "feature");
     commit(&repo, "notes.txt", &format!("the key is {SECRET}\n"));
     fetch_main(&repo).await;
-    let error = credential_check(&home, &repo, "origin/main", None).await.expect_err("the diff holds the value");
+    let error =
+      outbound_checks(&home, &repo, &repo, "feature", "origin/main", None).await.expect_err("the diff holds the value");
     let text = format!("{error:#}");
     assert!(text.contains("credentials.yaml leaf planted.api_key"), "the kind is named: {text}");
     assert!(text.contains("commit ") && text.contains(" diff"), "the field is named: {text}");
     assert!(!text.contains(SECRET), "the value never appears: {text}");
+  }
+
+  /// The literal check reads the files the branch changes. A literal that main already holds is not a site of this
+  /// landing; one that the branch adds is, and the refusal names its file and line.
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_backend_literal_the_branch_adds_refuses_the_landing_and_one_main_holds_does_not() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    let home = root.path().join("home");
+    let repo = synthetic_repo(root.path(), "main");
+    fs::create_dir(repo.join("scripts")).expect("the scripts directory is created");
+    commit(&repo, "scripts/old.sh", "model=claude-opus-5-5\n");
+    assert!(
+      Command::new("git").arg("-C").arg(&repo).args(["push", "-q", "origin", "main"]).status().unwrap().success()
+    );
+    assert!(
+      Command::new("git").arg("-C").arg(&repo).args(["switch", "-q", "-c", "feature"]).status().unwrap().success()
+    );
+    commit(&repo, "notes.txt", "clean\n");
+    fetch_main(&repo).await;
+    backend_literal_check(&Registry::new(), &home, &repo, "origin/main").await.expect("the branch adds no literal");
+
+    commit(&repo, "scripts/new.sh", "model=claude-opus-5-5\n");
+    let error = backend_literal_check(&Registry::new(), &home, &repo, "origin/main")
+      .await
+      .expect_err("the branch adds a literal");
+    let text = format!("{error:#}");
+    assert!(text.contains("scripts/new.sh:1") && text.contains("claude-opus-5-5"), "{text}");
+    assert!(!text.contains("old.sh"), "{text}");
   }
 
   #[tokio::test]
@@ -2259,7 +2614,9 @@ mod synthetic_repo_tests {
     let repo = synthetic_repo(root.path(), "feature");
     commit_with_message(&repo, "notes.txt", "clean\n", &format!("notes {SECRET}"));
     fetch_main(&repo).await;
-    let error = credential_check(&home, &repo, "origin/main", None).await.expect_err("the message holds the value");
+    let error = outbound_checks(&home, &repo, &repo, "feature", "origin/main", None)
+      .await
+      .expect_err("the message holds the value");
     let text = format!("{error:#}");
     assert!(text.contains("credentials.yaml leaf planted.api_key"), "the kind is named: {text}");
     assert!(text.contains(" message"), "the field is named: {text}");
@@ -2276,7 +2633,9 @@ mod synthetic_repo_tests {
     commit(&repo, "notes.txt", "clean\n");
     fetch_main(&repo).await;
     let text = ResolvedPrText { title: "Clean title".to_string(), body: format!("Evidence with {SECRET}\n") };
-    let error = credential_check(&home, &repo, "origin/main", Some(&text)).await.expect_err("the body holds the value");
+    let error = outbound_checks(&home, &repo, &repo, "feature", "origin/main", Some(&text))
+      .await
+      .expect_err("the body holds the value");
     let message = format!("{error:#}");
     assert!(message.contains("PR body"), "the field is named: {message}");
     assert!(!message.contains(SECRET), "the value never appears: {message}");
@@ -2293,7 +2652,7 @@ mod synthetic_repo_tests {
     commit(&repo, "notes.txt", &format!("the short value {SHORT} is not a credential\n"));
     fetch_main(&repo).await;
     let text = ResolvedPrText { title: "Clean title".to_string(), body: "Evidence.\n".to_string() };
-    credential_check(&home, &repo, "origin/main", Some(&text)).await.expect("the check passes");
+    outbound_checks(&home, &repo, &repo, "feature", "origin/main", Some(&text)).await.expect("the check passes");
   }
 
   #[tokio::test]
@@ -2310,7 +2669,7 @@ mod synthetic_repo_tests {
       title: "Clean title".to_string(),
       body: format!("## Evidence\nbefore and after.\n\nView: /?session={SESSION_ID}\n"),
     };
-    credential_check(&home, &repo, "origin/main", Some(&text)).await.expect("the check passes");
+    outbound_checks(&home, &repo, &repo, "feature", "origin/main", Some(&text)).await.expect("the check passes");
   }
 
   /// A profile home whose credentials file holds both a non-secret leaf and a secret leaf, so each side of the skip
@@ -2332,7 +2691,9 @@ mod synthetic_repo_tests {
     let repo = synthetic_repo(root.path(), "feature");
     commit(&repo, "notes.txt", &format!("the model is {MODEL}\n"));
     fetch_main(&repo).await;
-    credential_check(&home, &repo, "origin/main", None).await.expect("the model name is not a credential");
+    outbound_checks(&home, &repo, &repo, "feature", "origin/main", None)
+      .await
+      .expect("the model name is not a credential");
   }
 
   #[tokio::test]
@@ -2344,7 +2705,8 @@ mod synthetic_repo_tests {
     let repo = synthetic_repo(root.path(), "feature");
     commit(&repo, "notes.txt", &format!("the key is {SECRET}\n"));
     fetch_main(&repo).await;
-    let error = credential_check(&home, &repo, "origin/main", None).await.expect_err("the secret leaf refuses");
+    let error =
+      outbound_checks(&home, &repo, &repo, "feature", "origin/main", None).await.expect_err("the secret leaf refuses");
     let text = format!("{error:#}");
     assert!(text.contains("credentials.yaml leaf planted.api_key"), "the kind is named: {text}");
     assert!(!text.contains(SECRET), "the value never appears: {text}");
@@ -2361,7 +2723,8 @@ mod synthetic_repo_tests {
     let repo = synthetic_repo(root.path(), "feature");
     commit(&repo, "notes.txt", "clean\n");
     fetch_main(&repo).await;
-    let error = credential_check(&home, &repo, "origin/main", None).await.expect_err("the file does not parse");
+    let error =
+      outbound_checks(&home, &repo, &repo, "feature", "origin/main", None).await.expect_err("the file does not parse");
     let text = format!("{error:#}");
     assert!(text.contains("could not read the credential values"), "the refusal is named: {text}");
     assert!(!text.contains("listed-value-not-readable"), "the content never appears: {text}");
@@ -2428,5 +2791,246 @@ mod synthetic_repo_tests {
     );
     assert!(matches!(gate_applicability(&repo, "main").await.unwrap(), GateApplicability::Applies));
     assert!(matches!(gate_applicability(&repo, "other").await.unwrap(), GateApplicability::NotApplicable));
+  }
+
+  // ---- the declared-scanner checks: the base ref's own tree decides ----
+
+  /// A synthetic repository whose `origin/main` declares `dev/check-skills-host-leak.sh`, checked out on
+  /// *branch* for the task's commits.
+  fn declared_repo(root: &Path, branch: &str) -> std::path::PathBuf {
+    let repo = synthetic_repo(root, "main");
+    fs::create_dir_all(repo.join("dev")).expect("the dev directory is created");
+    fs::write(repo.join("dev/check-skills-host-leak.sh"), "# the leak scanner declaration\n")
+      .expect("the scanner declaration is written");
+    assert!(Command::new("git").arg("-C").arg(&repo).args(["add", "dev"]).status().unwrap().success());
+    assert!(
+      Command::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .args(["commit", "-q", "-m", "the scanner declaration"])
+        .status()
+        .unwrap()
+        .success()
+    );
+    assert!(
+      Command::new("git").arg("-C").arg(&repo).args(["push", "-q", "origin", "main"]).status().unwrap().success()
+    );
+    assert!(Command::new("git").arg("-C").arg(&repo).args(["switch", "-q", "-c", branch]).status().unwrap().success());
+    repo
+  }
+
+  /// A profile home with a credentials leaf and a local leak-patterns file holding `patterns`.
+  fn home_with_patterns(root: &Path, secret: &str, patterns: &str) -> PathBuf {
+    let home = planted_home(root, secret);
+    fs::write(home.join("skills_leak_patterns.local.txt"), patterns).expect("the pattern file is written");
+    home
+  }
+
+  /// Commits a `*.gz` file whose decompressed content is `content`.
+  fn commit_gz(repo: &Path, file: &str, content: &[u8]) {
+    use std::io::Write as _;
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    encoder.write_all(content).expect("the content compresses");
+    let bytes = encoder.finish().expect("the gzip stream finishes");
+    fs::write(repo.join(file), bytes).expect("the gz file is written");
+    assert!(Command::new("git").arg("-C").arg(repo).args(["add", "."]).status().unwrap().success());
+    assert!(
+      Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["-c", "user.name=Synthetic", "-c", "user.email=synthetic@example.test"])
+        .args(["commit", "-q", "-m", file])
+        .status()
+        .unwrap()
+        .success()
+    );
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_local_pattern_in_the_diff_refuses_a_declared_landing() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    let home = home_with_patterns(root.path(), "fake-landing-secret-0010", "fictionalmarker\n");
+    let repo = declared_repo(root.path(), "feature");
+    commit(&repo, "notes.txt", "the notes carry fictionalmarker\n");
+    fetch_main(&repo).await;
+    let error = outbound_checks(&home, &repo, &repo, "feature", "origin/main", None)
+      .await
+      .expect_err("the diff holds the pattern");
+    let text = format!("{error:#}");
+    assert!(text.contains("Leak hit in commit") && text.contains(" diff"), "the field is named: {text}");
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_local_pattern_in_a_commit_message_refuses_a_declared_landing() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    let home = home_with_patterns(root.path(), "fake-landing-secret-0011", "fictionalmarker\n");
+    let repo = declared_repo(root.path(), "feature");
+    commit_with_message(&repo, "notes.txt", "clean\n", "notes on fictionalmarker");
+    fetch_main(&repo).await;
+    let error = outbound_checks(&home, &repo, &repo, "feature", "origin/main", None)
+      .await
+      .expect_err("the message holds the pattern");
+    assert!(format!("{error:#}").contains("message"), "{}", format!("{error:#}"));
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_local_pattern_in_a_gz_blob_refuses_a_declared_landing() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    let home = home_with_patterns(root.path(), "fake-landing-secret-0012", "fictionalmarker\n");
+    let repo = declared_repo(root.path(), "feature");
+    commit_gz(&repo, "fixture.gz", b"compressed fictionalmarker content\n");
+    fetch_main(&repo).await;
+    let error = outbound_checks(&home, &repo, &repo, "feature", "origin/main", None)
+      .await
+      .expect_err("the blob holds the pattern");
+    assert!(format!("{error:#}").contains("fixture.gz"), "{}", format!("{error:#}"));
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_local_pattern_in_the_branch_name_refuses_a_declared_landing() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    let home = home_with_patterns(root.path(), "fake-landing-secret-0013", "fictionalmarker\n");
+    let repo = declared_repo(root.path(), "feature-fictionalmarker");
+    commit(&repo, "notes.txt", "clean\n");
+    fetch_main(&repo).await;
+    let error = outbound_checks(&home, &repo, &repo, "feature-fictionalmarker", "origin/main", None)
+      .await
+      .expect_err("the branch name holds the pattern");
+    assert!(format!("{error:#}").contains("branch name"), "{}", format!("{error:#}"));
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_local_pattern_in_the_pr_text_refuses_a_declared_landing() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    let home = home_with_patterns(root.path(), "fake-landing-secret-0014", "fictionalmarker\n");
+    let repo = declared_repo(root.path(), "feature");
+    commit(&repo, "notes.txt", "clean\n");
+    fetch_main(&repo).await;
+    let text = ResolvedPrText { title: "the fictionalmarker title".to_string(), body: "Evidence.\n".to_string() };
+    let error = outbound_checks(&home, &repo, &repo, "feature", "origin/main", Some(&text))
+      .await
+      .expect_err("the PR title holds the pattern");
+    assert!(format!("{error:#}").contains("PR title"), "{}", format!("{error:#}"));
+    let text = ResolvedPrText { title: "Clean".to_string(), body: "Evidence on fictionalmarker.\n".to_string() };
+    let error = outbound_checks(&home, &repo, &repo, "feature", "origin/main", Some(&text))
+      .await
+      .expect_err("the PR body holds the pattern");
+    assert!(format!("{error:#}").contains("PR body"), "{}", format!("{error:#}"));
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_generic_leak_in_a_touched_doc_refuses_a_declared_landing() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    let home = home_with_patterns(root.path(), "fake-landing-secret-0015", "fictionalmarker\n");
+    let repo = declared_repo(root.path(), "feature");
+    fs::create_dir_all(repo.join("skills/demo")).expect("the skill directory is created");
+    commit_with_message(&repo, "skills/demo/notes.md", "see /home/someone/notes\n", "the doc");
+    fetch_main(&repo).await;
+    let error = outbound_checks(&home, &repo, &repo, "feature", "origin/main", None)
+      .await
+      .expect_err("the touched doc holds a generic leak");
+    assert!(format!("{error:#}").contains("doc skills/demo/notes.md"), "{}", format!("{error:#}"));
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_declared_landing_refuses_a_missing_or_empty_pattern_file() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    // No pattern file at all: the required local patterns cannot be loaded.
+    let home = planted_home(root.path(), "fake-landing-secret-0016");
+    let repo = declared_repo(root.path(), "feature");
+    commit(&repo, "notes.txt", "clean\n");
+    fetch_main(&repo).await;
+    let error = outbound_checks(&home, &repo, &repo, "feature", "origin/main", None)
+      .await
+      .expect_err("the missing pattern file refuses");
+    assert!(format!("{error:#}").contains("exit 2"), "{}", format!("{error:#}"));
+
+    // A comments-only file holds no pattern: the refusal is the same.
+    fs::write(home.join("skills_leak_patterns.local.txt"), "# only comments\n").expect("the pattern file is written");
+    let error = outbound_checks(&home, &repo, &repo, "feature", "origin/main", None)
+      .await
+      .expect_err("the empty pattern file refuses");
+    assert!(format!("{error:#}").contains("exit 2"), "{}", format!("{error:#}"));
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_declared_landing_refuses_a_stale_hooks_path() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    let home = home_with_patterns(root.path(), "fake-landing-secret-0017", "fictionalmarker\n");
+    let repo = declared_repo(root.path(), "feature");
+    commit(&repo, "notes.txt", "clean\n");
+    fetch_main(&repo).await;
+    // The checkout pins a hooks directory that is gone: every push would skip the hooks.
+    assert!(
+      Command::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .args(["config", "core.hooksPath", "/nonexistent/hooks"])
+        .status()
+        .unwrap()
+        .success()
+    );
+    let error = outbound_checks(&home, &repo, &repo, "feature", "origin/main", None)
+      .await
+      .expect_err("the stale hooks path refuses");
+    assert!(format!("{error:#}").contains("core.hooksPath"), "{}", format!("{error:#}"));
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_clean_declared_landing_passes() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    let home = home_with_patterns(root.path(), "fake-landing-secret-0018", "fictionalmarker\n");
+    let repo = declared_repo(root.path(), "feature");
+    commit(&repo, "notes.txt", "clean notes\n");
+    fetch_main(&repo).await;
+    let text = ResolvedPrText {
+      title: "Clean title".to_string(),
+      body: "Evidence.\n\nView: /diff?session=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee\n".to_string(),
+    };
+    outbound_checks(&home, &repo, &repo, "feature", "origin/main", Some(&text))
+      .await
+      .expect("the declared checks pass");
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn an_undeclared_repo_keeps_only_the_credential_checks() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    // A repository whose base declares no scanner: the local patterns are never required or applied, so the
+    // same text that would refuse a declared landing lands here — the private repo's own names stay private.
+    let home = planted_home(root.path(), "fake-landing-secret-0019");
+    let repo = synthetic_repo(root.path(), "feature");
+    commit_with_message(&repo, "notes.txt", "the notes carry fictionalmarker\n", "notes on fictionalmarker");
+    fetch_main(&repo).await;
+    let text = ResolvedPrText { title: "fictionalmarker title".to_string(), body: "Evidence.\n".to_string() };
+    outbound_checks(&home, &repo, &repo, "feature-fictionalmarker", "origin/main", Some(&text))
+      .await
+      .expect("the undeclared landing skips the pattern checks");
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_corrupt_gz_blob_refuses_the_check() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    let home = home_with_patterns(root.path(), "fake-landing-secret-0020", "fictionalmarker\n");
+    let repo = declared_repo(root.path(), "feature");
+    fs::write(repo.join("fixture.gz"), b"not a gzip member").expect("the corrupt gz is written");
+    assert!(Command::new("git").arg("-C").arg(&repo).args(["add", "."]).status().unwrap().success());
+    assert!(
+      Command::new("git").arg("-C").arg(&repo).args(["commit", "-q", "-m", "the fixture"]).status().unwrap().success()
+    );
+    fetch_main(&repo).await;
+    let error =
+      outbound_checks(&home, &repo, &repo, "feature", "origin/main", None).await.expect_err("the corrupt blob refuses");
+    assert!(format!("{error:#}").contains("decompress"), "{}", format!("{error:#}"));
   }
 }

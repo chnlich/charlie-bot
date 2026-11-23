@@ -24,6 +24,10 @@ jobs:
       - name: Reject Python
         run: dev/check-no-python.sh
 
+      # The generic rules run without a local pattern file; the host-only patterns stay on the machine.
+      - name: Check generic host leaks
+        run: dev/check-skills-host-leak.sh
+
       - name: Install integration selector dependencies
         run: npm ci --prefix dev/integration-selection --ignore-scripts --no-audit --no-fund
 
@@ -227,3 +231,8 @@ jobs:
       - name: Format
         working-directory: rust
         run: cargo fmt --check
+
+      # Fails on a hardcoded backend choice in the repository's text source files, naming each file:line.
+      - name: Backend check
+        working-directory: rust
+        run: cargo run --locked -p charliebot-cli --bin charliebot -- backend check

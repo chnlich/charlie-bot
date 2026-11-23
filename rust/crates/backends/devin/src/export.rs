@@ -161,14 +161,11 @@ pub fn turn_events(export_text: &str, answer: &str) -> anyhow::Result<Vec<Value>
   // translator does: `input_tokens` is the prompt sum with the cached part. `cache_read_input_tokens` carries the
   // cached count beside it. Devin's usage source is run-logs-only, and its ledger record takes that cached count out
   // of `input_tokens`, so each input token is counted once.
-  events.push(make_result_event(
-    usage.prompt_tokens,
-    usage.completion_tokens,
-    usage.cached_tokens,
-    0,
-    Value::Null,
-    None,
-  ));
+  let mut result =
+    make_result_event(usage.prompt_tokens, usage.completion_tokens, usage.cached_tokens, 0, Value::Null, None);
+  // The run's final answer is the stdout text, which the export's last agent message repeats.
+  result["result"] = json!(answer);
+  events.push(result);
   Ok(events)
 }
 
@@ -211,7 +208,7 @@ mod tests {
         json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "The number is 41."}]}}),
         json!({
           "type": "result",
-          "result": "",
+          "result": "The number is 41.",
           "usage": {
             "input_tokens": 1200,
             "output_tokens": 85,
@@ -236,7 +233,7 @@ mod tests {
         json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "Fourth turn answer."}]}}),
         json!({
           "type": "result",
-          "result": "",
+          "result": "Fourth turn answer.",
           "usage": {
             "input_tokens": 2400,
             "output_tokens": 160,
@@ -264,7 +261,7 @@ mod tests {
         json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "The sum is 42."}]}}),
         json!({
           "type": "result",
-          "result": "",
+          "result": "The sum is 42.",
           "usage": {
             "input_tokens": 3200,
             "output_tokens": 90,
@@ -296,7 +293,7 @@ mod tests {
         json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "84."}]}}),
         json!({
           "type": "result",
-          "result": "",
+          "result": "84.",
           "usage": {
             "input_tokens": 1300,
             "output_tokens": 5,

@@ -570,7 +570,7 @@ mod tests {
     assert!(!cold);
   }
 
-  /// A turn that opens a fresh conversation picks even though its recorded login is warm and under the line; a turn
+  /// A turn that opens a fresh conversation picks even though its recorded login is warm and under the line. A turn
   /// that resumes the conversation keeps the login, and its placement holds a handle.
   #[test]
   fn a_fresh_conversation_picks_even_when_the_kept_login_is_warm_and_under_the_line() {

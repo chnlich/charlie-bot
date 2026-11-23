@@ -47,8 +47,7 @@ use charliebot_registry::context::FeatureContext;
 
 use crate::backend_retry;
 use crate::run_support::{
-  StreamEvent, extra_flags_of, read_stderr_tail, route_resume_session_style, silence_callback, stream_event_channel,
-  subprocess_buffer_bytes,
+  StreamEvent, extra_flags_of, read_stderr_tail, silence_callback, stream_event_channel, subprocess_buffer_bytes,
 };
 
 /// The stash-guard `git` wrapper directory, under the checkout. It rides first on every child's PATH.
@@ -637,14 +636,7 @@ impl Worker {
       let mut extra_flags = extra_flags_of(&backend_kwargs)?;
       backend_kwargs.remove(EXTRA_FLAGS_BACKEND_KWARG);
       if let Some(resume_id) = launch.and_then(|launch| launch.resume_id.as_deref()).filter(|id| !id.is_empty()) {
-        let style = self
-          .features
-          .registry
-          .backend_type_of(&option.backend_type)
-          .with_context(|| format!("unknown backend type {}", option.backend_type))?
-          .traits
-          .resume;
-        let (resume_flags, native_id) = route_resume_session_style(style, Some(resume_id))?;
+        let (resume_flags, native_id) = self.features.registry.resume_parts(&option.backend_type, resume_id)?;
         extra_flags = [resume_flags, extra_flags].concat();
         args.resume_session_id = native_id;
       }

@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 use world::{
   CODEX_REFRESH_TOKEN, DIRECTION, GATEWAY_TOKEN, LOGIN_REFRESH_TOKEN, LOGIN_TOKEN, REVIEW_CREDENTIAL, REVIEW_KEY,
-  REVIEW_LOGIN_TOKEN, SUBSCRIPTION_REVIEW_TYPE, World,
+  REVIEW_LOGIN_TOKEN, SUBSCRIPTION_REVIEW_TYPE, SYNTHETIC_PROBE_ANSWER, World,
 };
 
 /// The prompt the server writes to the launcher's standard input for a plain-text run.
@@ -45,6 +45,19 @@ fn wait_until(limit: Duration, mut condition: impl FnMut() -> bool) -> bool {
     std::thread::sleep(Duration::from_millis(20));
   }
   condition()
+}
+
+/// The launcher resolves the endpoint member of `backends.calls.probe` on its host and ships the answer with the
+/// launch. A host that runs no server has no other way to resolve it, so the round's environment names that answer, and
+/// the round's agent reads the answer the launcher shipped.
+#[test]
+#[ignore = "integration"]
+fn the_round_reads_the_probe_answer_the_launcher_shipped() {
+  let world = World::new();
+  let run = world.run(&world.env());
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(world.claude_ran(), "the fake claude did not run:\n{}", run.describe());
+  assert_eq!(world.claude_probe_answer(), SYNTHETIC_PROBE_ANSWER);
 }
 
 #[test]
@@ -277,6 +290,26 @@ fn the_review_runs_backend_run_on_the_launch_review_directory_from_its_scratch_d
   let credentials =
     fs::read_to_string(world.remote_home.join("improve/home/credentials.yaml")).expect("the round's credentials file");
   assert_eq!(credentials, format!("{REVIEW_CREDENTIAL}:\n  api_key: {REVIEW_KEY}\n"), "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn the_review_runs_with_the_round_clone_as_its_repo_root() {
+  let world = World::new();
+  let task = world.sandbox.root().join("review-task.md");
+  fs::write(&task, "Review the diff.\nPR: 1 https://example.invalid/pull/1\n").expect("the review task file");
+  let scratch = world.sandbox.dir("review-scratch");
+  let mut env = world.env();
+  env.insert("FAKE_CLAUDE_REVIEW_TASK".to_string(), task.display().to_string());
+  env.insert("FAKE_CLAUDE_REVIEW_DIR".to_string(), scratch.display().to_string());
+  let run = world.run(&env);
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(world.review_ran(), "the round's review did not run backend run:\n{}", run.describe());
+
+  // The CLI composes its checkout from CHARLIEBOT_REPO_ROOT, so the review names the round's own clone.
+  let clone = world.remote_home.join("improve").join(DIRECTION).join("charlie-bot");
+  let env = world.review_environment();
+  assert_eq!(env.get("CHARLIEBOT_REPO_ROOT"), Some(&digest(&clone.display().to_string())), "{}", run.describe());
 }
 
 #[test]
@@ -1469,13 +1502,83 @@ fn an_approval_prompt_exits_3_inside_five_seconds() {
   let elapsed = start.elapsed();
   assert_eq!(run.code, 3, "{}", run.describe());
   assert!(elapsed < Duration::from_secs(5), "the launcher waited {elapsed:?} for the approval");
-  assert!(stderr(&run).contains("/host-auth"), "the message names no approval page: {}", run.describe());
+  let text = stderr(&run);
+  assert!(text.contains("asks for a login approval"), "the message names no approval: {text}");
+  assert!(text.contains("/host-auth"), "the message names no approval page: {}", run.describe());
+  assert!(
+    text.contains("https://login.tailscale.com/a/synthetic-approval"),
+    "the message does not quote the login link ssh printed: {text}"
+  );
+  assert!(!text.contains("did not answer"), "an approval was reported as an absent host: {text}");
   assert!(!world.claude_ran(), "the round started although the connection needed an approval");
   assert!(
     !world.ssh_arguments().contains("remote-runner.sh"),
     "the launcher started the runner before the preflight passed:\n{}",
     world.ssh_arguments()
   );
+}
+
+/// A host that does not answer names the ssh error and sends the line manager to no approval page. The incident behind
+/// this check: host3's preflight printed a /host-auth instruction while no approval was pending, and two rounds' line
+/// managers checked a login instead of the host.
+#[test]
+#[ignore = "integration"]
+fn an_unreachable_host_names_the_ssh_error_and_no_approval_page() {
+  let world = World::new();
+  let error = world.sandbox.root().join("unreachable.txt");
+  fs::write(&error, "ssh: connect to host synthetic-improve-host port 22: Connection timed out\n")
+    .expect("the unreachable host's error");
+  let mut env = world.env();
+  env.insert("SSH_UNREACHABLE_FILE".to_string(), error.display().to_string());
+  let run = world.run(&env);
+  assert_eq!(run.code, 3, "{}", run.describe());
+  let text = stderr(&run);
+  assert!(text.contains("failed at the preflight"), "the message does not name the failed ssh call:\n{text}");
+  assert!(
+    text.contains("ssh: connect to host synthetic-improve-host port 22: Connection timed out"),
+    "the message does not quote the ssh error:\n{text}"
+  );
+  assert!(!text.contains("did not answer"), "the message claims a cause beyond ssh's error:\n{text}");
+  assert!(!text.contains("/host-auth"), "an unreachable host sent the line manager to the approval page:\n{text}");
+  assert!(!world.claude_ran(), "the round started although the host did not answer");
+}
+
+/// A host that answers but refuses the login names the ssh error and no approval page. The evidence shows a host that
+/// answered, so the message claims no absent host: the defect was the blanket cause, not the approval alone.
+#[test]
+#[ignore = "integration"]
+fn a_publickey_denial_names_the_ssh_error_and_no_approval_page() {
+  let world = World::new();
+  let mut env = world.env();
+  env.insert("SSH_DENY_PUBLICKEY".to_string(), "1".to_string());
+  let run = world.run(&env);
+  assert_eq!(run.code, 3, "{}", run.describe());
+  let text = stderr(&run);
+  assert!(
+    text.contains("synthetic-user@improve.example.ts.net: Permission denied (publickey)."),
+    "the message does not quote the ssh error:\n{text}"
+  );
+  assert!(!text.contains("did not answer"), "the message claims an absent host although the host answered:\n{text}");
+  assert!(!text.contains("/host-auth"), "a publickey denial sent the line manager to the approval page:\n{text}");
+  assert!(!world.claude_ran(), "the round started although the login was denied");
+}
+
+/// A host that stops answering after the preflight gives the input send the same treatment: the ssh error, and no
+/// approval page.
+#[test]
+#[ignore = "integration"]
+fn a_failed_input_send_names_the_ssh_error_and_no_approval_page() {
+  let world = World::new();
+  let mut env = world.env();
+  env.insert("SSH_FAIL_SEND".to_string(), "1".to_string());
+  let run = world.run(&env);
+  assert_eq!(run.code, 3, "{}", run.describe());
+  let text = stderr(&run);
+  assert!(text.contains("failed at the input send"), "the message does not name the failed ssh call:\n{text}");
+  assert!(text.contains("Connection timed out"), "the message does not quote the ssh error:\n{text}");
+  assert!(!text.contains("did not answer"), "the message claims a cause beyond ssh's error:\n{text}");
+  assert!(!text.contains("/host-auth"), "a failed send sent the line manager to the approval page:\n{text}");
+  assert!(!world.claude_ran(), "the round started although the input send failed");
 }
 
 #[test]

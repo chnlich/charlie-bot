@@ -148,6 +148,8 @@ impl World {
     copy_repo_file("scripts/switch-server.sh", &scripts.join("switch-server.sh"));
     copy_repo_file("scripts/install-slice-units.sh", &scripts.join("install-slice-units.sh"));
     copy_repo_file("scripts/systemd-user.sh", &scripts.join("systemd-user.sh"));
+    let prompts = sandbox.dir("clone/prompts");
+    copy_repo_file("prompts/live_view_check.md", &prompts.join("live_view_check.md"));
     // The switch sources the host release lock from beside itself.
     fs::create_dir(scripts.join("release")).expect("the release scripts directory");
     copy_repo_file("scripts/release/lock.sh", &scripts.join("release/lock.sh"));
@@ -164,7 +166,7 @@ impl World {
       write_registration(&clone, module, backend_type, enabled, Layout::Pre);
     }
     git(&git_vars, &clone, &["init", "-q", "-b", "main"]);
-    git(&git_vars, &clone, &["add", "scripts", "rust"]);
+    git(&git_vars, &clone, &["add", "scripts", "rust", "prompts"]);
     git(&git_vars, &clone, &["commit", "-q", "-m", "fake runtime clone"]);
     let pre_sha = git(&git_vars, &clone, &["rev-parse", "HEAD"]);
 
@@ -356,17 +358,39 @@ impl World {
   /// [`World::switch_forward`] with `live` as the shell command standing in for the live capture step, so a test can
   /// make the capture fail and read the exit.
   pub fn switch_forward_with(&self, run_pid: u32, launch_output: &str, delegation: &str, live: &str) -> Run {
-    self.forward_to(&self.rust_sha, run_pid, launch_output, delegation, Capture::Stub(live))
+    self.forward_to(&self.rust_sha, run_pid, launch_output, delegation, Capture::Stub(live), &[])
   }
 
   /// The forward path to `target`, a commit above the old release, with the switch's own capture step. The target
   /// release's CLI resolves only `known_view`, so a View line that names another view fails its capture.
   pub fn switch_forward_capturing(&self, target: &str, run_pid: u32, launch_output: &str, known_view: &str) -> Run {
-    self.forward_to(target, run_pid, launch_output, ":", Capture::Real { known_view })
+    self.forward_to(target, run_pid, launch_output, ":", Capture::Real { known_view }, &[])
+  }
+
+  /// Like [`World::switch_forward_capturing`], with a stub `node` that writes each captured PNG and extra environment
+  /// variables for the fake `charliebot` `backend run` judge handler.
+  pub fn switch_forward_live(
+    &self,
+    target: &str,
+    run_pid: u32,
+    launch_output: &str,
+    known_views: &str,
+    extra_env: &[(&str, &str)],
+  ) -> Run {
+    self.sandbox.stub("node", "mkdir -p \"$(dirname \"$6\")\" && printf 'png\\n' > \"$6\"\n");
+    self.forward_to(target, run_pid, launch_output, ":", Capture::Real { known_view: known_views }, extra_env)
   }
 
   /// The forward path to `target` with the live capture step `capture` names.
-  fn forward_to(&self, target: &str, run_pid: u32, launch_output: &str, delegation: &str, capture: Capture) -> Run {
+  fn forward_to(
+    &self,
+    target: &str,
+    run_pid: u32,
+    launch_output: &str,
+    delegation: &str,
+    capture: Capture,
+    extra_env: &[(&str, &str)],
+  ) -> Run {
     let (launch_log, work) = self.launch_files(launch_output);
     let mut env = self.env.clone();
     env.insert("CLONE".to_string(), self.clone.display().to_string());
@@ -378,8 +402,14 @@ impl World {
     env.insert("NEW_LOG".to_string(), launch_log.display().to_string());
     env.insert("NEW_OFFSET".to_string(), "0".to_string());
     env.insert("WORK".to_string(), work.display().to_string());
+    env.insert("LOG".to_string(), self.logs.join("switch_test.log").display().to_string());
+    // The preflight reads the access key from the home's credentials; the forward path here starts below it.
+    env.insert("KEY".to_string(), ACCESS_KEY.to_string());
     env.insert("DELEGATION".to_string(), delegation.to_string());
     env.insert("SYSTEMCTL_RECORDS".to_string(), self.sandbox.bin().join("systemctl.records").display().to_string());
+    for (key, value) in extra_env {
+      env.insert((*key).to_string(), (*value).to_string());
+    }
     let live_stub = match capture {
       Capture::Stub(live) => {
         env.insert("LIVE_SHOTS".to_string(), live.to_string());

@@ -2,10 +2,10 @@
 //! (`$CHARLIEBOT_RELEASES_DIR/current`) and the `charliebot` calls they make through it.
 
 use std::fs;
-use std::os::unix::fs::symlink;
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 
-use charliebot_shell_harness::{self as harness, Env, Run, Sandbox, write_executable};
+use charliebot_shell_harness::{self as harness, Env, Run, Sandbox, copy_file, write_executable};
 
 const RELEASE_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 
@@ -288,6 +288,49 @@ fn a_script_without_a_current_release_exits_1_and_names_the_path() {
   }
 }
 
+/// A scratch git checkout holding `scripts/` and `dev/git-hooks/` so `setup.sh` tests never mutate the live repo.
+fn scratch_setup_repo(sandbox: &Sandbox, env: &Env) -> PathBuf {
+  let repo = sandbox.dir("setup-repo");
+  let src = harness::repo_root();
+  for rel in [
+    "scripts/setup.sh",
+    "scripts/sync-skills.sh",
+    "scripts/install-slice-units.sh",
+    "scripts/systemd-user.sh",
+    "scripts/systemd/charliebot-agents.slice",
+    "scripts/systemd/charliebot.slice",
+    "scripts/systemd/charliebot-boot.service",
+    "dev/git-hooks/pre-commit",
+    "dev/git-hooks/commit-msg",
+    "dev/git-hooks/pre-push",
+  ] {
+    let dst = repo.join(rel);
+    fs::create_dir_all(dst.parent().expect("relative path has parent")).expect("create parent");
+    copy_file(&src.join(rel), &dst);
+  }
+  fs::create_dir_all(repo.join("skills/demo")).expect("create skills dir");
+  fs::write(repo.join("skills/demo/SKILL.md"), "---\nname: demo\ndescription: demo\n---\n").expect("write skill");
+  let git = |args: &[&str]| {
+    let mut command = harness::command("git", env);
+    command.arg("-C").arg(&repo).args(args);
+    let run = harness::run(&mut command);
+    assert_eq!(run.code, 0, "{}", run.describe());
+    run.stdout.trim().to_string()
+  };
+  git(&["init", "-q", "-b", "main"]);
+  git(&["config", "user.name", "setup-test"]);
+  git(&["config", "user.email", "setup-test@example.invalid"]);
+  git(&["add", "scripts", "dev", "skills"]);
+  git(&["commit", "-q", "-m", "initial setup files"]);
+  repo
+}
+
+fn run_repo_script(env: &Env, repo: &Path, script: &str, args: &[&str]) -> Run {
+  let mut command = harness::command("bash", env);
+  command.arg(repo.join(script)).args(args);
+  harness::run(&mut command)
+}
+
 #[test]
 #[ignore = "integration"]
 fn setup_sh_runs_the_release_cli_dry_run() {
@@ -297,15 +340,52 @@ fn setup_sh_runs_the_release_cli_dry_run() {
   let releases = install_release(&sandbox);
   sandbox.stub("systemctl", "exit 0\n");
   let env = script_environment(&sandbox, &releases, &record, &fake_home);
-  let run = run_script(&env, "scripts/setup.sh", &["--dry-run"]);
+  let repo = scratch_setup_repo(&sandbox, &env);
+  let run = run_repo_script(&env, &repo, "scripts/setup.sh", &["--dry-run"]);
 
   assert_eq!(run.code, 0, "{}", run.describe());
+  let expected_hooks = repo.join("dev/git-hooks");
+  assert!(
+    run.stdout.contains(&format!("git -C {} config core.hooksPath {}", repo.display(), expected_hooks.display())),
+    "{}",
+    run.stdout
+  );
+  let mut check = harness::command("git", &env);
+  check.arg("-C").arg(&repo).args(["config", "--get", "core.hooksPath"]);
+  assert_ne!(harness::run(&mut check).code, 0, "dry run must not write core.hooksPath");
   let calls = recorded(&record);
   assert!(calls.contains(&"setup --dry-run".to_string()), "the release CLI did not run setup --dry-run: {calls:?}");
   assert!(!calls.contains(&"setup".to_string()), "the dry run must not run the real setup: {calls:?}");
   assert!(calls.contains(&"config get charliebot_home".to_string()), "{calls:?}");
   assert!(run.stdout.contains("==> Syncing skills"), "{}", run.stdout);
   assert!(run.stdout.contains("Setup complete."), "{}", run.stdout);
+}
+
+#[test]
+#[ignore = "integration"]
+fn setup_sh_pins_absolute_hooks_path_and_validates_hooks() {
+  let sandbox = Sandbox::new();
+  let record = sandbox.root().join("charliebot.record");
+  let fake_home = sandbox.dir("home");
+  let releases = install_release(&sandbox);
+  sandbox.stub("systemctl", "exit 0\n");
+  let mut env = script_environment(&sandbox, &releases, &record, &fake_home);
+  env.insert("CHARLIEBOT_SYSTEMD_USER_DIR".to_string(), sandbox.dir("unit-dir").display().to_string());
+  let repo = scratch_setup_repo(&sandbox, &env);
+  let run = run_repo_script(&env, &repo, "scripts/setup.sh", &[]);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  let mut check = harness::command("git", &env);
+  check.arg("-C").arg(&repo).args(["config", "--get", "core.hooksPath"]);
+  let configured = harness::run(&mut check);
+  assert_eq!(configured.code, 0, "{}", configured.describe());
+  assert_eq!(configured.stdout.trim(), repo.join("dev/git-hooks").display().to_string());
+
+  let pre_push = repo.join("dev/git-hooks/pre-push");
+  fs::set_permissions(&pre_push, fs::Permissions::from_mode(0o644)).expect("strip execute bit");
+  let refused = run_repo_script(&env, &repo, "scripts/setup.sh", &[]);
+  assert_ne!(refused.code, 0, "{}", refused.describe());
+  assert!(refused.stderr.contains("pre-push"), "{}", refused.stderr);
 }
 
 #[test]
@@ -317,8 +397,10 @@ fn setup_sh_propagates_a_failing_setup_call() {
   let releases = install_release(&sandbox);
   sandbox.stub("systemctl", "exit 0\n");
   let mut env = script_environment(&sandbox, &releases, &record, &fake_home);
+  env.insert("CHARLIEBOT_SYSTEMD_USER_DIR".to_string(), sandbox.dir("unit-dir").display().to_string());
+  let repo = scratch_setup_repo(&sandbox, &env);
   env.insert("FAKE_EXIT".to_string(), "3".to_string());
-  let run = run_script(&env, "scripts/setup.sh", &[]);
+  let run = run_repo_script(&env, &repo, "scripts/setup.sh", &[]);
 
   assert_eq!(run.code, 3, "{}", run.describe());
   assert!(recorded(&record).contains(&"setup".to_string()), "{:?}", recorded(&record));

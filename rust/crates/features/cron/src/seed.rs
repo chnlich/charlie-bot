@@ -116,6 +116,32 @@ pub fn setup_step(cfg: &CharlieBotConfig, repo_root: &Path, dry_run: bool) -> Re
   Ok(())
 }
 
+/// Disables every cron task of a home: seeds the repo's default tasks as the server seeds them at its start, then sets
+/// `enabled: false` on each task file of the home's cron directory, seeded and copied files alike. A release trial runs
+/// it before its server starts, so the trial's home fires no scheduled task. Returns the disabled task names in file
+/// order.
+pub fn disable_cron_tasks(cfg: &CharlieBotConfig, repo_root: &Path) -> Result<Vec<String>, String> {
+  seed_default_cron_tasks(cfg, repo_root, false)?;
+  let directory = loader::cron_dir(cfg);
+  let mut paths = std::fs::read_dir(&directory)
+    .and_then(|entries| entries.map(|entry| entry.map(|entry| entry.path())).collect::<Result<Vec<_>, _>>())
+    .map_err(|error| format!("{}: {error}", directory.display()))?;
+  paths.sort();
+  let mut names = Vec::new();
+  for path in paths {
+    let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+    if !path.is_file() || !file_name.ends_with(".yaml") || file_name.starts_with('.') {
+      continue;
+    }
+    let mut task =
+      loader::read_task_file(&path).map_err(|error| format!("{}: {}", path.display(), error.message_without_path()))?;
+    task.insert("enabled".to_string(), Value::Bool(false));
+    loader::write_task_file(&path, &Value::Object(task)).map_err(|error| format!("{}: {error}", path.display()))?;
+    names.push(path.file_stem().and_then(|stem| stem.to_str()).unwrap_or_default().to_string());
+  }
+  Ok(names)
+}
+
 /// The backend ids that the steps of a default entry name and the host config does not hold, in step order.
 fn missing_step_backend_ids(cfg: &CharlieBotConfig, body: &Value) -> Vec<String> {
   body

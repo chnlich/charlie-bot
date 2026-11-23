@@ -1279,7 +1279,13 @@ async fn replay_followups_with_records(
       adapter.after_worker_run(&meta, run, outcome_name(outcome)).await?;
     } else if run.kind == RunKind::Review {
       counters.followups += 1;
-      adapter.after_review_run(&meta, run, outcome_name(outcome), RunEnd::Replay).await?;
+      let failover_retry_id = TaskExecutionAdapter::failover_retry_id(session_id, &run.id);
+      if run_records.iter().any(|candidate| {
+        candidate.retry_of_run_id.as_deref() == Some(run.id.as_str()) && candidate.id == failover_retry_id
+      }) {
+        continue;
+      }
+      adapter.after_review_run(&meta, run, outcome_name(outcome), RunEnd::Replay, None, Vec::new()).await?;
     }
   }
   Ok(())

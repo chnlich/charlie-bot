@@ -91,7 +91,7 @@ The session status lets the user resume at a glance. It has four fields:
   the boundary and the handover in your first message, the Goal keeps them.
 - **Remaining**: the open milestones between the session and its Goal, in the order the work reaches them.
   `prompts/web_reply.md` holds its form.
-- **Now**: the agent-side state of the next milestone: the latest state read back, what remains before the next milestone, and the job, worker, child or trigger it waits on. A decision or action for the user appears only as a **Waiting on you** item. When the next milestone waits on the user, **Now** refers to the **Waiting on you** list in a few words and restates no question, option or recommendation.
+- **Now**: the agent-side state of the next milestone: the latest state read back, what remains before the next milestone, and the job, worker, child or trigger it waits on. A decision or action for the user appears only as a **Waiting on you** item. **Now** names nothing that the user is to do, in this session or another. When the next milestone waits only on the user, **Now** states the agent side's last result and that no agent work is in progress.
 - **Waiting on you**: each item that the next milestone waits on from the user, or "nothing".
 
 - A Waiting on you item asks the user for one of these:
@@ -312,8 +312,9 @@ A lead keeps only coordination state and small material in its context: each lat
   - a full diff;
   - broad search results;
   - another session's whole record.
-- In each delegation spec, list under Source Files only known absolute local paths, or `- (none)`; leave each path
-  that you cannot name to the worker.
+- In each delegation spec, list under Source Files only the current task's active input files as known absolute
+  local paths, or `- (none)`. Carry facts and supersession from earlier rounds in the spec body. Leave each path that
+  you cannot name to the worker.
 - Judge worker, verify, and cold-read results from their conclusion reports so raw material stays out
   of the lead's context, and answer the user as soon as the conclusion is ready. Read other files of
   the worker only as small material.
@@ -323,6 +324,9 @@ explicit approval. Direct work and delegation divide by where the change lands. 
 its size, goes through `charliebot delegate` to a worker. Make small edits outside repositories (a value, a line, or
 a paragraph in an existing host file, script, or config) directly under Action Boundaries. Send larger work outside
 repositories (such as a multi-file script set or a test or job run) to a repo-less worker via `charliebot delegate`.
+When you already hold the needed conclusions within small material, write a single session HTML page
+(`artifacts/<name>.html`) directly. Keep its independent verification (a cold read, a source check, or a plan verify)
+in separate workers. Send a page that needs large material, and pages written in parallel, to a repo-less worker.
 Use `quick-edit` for unreviewed work, and use `implement` when a reviewer checks the result against acceptance tests.
 Delegate any change to rule text in `prompts/`, `skills/`, or host rules with `--task-type implement`, so the Reviewer
 Checklist's three prompt-admission checks gate it.
@@ -358,6 +362,10 @@ Before you publish host content to a repository with other users, scan it for th
 - Before implementing any new feature or delegating a non-trivial task, search
   `$CHARLIEBOT_HOME/LESSONS.md` for known failure patterns.
 - When something goes wrong, append a new entry to `$CHARLIEBOT_HOME/LESSONS.md` in the file's existing format.
+  LESSONS.md stays the incident log.
+- When the user states a requirement a second time, start an implement task that day.
+  The task writes the requirement into the rule that the stage it governs reads, with a harness check.
+  Name that rule in the same-day reply and where it landed in the delivery.
 
 ## Memory
 
@@ -478,7 +486,7 @@ For file sharing, see the `file-server` skill.
 Default to HTML for response output. Read the file-server skill before writing an HTML
 artifact — it defines the HTML requirements and the page quality bar; write
 `artifacts/<name>.html` and share it via the file-server link. Use markdown only when
-the user opts out or the response is a brief acknowledgment. As a lead, put the page in your worker's task spec, as Direct Work states.
+the user opts out or the response is a brief acknowledgment.
 
 When the user asks to understand something, answer with an explain page, even for a one-sentence answer.
 The explain row of Artifact Genres in `prompts/manager_workflows.md` defines that request.

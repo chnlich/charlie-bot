@@ -430,7 +430,8 @@ fn resolve_pointer(
   Ok(())
 }
 
-fn resolve_path(pointer: &str, repo: &Path) -> Result<PathBuf, String> {
+/// The file a `prompt_file` pointer names: `~` expands to the home, and a relative pointer resolves against `repo`.
+pub(crate) fn resolve_path(pointer: &str, repo: &Path) -> Result<PathBuf, String> {
   if pointer == "~" || pointer.starts_with("~/") {
     return Ok(PathBuf::from(expand_home(pointer)?));
   }

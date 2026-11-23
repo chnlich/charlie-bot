@@ -20,6 +20,25 @@ fn github_post() -> PathBuf {
   harness::repo_root().join("dev/improve/github-post.sh")
 }
 
+/// The credential-carrying environment variables the scanner reads. A test environment drops each so the only
+/// credential a run can hold is the one the test plants.
+const CREDENTIAL_ENV_NAMES: [&str; 6] = [
+  "ANTHROPIC_AUTH_TOKEN",
+  "CLAUDE_CODE_OAUTH_TOKEN",
+  "CHARLIEBOT_RUN_TOKEN",
+  "CHARLIE_CODE_API_KEY",
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+];
+
+/// The environment without the credential variables: a test that plants none collects zero credential values.
+fn without_credential_env(mut env: Env) -> Env {
+  for name in CREDENTIAL_ENV_NAMES {
+    env.remove(name);
+  }
+  env
+}
+
 fn leak_scanner() -> PathBuf {
   harness::repo_root().join("dev/check-skills-host-leak.sh")
 }
@@ -39,6 +58,9 @@ printf '%s\n' "$*" >> "$GH_CALL_LOG"
   env.insert("HOME".to_string(), sandbox.root().display().to_string());
   env.insert("CHARLIEBOT_HOME".to_string(), home.display().to_string());
   env.insert("GH_CALL_LOG".to_string(), gh_log.display().to_string());
+  // Empty config directories: the scanner reads the host's credential files only when no directory is named.
+  env.insert("CLAUDE_CONFIG_DIR".to_string(), sandbox.dir("claude-config-unset").display().to_string());
+  env.insert("CODEX_HOME".to_string(), sandbox.dir("codex-home-unset").display().to_string());
   env.insert("GIT_CONFIG_NOSYSTEM".to_string(), "1".to_string());
   env.insert("GIT_CONFIG_GLOBAL".to_string(), "/dev/null".to_string());
   for name in ["GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"] {
@@ -47,7 +69,7 @@ printf '%s\n' "$*" >> "$GH_CALL_LOG"
   for name in ["GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"] {
     env.insert(name.to_string(), "123+example@users.noreply.github.com".to_string());
   }
-  env
+  without_credential_env(env)
 }
 
 /// The profile home with one local pattern term in its pattern file.
@@ -373,7 +395,7 @@ fn a_push_refuses_a_leaky_commit_message() {
   command.arg(github_post()).args(["push", "-u", "origin", "improve/perf/topic-slug"]);
   let run = run_in(&mut command, &clone);
   assert_eq!(run.code, 1, "{}", run.describe());
-  assert!(run.stderr.contains("commit"), "{}", run.stderr);
+  assert!(run.stdout.contains("message"), "{}", run.describe());
   assert!(!ls_remote(&env, &clone).contains("improve/perf/topic-slug"));
 }
 
@@ -393,25 +415,27 @@ fn a_push_refuses_a_leaky_branch_name() {
   command.arg(github_post()).args(["push", "-u", "origin"]).arg(&branch);
   let run = run_in(&mut command, &clone);
   assert_eq!(run.code, 1, "{}", run.describe());
-  assert!(run.stderr.contains("branch name"), "{}", run.stderr);
+  assert!(run.stdout.contains("branch name"), "{}", run.describe());
   assert!(!ls_remote(&env, &clone).contains(&branch));
 }
 
 #[test]
 #[ignore = "integration"]
-fn a_push_refuses_when_origin_main_is_unknown() {
+fn a_push_scans_every_unpublished_commit_when_origin_main_is_unknown() {
   let sandbox = Sandbox::new();
   let (env, _gh_log, _home) = post(&sandbox);
   let clone = push_repo(&sandbox, &env);
   git(&env, &clone, &["update-ref", "-d", "refs/remotes/origin/main"]);
   std::fs::write(clone.join("bad.txt"), "bad\n").unwrap();
   git(&env, &clone, &["add", "bad.txt"]);
-  git(&env, &clone, &["commit", "-q", "-m", &format!("follow {HOME_PATH_TEXT}")]);
+  git(&env, &clone, &["commit", "-q", "-m", &format!("follow {PATTERN_TERM}")]);
 
+  // Without origin/main the check falls back to the commits no remote ref reaches, so the leaky message in the
+  // unpublished history still refuses the push.
   let mut command = harness::command("bash", &env);
   command.arg(github_post()).args(["push", "-u", "origin", "improve/perf/topic-slug"]);
   let run = run_in(&mut command, &clone);
-  assert_eq!(run.code, 2, "{}", run.describe());
+  assert_eq!(run.code, 1, "{}", run.describe());
   assert!(!ls_remote(&env, &clone).contains("improve/perf/topic-slug"));
 }
 
@@ -549,6 +573,7 @@ fn copy_leak_tools(checkout: &Path) {
   std::fs::create_dir_all(dev.join("git-hooks")).unwrap();
   harness::copy_file(&leak_scanner(), &dev.join("check-skills-host-leak.sh"));
   harness::copy_file(&harness::repo_root().join("dev/leak-patterns.sh"), &dev.join("leak-patterns.sh"));
+  harness::copy_file(&harness::repo_root().join("dev/push-text-lists.sh"), &dev.join("push-text-lists.sh"));
   for hook in ["pre-commit", "commit-msg"] {
     harness::copy_file(&harness::repo_root().join("dev/git-hooks").join(hook), &dev.join("git-hooks").join(hook));
   }
@@ -566,7 +591,7 @@ fn pinned_git_env(sandbox: &Sandbox) -> Env {
   for name in ["GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"] {
     env.insert(name.to_string(), "123+example@users.noreply.github.com".to_string());
   }
-  env
+  without_credential_env(env)
 }
 
 /// A scratch repository carrying a copy of the leak tools and the hooks path installed.
@@ -671,10 +696,8 @@ fn the_installed_checkouts_hooks_check_the_committers_tree() {
   std::fs::create_dir_all(repo.join("web/features/demo")).unwrap();
   std::fs::write(repo.join("web/features/demo/leak_scan_files.txt"), "notes.txt\n").unwrap();
   std::fs::write(repo.join("notes.txt"), format!("{HOME_PATH_TEXT}\n")).unwrap();
-  let mut builtin_env = env.clone();
-  builtin_env.remove("EXTRA_PATTERNS_FILE");
-  assert_eq!(leak_run(&repo, &builtin_env, &["add", "notes.txt", "web/features/demo/leak_scan_files.txt"]).code, 0);
-  let commit = leak_run(&repo, &builtin_env, &["commit", "-m", "add notes"]);
+  assert_eq!(leak_run(&repo, &env, &["add", "notes.txt", "web/features/demo/leak_scan_files.txt"]).code, 0);
+  let commit = leak_run(&repo, &env, &["commit", "-m", "add notes"]);
   assert_ne!(commit.code, 0, "{}", commit.describe());
   assert!(commit.stderr.contains("notes.txt"), "{}", commit.stderr);
 }
@@ -722,6 +745,7 @@ const MERGE_GH_STUB: &str = r#"case "$1 $2" in
     case " $* " in
       *" title "*) cat "$GH_PR_TITLE" ;;
       *" body "*) cat "$GH_PR_BODY" ;;
+      *" isDraft "*) cat "$GH_PR_DRAFT" ;;
       *) printf '%s\n' 'https://github.com/chnlich/charlie-bot/pull/5046' ;;
     esac
     ;;
@@ -735,14 +759,15 @@ if [[ "$1 $2" == 'pr merge' ]]; then
 fi
 "#;
 
-/// One synthetic pull request for `pr-merge`: the changed paths, the title and body, the call log and the copied squash
-/// message, plus an evidence directory the caller fills with screenshots.
+/// One synthetic pull request for `pr-merge`: the changed paths, the title and body, the draft state, the call log and
+/// the copied squash message, plus an evidence directory the caller fills with screenshots.
 struct MergeWorld {
   sandbox: Sandbox,
   env: Env,
   gh_log: PathBuf,
   merge_body: PathBuf,
   evidence: PathBuf,
+  pr_draft: PathBuf,
 }
 
 impl MergeWorld {
@@ -759,16 +784,19 @@ impl MergeWorld {
     let pr_title = sandbox.root().join("pr-title");
     let pr_body_file = sandbox.root().join("pr-body");
     let merge_body = sandbox.root().join("merge-body");
+    let pr_draft = sandbox.root().join("pr-draft");
     std::fs::write(&changed_paths, changed).unwrap();
     std::fs::write(&pr_title, "Improve the status panel\n").unwrap();
     std::fs::write(&pr_body_file, pr_body).unwrap();
+    std::fs::write(&pr_draft, "false\n").unwrap();
     let mut env = env;
     env.insert("GH_CHANGED_PATHS".to_string(), changed_paths.display().to_string());
     env.insert("GH_PR_TITLE".to_string(), pr_title.display().to_string());
     env.insert("GH_PR_BODY".to_string(), pr_body_file.display().to_string());
+    env.insert("GH_PR_DRAFT".to_string(), pr_draft.display().to_string());
     env.insert("GH_MERGE_BODY".to_string(), merge_body.display().to_string());
     let evidence = sandbox.dir("evidence");
-    MergeWorld { sandbox, env, gh_log, merge_body, evidence }
+    MergeWorld { sandbox, env, gh_log, merge_body, evidence, pr_draft }
   }
 
   /// Writes `count` PNGs at each window size into the evidence directory.
@@ -820,8 +848,27 @@ fn a_pr_merge_refuses_a_web_page_change_without_a_view_line() {
   let run = world.merge(&["--evidence-dir", world.evidence.to_str().unwrap(), "5046"]);
 
   assert_eq!(run.code, 2, "{}", run.describe());
-  assert!(run.stderr.contains("View:"), "{}", run.stderr);
+  assert!(
+    run.stderr.contains("a `View: <URL>` line naming the full URL, path and query, that opens the changed state"),
+    "{}",
+    run.stderr
+  );
   assert!(world.merge_calls().is_empty(), "nothing may merge: {}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_refuses_a_view_without_a_leading_slash() {
+  let world = MergeWorld::new("web/static/ui.js\n", "## Evidence\nbefore and after.\n\nView: diff\n");
+  world.write_screenshots(2);
+
+  let run = world.merge(&["--evidence-dir", world.evidence.to_str().unwrap(), "5046"]);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("PR 5046"), "{}", run.stderr);
+  assert!(run.stderr.contains("must start with `/`"), "{}", run.stderr);
+  assert!(world.merge_calls().is_empty(), "nothing may merge: {}", run.describe());
+  assert!(!world.merge_body.exists(), "no squash message was written");
 }
 
 #[test]
@@ -859,19 +906,23 @@ fn a_pr_merge_carries_the_view_line_into_the_squash_message() {
   assert!(message.contains("## Evidence"), "the pull request body stays in the squash message: {message}");
 }
 
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_refuses_a_draft_pull_request() {
+  let world = MergeWorld::new("rust/crates/x/src/lib.rs\n", "## Evidence\nmeasurements pending.\n");
+  std::fs::write(&world.pr_draft, "true\n").unwrap();
+
+  let run = world.merge(&["5046"]);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("a draft waits for its measurements"), "{}", run.describe());
+  assert!(world.merge_calls().is_empty(), "nothing may merge: {}", run.describe());
+}
+
 // -- the credential check: one scanner for the round's writes and the landing --
 
 /// The fake credential value every case plants. It is long enough to pass the scanner's minimum length.
 const CREDENTIAL_VALUE: &str = "fake-credential-value-0042";
-/// The environment variables the scanner reads, each planted alone in one case.
-const CREDENTIAL_ENV_NAMES: [&str; 6] = [
-  "ANTHROPIC_AUTH_TOKEN",
-  "CLAUDE_CODE_OAUTH_TOKEN",
-  "CHARLIEBOT_RUN_TOKEN",
-  "CHARLIE_CODE_API_KEY",
-  "GH_TOKEN",
-  "GITHUB_TOKEN",
-];
 
 /// The kinds of credential source the scanner reads.
 #[derive(Clone, Copy, Debug)]
@@ -1111,6 +1162,7 @@ fn hooked_clone(sandbox: &Sandbox, env: &Env) -> PathBuf {
   harness::copy_file(&root.join("dev/git-hooks/pre-push"), &hooks.join("pre-push"));
   harness::copy_file(&leak_scanner(), &clone.join("dev/check-skills-host-leak.sh"));
   harness::copy_file(&root.join("dev/leak-patterns.sh"), &clone.join("dev/leak-patterns.sh"));
+  harness::copy_file(&root.join("dev/push-text-lists.sh"), &clone.join("dev/push-text-lists.sh"));
   git(env, &clone, &["config", "core.hooksPath", "dev/git-hooks"]);
   clone
 }
@@ -1207,4 +1259,437 @@ fn a_gh_shim_passes_a_clean_call_to_the_real_gh() {
   let passed = run_in(&mut command, sandbox.root());
   assert_eq!(passed.code, 0, "{}", passed.describe());
   assert_eq!(gh_log_lines(&sandbox.root().join("gh-calls.log")), vec!["pr view 5 --json url".to_string()]);
+}
+
+// -- the scanner's option handling and list modes --
+
+/// A scanner run in the sandbox root with the given arguments and no stdin text.
+fn scan(env: &Env, args: &[&str]) -> Run {
+  let mut command = harness::command("bash", env);
+  command.arg(leak_scanner()).args(args);
+  run(&mut command)
+}
+
+#[test]
+#[ignore = "integration"]
+fn an_unknown_option_exits_2() {
+  let sandbox = Sandbox::new();
+  let env = pinned_git_env(&sandbox);
+  for args in [&["--bogus"][..], &["--require-local-patterns", "--bogus"][..]] {
+    let run = scan(&env, args);
+    assert_eq!(run.code, 2, "{args:?}: {}", run.describe());
+    assert!(run.stderr.contains("--bogus"), "{args:?}: {}", run.describe());
+  }
+}
+
+#[test]
+#[ignore = "integration"]
+fn require_local_patterns_refuses_a_missing_empty_or_comments_only_file() {
+  let sandbox = Sandbox::new();
+  let mut env = pinned_git_env(&sandbox);
+  let home = sandbox.dir("pattern-home");
+  env.insert("CHARLIEBOT_HOME".to_string(), home.display().to_string());
+  let file = home.join("skills_leak_patterns.local.txt");
+
+  // Missing: the file was never written.
+  let run = scan(&env, &["--require-local-patterns", "--stdin"]);
+  assert_eq!(run.code, 2, "missing: {}", run.describe());
+
+  // Empty, then comments-only: no active pattern.
+  for contents in ["", "# only a comment\n\n  # another\n"] {
+    std::fs::write(&file, contents).unwrap();
+    let run = scan(&env, &["--require-local-patterns", "--stdin"]);
+    assert_eq!(run.code, 2, "{contents:?}: {}", run.describe());
+  }
+
+  // Unreadable: the same refusal.
+  std::fs::write(&file, format!("{PATTERN_TERM}\n")).unwrap();
+  let mut perms = std::fs::metadata(&file).unwrap().permissions();
+  use std::os::unix::fs::PermissionsExt;
+  perms.set_mode(0o000);
+  std::fs::set_permissions(&file, perms).unwrap();
+  let run = scan(&env, &["--require-local-patterns", "--stdin"]);
+  assert_eq!(run.code, 2, "unreadable: {}", run.describe());
+  let mut perms = std::fs::metadata(&file).unwrap().permissions();
+  perms.set_mode(0o644);
+  std::fs::set_permissions(&file, perms).unwrap();
+
+  // An active pattern passes the gate and scans.
+  let run = scan(&env, &["--require-local-patterns", "--stdin"]);
+  assert_eq!(run.code, 0, "active: {}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn the_list_modes_refuse_a_missing_list_or_target() {
+  let sandbox = Sandbox::new();
+  let mut env = pinned_git_env(&sandbox);
+  let home = pattern_home(&sandbox);
+  env.insert("CHARLIEBOT_HOME".to_string(), home.display().to_string());
+  let values = sandbox.root().join("values");
+  std::fs::write(&values, "").unwrap();
+  let list = sandbox.root().join("list");
+  std::fs::write(&list, format!("a field\t{}\n", sandbox.root().join("absent").display())).unwrap();
+
+  for args in [
+    vec!["--check-list", "/nonexistent"],
+    vec!["--credential-check-list", values.to_str().unwrap(), "/nonexistent"],
+    vec!["--check-list", list.to_str().unwrap()],
+    vec!["--credential-check-list", values.to_str().unwrap(), list.to_str().unwrap()],
+  ] {
+    let run = scan(&env, &args);
+    assert_eq!(run.code, 2, "{args:?}: {}", run.describe());
+  }
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_check_list_names_the_leaking_field() {
+  let sandbox = Sandbox::new();
+  let mut env = pinned_git_env(&sandbox);
+  let home = pattern_home(&sandbox);
+  env.insert("CHARLIEBOT_HOME".to_string(), home.display().to_string());
+  let clean = body_file(&sandbox, "clean.txt", "clean text\n");
+  let leaking = body_file(&sandbox, "leaking.txt", &format!("the {PATTERN_TERM} value\n"));
+  let list = sandbox.root().join("list");
+  std::fs::write(&list, format!("first\t{}\nsecond\t{}\n", clean.display(), leaking.display())).unwrap();
+  let run = scan(&env, &["--require-local-patterns", "--check-list", list.to_str().unwrap()]);
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(run.stdout.contains("Leak hit in second"), "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn host_patterns_only_skips_the_generic_rules() {
+  let sandbox = Sandbox::new();
+  let mut env = pinned_git_env(&sandbox);
+  let home = pattern_home(&sandbox);
+  env.insert("CHARLIEBOT_HOME".to_string(), home.display().to_string());
+
+  // Generic leaks pass: the local patterns alone apply.
+  let mut command = harness::command("bash", &env);
+  command.arg(leak_scanner()).args(["--require-local-patterns", "--host-patterns-only", "--stdin"]);
+  let run = run_with_stdin(&mut command, sandbox.root(), &format!("id {SESSION_ID}\n{HOME_PATH_TEXT}\n"));
+  assert_eq!(run.code, 0, "{}", run.describe());
+
+  // A local pattern still hits.
+  let mut command = harness::command("bash", &env);
+  command.arg(leak_scanner()).args(["--require-local-patterns", "--host-patterns-only", "--stdin"]);
+  let run = run_with_stdin(&mut command, sandbox.root(), &format!("the {PATTERN_TERM} value\n"));
+  assert_eq!(run.code, 1, "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_diff_path_view_line_is_admitted_and_a_diff_added_view_line_is_refused() {
+  let sandbox = Sandbox::new();
+  let (env, _gh_log, _home) = post(&sandbox);
+  let mut command = harness::command("bash", &env);
+  command.arg(leak_scanner()).arg("--stdin");
+  let admitted = run_with_stdin(&mut command, sandbox.root(), &format!("View: /diff?session={SESSION_ID}\n"));
+  assert_eq!(admitted.code, 0, "{}", admitted.describe());
+  let refused = run_with_stdin(&mut command, sandbox.root(), &format!("+View: /diff?session={SESSION_ID}\n"));
+  assert_eq!(refused.code, 1, "{}", refused.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_corrupt_gz_in_file_mode_exits_2() {
+  let sandbox = Sandbox::new();
+  let (repo, env) = leak_repo(&sandbox);
+  std::fs::write(repo.join("fixture.gz"), b"not a gzip member").unwrap();
+  let run = scan_in(&env, &repo, &["fixture.gz"]);
+  assert_eq!(run.code, 2, "{}", run.describe());
+}
+
+/// A scanner run inside `cwd`, for the file mode that reads the repository.
+fn scan_in(env: &Env, cwd: &Path, args: &[&str]) -> Run {
+  let mut command = harness::command("bash", env);
+  command.arg(cwd.join("dev/check-skills-host-leak.sh")).args(args);
+  run_in(&mut command, cwd)
+}
+
+// -- the hooks' pattern requirements --
+
+/// The hook environment of `leak_repo`, re-pointed at `patterns` as the only pattern file.
+fn extra_patterns_env(env: &Env, patterns: &Path) -> Env {
+  let mut env = env.clone();
+  env.insert("EXTRA_PATTERNS_FILE".to_string(), patterns.display().to_string());
+  env
+}
+
+#[test]
+#[ignore = "integration"]
+fn the_commit_hooks_refuse_a_missing_or_empty_pattern_file() {
+  let sandbox = Sandbox::new();
+  let (repo, env) = leak_repo(&sandbox);
+  std::fs::write(repo.join("note.txt"), "clean\n").unwrap();
+
+  for (label, file) in [
+    ("missing", sandbox.root().join("absent-patterns")),
+    ("empty", body_file(&sandbox, "empty-patterns", "")),
+    ("comments-only", body_file(&sandbox, "comment-patterns", "# nothing active\n")),
+  ] {
+    let env = extra_patterns_env(&env, &file);
+    assert_eq!(leak_run(&repo, &env, &["add", "note.txt"]).code, 0, "{label}");
+    let commit = leak_run(&repo, &env, &["commit", "-m", "clean message"]);
+    assert_ne!(commit.code, 0, "{label}: {}", commit.describe());
+    assert!(commit.stderr.contains("patterns file"), "{label}: {}", commit.describe());
+    assert_eq!(leak_run(&repo, &env, &["reset", "-q"]).code, 0, "{label}");
+  }
+}
+
+#[test]
+#[ignore = "integration"]
+fn the_commit_hooks_catch_a_local_pattern_in_the_diff_and_the_message() {
+  let sandbox = Sandbox::new();
+  let (repo, env) = leak_repo(&sandbox);
+
+  // `secretmarker` is the pattern file's term.
+  std::fs::write(repo.join("note.txt"), "text secretmarker\n").unwrap();
+  assert_eq!(leak_run(&repo, &env, &["add", "note.txt"]).code, 0);
+  let commit = leak_run(&repo, &env, &["commit", "-m", "clean"]);
+  assert_ne!(commit.code, 0, "{}", commit.describe());
+  assert!(commit.stderr.contains("note.txt"), "{}", commit.describe());
+  assert_eq!(leak_run(&repo, &env, &["reset", "-q"]).code, 0);
+
+  std::fs::write(repo.join("note.txt"), "clean\n").unwrap();
+  assert_eq!(leak_run(&repo, &env, &["add", "note.txt"]).code, 0);
+  let commit = leak_run(&repo, &env, &["commit", "-m", "about secretmarker"]);
+  assert_ne!(commit.code, 0, "{}", commit.describe());
+  assert!(commit.stderr.contains("commit message"), "{}", commit.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn the_pre_push_hook_refuses_a_missing_or_empty_pattern_file() {
+  let sandbox = Sandbox::new();
+  let (env, _gh_log, _home) = post(&sandbox);
+  let clone = hooked_clone(&sandbox, &env);
+  for (label, file) in [
+    ("missing", sandbox.root().join("absent-patterns")),
+    ("comments-only", body_file(&sandbox, "comment-patterns", "# nothing active\n")),
+  ] {
+    let env = extra_patterns_env(&env, &file);
+    let mut push = harness::command("git", &env);
+    push.args(["push", "-q", "origin", "improve/perf/topic-slug"]);
+    let run = run_in(&mut push, &clone);
+    assert_ne!(run.code, 0, "{label}: {}", run.describe());
+    assert!(
+      !ls_remote(&extra_patterns_env(&env, &file), &clone).contains("improve/perf/topic-slug"),
+      "{label}: nothing was pushed"
+    );
+  }
+}
+
+#[test]
+#[ignore = "integration"]
+fn the_pre_push_hook_catches_a_local_pattern_in_each_published_text() {
+  let sandbox = Sandbox::new();
+  let (env, _gh_log, _home) = post(&sandbox);
+  // EXTRA_PATTERNS_FILE adds a second term on top of the home file's fictionalmarker.
+  let extra = body_file(&sandbox, "extra-patterns", &format!("{PATTERN_TERM}\nextramarker\n"));
+  let env = extra_patterns_env(&env, &extra);
+
+  let clone = hooked_clone(&sandbox, &env);
+  let push = |env: &Env, clone: &Path| {
+    let mut command = harness::command("git", env);
+    command.args(["push", "-q", "origin", "HEAD:refs/heads/scanned"]);
+    run_in(&mut command, clone)
+  };
+
+  // A pattern in the diff.
+  std::fs::write(clone.join("note.txt"), "carries extramarker\n").unwrap();
+  git(&env, &clone, &["add", "note.txt"]);
+  git(&env, &clone, &["commit", "-q", "-m", "clean"]);
+  let run = push(&env, &clone);
+  assert_ne!(run.code, 0, "diff: {}", run.describe());
+  assert!(run.stdout.contains("diff"), "diff: {}", run.describe());
+
+  // A pattern in a `*.gz` blob.
+  git(&env, &clone, &["reset", "--hard", "-q", "HEAD~1"]);
+  let mut command = harness::command("bash", &env);
+  command.args(["-c", "printf 'compressed extramarker' | gzip -n > blob.gz"]);
+  run_in(&mut command, &clone);
+  git(&env, &clone, &["add", "blob.gz"]);
+  git(&env, &clone, &["commit", "-q", "-m", "clean"]);
+  let run = push(&env, &clone);
+  assert_ne!(run.code, 0, "gz: {}", run.describe());
+  assert!(run.stdout.contains("blob.gz"), "gz: {}", run.describe());
+
+  // A pattern in the message.
+  git(&env, &clone, &["reset", "--hard", "-q", "HEAD~1"]);
+  git(&env, &clone, &["commit", "-q", "--allow-empty", "-m", "about extramarker"]);
+  let run = push(&env, &clone);
+  assert_ne!(run.code, 0, "message: {}", run.describe());
+
+  // A pattern in the author identity.
+  git(&env, &clone, &["reset", "--hard", "-q", "HEAD~1"]);
+  let mut bad_env = env.clone();
+  bad_env.insert("GIT_AUTHOR_EMAIL".to_string(), "extramarker@example.invalid".to_string());
+  git(&bad_env, &clone, &["commit", "-q", "--allow-empty", "-m", "clean"]);
+  let run = push(&bad_env, &clone);
+  assert_ne!(run.code, 0, "identity: {}", run.describe());
+  assert!(run.stdout.contains("identity"), "identity: {}", run.describe());
+  git(&env, &clone, &["reset", "--hard", "-q", "HEAD~1"]);
+
+  // A pattern in the pushed ref name.
+  let mut bad_ref = harness::command("git", &env);
+  bad_ref.args(["push", "-q", "origin", "HEAD:refs/heads/feat-extramarker"]);
+  let run = run_in(&mut bad_ref, &clone);
+  assert_ne!(run.code, 0, "ref name: {}", run.describe());
+  assert!(run.stdout.contains("ref name"), "ref name: {}", run.describe());
+  assert!(!ls_remote(&env, &clone).contains("scanned"), "nothing was pushed");
+}
+
+#[test]
+#[ignore = "integration"]
+fn the_pre_push_hook_catches_a_generic_leak_in_a_touched_doc() {
+  let sandbox = Sandbox::new();
+  let (env, _gh_log, _home) = post(&sandbox);
+  let clone = hooked_clone(&sandbox, &env);
+  std::fs::create_dir_all(clone.join("skills/demo")).unwrap();
+  std::fs::write(clone.join("skills/demo/notes.md"), format!("{HOME_PATH_TEXT}\n")).unwrap();
+  git(&env, &clone, &["add", "skills/demo/notes.md"]);
+  git(&env, &clone, &["commit", "-q", "-m", "add notes"]);
+  let mut push = harness::command("git", &env);
+  push.args(["push", "-q", "origin", "HEAD:refs/heads/scanned"]);
+  let run = run_in(&mut push, &clone);
+  assert_ne!(run.code, 0, "{}", run.describe());
+  assert!(run.stdout.contains("doc skills/demo/notes.md"), "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn the_pre_push_hook_refuses_a_corrupt_gz_blob() {
+  let sandbox = Sandbox::new();
+  let (env, _gh_log, _home) = post(&sandbox);
+  let clone = hooked_clone(&sandbox, &env);
+  std::fs::write(clone.join("blob.gz"), b"not a gzip member").unwrap();
+  git(&env, &clone, &["add", "blob.gz"]);
+  git(&env, &clone, &["commit", "-q", "-m", "the fixture"]);
+  let mut push = harness::command("git", &env);
+  push.args(["push", "-q", "origin", "HEAD:refs/heads/scanned"]);
+  let run = run_in(&mut push, &clone);
+  assert_ne!(run.code, 0, "{}", run.describe());
+  assert!(run.stderr.contains("decompress"), "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pre_push_credential_hit_writes_the_hit_file_and_github_post_passes_3() {
+  let sandbox = Sandbox::new();
+  let (env, _gh_log, _home) = post(&sandbox);
+  let home = sandbox.root().join("charliebot-home");
+  std::fs::write(home.join("credentials.yaml"), format!("planted:\n  api_key: {CREDENTIAL_VALUE}\n")).unwrap();
+  let clone = hooked_clone(&sandbox, &env);
+  std::fs::write(clone.join("bad.txt"), format!("the key is {CREDENTIAL_VALUE}\n")).unwrap();
+  git(&env, &clone, &["add", "bad.txt"]);
+  git(&env, &clone, &["commit", "-q", "-m", "clean"]);
+
+  let hit_file = sandbox.root().join("credential-hit");
+  let mut hooked = env.clone();
+  hooked.insert("CHARLIEBOT_CREDENTIAL_HIT_FILE".to_string(), hit_file.display().to_string());
+  let mut push = harness::command("git", &hooked);
+  push.args(["push", "-q", "origin", "improve/perf/topic-slug"]);
+  let refused = run_in(&mut push, &clone);
+  assert_ne!(refused.code, 0, "{}", refused.describe());
+  assert_credential_refusal_text(&refused, "credentials.yaml leaf planted.api_key");
+  let hit = std::fs::read_to_string(&hit_file).expect("the hit file was written");
+  assert!(hit.contains("credentials.yaml leaf planted.api_key"), "{hit}");
+  assert!(!hit.contains(CREDENTIAL_VALUE), "the value is not written: {hit}");
+
+  // The round's push passes the hook's credential refusal through as exit 3.
+  let mut post = harness::command("bash", &env);
+  post.arg(github_post()).args(["push", "-u", "origin", "improve/perf/topic-slug"]);
+  let run = run_in(&mut post, &clone);
+  assert_eq!(run.code, 3, "{}", run.describe());
+  assert!(!ls_remote(&env, &clone).contains("improve/perf/topic-slug"), "nothing was pushed");
+}
+
+// -- github-post.sh push and the required pattern file --
+
+#[test]
+#[ignore = "integration"]
+fn pr_writes_refuse_an_empty_or_comments_only_pattern_file() {
+  let sandbox = Sandbox::new();
+  let (env, gh_log, home) = post(&sandbox);
+  let body = body_file(&sandbox, "body.md", CLEAN_BODY);
+  for contents in ["", "# only a comment\n"] {
+    std::fs::write(home.join("skills_leak_patterns.local.txt"), contents).unwrap();
+    let mut comment = harness::command("bash", &env);
+    comment.arg(github_post()).args(["pr-comment", "--body-file"]).arg(&body).arg("5");
+    let run = run_in(&mut comment, sandbox.root());
+    assert_eq!(run.code, 2, "{contents:?}: {}", run.describe());
+    let mut create = harness::command("bash", &env);
+    create
+      .arg(github_post())
+      .args(["pr-create", "--title", "clean", "--body-file"])
+      .arg(&body)
+      .args(["--base", "main"]);
+    let run = run_in(&mut create, sandbox.root());
+    assert_eq!(run.code, 2, "{contents:?}: {}", run.describe());
+  }
+  assert!(gh_log_lines(&gh_log).is_empty(), "nothing was sent");
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_push_checks_a_non_head_refspec_and_its_gz_blobs() {
+  let sandbox = Sandbox::new();
+  let (env, _gh_log, _home) = post(&sandbox);
+  let clone = push_repo(&sandbox, &env);
+
+  // A side branch whose tip holds the pattern in its diff and in a `*.gz` blob; HEAD stays clean.
+  git(&env, &clone, &["switch", "-c", "side"]);
+  std::fs::write(clone.join("note.txt"), format!("carries {PATTERN_TERM}\n")).unwrap();
+  let mut command = harness::command("bash", &env);
+  command.args(["-c", "printf 'compressed text' | gzip -n > blob.gz"]);
+  run_in(&mut command, &clone);
+  git(&env, &clone, &["add", "."]);
+  git(&env, &clone, &["commit", "-q", "-m", "the side change"]);
+  git(&env, &clone, &["switch", "-q", "improve/perf/topic-slug"]);
+
+  for spec in ["side:side", "side:main"] {
+    let run = {
+      let mut command = harness::command("bash", &env);
+      command.arg(github_post()).args(["push", "origin", spec]);
+      run_in(&mut command, &clone)
+    };
+    assert_eq!(run.code, 1, "{spec}: {}", run.describe());
+    assert!(run.stdout.contains("Leak hit in commit"), "{spec}: {}", run.describe());
+    assert!(!ls_remote(&env, &clone).contains("refs/heads/side"), "{spec}: nothing was pushed");
+  }
+
+  // The same refspec through a gz blob: rewrite the side tip so only the blob carries the term.
+  git(&env, &clone, &["switch", "-q", "side"]);
+  std::fs::write(clone.join("note.txt"), "clean\n").unwrap();
+  let mut command = harness::command("bash", &env);
+  command.args(["-c", &format!("printf 'compressed {PATTERN_TERM}' | gzip -n > blob.gz")]);
+  run_in(&mut command, &clone);
+  git(&env, &clone, &["add", "."]);
+  git(&env, &clone, &["commit", "-q", "--amend", "-m", "the side change"]);
+  git(&env, &clone, &["switch", "-q", "improve/perf/topic-slug"]);
+  let mut command = harness::command("bash", &env);
+  command.arg(github_post()).args(["push", "origin", "side:side"]);
+  let run = run_in(&mut command, &clone);
+  assert_eq!(run.code, 1, "gz: {}", run.describe());
+  assert!(run.stdout.contains("blob.gz"), "gz: {}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_push_with_a_lone_remote_checks_the_current_branch() {
+  let sandbox = Sandbox::new();
+  let (env, _gh_log, _home) = post(&sandbox);
+  let clone = push_repo(&sandbox, &env);
+  std::fs::write(clone.join("bad.txt"), "bad\n").unwrap();
+  git(&env, &clone, &["add", "bad.txt"]);
+  git(&env, &clone, &["commit", "-q", "-m", &format!("follow {PATTERN_TERM}")]);
+
+  let mut command = harness::command("bash", &env);
+  command.arg(github_post()).args(["push", "-u", "origin"]);
+  let run = run_in(&mut command, &clone);
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(!ls_remote(&env, &clone).contains("improve/perf/topic-slug"));
 }

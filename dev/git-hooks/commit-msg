@@ -10,8 +10,7 @@ source "$helper_dir/leak-patterns.sh"
 
 tmp_patterns=$(mktemp)
 trap 'rm -f "$tmp_patterns"' EXIT
-load_host_patterns
-[[ -s "$tmp_patterns" ]] || exit 0
+load_host_patterns --require
 
 check_field() {
   local field=$1 file=$2 status

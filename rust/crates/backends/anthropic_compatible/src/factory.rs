@@ -16,6 +16,10 @@ const NO_AUTH_TOKEN: &str = "no-auth";
 pub struct AnthropicCompatibleFactory;
 
 impl BackendFactory for AnthropicCompatibleFactory {
+  fn one_shot_is_tool_less(&self) -> bool {
+    true
+  }
+
   fn build(
     &self,
     option: Option<&BackendOption>,
@@ -59,6 +63,11 @@ mod tests {
 
   use super::*;
   use charliebot_claude_code::{GATEWAY_CUSTOM_HEADERS_ENV, GATEWAY_EXTRA_BODY_ENV};
+
+  #[test]
+  fn factory_declares_its_native_one_shot_tool_less() {
+    assert!(AnthropicCompatibleFactory.one_shot_is_tool_less());
+  }
 
   fn option(type_fields: &str) -> BackendOption {
     BackendOption {

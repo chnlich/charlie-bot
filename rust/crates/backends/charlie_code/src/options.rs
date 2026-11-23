@@ -1,9 +1,11 @@
 //! The charlie-code option fields. Each field carries its bound checks, and the type refuses any key
 //! it does not name.
 
+use charliebot_core::backend_types;
 use charliebot_core::config::{
   API_BASE_KEY, CONTEXT_WINDOW_KEY, CREDENTIAL_KEY, OptionField, OptionFieldDefault, PROXY_URL_KEY,
 };
+use charliebot_registry::option_model::optional_text;
 use serde_yaml::{Mapping, Value};
 
 const IMAGE_INPUT: &str = "image_input";
@@ -60,10 +62,10 @@ impl CharlieCodeOption {
       }
     }
     Ok(Self {
-      api_base: optional_text(fields, API_BASE_KEY)?,
+      api_base: optional_text(fields, backend_types::CHARLIE_CODE, API_BASE_KEY)?,
       context_window: optional_positive_int(fields, CONTEXT_WINDOW_KEY)?,
-      credential: optional_text(fields, CREDENTIAL_KEY)?,
-      proxy_url: optional_text(fields, PROXY_URL_KEY)?,
+      credential: optional_text(fields, backend_types::CHARLIE_CODE, CREDENTIAL_KEY)?,
+      proxy_url: optional_text(fields, backend_types::CHARLIE_CODE, PROXY_URL_KEY)?,
       image_input: flag(fields, IMAGE_INPUT, true)?,
       stream: flag(fields, STREAM, true)?,
       timeout_seconds: optional_positive_int(fields, TIMEOUT_SECONDS)?,
@@ -81,14 +83,6 @@ pub fn option_model(fields: &Mapping) -> Result<(), String> {
 /// The field's value when the option sets it to a value. A null field reads as absent.
 fn present<'a>(fields: &'a Mapping, name: &str) -> Option<&'a Value> {
   fields.get(name).filter(|value| !value.is_null())
-}
-
-fn optional_text(fields: &Mapping, name: &str) -> Result<Option<String>, String> {
-  match present(fields, name) {
-    None => Ok(None),
-    Some(Value::String(text)) => Ok(Some(text.clone())),
-    Some(_) => Err(format!("charlie-code option {name} must be a string or null")),
-  }
 }
 
 fn optional_positive_int(fields: &Mapping, name: &str) -> Result<Option<i64>, String> {

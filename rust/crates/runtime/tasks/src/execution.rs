@@ -17,7 +17,7 @@ use charliebot_agents::backend_pool;
 use charliebot_agents::backend_types;
 use charliebot_agents::launch_loop;
 use charliebot_agents::model_pool;
-use charliebot_core::config::{BackendOption, CallClass, CharlieBotConfig};
+use charliebot_core::config::{BackendOption, CallClass, CallTarget, CharlieBotConfig};
 use charliebot_core::event_types;
 use charliebot_core::fsutil;
 use charliebot_core::home::CHARLIEBOT_HOME_ENV;
@@ -1660,7 +1660,9 @@ impl TaskExecutionAdapter {
     }
 
     if run.kind == RunKind::Review {
-      return self.after_review_run(meta, run, durable_outcome, crate::completion::RunEnd::Live).await;
+      return self
+        .after_review_run(meta, run, durable_outcome, crate::completion::RunEnd::Live, quota_failure, failover_left)
+        .await;
     }
     let task_type = meta.task.as_ref().and_then(|task| task.task_type);
     if task_type == Some(TaskType::ColdRead) && matches!(durable_outcome, "success" | "failed") {
@@ -1922,6 +1924,8 @@ impl TaskExecutionAdapter {
     run: &RunRecord,
     durable_outcome: &str,
     end: crate::completion::RunEnd,
+    quota_failure: Option<QuotaFailure>,
+    failover_left: Vec<String>,
   ) -> anyhow::Result<()> {
     let session_id = meta.id.as_str();
     let work_run = self
@@ -1948,7 +1952,15 @@ impl TaskExecutionAdapter {
         ReviewSpawnOutcome::Pending(retried_id) => {
           let events = self.features.store.load_all_facts(session_id)?;
           if run_records::terminal_outcome(&events, &retried_id)? == Some(RunOutcomeKind::Success) {
-            self.report_failure_to_parent(session_id, run, durable_outcome, None).await?;
+            let mut summary = None;
+            if let Some(failure) = quota_failure.as_ref() {
+              match self.fail_over_quota(meta, run, failure, HandoffSource::WorkerRun { run }, failover_left).await? {
+                Failover::Moved => return Ok(()),
+                Failover::Exhausted(message) => summary = Some(message),
+                Failover::NoMember => {}
+              }
+            }
+            self.report_failure_to_parent(session_id, run, durable_outcome, summary.as_deref()).await?;
           }
         }
         ReviewSpawnOutcome::NotEligible => {}
@@ -2164,6 +2176,43 @@ impl TaskExecutionAdapter {
     control_events::stable_run_id(session_id, &Self::failover_request_id(session_id, run_id))
   }
 
+  /// Resolve the pool a continued review run fails over within: `backends.calls.review` when it names a pool, else
+  /// the session's route pool, the session's own pool backend, or the worker pool for a routed concrete session.
+  fn review_failover_pool_id(
+    &self,
+    cfg: &CharlieBotConfig,
+    meta: &SessionMetadata,
+    failed_backend: &str,
+  ) -> anyhow::Result<Option<String>> {
+    match cfg.backends.calls.get(CallClass::Review) {
+      Some(CallTarget::Backend(target)) => Ok(cfg.backends.pool(target).map(|pool| pool.id.clone())),
+      None | Some(CallTarget::Session) => {
+        let route = meta
+          .extra("route")
+          .filter(|value| !value.is_null())
+          .map(|value| serde_json::from_value::<backend_pool::BackendRoute>(value.clone()))
+          .transpose()?;
+        if let Some(route_pool) = route.as_ref().and_then(|route| {
+          route.backends.iter().find(|backend| {
+            cfg
+              .backends
+              .pool(backend)
+              .is_some_and(|pool| pool.members.iter().any(|member| member.backend.as_str() == failed_backend))
+          })
+        }) {
+          return Ok(Some(route_pool.clone()));
+        }
+        if let Some(pool) = cfg.backends.pool(&meta.backend) {
+          return Ok(Some(pool.id.clone()));
+        }
+        if route.as_ref().is_some_and(|route| !route.backends.is_empty()) {
+          return Ok(spawner_backends::class_pool_id(cfg, CallClass::Worker).map(str::to_string));
+        }
+        Ok(None)
+      }
+    }
+  }
+
   /// Continue a failed run on the next member of its pool, as one retry run. A session whose backend is a pool id
   /// switches in that pool. A run the router routed to a concrete model moves its session into the
   /// `backends.calls.worker` pool. The session then stores that pool id as backend and the member as `pool_member`.
@@ -2183,10 +2232,14 @@ impl TaskExecutionAdapter {
       .as_deref()
       .filter(|backend| !backend.is_empty())
       .ok_or_else(|| anyhow!("run {} records no backend; refusing to substitute one", run.id))?;
-    let pool_id = match cfg.backends.pool(&meta.backend) {
-      Some(pool) => Some(pool.id.clone()),
-      None if self.fails_over(meta, run) => spawner_backends::worker_pool_id(&cfg, meta).map(str::to_string),
-      None => None,
+    let pool_id = if run.kind == RunKind::Review {
+      self.review_failover_pool_id(&cfg, meta, from)?
+    } else {
+      match cfg.backends.pool(&meta.backend) {
+        Some(pool) => Some(pool.id.clone()),
+        None if self.fails_over(meta, run) => spawner_backends::worker_pool_id(&cfg, meta).map(str::to_string),
+        None => None,
+      }
     };
     let Some(pool_id) = pool_id else { return Ok(Failover::NoMember) };
     left.push(from.to_string());
@@ -2196,8 +2249,9 @@ impl TaskExecutionAdapter {
       MemberSwitch::Exhausted(message) => return Ok(Failover::Exhausted(message)),
     };
     // A session whose backend is a concrete model takes the id of the pool it moved into. The member is recorded first:
-    // a pool id with no `pool_member` makes the next turn select fresh and write no switch event.
-    if cfg.backends.pool(&meta.backend).is_none() {
+    // a pool id with no `pool_member` makes the next turn select fresh and write no switch event. A review run keeps
+    // the worker session's own backend and member untouched.
+    if run.kind != RunKind::Review && cfg.backends.pool(&meta.backend).is_none() {
       model_pool::set_current_member(&self.features, &meta.id, &member).await?;
       let guard = self.features.store.control_lock().await;
       self.features.store.set_node_backend_locked(&guard, &meta.id, &pool_id).await?;

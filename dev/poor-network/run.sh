@@ -67,7 +67,7 @@ readonly BENCH_DIR="$SCRIPT_DIR"
 source "$SCRIPT_DIR/lock.sh"
 # How long a side's written JSON may sit beside a bench that does not exit, before the runner ends the trial tree.
 readonly SIDE_EXIT_GRACE_SECONDS=120
-# The trial's server ports. trial.sh's default range (18650-18669) is the improve perf trials' on host3, and two trials
+# The trial's server ports. trial.sh's default range (18650-18669) is the improve perf trials' on the benchmark host, and two trials
 # that pick the same free port race at startup (fy6: "port 18651 is held by another process"). 18600-18799 is claimed by
 # the release lab, so the bench takes 18800-18819, which no repo script names.
 readonly BENCH_PORT_MIN=18800

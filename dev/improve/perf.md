@@ -17,17 +17,21 @@ Keep performance changes in:
 Rank topics by the user's wait in seconds: page topics use slow-network load time, and GET-route topics use slow-network
 transfer time. Byte-class and ratio-class scenarios in the poor-network bench do not rank. The bench's verdict decides
 whether a round whose change can affect one of those scenarios takes it as a topic.
+The poor-network rule sits in its own section, `## Poor-network scenarios`.
 
 ## Poor-network scenarios
 
-Measure each relevant scenario before and after the change on the remote test host, using the shared scenario definitions and target
-verdicts in `dev/poor-network/profile.mjs`. The bench's verdict is authoritative; do not copy target values into this
-direction. The background scenario runs 3 repetitions, so the check stays inside the round's time.
+An improve round measures the serve trial.
+A round does not run the poor-network bench.
+The bench's shared scenario definitions and target verdicts live in `dev/poor-network/profile.mjs`.
+The bench's verdict is authoritative; do not copy target values into this direction.
 A scenario that passes before and fails after blocks landing.
+When a change needs poor-network rows, the round opens or keeps its pull request.
+The round records `poor-network rows pending` in the pull request body.
+The round does not merge that pull request.
+The poor-network rows for such a change run outside the round, through the route that the parent session names.
 
-Each take of the host's bench lock waits at most 15 minutes. A poor-network side takes the lock once per step, so one
-run takes it many times: after each step that a queued process waits for, the side gives the lock up and takes it again
-behind that process, and each take has its own 15-minute wait. A serve-trial side takes the lock once and waits at most
+Each take of the host's bench lock waits at most 15 minutes. A serve-trial side takes the lock once and waits at most
 15 minutes. If a wait expires, the timed-out side takes no measurement. The round reports no result from an incomplete
 pair, stops without opening a pull request and names the held bench lock in its stop reason. The next scheduled fire
 tries again.

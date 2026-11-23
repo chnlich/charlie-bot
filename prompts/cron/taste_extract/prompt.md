@@ -46,6 +46,14 @@ for each fork that the reply, or the page the reply links, laid out when all of 
   - they approve a reply whose question to the user was that fork.
 
 The row's `options` are the fork's named options, and `recommended` and `chosen` are the recommendation.
+
+A pick entry whose answer starts with `This should not be a question` approves the recommendation of the fork that the entry names. It yields one `choice` row for that fork:
+- `options`: the fork's named options;
+- `recommended` and `chosen`: the recommendation;
+- `reason`: the entry's answer verbatim.
+
+When that recommendation names a high-consequence step, the entry also takes off that step, and the step yields no row.
+
 A take-off or a go-ahead answers the step. When its words answer no fork and the reply asked the user
 only for the step, the approval accepts the step alone and yields no fork row, even when the page states
 that unaddressed forks take the recommendation. That page statement is the agent's default, so a row from
@@ -119,6 +127,11 @@ When the reversed row is covered by a memory entry, or a memory entry states the
 reverses, stage a memory revision candidate with `charliebot memory add`, following the
 `llm-context-guideline` skill. Its first line is `# <title>`, and its body names the target entry and the
 change.
+
+## Repeated requirements
+
+When the user's words in the read window restate a requirement that an active row, a memory entry or a LESSONS.md entry
+already records, the session where the user stated the requirement learns of the repeat that day, with both statements.
 
 ## Patterns on Mondays
 

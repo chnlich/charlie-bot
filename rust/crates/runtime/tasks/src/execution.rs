@@ -2178,7 +2178,12 @@ impl TaskExecutionAdapter {
 
   /// Resolve the pool a continued review run fails over within: `backends.calls.review` when it names a pool, else
   /// the session's route pool, the session's own pool backend, or the worker pool for a routed concrete session.
-  fn review_failover_pool_id(&self, cfg: &CharlieBotConfig, meta: &SessionMetadata) -> anyhow::Result<Option<String>> {
+  fn review_failover_pool_id(
+    &self,
+    cfg: &CharlieBotConfig,
+    meta: &SessionMetadata,
+    failed_backend: &str,
+  ) -> anyhow::Result<Option<String>> {
     match cfg.backends.calls.get(CallClass::Review) {
       Some(CallTarget::Backend(target)) => Ok(cfg.backends.pool(target).map(|pool| pool.id.clone())),
       None | Some(CallTarget::Session) => {
@@ -2189,7 +2194,13 @@ impl TaskExecutionAdapter {
           .transpose()?;
         if let Some(route_pool) = route
           .as_ref()
-          .and_then(|route| route.backends.iter().find(|backend| cfg.backends.pool(backend).is_some()))
+          .and_then(|route| {
+            route.backends.iter().find(|backend| {
+              cfg.backends
+                .pool(backend)
+                .is_some_and(|pool| pool.members.iter().any(|member| member.backend.as_str() == failed_backend))
+            })
+          })
         {
           return Ok(Some(route_pool.clone()));
         }
@@ -2224,7 +2235,7 @@ impl TaskExecutionAdapter {
       .filter(|backend| !backend.is_empty())
       .ok_or_else(|| anyhow!("run {} records no backend; refusing to substitute one", run.id))?;
     let pool_id = if run.kind == RunKind::Review {
-      self.review_failover_pool_id(&cfg, meta)?
+      self.review_failover_pool_id(&cfg, meta, from)?
     } else {
       match cfg.backends.pool(&meta.backend) {
         Some(pool) => Some(pool.id.clone()),

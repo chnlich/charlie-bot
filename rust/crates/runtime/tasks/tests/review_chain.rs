@@ -2084,10 +2084,43 @@ async fn continued_review_quota_failure_fails_over_to_next_pool_member() -> anyh
     vec!["fake".to_string(), "fake2".to_string(), "fake3".to_string()],
   )
   .await?;
+  let mut cfg = (*stack.cfg).clone();
+  cfg.backends.pools.extend([
+    PoolConfig {
+      id: "writerpool".to_string(),
+      label: "Writer".to_string(),
+      rule: PoolRule::Rotate,
+      members: vec![PoolMember { backend: "fake".to_string() }],
+      visible: true,
+    },
+    PoolConfig {
+      id: "reviewpool".to_string(),
+      label: "Review".to_string(),
+      rule: PoolRule::Rotate,
+      members: vec![PoolMember { backend: "fake2".to_string() }, PoolMember { backend: "fake3".to_string() }],
+      visible: true,
+    },
+  ]);
+  cfg.backends.calls.insert(CallClass::Review, CallTarget::Session);
+  stack.replace_config(cfg)?;
   set_access_key(&stack)?;
   let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
   let worker =
     stack.node("worker", Some(&manager.id), TaskProfile::Worker, Some(implement_task("write a report", None))).await?;
+  stack
+    .store()
+    .update_slot_fields(
+      &worker.id,
+      charliebot_agents::backend_pool::METADATA_OWNER,
+      serde_json::Map::from_iter([(
+        "route".to_string(),
+        serde_json::to_value(BackendRoute {
+          backends: vec!["writerpool".to_string(), "reviewpool".to_string()],
+          reason: "continued review route".to_string(),
+        })?,
+      )]),
+    )
+    .await?;
   let guard = ProcessGroupGuard::new();
   queue_and_launch_work(&stack, &worker.id, "run-work", "write a report").await?;
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, "run-work").await?, RunOutcomeKind::Success);
@@ -2157,7 +2190,7 @@ async fn continued_review_quota_failure_fails_over_to_next_pool_member() -> anyh
   assert_eq!(switches.len(), 1, "{switches:?}");
   assert_eq!(switches[0]["from"], "fake2");
   assert_eq!(switches[0]["to"], "fake3");
-  assert_eq!(switches[0]["set"], "pool");
+  assert_eq!(switches[0]["set"], "reviewpool");
 
   stack.dispatch.set_executor(None);
   fs::write(retry_control.path().join("release"), "release")?;

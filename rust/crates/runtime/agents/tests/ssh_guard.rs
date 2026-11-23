@@ -9,7 +9,8 @@ use std::process::Command;
 /// The guard options the script prepends, in the order it passes them.
 const GUARD_OPTIONS: [&str; 6] = ["-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"];
 
-/// A ControlMaster argv that requests values the guard overrides: BatchMode=no, no keepalive, a persisted master.
+/// A ControlMaster argv. The guard prepends BatchMode=yes and the two keepalive options (ssh_guard/ssh), so the
+/// BatchMode=no and ServerAliveInterval=0 here lose to them. The guard leaves ControlPersist=8h as the caller set it.
 const UNGUARDED_MASTER_ARGV: [&str; 9] = [
   "-M",
   "-S",

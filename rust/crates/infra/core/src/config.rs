@@ -51,6 +51,32 @@ pub const PROXY_URL_KEY: &str = "proxy_url";
 /// every request it sends. The option schemas import this name instead of each spelling it.
 pub const EXTRA_BODY_KEY: &str = "extra_body";
 
+// The shared keys of a `backends.options[]` entry: every key each entry carries beside its backend type's own fields.
+// The entry's writer and reader and the CLI's `config get backends` renderer import these names instead of each
+// spelling them.
+
+/// The `id` key of a `backends.options[]` entry: the name a `backends.calls` key and a pool member name the entry by.
+pub const OPTION_ID_KEY: &str = "id";
+
+/// The `label` key of a `backends.options[]` entry: the name a picker and a row show the entry under.
+pub const OPTION_LABEL_KEY: &str = "label";
+
+/// The `model` key of a `backends.options[]` entry: the model the entry runs.
+pub const OPTION_MODEL_KEY: &str = "model";
+
+/// The `type` key of a `backends.options[]` entry: the registered backend type that reads the entry's other keys.
+pub const OPTION_TYPE_KEY: &str = "type";
+
+/// The `prompt_overlay` key of a `backends.options[]` entry: the overlay text a run composes its prompt with.
+pub const OPTION_PROMPT_OVERLAY_KEY: &str = "prompt_overlay";
+
+/// The `billing` key of a `backends.options[]` entry: how the option's account is paid for, which a priority pool's
+/// member needs.
+pub const OPTION_BILLING_KEY: &str = "billing";
+
+/// The `visible` key of a `backends.options[]` entry: whether the web pickers list the entry, true by default.
+pub const OPTION_VISIBLE_KEY: &str = "visible";
+
 /// Retired keys under `backends:`, replaced by `backends.pools` and `backends.calls`.
 const RETIRED_BACKENDS_KEYS: &[&str] = &["preference", "worker_default", "auto", "pool"];
 
@@ -380,17 +406,17 @@ impl BackendOption {
   /// credential's name, never its key, so the record can be printed. [`parse_backend_record`] reads it back.
   pub fn record(&self) -> Mapping {
     let mut record = Mapping::new();
-    record.insert("id".into(), self.id.clone().into());
-    record.insert("label".into(), self.label.clone().into());
-    record.insert("type".into(), self.backend_type.clone().into());
-    record.insert("model".into(), self.model.clone().into());
+    record.insert(OPTION_ID_KEY.into(), self.id.clone().into());
+    record.insert(OPTION_LABEL_KEY.into(), self.label.clone().into());
+    record.insert(OPTION_TYPE_KEY.into(), self.backend_type.clone().into());
+    record.insert(OPTION_MODEL_KEY.into(), self.model.clone().into());
     if let Some(overlay) = &self.prompt_overlay {
-      record.insert("prompt_overlay".into(), overlay.clone().into());
+      record.insert(OPTION_PROMPT_OVERLAY_KEY.into(), overlay.clone().into());
     }
     if let Some(billing) = self.billing {
-      record.insert("billing".into(), billing.key().into());
+      record.insert(OPTION_BILLING_KEY.into(), billing.key().into());
     }
-    record.insert("visible".into(), self.visible.into());
+    record.insert(OPTION_VISIBLE_KEY.into(), self.visible.into());
     for (key, value) in &self.type_fields {
       record.insert(key.clone(), value.clone());
     }
@@ -1301,7 +1327,7 @@ fn parse_option(
   let Value::Mapping(entry) = entry else {
     return Err(ConfigError(format!("{location}: a backend entry must be a mapping, got {}", yaml_value_kind(entry))));
   };
-  let backend_type = match entry.get("type") {
+  let backend_type = match entry.get(OPTION_TYPE_KEY) {
     Some(Value::String(name)) if backend_types.contains(&name.as_str()) => name.clone(),
     other => {
       let shown = match other {
@@ -1329,26 +1355,43 @@ fn parse_option(
       Some(other) => Err(ConfigError(format!("{location}.{key}: expected a string, got {}", yaml_value_kind(other)))),
     }
   };
-  let id = required_text("id")?;
-  let label = required_text("label")?;
-  let model = optional_text("model")?
-    .ok_or_else(|| ConfigError(format!("{location}: backend '{id}' (type '{backend_type}') requires 'model'")))?;
-  let prompt_overlay = optional_text("prompt_overlay")?;
-  let billing: Option<PoolBilling> = match entry.get("billing") {
+  let id = required_text(OPTION_ID_KEY)?;
+  let label = required_text(OPTION_LABEL_KEY)?;
+  let model = optional_text(OPTION_MODEL_KEY)?.ok_or_else(|| {
+    ConfigError(format!("{location}: backend '{id}' (type '{backend_type}') requires '{OPTION_MODEL_KEY}'"))
+  })?;
+  let prompt_overlay = optional_text(OPTION_PROMPT_OVERLAY_KEY)?;
+  let billing: Option<PoolBilling> = match entry.get(OPTION_BILLING_KEY) {
     None | Some(Value::Null) => None,
-    Some(value) => Some(deserialize_at(config_path, &format!("backends.options[{index}].billing"), value.clone())?),
+    Some(value) => {
+      Some(deserialize_at(config_path, &format!("backends.options[{index}].{OPTION_BILLING_KEY}"), value.clone())?)
+    }
   };
-  let visible = match entry.get("visible") {
+  let visible = match entry.get(OPTION_VISIBLE_KEY) {
     None | Some(Value::Null) => true,
     Some(Value::Bool(flag)) => *flag,
     Some(other) => {
-      return Err(ConfigError(format!("{location}.visible: expected a boolean, got {}", yaml_value_kind(other))));
+      return Err(ConfigError(format!(
+        "{location}.{OPTION_VISIBLE_KEY}: expected a boolean, got {}",
+        yaml_value_kind(other)
+      )));
     }
   };
   let type_fields: Mapping = entry
     .iter()
     .filter(|(key, _)| {
-      !matches!(key.as_str(), Some("id" | "label" | "model" | "prompt_overlay" | "billing" | "visible" | "type"))
+      !matches!(
+        key.as_str(),
+        Some(
+          OPTION_ID_KEY
+            | OPTION_LABEL_KEY
+            | OPTION_MODEL_KEY
+            | OPTION_TYPE_KEY
+            | OPTION_PROMPT_OVERLAY_KEY
+            | OPTION_BILLING_KEY
+            | OPTION_VISIBLE_KEY
+        )
+      )
     })
     .map(|(key, value)| (key.clone(), value.clone()))
     .collect();

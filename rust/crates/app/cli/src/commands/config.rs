@@ -272,12 +272,16 @@ fn option_json(option: &BackendOption, registry: &Registry) -> Result<Value, Str
     .registered_option_schema(&option.backend_type)
     .ok_or_else(|| format!("backend type {:?} registers no option schema", option.backend_type))?;
   let mut object = Map::new();
-  object.insert("id".to_string(), Value::String(option.id.clone()));
-  object.insert("label".to_string(), Value::String(option.label.clone()));
-  object.insert("model".to_string(), Value::String(option.model.clone()));
-  object.insert("prompt_overlay".to_string(), option.prompt_overlay.clone().map_or(Value::Null, Value::String));
-  object.insert("billing".to_string(), option.billing.map_or(Value::Null, |billing| json!(billing.key())));
-  object.insert("type".to_string(), Value::String(option.backend_type.clone()));
+  object.insert(config::OPTION_ID_KEY.to_string(), Value::String(option.id.clone()));
+  object.insert(config::OPTION_LABEL_KEY.to_string(), Value::String(option.label.clone()));
+  object.insert(config::OPTION_MODEL_KEY.to_string(), Value::String(option.model.clone()));
+  object.insert(
+    config::OPTION_PROMPT_OVERLAY_KEY.to_string(),
+    option.prompt_overlay.clone().map_or(Value::Null, Value::String),
+  );
+  object
+    .insert(config::OPTION_BILLING_KEY.to_string(), option.billing.map_or(Value::Null, |billing| json!(billing.key())));
+  object.insert(config::OPTION_TYPE_KEY.to_string(), Value::String(option.backend_type.clone()));
   for field in schema {
     let value = match option.type_fields.get(field.name) {
       Some(raw) => option_field_json(raw, field.kind)?,

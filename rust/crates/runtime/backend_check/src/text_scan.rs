@@ -19,19 +19,62 @@ use crate::vocabulary::Vocabulary;
 struct Syntax {
   line: &'static str,
   block: Option<(&'static str, &'static str)>,
+  line_needs_boundary: bool,
+  single_quote_escapes: bool,
+  backticks_quote: bool,
+  multiline_quotes: bool,
+  triple_quotes: bool,
 }
 
-/// Shell, Python, Perl and awk: a `#` comment runs to the end of the line.
-const HASH: Syntax = Syntax { line: "#", block: None };
+/// A shell `#` starts a comment at a token boundary; inside a word it is literal text.
+const SHELL_HASH: Syntax = Syntax {
+  line: "#",
+  block: None,
+  line_needs_boundary: true,
+  single_quote_escapes: false,
+  backticks_quote: false,
+  multiline_quotes: true,
+  triple_quotes: false,
+};
+
+/// Perl and awk: a `#` comment runs to the end of the line outside a string.
+const HASH: Syntax = Syntax {
+  line: "#",
+  block: None,
+  line_needs_boundary: false,
+  single_quote_escapes: true,
+  backticks_quote: false,
+  multiline_quotes: true,
+  triple_quotes: false,
+};
+
+/// Python: a `#` comment runs to the end of the line outside a string or a multiline triple-quoted string.
+const PYTHON_HASH: Syntax = Syntax {
+  line: "#",
+  block: None,
+  line_needs_boundary: false,
+  single_quote_escapes: true,
+  backticks_quote: false,
+  multiline_quotes: false,
+  triple_quotes: true,
+};
 
 /// JavaScript and TypeScript: a `//` comment runs to the end of the line, and a `/* ... */` comment may span lines.
-const SLASH: Syntax = Syntax { line: "//", block: Some(("/*", "*/")) };
+const SLASH: Syntax = Syntax {
+  line: "//",
+  block: Some(("/*", "*/")),
+  line_needs_boundary: false,
+  single_quote_escapes: true,
+  backticks_quote: true,
+  multiline_quotes: false,
+  triple_quotes: false,
+};
 
 /// The code file extensions, each with its comment syntax.
 const CODE_EXTENSIONS: [(&str, Syntax); 9] = [
-  ("sh", HASH),
-  ("bash", HASH),
-  ("py", HASH),
+  ("sh", SHELL_HASH),
+  ("bash", SHELL_HASH),
+  ("py", PYTHON_HASH),
   ("pl", HASH),
   ("awk", HASH),
   ("mjs", SLASH),
@@ -63,18 +106,30 @@ struct Word<'a> {
   text: &'a str,
 }
 
+#[derive(Clone, Copy)]
+struct Quote {
+  character: char,
+  triple: bool,
+}
+
+#[derive(Default)]
+struct LexState {
+  open_block: Option<&'static str>,
+  quote: Option<Quote>,
+  escaped: bool,
+}
+
 /// Scan a whole text file. A code file's code is read as code, with its comments left out; any other text file is prose.
 pub fn scan_file(vocab: &Vocabulary, text: &str, path: &Path) -> Vec<Found> {
   let ext = path.extension().and_then(|ext| ext.to_str()).unwrap_or_default();
   let code = CODE_EXTENSIONS.iter().find(|(name, _)| *name == ext).map(|(_, syntax)| *syntax);
   let mut found = Vec::new();
-  // The closing delimiter of the block comment that the previous line left open, if any.
-  let mut open_block = None;
+  let mut state = LexState::default();
   for (index, line) in text.lines().enumerate() {
     let number = index + 1;
     match code {
       Some(syntax) => {
-        let code_text = strip_comments(line, syntax, &mut open_block);
+        let code_text = strip_comments(line, syntax, &mut state);
         scan_line(vocab, &code_text, number, Mode::Code, &mut found);
       }
       None => scan_line(vocab, line, number, Mode::Prose, &mut found),
@@ -84,47 +139,80 @@ pub fn scan_file(vocab: &Vocabulary, text: &str, path: &Path) -> Vec<Found> {
 }
 
 /// The code of a line, with each comment blanked to a space so that the words on either side of it stay apart. A line
-/// comment starts at its marker when the line's start or a whitespace comes before the marker, and a block comment at its
-/// opening delimiter. Neither opens inside a quoted string. A block comment that the line does not close leaves its
-/// closing delimiter in `open_block` for the next line.
-fn strip_comments(line: &str, syntax: Syntax, open_block: &mut Option<&'static str>) -> String {
+/// comment starts at its marker outside a string; a shell comment also needs a token boundary. A block comment starts at
+/// its opening delimiter. Strings and block comments that span lines keep their state for the next line.
+fn strip_comments(line: &str, syntax: Syntax, state: &mut LexState) -> String {
   let mut code = String::with_capacity(line.len());
-  let mut quote: Option<char> = None;
   let mut resume = 0;
   for (at, ch) in line.char_indices() {
     if at < resume {
       continue;
     }
-    if let Some(close) = *open_block {
+    if let Some(close) = state.open_block {
       let Some(end) = line[at..].find(close) else { break };
-      *open_block = None;
+      state.open_block = None;
       resume = at + end + close.len();
       code.push(' ');
       continue;
     }
-    if let Some(open) = quote {
-      if ch == open {
-        quote = None;
+    if let Some(quote) = state.quote {
+      let triple = triple_marker(quote.character);
+      if quote.triple && !state.escaped && line[at..].starts_with(triple) {
+        state.quote = None;
+        code.push_str(triple);
+        resume = at + triple.len();
+        continue;
+      }
+      if state.escaped {
+        state.escaped = false;
+      } else if ch == '\\' && (quote.character != '\'' || syntax.single_quote_escapes) {
+        state.escaped = true;
+      } else if !quote.triple && ch == quote.character {
+        state.quote = None;
       }
       code.push(ch);
       continue;
     }
     let rest = &line[at..];
-    if matches!(ch, '"' | '\'') {
-      quote = Some(ch);
-    } else if rest.starts_with(syntax.line) && code.chars().last().is_none_or(char::is_whitespace) {
+    if (matches!(ch, '"' | '\'') || (syntax.backticks_quote && ch == '`'))
+      && syntax.triple_quotes
+      && rest.starts_with(triple_marker(ch))
+    {
+      let triple = triple_marker(ch);
+      state.quote = Some(Quote { character: ch, triple: true });
+      code.push_str(triple);
+      resume = at + triple.len();
+      continue;
+    } else if matches!(ch, '"' | '\'') || (syntax.backticks_quote && ch == '`') {
+      state.quote = Some(Quote { character: ch, triple: false });
+    } else if rest.starts_with(syntax.line)
+      && (!syntax.line_needs_boundary
+        || code.chars().last().is_none_or(|previous| {
+          previous.is_whitespace() || matches!(previous, ';' | '|' | '&' | '(' | ')' | '{' | '}')
+        }))
+    {
       break;
     } else if let Some((block_open, block_close)) = syntax.block
       && rest.starts_with(block_open)
     {
-      *open_block = Some(block_close);
+      state.open_block = Some(block_close);
       resume = at + block_open.len();
       code.push(' ');
       continue;
     }
     code.push(ch);
   }
+  if state.quote.is_some_and(|quote| {
+    !quote.triple && !syntax.multiline_quotes && !(quote.character == '`' && syntax.backticks_quote) && !state.escaped
+  }) {
+    state.quote = None;
+    state.escaped = false;
+  }
   code
+}
+
+fn triple_marker(quote: char) -> &'static str {
+  if quote == '"' { "\"\"\"" } else { "'''" }
 }
 
 /// Scan a text block whose first line is `first_line`, such as the value of a Rust string literal, as prose.
@@ -144,6 +232,11 @@ fn scan_line(vocab: &Vocabulary, line: &str, number: usize, mode: Mode, found: &
     let value = word.text.trim_start_matches('-');
     if let Some(class) = rules::value_class(vocab, value) {
       found.push(site(number, class, value));
+    }
+    if mode == Mode::Code
+      && let Some(command) = assigned_command_constant(line, word)
+    {
+      found.push(site(number, Class::FixedCommand, command));
     }
     let Some(next) = words.get(index + 1) else { continue };
     let gap = &line[word.end..next.start];
@@ -194,6 +287,24 @@ fn words(line: &str) -> Vec<Word<'_>> {
 
 fn word(line: &str, start: usize, end: usize) -> Word<'_> {
   Word { start, end, text: line[start..end].trim_matches(['.', '/']) }
+}
+
+/// The backend CLI that is the entire quoted right-hand value of an assignment. A command constant is a fixed command
+/// even when the call marker that uses it is on another line.
+fn assigned_command_constant(line: &str, word: &Word<'_>) -> Option<&'static str> {
+  let before = line[..word.start].trim_end();
+  let after = line[word.end..].trim_start();
+  let quote = before.chars().last().filter(|ch| matches!(ch, '"' | '\''))?;
+  if !after.starts_with(quote) {
+    return None;
+  }
+  let before = before.strip_suffix(quote).unwrap().trim_end();
+  if !before.ends_with('=') || ["==", "!=", "<=", ">=", "=>"].iter().any(|operator| before.ends_with(operator)) {
+    return None;
+  }
+  let raw = &line[word.start..word.end];
+  let command = raw.rsplit('/').next()?;
+  fixed_command(command).filter(|fixed| *fixed == command)
 }
 
 fn is_word_char(ch: char) -> bool {
@@ -312,6 +423,46 @@ mod tests {
     assert_eq!(found, vec![(2, Class::FixedCommand, "claude -p".to_string())]);
   }
 
+  /// Python, Perl, awk and JavaScript comments start next to code. A shell `#` needs a token boundary, not merely a
+  /// character boundary.
+  #[test]
+  fn line_comments_follow_their_language_boundaries() {
+    for (path, line) in [
+      ("run.py", "x=1# model claude-opus-5-5\n"),
+      ("run.pl", "$x=1# model claude-opus-5-5\n"),
+      ("run.awk", "x=1# model claude-opus-5-5\n"),
+      ("run.mjs", "const x=1;// model claude-opus-5-5\n"),
+      ("run.sh", "x=1;# model claude-opus-5-5\n"),
+    ] {
+      assert!(classes(line, path).is_empty(), "{path}: {:?}", classes(line, path));
+    }
+
+    let shell_word = classes("x=claude-opus#suffix\n", "run.sh");
+    assert!(shell_word.contains(&(1, Class::OptionId, "claude-opus".to_string())), "{shell_word:?}");
+  }
+
+  /// Escaped quotes and JavaScript template strings keep comment markers inside the string; code after them is scanned.
+  #[test]
+  fn quoted_comment_markers_do_not_hide_later_code() {
+    let escaped = r#"const text = "escaped \" // still string"; const model = "claude-opus-5-5";"#;
+    let found = classes(escaped, "run.js");
+    assert!(found.contains(&(1, Class::ModelId, "claude-opus-5-5".to_string())), "{found:?}");
+
+    let template = "const url = `https://aigw.example.team/v1`; const model = \"claude-opus-5-5\";";
+    let found = classes(template, "run.js");
+    assert!(found.contains(&(1, Class::Gateway, "https://aigw.example.team/v1".to_string())), "{found:?}");
+    assert!(found.contains(&(1, Class::ModelId, "claude-opus-5-5".to_string())), "{found:?}");
+
+    for (path, text) in [
+      ("run.py", "DOC = \"\"\"\n# model claude-opus-5-5\n\"\"\"\n"),
+      ("run.mjs", "const text = `start\n// model claude-opus-5-5\n`;\n"),
+      ("run.sh", "DOC='start\n# model claude-opus-5-5\n'\n"),
+    ] {
+      let found = classes(text, path);
+      assert!(found.contains(&(2, Class::ModelId, "claude-opus-5-5".to_string())), "{path}: {found:?}");
+    }
+  }
+
   /// A block comment in a JavaScript file is no site, across its lines, and the code after its close is read.
   #[test]
   fn a_block_comment_is_no_site_and_the_code_after_it_is_read() {
@@ -338,6 +489,18 @@ mod tests {
       found,
       vec![(1, Class::FixedCommand, "claude -p".to_string()), (2, Class::FixedCommand, "claude -p".to_string())]
     );
+  }
+
+  /// A command string assigned to a variable is a fixed command; a command name in a sentence string is not.
+  #[test]
+  fn a_command_constant_value_is_a_fixed_command() {
+    let assigned = classes("const cli = \"claude\";\n", "run.mjs");
+    assert_eq!(assigned, vec![(1, Class::FixedCommand, "claude".to_string())]);
+
+    let prose = classes("const note = \"run claude locally\";\n", "run.mjs");
+    assert!(prose.is_empty(), "{prose:?}");
+    let punctuation = classes("const note = \"claude.\";\n", "run.mjs");
+    assert!(punctuation.is_empty(), "{punctuation:?}");
   }
 
   /// A pool id names a backend only after a `--backend` flag or a `backend` key; the same word in prose names none.

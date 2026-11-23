@@ -29,8 +29,8 @@ const IDENTITY: [(&str, &str); 4] = [
   ("GIT_COMMITTER_EMAIL", "improve-test@example.invalid"),
 ];
 
-/// The direction of every test round.
-pub const DIRECTION: &str = "perf";
+/// The direction of every test round. Uses a synthetic name so host tests never touch real rounds' `/tmp/improve-*`.
+pub const DIRECTION: &str = "test_perf";
 /// The GitHub origin of the launcher's checkout, as a live host's checkout names it.
 pub const GITHUB_ORIGIN: &str = "https://github.com/fixture-owner/fixture-repo.git";
 /// The repository that origin names, as the GitHub CLI writes it.
@@ -156,10 +156,10 @@ if [[ -n ${IMPROVE_DIRECTION:-} ]]; then
   if [[ -n ${FAKE_CLAUDE_BARRIER:-} ]]; then
     : >"$FAKE_CLAUDE_BARRIER/$IMPROVE_DIRECTION"
     for _ in $(seq 1 600); do
-      [[ -e $FAKE_CLAUDE_BARRIER/perf && -e $FAKE_CLAUDE_BARRIER/ux ]] && break
+      [[ -e $FAKE_CLAUDE_BARRIER/test_perf && -e $FAKE_CLAUDE_BARRIER/test_ux ]] && break
       sleep 0.1
     done
-    [[ -e $FAKE_CLAUDE_BARRIER/perf && -e $FAKE_CLAUDE_BARRIER/ux ]] || {
+    [[ -e $FAKE_CLAUDE_BARRIER/test_perf && -e $FAKE_CLAUDE_BARRIER/test_ux ]] || {
       printf 'both rounds did not reach the shared mock home barrier\n' >&2
       exit 92
     }
@@ -372,7 +372,7 @@ const SYSTEMD_RUN: &str = r#"# Fake systemd-run: record the call, then run the c
 # refuses the start, unless a fake systemctl stop has ended that unit first.
 printf '%s\n' "$*" >>"$FAKE_SYSTEMD_RUN_LOG"
 if [[ ${FAKE_SYSTEMD_RUN_EXISTING:-0} == 1 && ! -e $FAKE_SCOPE_STOPPED ]]; then
-  printf 'Failed to start transient scope unit: Unit improve-perf.scope was already loaded or has a fragment file.\n' >&2
+  printf 'Failed to start transient scope unit: Unit improve-test_perf.scope was already loaded or has a fragment file.\n' >&2
   exit 1
 fi
 arguments=("$@")

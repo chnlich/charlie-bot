@@ -227,7 +227,20 @@ impl Kind {
         "tag": tag,
         "expected_tags": quoted_list(expected_tags),
       })),
-      _ => None,
+      Kind::Missing
+      | Kind::StringType
+      | Kind::IntType
+      | Kind::IntParsing
+      | Kind::IntFromFloat
+      | Kind::IntParsingSize
+      | Kind::FloatType
+      | Kind::FloatParsing
+      | Kind::BoolType
+      | Kind::BoolParsing
+      | Kind::ListType
+      | Kind::DictType
+      | Kind::ModelAttributesType
+      | Kind::ExtraForbidden => None,
     }
   }
 }

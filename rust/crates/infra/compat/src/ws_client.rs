@@ -780,7 +780,7 @@ mod tests {
           socket.flush().await.expect("flush the close response");
           return;
         }
-        _ => {}
+        ServerMessage::Binary(_) | ServerMessage::Ping(_) | ServerMessage::Pong(_) | ServerMessage::Frame(_) => {}
       }
     }
   }

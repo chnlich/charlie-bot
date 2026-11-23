@@ -5,7 +5,7 @@ use charliebot_core::backend_types;
 use charliebot_core::config::{
   API_BASE_KEY, CONTEXT_WINDOW_KEY, CREDENTIAL_KEY, OptionField, OptionFieldDefault, PROXY_URL_KEY,
 };
-use charliebot_registry::option_model::optional_text;
+use charliebot_registry::option_model::{self, UnknownOptionFieldStyle, optional_text};
 use serde_yaml::{Mapping, Value};
 
 const IMAGE_INPUT: &str = "image_input";
@@ -54,13 +54,7 @@ pub struct CharlieCodeOption {
 
 impl CharlieCodeOption {
   pub fn from_fields(fields: &Mapping) -> Result<Self, String> {
-    for key in fields.keys() {
-      match key.as_str() {
-        Some(name) if SCHEMA.iter().any(|field| field.name == name) => {}
-        Some(name) => return Err(format!("unknown charlie-code option field {name:?}")),
-        None => return Err(format!("charlie-code option key must be a string: {key:?}")),
-      }
-    }
+    option_model::validate_field_names(fields, SCHEMA, "charlie-code", UnknownOptionFieldStyle::Unknown)?;
     Ok(Self {
       api_base: optional_text(fields, backend_types::CHARLIE_CODE, API_BASE_KEY)?,
       context_window: optional_positive_int(fields, CONTEXT_WINDOW_KEY)?,

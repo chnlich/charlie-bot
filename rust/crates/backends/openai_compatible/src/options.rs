@@ -1,6 +1,7 @@
 //! The cc-openai-compatible option fields: `api_base` and `credential`.
 
 use charliebot_core::config::{API_BASE_KEY, CREDENTIAL_KEY, OptionField, OptionFieldDefault};
+use charliebot_registry::option_model::{self, UnknownOptionFieldStyle};
 use serde_yaml::{Mapping, Value};
 
 /// The `cc-openai-compatible` option's type-specific fields, in the order this crate declares them, each with the
@@ -21,13 +22,7 @@ pub struct CcOpenAiOption {
 
 impl CcOpenAiOption {
   pub fn from_fields(fields: &Mapping) -> Result<Self, String> {
-    for key in fields.keys() {
-      match key.as_str() {
-        Some(API_BASE_KEY | CREDENTIAL_KEY) => {}
-        Some(name) => return Err(format!("unknown cc-openai-compatible option field {name:?}")),
-        None => return Err(format!("cc-openai-compatible option key must be a string: {key:?}")),
-      }
-    }
+    option_model::validate_field_names(fields, SCHEMA, "cc-openai-compatible", UnknownOptionFieldStyle::Unknown)?;
     let api_base = match fields.get(API_BASE_KEY) {
       None => return Err("cc-openai-compatible option api_base is required".to_string()),
       Some(Value::String(api_base)) => api_base.clone(),

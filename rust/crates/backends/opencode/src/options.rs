@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use anyhow::bail;
 use charliebot_core::config::{BackendOption, EXTRA_BODY_KEY, OptionField, OptionFieldDefault, PROXY_URL_KEY};
 use charliebot_core::text_repr;
+use charliebot_registry::option_model::{self, UnknownOptionFieldStyle};
 use serde_json::{Map, Value as JsonValue, json};
 use serde_yaml::{Mapping, Value};
 
@@ -33,13 +34,7 @@ pub struct OpenCodeOption {
 
 impl OpenCodeOption {
   pub fn from_fields(fields: &Mapping) -> Result<Self, String> {
-    for key in fields.keys() {
-      match key.as_str() {
-        Some(name) if SCHEMA.iter().any(|field| field.name == name) => {}
-        Some(name) => return Err(format!("opencode option field {name:?} is not supported")),
-        None => return Err(format!("opencode option key must be a string: {key:?}")),
-      }
-    }
+    option_model::validate_field_names(fields, SCHEMA, "opencode", UnknownOptionFieldStyle::Unsupported)?;
     let proxy_url = match fields.get(PROXY_URL_KEY) {
       None | Some(Value::Null) => None,
       Some(Value::String(value)) => Some(value.clone()),

@@ -70,12 +70,11 @@ fail() {
   exit "$code"
 }
 
-# The markers of a host that waits for the user's approval. One classifier owns a host's login state: `classify` and
-# `awaits_approval` in rust/crates/features/host_auth/src/probe.rs turn a probe's output and return code into a status,
-# and rust/crates/features/cron/src/host_gate.rs holds a fire while that status awaits approval. These are that
-# classifier's approval markers, plus a login URL line: a held ssh prints its login link and may print no other marker,
-# and the probe's `build_detail` keeps a URL line as the host's detail. No CLI exposes the classifier's verdict, so this
-# launcher carries the same categories, and a change to either list belongs in both files.
+# The output markers of a host that waits for the user's approval. One classifier owns a host's login state: `classify`
+# in rust/crates/features/host_auth/src/probe.rs maps a probe's output and return code to a status, `awaits_approval`
+# there names the statuses that wait for approval, and rust/crates/features/cron/src/host_gate.rs holds a fire on them.
+# No CLI exposes that verdict, so this launcher carries the same markers, and a change to either list belongs in both
+# files.
 readonly APPROVAL_MARKERS=(
   'Okta verification required'
   'activate\?user_code='
@@ -83,7 +82,6 @@ readonly APPROVAL_MARKERS=(
   'requires an additional check'
   'To authenticate, visit:'
   'Host key verification failed'
-  'https?://'
 )
 
 # Whether a failed ssh call's output carries evidence that the host waits for a login approval.

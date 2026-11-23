@@ -801,6 +801,17 @@ impl ServeWorld {
     .expect("the credentials");
     sandbox.stub("charlie-code", "exit 0\n");
 
+    let mut disable_tasks = harness::command(harness::built_binary("charliebot"), &env);
+    disable_tasks
+      .current_dir(&repo)
+      .env("CHARLIEBOT_HOME", &live_home)
+      .arg("release-helper")
+      .arg("disable-cron-tasks")
+      .arg(&live_home)
+      .arg(&repo);
+    let disabled = harness::run(&mut disable_tasks);
+    assert_eq!(disabled.code, 0, "{}", disabled.describe());
+
     let live = LiveServer::start(&sandbox, &env, &live_home, &repo);
     // The trial's port range starts at a port the kernel frees for this world, not at the default range, which other
     // trials on the host share. A foreign listener on the port a trial picked fails that side.

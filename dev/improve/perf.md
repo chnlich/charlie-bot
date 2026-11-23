@@ -88,9 +88,11 @@ open, that session's events viewer and the home page. Each page takes 10 cold lo
 Startup latency is the interval from the server's first log timestamp to its first successful HTTP request. Repeat five
 runs and summarize them with their median.
 
-Memory reports the server process's peak resident memory after its high-water mark is reset at the start of the fixed
-200-request workload. This isolates that workload and captures spikes between samples.
-Both sides use the same method, and the pull request evidence names it.
+Memory reports sampled peak RSS as the largest resident-page count read from `/proc/$CHARLIEBOT_SERVE_PID/statm` at
+1 ms intervals during the fixed 200-request workload, converted to KB with the host page size. Capture pre-workload
+and post-workload `VmRSS` snapshots from `/proc/$CHARLIEBOT_SERVE_PID/status`, and report `VmHWM` as lifetime context.
+Use read-only procfs access and the same method on both sides. Name the method, 1 ms interval and sample counts in the
+pull request evidence. The sampled peak can miss spikes shorter than 1 ms.
 CPU reports user and system CPU time spent serving those 200 requests. Keep the workload identical between sides.
 
 ## Evidence

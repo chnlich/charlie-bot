@@ -1452,6 +1452,24 @@ const EXACT_LITERAL_OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_chat_threads::thread_read::PERSON`; every message view in a thread read names the person \
            field from it.",
   },
+  OwnerRow {
+    name: "session_backend",
+    owner: "runtime/agents",
+    hint: "Use `charliebot_agents::backend_pool::ROUTER_SESSION_BACKEND_FIELD`; the backend router request names the \
+           delegating session's backend under it.",
+  },
+  OwnerRow {
+    name: "cooling_until",
+    owner: "runtime/agents",
+    hint: "Use `charliebot_agents::backend_pool::ROUTER_CANDIDATE_COOLING_UNTIL_FIELD`; the backend router candidate \
+           object carries its recovery time under it.",
+  },
+  OwnerRow {
+    name: "routed",
+    owner: "runtime/agents",
+    hint: "Use `charliebot_agents::backend_pool::RouterAnswer` and `ROUTER_ROUTED_FIELD`; the backend router answers \
+           through them.",
+  },
 ];
 
 /// The phrases that one crate owns: the response detail sentences that a route answers with, and the log event

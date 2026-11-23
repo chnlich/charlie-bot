@@ -20,7 +20,7 @@ pub(crate) struct WorktreeInspection {
 }
 
 /// Caches and the one env file that a checkout rebuilds, so a removal may drop them. The 11-22 audit allowed exactly
-/// these; a real `.venv` directory is not among them.
+/// these. A real `.venv` directory is not among them.
 const REBUILDABLE_CACHE_DIRS: [&str; 4] = ["__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"];
 const VENV_NAME: &str = ".venv";
 const TORCH_LOCK_NAME: &str = ".torch-runtime.lock";
@@ -106,7 +106,7 @@ fn head_keeping(path: &Path) -> Result<HeadKeeping> {
 }
 
 /// Whether the checkout holds an ignored entry that a removal would destroy. Ignored entries are listed as the
-/// untracked-ignored files and as the collapsed `!!` entries of `status --ignored`; each must be a cache directory,
+/// untracked-ignored files and as the collapsed `!!` entries of `status --ignored`. Each must be a cache directory,
 /// a `.venv` symlink to the main checkout's env (or a dangling one), or a 0-byte `.torch-runtime.lock`.
 fn has_non_rebuildable_ignored(repo: &Path) -> Result<bool> {
   let listed = git_output(repo, &["ls-files", "-o", "-i", "--exclude-standard", "-z"], None)?;

@@ -46,7 +46,7 @@ pub(crate) fn archive_worktree(worktree: &Path, archive_path: &Path, untracked: 
   Ok(())
 }
 
-/// One untracked path into the archive. A link that still resolves archives its target's content; a link whose target
+/// One untracked path into the archive. A link that still resolves archives its target's content. A link whose target
 /// is gone is written as a link entry, so the archive keeps the tree's shape. Any other read failure fails the archive.
 fn append_untracked(builder: &mut Builder<&mut fs::File>, path: &Path, archive_name: &Path) -> Result<()> {
   match fs::metadata(path) {

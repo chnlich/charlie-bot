@@ -36,6 +36,7 @@ name = "port-holder"
 path = "src/bin/port_holder.rs"
 
 [dependencies]
+charliebot-charlie-code.workspace = true
 charliebot-cli-common.workspace = true
 charliebot-core.workspace = true
 charliebot-session-api.workspace = true

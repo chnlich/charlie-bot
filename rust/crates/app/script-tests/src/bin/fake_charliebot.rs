@@ -7,6 +7,10 @@ use std::fs;
 use std::path::Path;
 use std::process::exit;
 
+use charliebot_charlie_code::TASK_FILE_NAME;
+use charliebot_core::config::CONFIG_FILENAME;
+use charliebot_core::home::CHARLIEBOT_HOME_ENV;
+
 fn main() {
   let args: Vec<OsString> = std::env::args_os().skip(1).collect();
   match args.first().and_then(|argument| argument.to_str()) {
@@ -93,8 +97,8 @@ fn backend(args: &[OsString]) -> ! {
   });
 
   if std::env::var("FAKE_JUDGE_CHECK_CONFIG").ok().as_deref() == Some("1") {
-    let home = std::env::var("CHARLIEBOT_HOME").unwrap_or_default();
-    let cfg_path = Path::new(&home).join("config.yaml");
+    let home = std::env::var(CHARLIEBOT_HOME_ENV).unwrap_or_default();
+    let cfg_path = Path::new(&home).join(CONFIG_FILENAME);
     let cfg_text = fs::read_to_string(&cfg_path).unwrap_or_default();
     if !cfg_text.lines().any(|line| line.trim_start().starts_with("judge:")) {
       eprintln!(
@@ -111,7 +115,7 @@ fn backend(args: &[OsString]) -> ! {
     fs::create_dir_all(record_dir).expect("record dir");
     fs::write(record_dir.join("args.txt"), args.join("\n")).expect("args.txt");
     fs::write(record_dir.join("cwd.txt"), cwd.display().to_string()).expect("cwd.txt");
-    fs::write(record_dir.join("task.md"), &task_text).expect("task.md");
+    fs::write(record_dir.join(TASK_FILE_NAME), &task_text).expect("record the task file copy");
     let mut entries: Vec<String> = fs::read_dir(&cwd)
       .expect("read cwd")
       .map(|entry| entry.expect("entry").file_name().to_string_lossy().into_owned())

@@ -42,7 +42,7 @@ impl ColleagueGate for FixedClientGate {
     features: &'a FeatureContext,
     caller: &'a charliebot_registry::caller::CallerIdentity,
   ) -> BoxFuture<'a, Option<&'static str>> {
-    Box::pin(async move { crate::colleague::refuse_work_with(features, &self.0, caller).await })
+    Box::pin(async move { crate::colleague::refuse_work_with(features, Some(&self.0), caller).await })
   }
 
   fn admits_wake<'a>(
@@ -166,6 +166,25 @@ impl Home {
     }
 
     Self { _dir: dir, features, executor }
+  }
+
+  pub(crate) fn clear_slack_credentials(&self) {
+    std::fs::write(self._dir.path().join("credentials.yaml"), "slack: {}\n")
+      .expect("the empty Slack credentials write");
+  }
+
+  pub(crate) async fn plain_session(&self, session_id: &str) -> SessionMetadata {
+    let request = CreateTask {
+      request_id: format!("plain-session-{session_id}"),
+      task_parent_id: None,
+      profile: TaskProfile::Manager,
+      task: None,
+      name: Some(format!("Plain session {session_id}")),
+      backend: Some("synthetic-slack".to_string()),
+      group: None,
+      session_id: Some(session_id.to_string()),
+    };
+    self.features.store.create_task(request, TaskCaller::System, Map::new()).await.expect("the plain session creates")
   }
 
   pub(crate) async fn thread_session(&self, session_id: &str, thread_ts: &str) -> SessionMetadata {
@@ -392,7 +411,7 @@ async fn thread_replies(
 ) -> Json<Value> {
   state.record("GET", "/api/conversations.replies", json!(query));
   if state.replies_unreadable.load(Ordering::SeqCst) {
-    return Json(json!({"ok": false, "error": "internal_error"}));
+    return Json(json!({"ok": false, "error": "channel_not_found"}));
   }
   let messages = state.thread_messages.lock().expect("the fake thread is never poisoned").clone();
   Json(json!({"ok": true, "messages": messages, "has_more": false}))

@@ -103,12 +103,15 @@ fn thread_of(origin: &Value) -> Result<(&str, &str)> {
 /// thread, and a colleague has posted in that thread.
 async fn colleague_thread_refuses(
   features: &FeatureContext,
-  client: &SlackClient,
+  client: Option<&SlackClient>,
   session_id: &str,
   run_id: &str,
 ) -> Result<bool> {
   let config = features.config.get().context("load config")?;
   let slack = config.section::<SlackConfig>(NAME);
+  if slack.colleague_user_ids.is_empty() {
+    return Ok(false);
+  }
   let run = features.store.read_run_sync(session_id, run_id)?.context("the run record is missing")?;
   let events: Vec<Value> =
     features.store.load_all_facts_view_sync(session_id)?.iter().map(|event| event.event_value()).collect();
@@ -130,6 +133,11 @@ async fn colleague_thread_refuses(
     return Ok(false);
   };
   let (channel, thread_ts) = thread_of(&origin)?;
+  let owned_client = match client {
+    Some(_) => None,
+    None => Some(SlackClient::from_features(features).context("load Slack client")?),
+  };
+  let client = client.or(owned_client.as_ref()).expect("the Slack client is available");
   let messages = client.get_thread_replies(channel, thread_ts).await?;
   Ok(messages.iter().any(|message| sent_by(message, &slack.colleague_user_ids)))
 }
@@ -165,7 +173,7 @@ async fn follow_wake_admitted(features: &FeatureContext, client: &SlackClient, s
 /// a failed read refuses and logs an error.
 pub(crate) async fn refuse_work_with(
   features: &FeatureContext,
-  client: &SlackClient,
+  client: Option<&SlackClient>,
   caller: &CallerIdentity,
 ) -> Option<&'static str> {
   let CallerIdentity::Agent { claims } = caller else {
@@ -211,18 +219,7 @@ impl ColleagueGate for SlackColleagueGate {
     features: &'a FeatureContext,
     caller: &'a CallerIdentity,
   ) -> BoxFuture<'a, Option<&'static str>> {
-    Box::pin(async move {
-      if !matches!(caller, CallerIdentity::Agent { .. }) {
-        return None;
-      }
-      match SlackClient::from_features(features) {
-        Ok(client) => refuse_work_with(features, &client, caller).await,
-        Err(error) => {
-          tracing::error!(event = "slack_colleague_client_failed", error = %format!("{error:#}"));
-          Some(COLLEAGUE_REFUSAL)
-        }
-      }
-    })
+    Box::pin(async move { refuse_work_with(features, None, caller).await })
   }
 
   fn admits_wake<'a>(
@@ -333,6 +330,15 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn an_unreadable_multi_person_dm_thread_drops_the_message() {
+    let api = FakeApi::start(&[]).await;
+    api.set_member_pages(&[&["U_ALLOWED"]]);
+    api.set_replies_unreadable();
+
+    assert!(!colleague_admitted(&api.client, &config(), "G_TEST", THREAD, "U_COLLEAGUE").await);
+  }
+
+  #[tokio::test]
   async fn an_unlisted_sender_is_dropped_without_a_slack_read() {
     let api = FakeApi::start(&[]).await;
     api.set_member_pages(&[&["U_ALLOWED"]]);
@@ -422,7 +428,7 @@ mod tests {
     .await;
     append(&home, &session_id, summon("evt-colleague-summon", "U_COLLEAGUE")).await;
     let caller = run_caller(&home, &session_id, &["evt-colleague-summon"]);
-    assert_eq!(refuse_work_with(&home.features, &api.client, &caller).await, Some(COLLEAGUE_REFUSAL));
+    assert_eq!(refuse_work_with(&home.features, Some(&api.client), &caller).await, Some(COLLEAGUE_REFUSAL));
   }
 
   #[tokio::test]
@@ -436,7 +442,7 @@ mod tests {
     append(&home, &session_id, operator_web_message()).await;
     append(&home, &session_id, summon("evt-operator-summon", "U_ALLOWED")).await;
     let caller = run_caller(&home, &session_id, &["evt-operator-web", "evt-operator-summon"]);
-    assert_eq!(refuse_work_with(&home.features, &api.client, &caller).await, None);
+    assert_eq!(refuse_work_with(&home.features, Some(&api.client), &caller).await, None);
   }
 
   #[tokio::test]
@@ -450,7 +456,7 @@ mod tests {
     append(&home, &session_id, operator_web_message()).await;
     append(&home, &session_id, summon("evt-colleague-summon", "U_COLLEAGUE")).await;
     let caller = run_caller(&home, &session_id, &["evt-operator-web", "evt-colleague-summon"]);
-    assert_eq!(refuse_work_with(&home.features, &api.client, &caller).await, Some(COLLEAGUE_REFUSAL));
+    assert_eq!(refuse_work_with(&home.features, Some(&api.client), &caller).await, Some(COLLEAGUE_REFUSAL));
   }
 
   #[tokio::test]
@@ -459,7 +465,7 @@ mod tests {
     let (home, session_id) = thread_home(&api, vec![message(THREAD, "U_ALLOWED", "status?")]).await;
     append(&home, &session_id, summon("evt-stranger-summon", "U_STRANGER")).await;
     let caller = run_caller(&home, &session_id, &["evt-stranger-summon"]);
-    assert_eq!(refuse_work_with(&home.features, &api.client, &caller).await, None);
+    assert_eq!(refuse_work_with(&home.features, Some(&api.client), &caller).await, None);
   }
 
   #[tokio::test]
@@ -469,14 +475,25 @@ mod tests {
     api.set_replies_unreadable();
     append(&home, &session_id, summon("evt-colleague-summon", "U_COLLEAGUE")).await;
     let caller = run_caller(&home, &session_id, &["evt-colleague-summon"]);
-    assert_eq!(refuse_work_with(&home.features, &api.client, &caller).await, Some(COLLEAGUE_REFUSAL));
+    assert_eq!(refuse_work_with(&home.features, Some(&api.client), &caller).await, Some(COLLEAGUE_REFUSAL));
   }
 
   #[tokio::test]
   async fn an_operator_caller_is_never_refused() {
-    let api = FakeApi::start(&[]).await;
     let home = Home::new();
     let caller = CallerIdentity::Operator { session_id: None };
-    assert_eq!(refuse_work_with(&home.features, &api.client, &caller).await, None);
+    assert_eq!(refuse_work_with(&home.features, None, &caller).await, None);
+  }
+
+  #[tokio::test]
+  async fn an_unconfigured_slack_feature_does_not_refuse_work_in_a_plain_session() {
+    let home = Home::new();
+    home.clear_slack_credentials();
+    home.plain_session("plain-session").await;
+    let caller = run_caller(&home, "plain-session", &["evt-nonoperator"]);
+
+    let refusal = SlackColleagueGate.refuse_agent_work(&home.features, &caller).await;
+
+    assert_eq!(refusal, None);
   }
 }

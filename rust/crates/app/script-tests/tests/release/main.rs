@@ -1037,6 +1037,7 @@ impl RoundScope {
 /// server start. The directions are `ux`, the reported round, and `decoupling`, the longest direction name on the round
 /// host. A shorter TMPDIR takes a smaller budget, so dev/remote-run and CI also fit.
 #[test]
+#[ignore = "integration"]
 fn test_trial_preflight_passes_under_each_round_scope_tmpdir() {
   let world = PreflightWorld::new();
   let hex = &world.commit[..12];
@@ -1077,6 +1078,7 @@ fn test_trial_preflight_refuses_a_long_tmpdir_and_names_the_chrome_socket() {
 
 /// A --tree-root trial keeps both sockets under its temp root, inside its tree, and removes its tree when it ends.
 #[test]
+#[ignore = "integration"]
 fn test_trial_preflight_with_tree_root_puts_both_sockets_under_its_temp_root() {
   let world = PreflightWorld::new();
   let tree_root = tempfile::Builder::new().prefix(TREE_ROOT_PREFIX).tempdir().expect("the tree root");

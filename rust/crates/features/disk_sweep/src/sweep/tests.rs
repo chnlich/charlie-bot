@@ -20,6 +20,7 @@ fn fixture(base: &Path) -> SweepRoots {
     scratch_root: base.join("scripts"),
     sessions_root: base.join("sessions"),
     proc_root: base.join("proc"),
+    reference_command: None,
   };
   for path in [&roots.worktree_root, &roots.scratch_root, &roots.sessions_root, &roots.proc_root] {
     fs::create_dir_all(path).unwrap();
@@ -813,4 +814,253 @@ fn test_bare_chat_events_archive_name_does_not_change_close_time() {
   )
   .unwrap();
   assert_eq!(super::latest_closed_at(&session).unwrap(), Some(utc("2026-02-02T00:00:00Z")));
+}
+
+/// A repository whose `main` is pushed to a bare remote, so every commit is saved and a scratch copy of it may go.
+fn create_pushed_repo(root: &Path, name: &str) -> PathBuf {
+  let repo = create_repo(&root.join(name));
+  let remote = root.join(format!("{name}-remote.git"));
+  git(root, &["init", "--bare", remote.to_str().unwrap()]);
+  git(&repo, &["remote", "add", "origin", remote.to_str().unwrap()]);
+  git(&repo, &["push", "-u", "origin", "main"]);
+  repo
+}
+
+/// A worktree named `name` on its own branch, owned by a session closed on 2026-01-01.
+fn closed_worktree(roots: &SweepRoots, repo: &Path, name: &str) -> PathBuf {
+  let (worktree, branch) = create_worktree(roots, repo, name);
+  write_owner(
+    roots,
+    Owner {
+      session_id: name,
+      worktree: &worktree,
+      repo,
+      branch: &branch,
+      closed_at: Some(utc("2026-01-01T00:00:00Z")),
+      keep_worktree: false,
+      reopened: false,
+    },
+  );
+  worktree
+}
+
+fn row_reason(report: &super::SweepReport, path: &Path) -> (SweepAction, String) {
+  let row = row_by_path(report, path);
+  (row.action, row.reason.clone())
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn test_ignored_entries_outside_the_rebuildable_whitelist_keep_a_worktree() {
+  let root = tempdir().unwrap();
+  let roots = fixture(root.path());
+  let repo = create_repo(&root.path().join("repo"));
+  fs::write(repo.join(".gitignore"), "*.bin\n__pycache__/\n.venv\n.torch-runtime.lock\n").unwrap();
+  git(&repo, &["add", ".gitignore"]);
+  git(&repo, &["commit", "-m", "ignore rules"]);
+  // The main checkout's env, which a worktree's `.venv` symlink may point at.
+  fs::create_dir_all(repo.join(".venv/bin")).unwrap();
+
+  let cache_only = closed_worktree(&roots, &repo, "cache-only");
+  fs::create_dir_all(cache_only.join("pkg/__pycache__")).unwrap();
+  fs::write(cache_only.join("pkg/__pycache__/module.pyc"), b"bytecode").unwrap();
+  fs::write(cache_only.join(".torch-runtime.lock"), b"").unwrap();
+
+  let linked_env = closed_worktree(&roots, &repo, "linked-env");
+  std::os::unix::fs::symlink(repo.join(".venv"), linked_env.join(".venv")).unwrap();
+
+  let binary = closed_worktree(&roots, &repo, "binary");
+  fs::write(binary.join("weights.bin"), b"checkpoint").unwrap();
+
+  let real_env = closed_worktree(&roots, &repo, "real-env");
+  fs::create_dir_all(real_env.join(".venv/bin")).unwrap();
+  fs::write(real_env.join(".venv/bin/python"), b"interpreter").unwrap();
+
+  let report = run(&roots, SweepMode::List, utc("2026-01-20T00:00:00Z")).await;
+  assert_eq!(row_reason(&report, &cache_only), (SweepAction::Delete, "closed-task".to_string()));
+  assert_eq!(row_reason(&report, &linked_env), (SweepAction::Delete, "closed-task".to_string()));
+  assert_eq!(row_reason(&report, &binary), (SweepAction::Skip, "non-rebuildable-ignored".to_string()));
+  assert_eq!(row_reason(&report, &real_env), (SweepAction::Skip, "non-rebuildable-ignored".to_string()));
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn test_head_reachable_only_from_no_other_ref_keeps_a_worktree_and_unborn_repo_is_skipped() {
+  let root = tempdir().unwrap();
+  let roots = fixture(root.path());
+  let repo = create_repo(&root.path().join("repo"));
+  let detached = closed_worktree(&roots, &repo, "detached");
+  git(&detached, &["checkout", "--detach"]);
+  fs::write(detached.join("tracked.txt"), b"detached commit\n").unwrap();
+  git(&detached, &["commit", "-am", "commit no ref holds"]);
+
+  let unborn = roots.worktree_root.join("unborn");
+  fs::create_dir_all(&unborn).unwrap();
+  git(&unborn, &["init", "-b", "main"]);
+  write_owner(
+    &roots,
+    Owner {
+      session_id: "unborn",
+      worktree: &unborn,
+      repo: &unborn,
+      branch: "charliebot/unborn",
+      closed_at: Some(utc("2026-01-01T00:00:00Z")),
+      keep_worktree: false,
+      reopened: false,
+    },
+  );
+
+  let report = run(&roots, SweepMode::List, utc("2026-01-20T00:00:00Z")).await;
+  assert_eq!(row_reason(&report, &detached), (SweepAction::Skip, "unreachable-head".to_string()));
+  assert_eq!(row_reason(&report, &unborn), (SweepAction::Skip, "unborn-head".to_string()));
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn test_scratch_linked_worktrees_are_removed_through_their_main_repository() {
+  let root = tempdir().unwrap();
+  let roots = fixture(root.path());
+  let now = utc("2026-05-20T00:00:00Z");
+  let old_time = SystemTime::UNIX_EPOCH + Duration::from_secs((now - chrono::Duration::days(15)).timestamp() as u64);
+  let repo = create_pushed_repo(root.path(), "repo");
+
+  // A linked worktree inside an old scratch directory, and a scratch directory that is itself the linked worktree.
+  let holder = roots.scratch_root.join("old-task");
+  fs::create_dir_all(&holder).unwrap();
+  let nested = holder.join("repo-submit");
+  git(&repo, &["worktree", "add", "-b", "charliebot/submit", nested.to_str().unwrap(), "HEAD"]);
+  set_tree_mtime(&holder, old_time);
+  let itself = roots.scratch_root.join("self-linked");
+  git(&repo, &["worktree", "add", "-b", "charliebot/self", itself.to_str().unwrap(), "HEAD"]);
+  set_tree_mtime(&itself, old_time);
+  for path in [&holder, &itself] {
+    assert_scratch_aged(path, now);
+  }
+
+  let report = run(&roots, SweepMode::Apply, now).await;
+  assert!(report.failures.is_empty(), "{:?}", report.failures);
+  assert_eq!(row_reason(&report, &holder), (SweepAction::Delete, "old-scratch".to_string()));
+  assert_eq!(row_reason(&report, &itself), (SweepAction::Delete, "old-scratch".to_string()));
+  assert!(!holder.exists());
+  assert!(!itself.exists());
+  let listed = String::from_utf8(git(&repo, &["worktree", "list", "--porcelain"])).unwrap();
+  assert!(!listed.contains("repo-submit"), "{listed}");
+  assert!(!listed.contains("self-linked"), "{listed}");
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn test_scratch_git_file_pointing_outside_a_worktree_list_is_kept_as_foreign_gitdir() {
+  let root = tempdir().unwrap();
+  let roots = fixture(root.path());
+  let now = utc("2026-05-20T00:00:00Z");
+  let old_time = SystemTime::UNIX_EPOCH + Duration::from_secs((now - chrono::Duration::days(15)).timestamp() as u64);
+  let candidate = roots.scratch_root.join("foreign");
+  let submodule = candidate.join("sub");
+  fs::create_dir_all(&submodule).unwrap();
+  let elsewhere = root.path().join("elsewhere/.git/modules/sub");
+  fs::write(submodule.join(".git"), format!("gitdir: {}\n", elsewhere.display())).unwrap();
+  set_tree_mtime(&candidate, old_time);
+  assert_scratch_aged(&candidate, now);
+
+  let report = run(&roots, SweepMode::List, now).await;
+  assert_eq!(row_reason(&report, &candidate), (SweepAction::Skip, "foreign-gitdir".to_string()));
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn test_scratch_candidate_holding_an_open_sessions_worktree_is_task_open() {
+  let root = tempdir().unwrap();
+  let roots = fixture(root.path());
+  let now = utc("2026-05-20T00:00:00Z");
+  let old_time = SystemTime::UNIX_EPOCH + Duration::from_secs((now - chrono::Duration::days(15)).timestamp() as u64);
+  let candidate = roots.scratch_root.join("busy");
+  let worktree = candidate.join("wt");
+  fs::create_dir_all(&worktree).unwrap();
+  let repo = create_repo(&root.path().join("repo"));
+  write_owner(
+    &roots,
+    Owner {
+      session_id: "busy",
+      worktree: &worktree,
+      repo: &repo,
+      branch: "charliebot/busy",
+      closed_at: None,
+      keep_worktree: false,
+      reopened: false,
+    },
+  );
+  set_tree_mtime(&candidate, old_time);
+  assert_scratch_aged(&candidate, now);
+
+  let report = run(&roots, SweepMode::List, now).await;
+  assert_eq!(row_reason(&report, &candidate), (SweepAction::Skip, "task-open".to_string()));
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn test_reference_command_keeps_the_named_worktree_and_not_one_whose_name_it_extends() {
+  let root = tempdir().unwrap();
+  let mut roots = fixture(root.path());
+  let repo = create_repo(&root.path().join("repo"));
+  let one = closed_worktree(&roots, &repo, "wt-1");
+  let ten = closed_worktree(&roots, &repo, "wt-10");
+  let records = root.path().join("records.json");
+  fs::write(&records, json!([{"submit_cwd": ten.to_str().unwrap(), "state": "RUNNING"}]).to_string()).unwrap();
+  roots.reference_command = Some(format!("cat {}", records.display()));
+
+  let report = run(&roots, SweepMode::List, utc("2026-01-20T00:00:00Z")).await;
+  assert_eq!(row_reason(&report, &ten), (SweepAction::Skip, "external-reference".to_string()));
+  assert_eq!(row_reason(&report, &one), (SweepAction::Delete, "closed-task".to_string()));
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn test_failing_or_non_array_reference_command_fails_the_sweep_and_removes_nothing() {
+  let root = tempdir().unwrap();
+  let mut roots = fixture(root.path());
+  let repo = create_repo(&root.path().join("repo"));
+  let worktree = closed_worktree(&roots, &repo, "guarded");
+  let now = utc("2026-01-20T00:00:00Z");
+
+  for command in ["exit 1", "echo '{}'"] {
+    roots.reference_command = Some(command.to_string());
+    let result = run_sweep(roots.clone(), SweepMode::Apply, now, remove_worktree).await;
+    assert!(result.is_err(), "reference command {command:?} must fail the sweep");
+    assert!(worktree.is_dir(), "reference command {command:?} must not remove anything");
+  }
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn test_open_worktree_is_held_when_the_scratch_root_is_reached_through_a_symlink() {
+  let root = tempdir().unwrap();
+  let mut roots = fixture(root.path());
+  let now = utc("2026-05-20T00:00:00Z");
+  let old_time = SystemTime::UNIX_EPOCH + Duration::from_secs((now - chrono::Duration::days(15)).timestamp() as u64);
+  // The run record stores the real path (`write_owner` canonicalizes it), while the sweep walks the symlinked root.
+  let link = root.path().join("scripts-link");
+  std::os::unix::fs::symlink(&roots.scratch_root, &link).unwrap();
+  roots.scratch_root = link;
+  let candidate = roots.scratch_root.join("busy");
+  let worktree = root.path().join("scripts/busy/wt");
+  fs::create_dir_all(&worktree).unwrap();
+  let repo = create_repo(&root.path().join("repo"));
+  write_owner(
+    &roots,
+    Owner {
+      session_id: "busy",
+      worktree: &worktree,
+      repo: &repo,
+      branch: "charliebot/busy",
+      closed_at: None,
+      keep_worktree: false,
+      reopened: false,
+    },
+  );
+  set_tree_mtime(&root.path().join("scripts/busy"), old_time);
+  assert_scratch_aged(&root.path().join("scripts/busy"), now);
+
+  let report = run(&roots, SweepMode::List, now).await;
+  assert_eq!(row_reason(&report, &candidate), (SweepAction::Skip, "task-open".to_string()));
 }

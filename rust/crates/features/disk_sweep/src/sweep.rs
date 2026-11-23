@@ -17,7 +17,8 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 use walkdir::{DirEntry, WalkDir};
 
-use crate::{archive, git, process};
+use crate::config::{self, DiskSweepConfig};
+use crate::{archive, git, linked, process, references};
 
 const CLOSED_WORKTREE_DAYS: i64 = 3;
 const KEPT_WORKTREE_DAYS: i64 = 14;
@@ -29,6 +30,8 @@ pub struct SweepRoots {
   pub scratch_root: PathBuf,
   pub sessions_root: PathBuf,
   pub proc_root: PathBuf,
+  /// The `disk_sweep.reference_command`, run once per scan. `None` runs no external reference check.
+  pub reference_command: Option<String>,
 }
 
 impl SweepRoots {
@@ -38,6 +41,7 @@ impl SweepRoots {
       scratch_root: PathBuf::from(&cfg.paths.scratch_dir),
       sessions_root: cfg.sessions_dir(),
       proc_root: PathBuf::from("/proc"),
+      reference_command: cfg.section::<DiskSweepConfig>(config::NAME).reference_command.clone(),
     }
   }
 }
@@ -144,15 +148,14 @@ impl SweepRow {
     Ok(())
   }
 
-  /// The scratch preflight: skips a directory that is too young or holds an unsaved repository.
+  /// The scratch preflight: skips a directory that is too young or that the scratch keep rules hold.
   fn scratch_preflight(&mut self, now: DateTime<Utc>) -> Result<()> {
     if tree_latest_mtime(&self.path)? >= scratch_cutoff(now) {
       self.mark_skipped("too-young");
       return Ok(());
     }
-    if has_unsaved_repository(&self.path)? {
-      self.mark_skipped("has-unsaved-repo");
-      return Ok(());
+    if let Some(reason) = scratch_keep_reason(&self.path)? {
+      self.mark_skipped(reason);
     }
     Ok(())
   }
@@ -192,8 +195,17 @@ impl SweepRow {
             self.mark_skipped("in-use");
             return Ok(PreparedApply::Skip(self));
           }
-          fs::remove_dir_all(&self.path)
-            .with_context(|| format!("removing scratch directory {}", self.path.display()))?;
+          let linked = linked::linked_worktrees(&nested_repositories(&self.path)?)?
+            .context("scratch candidate holds a .git file that points outside its main repository")?;
+          if let Some(refusal) = linked::remove_linked_worktrees(&linked)? {
+            self.mark_skipped(&format!("worktree-remove-refused: {refusal}"));
+            return Ok(PreparedApply::Skip(self));
+          }
+          // A candidate that is itself a linked worktree is gone once git removed it.
+          if self.path.try_exists().with_context(|| format!("inspecting {}", self.path.display()))? {
+            fs::remove_dir_all(&self.path)
+              .with_context(|| format!("removing scratch directory {}", self.path.display()))?;
+          }
           Ok(PreparedApply::ScratchRemoved(self))
         }
       }
@@ -229,6 +241,28 @@ impl SweepReport {
   /// The number of rows a sweep leaves in place: the rows whose action is [`SweepAction::Skip`].
   pub fn skipped_count(&self) -> usize {
     self.rows.iter().filter(|row| row.action == SweepAction::Skip).count()
+  }
+
+  /// The `charliebot disk-sweep list` output: every candidate as a TSV row, then the total line.
+  pub fn list_lines(&self) -> String {
+    let mut lines: Vec<String> = self.rows.iter().map(SweepRow::to_tsv).collect();
+    lines.push(self.total_line());
+    lines.join("\n") + "\n"
+  }
+
+  /// The scheduled run's result: the rows it removes or archives, the skipped rows counted per reason code, then the
+  /// total line. The reason code is the reason up to its first `:`.
+  pub fn apply_summary(&self) -> String {
+    let mut lines: Vec<String> =
+      self.rows.iter().filter(|row| row.action != SweepAction::Skip).map(SweepRow::to_tsv).collect();
+    let mut skipped: BTreeMap<&str, usize> = BTreeMap::new();
+    for row in self.rows.iter().filter(|row| row.action == SweepAction::Skip) {
+      let code = row.reason.split(':').next().unwrap_or("");
+      *skipped.entry(code).or_default() += 1;
+    }
+    lines.extend(skipped.iter().map(|(code, count)| format!("skipped\t{code}\t{count}")));
+    lines.push(self.total_line());
+    lines.join("\n")
   }
 
   pub fn total_line(&self) -> String {
@@ -302,8 +336,10 @@ struct ScanResult {
 fn scan(roots: SweepRoots, now: DateTime<Utc>) -> Result<ScanResult> {
   let worktree_root = absolute(&roots.worktree_root)?;
   let scratch_root = absolute(&roots.scratch_root)?;
-  let mut rows = worktree_rows(&roots.sessions_root, &worktree_root, now)?;
-  rows.extend(scratch_rows(&scratch_root, now)?);
+  let groups = load_run_groups(&roots.sessions_root)?;
+  let mut rows = worktree_rows(&roots.sessions_root, &groups, &worktree_root, now)?;
+  let open = open_worktrees(&roots.sessions_root, &groups)?;
+  rows.extend(scratch_rows(&open, &scratch_root, now)?);
   let resolved_scratch_root = paths::realpath(&scratch_root);
   for row in &mut rows {
     if row.action != SweepAction::Skip
@@ -311,6 +347,15 @@ fn scan(roots: SweepRoots, now: DateTime<Utc>) -> Result<ScanResult> {
         || (row.kind == SweepKind::Scratch && row.path == resolved_scratch_root))
     {
       row.mark_skipped("unsafe-root");
+    }
+  }
+  // The command runs once per scan. Its failure returns here, before any removal, so the whole sweep removes nothing.
+  if let Some(command) = &roots.reference_command {
+    let records = references::load(command)?;
+    for row in &mut rows {
+      if row.action != SweepAction::Skip && references::names(&records, &row.path) {
+        row.mark_skipped("external-reference");
+      }
     }
   }
   let eligible =
@@ -396,8 +441,12 @@ fn load_run_groups(sessions_root: &Path) -> Result<RunGroups> {
   Ok(groups)
 }
 
-fn worktree_rows(sessions_root: &Path, worktree_root: &Path, now: DateTime<Utc>) -> Result<Vec<SweepRow>> {
-  let groups = load_run_groups(sessions_root)?;
+fn worktree_rows(
+  sessions_root: &Path,
+  groups: &RunGroups,
+  worktree_root: &Path,
+  now: DateTime<Utc>,
+) -> Result<Vec<SweepRow>> {
   let mut rows = Vec::new();
   for (path, owners) in groups {
     if !path.is_dir() {
@@ -411,7 +460,7 @@ fn worktree_rows(sessions_root: &Path, worktree_root: &Path, now: DateTime<Utc>)
       reason: String::new(),
       owner_run: None,
     };
-    if fs::symlink_metadata(&path)?.file_type().is_symlink() {
+    if fs::symlink_metadata(path)?.file_type().is_symlink() {
       row.reason = "worktree-symlink".to_string();
       rows.push(row);
       continue;
@@ -457,7 +506,7 @@ fn worktree_rows(sessions_root: &Path, worktree_root: &Path, now: DateTime<Utc>)
     if age_days < wait_days as f64 {
       continue;
     }
-    let Some(run) = choose_owner_run(&owners) else {
+    let Some(run) = choose_owner_run(owners) else {
       row.reason = "unknown-owner".to_string();
       rows.push(row);
       continue;
@@ -548,7 +597,7 @@ fn choose_owner_run(owners: &BTreeMap<String, Vec<RunRecord>>) -> Option<RunReco
     .cloned()
 }
 
-fn scratch_rows(scratch_root: &Path, now: DateTime<Utc>) -> Result<Vec<SweepRow>> {
+fn scratch_rows(open: &[OpenWorktree], scratch_root: &Path, now: DateTime<Utc>) -> Result<Vec<SweepRow>> {
   if !scratch_root.is_dir() {
     return Ok(Vec::new());
   }
@@ -584,8 +633,13 @@ fn scratch_rows(scratch_root: &Path, now: DateTime<Utc>) -> Result<Vec<SweepRow>
     if newest >= cutoff {
       continue;
     }
-    if has_unsaved_repository(&path)? {
-      row.reason = "has-unsaved-repo".to_string();
+    if holds_open_worktree(open, &path) {
+      row.reason = "task-open".to_string();
+      rows.push(row);
+      continue;
+    }
+    if let Some(reason) = scratch_keep_reason(&path)? {
+      row.reason = reason.to_string();
       rows.push(row);
       continue;
     }
@@ -594,6 +648,57 @@ fn scratch_rows(scratch_root: &Path, now: DateTime<Utc>) -> Result<Vec<SweepRow>
     rows.push(row);
   }
   Ok(rows)
+}
+
+/// A run record's worktree whose owning session is still open, with its real path. Open work is active, so a
+/// scratch candidate that holds it is kept.
+struct OpenWorktree {
+  path: PathBuf,
+  real_path: PathBuf,
+}
+
+fn open_worktrees(sessions_root: &Path, groups: &RunGroups) -> Result<Vec<OpenWorktree>> {
+  let mut open_sessions: HashMap<&str, bool> = HashMap::new();
+  let mut open = Vec::new();
+  for (worktree, owners) in groups {
+    let mut holds_open_session = false;
+    for session_id in owners.keys() {
+      let is_open = match open_sessions.get(session_id.as_str()) {
+        Some(is_open) => *is_open,
+        None => {
+          let is_open = latest_closed_at(&sessions_root.join(session_id))?.is_none();
+          open_sessions.insert(session_id, is_open);
+          is_open
+        }
+      };
+      holds_open_session |= is_open;
+    }
+    if holds_open_session {
+      open.push(OpenWorktree { path: worktree.clone(), real_path: paths::realpath(worktree) });
+    }
+  }
+  Ok(open)
+}
+
+/// Whether an open worktree lies under `candidate`, compared both as written and as its real path.
+fn holds_open_worktree(open: &[OpenWorktree], candidate: &Path) -> bool {
+  let real_candidate = paths::realpath(candidate);
+  open.iter().any(|worktree| worktree.path.starts_with(candidate) || worktree.real_path.starts_with(&real_candidate))
+}
+
+/// Why a scratch candidate stays, or `None`. A `.git` file that points outside its main repository's worktree list
+/// keeps it as `foreign-gitdir`. Otherwise every nested repository must pass the same checks as a worktree.
+fn scratch_keep_reason(path: &Path) -> Result<Option<&'static str>> {
+  let repositories = nested_repositories(path)?;
+  if linked::linked_worktrees(&repositories)?.is_none() {
+    return Ok(Some("foreign-gitdir"));
+  }
+  for repository in &repositories {
+    if let Some(reason) = git::repo_unsaved_reason(repository)? {
+      return Ok(Some(reason));
+    }
+  }
+  Ok(None)
 }
 
 fn tree_latest_mtime(path: &Path) -> Result<f64> {
@@ -630,17 +735,6 @@ fn nested_repositories(path: &Path) -> Result<Vec<PathBuf>> {
     }
   }
   Ok(repositories)
-}
-
-/// Whether any repository below `path` holds a change that a removal would lose: an uncommitted change or a commit
-/// that no remote has.
-fn has_unsaved_repository(path: &Path) -> Result<bool> {
-  for repository in nested_repositories(path)? {
-    if git::repo_has_unsaved_changes(&repository)? {
-      return Ok(true);
-    }
-  }
-  Ok(false)
 }
 
 /// A walk over the scratch trees. It yields every entry below `path` in sorted order, and raises inspection

@@ -193,6 +193,7 @@ Before a `trial.sh --serve` run, set `CHARLIEBOT_RELEASE_RUN_DIR` to that round 
 
 The trial writes its own evidence under that directory.
 Without the variable the trial writes `~/charliebot-release-logs`, which the write boundary refuses, so the step fails.
+The round's runner sets `CHARLIEBOT_TRIAL_PROBE_ANSWER` to the launch's probe answer, so the trial takes its probe model from that file: the round's host runs no server to resolve `backends.calls.probe`.
 
 The pull request names each screenshot by its file name and width, at the widths and states that the Web UI Screenshots rule in `prompts/task_base.md` sets.
 The pull request names no link to an evidence file and no host path; the evidence text stands on its own.

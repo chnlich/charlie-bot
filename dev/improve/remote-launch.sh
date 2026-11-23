@@ -20,6 +20,8 @@
 #   - the review backend that `backends.calls.improve_review` selects, as `charliebot backend resolve` answers it,
 #     and its login: a gateway option's api_key in $CHARLIEBOT_HOME/credentials.yaml, a subscription account's access
 #     token, or a codex login in ~/.codex/auth.json;
+#   - the probe member that `backends.calls.probe` selects, as `charliebot backend resolve` answers it: the round's
+#     serve trial reads that answer, because the improve host runs no server;
 #   - the member's login: the gateway token in the environment, or a subscription member's access token in
 #     $CLAUDE_CONFIG_DIR/.credentials.json, or a codex member's login in ~/.codex/auth.json;
 #   - the leak pattern file $CHARLIEBOT_HOME/skills_leak_patterns.local.txt;
@@ -35,7 +37,8 @@
 # direction cannot be read; 7 a round dependency is missing, and stderr names it; 8 the member's login has less
 # access-token life than a round needs, and stderr names the login and its minutes left. Codes 3 to 8 start no agent
 # and no scope, and codes 7 and 8 send nothing to the host. Code 7 also covers the review backend: an unresolved
-# `backends.calls.improve_review`, a missing key or login, or a login with too little life. The review never exits 8,
+# `backends.calls.improve_review`, a missing key or login, or a login with too little life; and the probe: an
+# unresolved `backends.calls.probe`. The review never exits 8,
 # because the server reads 8 as a member's short token and swaps the member. A code 7 for a member or review CLI means
 # this host's `--version` output names no version; the install and its check are the runner's.
 #
@@ -340,6 +343,16 @@ cli_version_of "$review_kind" "$review_binary"
 review_version=$cli_version_result
 printf '%s review backend %s (%s)\n' "$STDERR_PREFIX" "$review_id" "$review_type" >&2
 
+# ---------- 1d. The probe answer ----------
+# `backends.calls.probe` names the member that a serve trial runs its model on. The improve host runs no server, so the
+# round's trial reads this answer from the launch: CHARLIEBOT_TRIAL_PROBE_ANSWER names its file. An unset call class
+# exits 7.
+if ! probe_answer=$(charliebot backend resolve --call probe 2>&1); then
+  fail 7 "cannot resolve the probe member of backends.calls.probe: $probe_answer"
+fi
+jq -e '.option.id' <<<"$probe_answer" >/dev/null \
+  || fail 7 "the resolve answer of backends.calls.probe names no option id: $probe_answer"
+
 # ---------- 2. Round preflight ----------
 set +e
 preflight_output=$(timeout "$PREFLIGHT_SECONDS" "${SSH[@]}" -n "$REMOTE_HOST" true 2>&1)
@@ -383,6 +396,9 @@ cp -- "$SCRIPT_DIR/remote-runner.sh" "$payload/remote-runner.sh"
 # The review backend's answer: the runner reads the review's backend record from it, and the answer holds no key.
 mkdir -- "$payload/review"
 printf '%s\n' "$review_answer" >"$payload/review/option.json"
+# The probe answer, in the same form: the round's serve trial reads it from probe/option.json.
+mkdir -- "$payload/probe"
+printf '%s\n' "$probe_answer" >"$payload/probe/option.json"
 cp -- "$member_kinds_file" "$payload/member_kinds.txt"
 # The runner sources the in-flight rule from this copy, so its clone scan uses
 # the same claimant and path functions as the list above.

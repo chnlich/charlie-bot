@@ -50,6 +50,9 @@ pub const SYNTHETIC_REVIEW_ID: &str = "synthetic-review";
 pub const REVIEW_MODEL: &str = "synthetic-review-model";
 pub const REVIEW_API_BASE: &str = "https://aigw.example";
 pub const REVIEW_CONTEXT_WINDOW: u64 = 409_600;
+/// The probe answer that `backends.calls.probe` resolves to, as the server prints it: the option's record with no key.
+/// The launch ships it to the round, whose serve trial reads it there.
+pub const SYNTHETIC_PROBE_ANSWER: &str = r#"{"option":{"id":"synthetic-probe","label":"Synthetic probe","type":"charlie-code","model":"synthetic-probe-model","api_base":"https://probe.example/v1"}}"#;
 /// The review option types of the gateway key and of the subscription account, whose logins the launcher reads.
 pub const GATEWAY_REVIEW_TYPE: &str = "cc-anthropic-compatible";
 pub const SUBSCRIPTION_REVIEW_TYPE: &str = "cc-claude";
@@ -171,6 +174,10 @@ fi
 if [[ -n ${FAKE_CLAUDE_INFLIGHT:-} && -e $IMPROVE_LAUNCH_DIR/inflight-files.txt ]]; then
   cp -- "$IMPROVE_LAUNCH_DIR/inflight-files.txt" "$FAKE_CLAUDE_INFLIGHT"
 fi
+# The probe answer that the round's environment names, copied as the serve trial reads it.
+if [[ -n ${CHARLIEBOT_TRIAL_PROBE_ANSWER-} ]]; then
+  cp -- "$CHARLIEBOT_TRIAL_PROBE_ANSWER" "$FAKE_CLAUDE_PROBE"
+fi
 if [[ -n ${FAKE_CLAUDE_WAIT_FOR:-} ]]; then
   for _ in $(seq 1 600); do
     [[ -e $FAKE_CLAUDE_WAIT_FOR ]] && break
@@ -275,7 +282,13 @@ fn sha256_file(path: &Path) -> String {
 
 /// The launching host's `charliebot`: `backend resolve --call improve_review` prints the answer that FAKE_RESOLVE_ANSWER
 /// names. Without that file the call class is unset, and the command fails as the CLI fails for an unset key.
-const RESOLVE_CHARLIEBOT: &str = r#"# Fake charliebot on the launching host: answer the review resolve from its fixture, or refuse as an unset call class.
+/// `backend resolve --call probe` prints FAKE_PROBE_ANSWER, which the launch ships.
+const RESOLVE_CHARLIEBOT: &str = r#"# Fake charliebot on the launching host: answer the review and probe resolves from their fixtures, or refuse as an unset
+# call class.
+if [[ ${1-} == backend && ${2-} == resolve && ${3-} == --call && ${4-} == probe ]]; then
+  cat -- "$FAKE_PROBE_ANSWER"
+  exit 0
+fi
 if [[ ${1-} == backend && ${2-} == resolve && ${3-} == --call && ${4-} == improve_review ]]; then
   if [[ -r $FAKE_RESOLVE_ANSWER ]]; then
     cat -- "$FAKE_RESOLVE_ANSWER"
@@ -538,6 +551,10 @@ pub struct World {
   /// The answer that the launching host's fake `backend resolve --call improve_review` prints. The file's absence
   /// makes the call class unset.
   pub resolve_answer: PathBuf,
+  /// The answer that the launching host's fake `backend resolve --call probe` prints.
+  pub probe_answer: PathBuf,
+  /// Where the fake claude copies the probe answer that its round's environment names, inside the round's boundary.
+  pub claude_probe: PathBuf,
   /// Where the fake codex writes its `CODEX_HOME` and its arguments: this host's records, outside the round's boundary.
   pub codex_env: PathBuf,
   pub codex_argv: PathBuf,
@@ -687,6 +704,8 @@ impl World {
       review_cwd: evidence.join("review-cwd.txt"),
       review_env: evidence.join("review-env.txt"),
       resolve_answer: sandbox.root().join("resolve-answer.json"),
+      probe_answer: sandbox.root().join("probe-answer.json"),
+      claude_probe: evidence.join("claude-probe.json"),
       codex_env: sandbox.root().join("codex-env.txt"),
       codex_argv: sandbox.root().join("codex-argv.txt"),
       codex_auth: sandbox.root().join("codex-auth.json"),
@@ -713,6 +732,7 @@ impl World {
     world.publish_member_cli("claude", LOCAL_CLAUDE_VERSION, LOCAL_CLAUDE_LINE);
     world.publish_member_cli("codex", LOCAL_CODEX_VERSION, LOCAL_CODEX_LINE);
     world.write_review_answer(GATEWAY_REVIEW_TYPE, 0);
+    fs::write(&world.probe_answer, SYNTHETIC_PROBE_ANSWER).expect("the probe answer");
     world
   }
 
@@ -885,6 +905,8 @@ impl World {
     env.insert("FAKE_CODEX_AUTH_MODE".to_string(), self.codex_auth_mode.display().to_string());
     env.insert("IMPROVE_TOKEN_MIN_SECONDS".to_string(), TOKEN_MIN_SECONDS.to_string());
     env.insert("FAKE_RESOLVE_ANSWER".to_string(), self.resolve_answer.display().to_string());
+    env.insert("FAKE_PROBE_ANSWER".to_string(), self.probe_answer.display().to_string());
+    env.insert("FAKE_CLAUDE_PROBE".to_string(), self.claude_probe.display().to_string());
     env.insert("FAKE_REVIEW_ARGV".to_string(), self.review_argv.display().to_string());
     env.insert("FAKE_REVIEW_CWD".to_string(), self.review_cwd.display().to_string());
     env.insert("FAKE_REVIEW_ENV".to_string(), self.review_env.display().to_string());
@@ -984,6 +1006,11 @@ impl World {
     record_environment(&self.claude_env)
   }
 
+  /// The probe answer that the round's environment named, as the round's agent read it from that file.
+  pub fn claude_probe_answer(&self) -> String {
+    fs::read_to_string(&self.claude_probe).expect("the fake claude copied the probe answer").trim_end().to_string()
+  }
+
   /// Whether the improve host's fake `charliebot backend run` ran at all.
   pub fn review_ran(&self) -> bool {
     self.review_argv.exists()
@@ -1071,13 +1098,15 @@ impl World {
   }
 
   /// A launch directory the runner reads, created as the launcher's payload creates it: the member kind list, the clone
-  /// check and the review backend's answer sit in it.
+  /// check, and the review backend's and the probe's answers sit in it.
   pub fn stage_launch(&self, launch_id: &str) -> PathBuf {
     let launch = self.remote_home.join("improve/launch").join(launch_id);
     fs::create_dir_all(launch.join("review")).expect("the launch's review directory");
+    fs::create_dir_all(launch.join("probe")).expect("the launch's probe directory");
     harness::copy_file(&self.repo.join("dev/improve/member_kinds.txt"), &launch.join("member_kinds.txt"));
     harness::copy_file(&self.repo.join("dev/improve/clone-check.sh"), &launch.join("clone-check.sh"));
     harness::copy_file(&self.resolve_answer, &launch.join("review/option.json"));
+    harness::copy_file(&self.probe_answer, &launch.join("probe/option.json"));
     launch
   }
 

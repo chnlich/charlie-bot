@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 use world::{
   CODEX_REFRESH_TOKEN, DIRECTION, GATEWAY_TOKEN, LOGIN_REFRESH_TOKEN, LOGIN_TOKEN, REVIEW_CREDENTIAL, REVIEW_KEY,
-  REVIEW_LOGIN_TOKEN, SUBSCRIPTION_REVIEW_TYPE, World,
+  REVIEW_LOGIN_TOKEN, SUBSCRIPTION_REVIEW_TYPE, SYNTHETIC_PROBE_ANSWER, World,
 };
 
 /// The prompt the server writes to the launcher's standard input for a plain-text run.
@@ -45,6 +45,19 @@ fn wait_until(limit: Duration, mut condition: impl FnMut() -> bool) -> bool {
     std::thread::sleep(Duration::from_millis(20));
   }
   condition()
+}
+
+/// The launcher resolves `backends.calls.probe` on its host and ships the answer with the launch. A host that runs no
+/// server has no other way to resolve the probe, so the round's environment names that answer, and the round's agent
+/// reads the answer the launcher shipped.
+#[test]
+#[ignore = "integration"]
+fn the_round_reads_the_probe_answer_the_launcher_shipped() {
+  let world = World::new();
+  let run = world.run(&world.env());
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(world.claude_ran(), "the fake claude did not run:\n{}", run.describe());
+  assert_eq!(world.claude_probe_answer(), SYNTHETIC_PROBE_ANSWER);
 }
 
 #[test]

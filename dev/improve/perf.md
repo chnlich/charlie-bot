@@ -88,9 +88,8 @@ open, that session's events viewer and the home page. Each page takes 10 cold lo
 Startup latency is the interval from the server's first log timestamp to its first successful HTTP request. Repeat five
 runs and summarize them with their median.
 
-Memory reports the server's peak resident memory during the fixed 200 requests only, on each side.
-The peak is measured over that window alone, so startup and earlier work stay out of the figure, and a short spike
-between samples is not missed.
+Memory reports the server process's peak resident memory after its high-water mark is reset at the start of the fixed
+200-request workload. This isolates that workload and captures spikes between samples.
 Both sides use the same method, and the pull request evidence names it.
 CPU reports user and system CPU time spent serving those 200 requests. Keep the workload identical between sides.
 

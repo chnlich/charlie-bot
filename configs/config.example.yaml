@@ -140,7 +140,8 @@ backends:
   #   improve_review: <option or pool id>   # the improve round's review, avoiding the author's member
   #   compaction: <cc-claude option id>
   #   web_search: <option id with api_base and credential>
-  #   judge: <option id with api_base and credential, not a pool>
+  #   judge: <vision-capable option id with api_base and credential, not a pool>
+  #          week labelling, week review, and release-switch live screenshot checks
   # Backends available for model switching. Editing the list REPLACES it — to
   # add a codex backend, append an entry such as:
   #   - id: codex-luna

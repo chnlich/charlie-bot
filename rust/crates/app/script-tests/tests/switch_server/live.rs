@@ -280,3 +280,313 @@ fn test_a_view_the_live_server_does_not_know_exits_7_through_the_switch_and_stay
   assert!(run.stdout.contains("live screenshot capture failed"), "{}", world.report(&run));
   assert!(!run.stdout.contains("SWITCH COMPLETE:"), "{}", world.report(&run));
 }
+
+fn commit_with_file_and_views(world: &World, message: &str, views: &[&str]) -> (String, String) {
+  let file = world.clone.join("web_fixture.txt");
+  fs::write(&file, format!("{message}\n")).expect("write fixture");
+  world.git(&world.clone, &["add", "web_fixture.txt"]);
+  let mut full_message = message.to_string();
+  full_message.push_str("\n\n");
+  for view in views {
+    full_message.push_str(&format!("View: {view}\n"));
+  }
+  world.git(&world.clone, &["commit", "-q", "-m", &full_message]);
+  let target = world.git(&world.clone, &["rev-parse", "HEAD"]);
+  let short = world.git(&world.clone, &["rev-parse", "--short", "HEAD"]);
+  install_release(&world.releases, &target);
+  (target, short)
+}
+
+fn setup_judge_world() -> (World, u32) {
+  let mut world = World::new();
+  world.seed_live_run("run-live", Some("claude-opus"));
+  world.record_outcome("run-live", "success");
+  let pid = world.live[0].id();
+  (world, pid)
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_judge_not_visible_exits_7_logs_commit_view_reason_and_keeps_new_release() {
+  let (world, pid) = setup_judge_world();
+  let (target, short) = commit_with_file_and_views(&world, "Wrap diff code on phones", &["/diff"]);
+
+  let run = world.switch_forward_live(
+    &target,
+    pid,
+    &drain_line("run-live"),
+    "/diff",
+    &[("FAKE_JUDGE_STDOUT", "VERDICT /diff not-visible All three screenshots show an empty Diff Viewer form.\n")],
+  );
+
+  assert_eq!(run.code, 7, "{}", world.report(&run));
+  assert!(!world.root().join("restored").exists(), "the switch did not switch back: {}", world.report(&run));
+  let current = fs::read_link(world.releases.join("current")).expect("current names a release");
+  assert_eq!(current, Path::new(&target), "the new release stays switched: {}", world.report(&run));
+  assert!(
+    run.stdout.contains(&format!(
+      "live view check: commit {short} view /diff not-visible: All three screenshots show an empty Diff Viewer form."
+    )),
+    "{}",
+    world.report(&run)
+  );
+  assert!(!run.stdout.contains("SWITCH COMPLETE:"), "{}", world.report(&run));
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_judge_all_views_shows_exits_0_and_logs_one_line_per_view() {
+  let (world, pid) = setup_judge_world();
+  let (target, short) = commit_with_file_and_views(&world, "Update status and plans", &["/?session=abc", "/plans"]);
+
+  let run = world.switch_forward_live(
+    &target,
+    pid,
+    &drain_line("run-live"),
+    "/?session=abc\n/plans",
+    &[(
+      "FAKE_JUDGE_STDOUT",
+      "VERDICT /?session=abc shows The status panel shows the updated badge.\n\
+       VERDICT /plans shows The plan table renders the new column.\n",
+    )],
+  );
+
+  assert_eq!(run.code, 0, "{}", world.report(&run));
+  assert!(
+    run.stdout.contains(&format!(
+      "live view check: commit {short} view /?session=abc shows: The status panel shows the updated badge."
+    )),
+    "{}",
+    world.report(&run)
+  );
+  assert!(
+    run
+      .stdout
+      .contains(&format!("live view check: commit {short} view /plans shows: The plan table renders the new column.")),
+    "{}",
+    world.report(&run)
+  );
+  assert!(run.stdout.contains("SWITCH COMPLETE:"), "{}", world.report(&run));
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_judge_broken_verdict_exits_7_and_logs_reason() {
+  let (world, pid) = setup_judge_world();
+  let (target, short) = commit_with_file_and_views(&world, "Render plans page", &["/plans"]);
+
+  let run = world.switch_forward_live(
+    &target,
+    pid,
+    &drain_line("run-live"),
+    "/plans",
+    &[("FAKE_JUDGE_STDOUT", "VERDICT /plans broken The page rendered a blank 500 error screen.\n")],
+  );
+
+  assert_eq!(run.code, 7, "{}", world.report(&run));
+  assert!(!world.root().join("restored").exists(), "{}", world.report(&run));
+  assert!(
+    run.stdout.contains(&format!(
+      "live view check: commit {short} view /plans broken: The page rendered a blank 500 error screen."
+    )),
+    "{}",
+    world.report(&run)
+  );
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_judge_missing_verdict_exits_7_and_logs_missing() {
+  let (world, pid) = setup_judge_world();
+  let (target, short) = commit_with_file_and_views(&world, "Update two views", &["/?session=abc", "/plans"]);
+
+  let run = world.switch_forward_live(
+    &target,
+    pid,
+    &drain_line("run-live"),
+    "/?session=abc\n/plans",
+    &[("FAKE_JUDGE_STDOUT", "VERDICT /?session=abc shows The panel shows the change.\n")],
+  );
+
+  assert_eq!(run.code, 7, "{}", world.report(&run));
+  assert!(!world.root().join("restored").exists(), "{}", world.report(&run));
+  assert!(
+    run.stdout.contains(&format!("live view check: commit {short} view /plans missing verdict")),
+    "{}",
+    world.report(&run)
+  );
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_judge_unrecognized_verdict_exits_7_and_logs_unrecognized() {
+  let (world, pid) = setup_judge_world();
+  let (target, short) = commit_with_file_and_views(&world, "Update diff header", &["/diff"]);
+
+  let run = world.switch_forward_live(
+    &target,
+    pid,
+    &drain_line("run-live"),
+    "/diff",
+    &[("FAKE_JUDGE_STDOUT", "VERDICT /diff maybe Could not tell from screenshot.\n")],
+  );
+
+  assert_eq!(run.code, 7, "{}", world.report(&run));
+  assert!(!world.root().join("restored").exists(), "{}", world.report(&run));
+  assert!(
+    run.stdout.contains(&format!("live view check: commit {short} view /diff unrecognized verdict 'maybe'")),
+    "{}",
+    world.report(&run)
+  );
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_judge_backend_run_failure_exits_7_and_logs_error() {
+  let (world, pid) = setup_judge_world();
+  let (target, short) = commit_with_file_and_views(&world, "Update diff header", &["/diff"]);
+
+  let run = world.switch_forward_live(
+    &target,
+    pid,
+    &drain_line("run-live"),
+    "/diff",
+    &[("FAKE_JUDGE_EXIT_CODE", "1"), ("FAKE_JUDGE_STDERR", "gateway returned 503 overloaded")],
+  );
+
+  assert_eq!(run.code, 7, "{}", world.report(&run));
+  assert!(!world.root().join("restored").exists(), "{}", world.report(&run));
+  assert!(
+    run.stdout.contains(&format!("live view check: commit {short}: judge failed:")),
+    "{}",
+    world.report(&run)
+  );
+  assert!(run.stdout.contains("gateway returned 503 overloaded"), "{}", world.report(&run));
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_judge_unset_calls_config_exits_7_and_logs_missing_key() {
+  let (world, pid) = setup_judge_world();
+  let (target, short) = commit_with_file_and_views(&world, "Update diff header", &["/diff"]);
+
+  let run =
+    world.switch_forward_live(&target, pid, &drain_line("run-live"), "/diff", &[("FAKE_JUDGE_CHECK_CONFIG", "1")]);
+
+  assert_eq!(run.code, 7, "{}", world.report(&run));
+  assert!(!world.root().join("restored").exists(), "{}", world.report(&run));
+  assert!(
+    run.stdout.contains(&format!("live view check: commit {short}: judge failed:")),
+    "{}",
+    world.report(&run)
+  );
+  assert!(run.stdout.contains("backends.calls.judge"), "{}", world.report(&run));
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_judge_verdict_with_leading_text_on_same_line_is_accepted() {
+  let (world, pid) = setup_judge_world();
+  let (target, short) = commit_with_file_and_views(&world, "Adjust badge color", &["/?session=abc"]);
+
+  let run = world.switch_forward_live(
+    &target,
+    pid,
+    &drain_line("run-live"),
+    "/?session=abc",
+    &[(
+      "FAKE_JUDGE_STDOUT",
+      "I need to read the screenshots.VERDICT /?session=abc shows The badge uses the new color.\n",
+    )],
+  );
+
+  assert_eq!(run.code, 0, "{}", world.report(&run));
+  assert!(
+    run.stdout.contains(&format!(
+      "live view check: commit {short} view /?session=abc shows: The badge uses the new color."
+    )),
+    "{}",
+    world.report(&run)
+  );
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_judge_task_file_and_working_dir_include_commit_diff_views_and_pngs() {
+  let (world, pid) = setup_judge_world();
+  let (target, short) = commit_with_file_and_views(&world, "Style the status header", &["/?session=abc", "/plans"]);
+  let record_dir = world.root().join("judge-record");
+  let record_dir_str = record_dir.display().to_string();
+
+  let run = world.switch_forward_live(
+    &target,
+    pid,
+    &drain_line("run-live"),
+    "/?session=abc\n/plans",
+    &[
+      ("FAKE_SCREENSHOT_SIZES", "1536x900 390x844"),
+      ("FAKE_JUDGE_RECORD_DIR", &record_dir_str),
+      (
+        "FAKE_JUDGE_STDOUT",
+        "VERDICT /?session=abc shows Status header matches.\nVERDICT /plans shows Plans view unaffected.\n",
+      ),
+    ],
+  );
+
+  assert_eq!(run.code, 0, "{}", world.report(&run));
+  let shot_dir = world.logs.join("live-screenshots/switch_test").join(&short);
+  let recorded_cwd = fs::read_to_string(record_dir.join("cwd.txt")).expect("cwd.txt");
+  assert_eq!(Path::new(recorded_cwd.trim()), shot_dir.as_path());
+
+  let args = fs::read_to_string(record_dir.join("args.txt")).expect("args.txt");
+  let arg_lines: Vec<&str> = args.lines().collect();
+  assert!(arg_lines.windows(2).any(|w| w == ["--call", "judge"]), "{args}");
+  assert!(arg_lines.contains(&"--task-file"), "{args}");
+  assert!(!arg_lines.contains(&"--one-shot"), "never pass --one-shot: {args}");
+
+  assert!(shot_dir.join("task.md").is_file());
+  assert!(shot_dir.join("answer.txt").is_file());
+  assert!(shot_dir.join("events.ndjson").is_file());
+
+  let task_md = fs::read_to_string(record_dir.join("task.md")).expect("task.md");
+  assert!(task_md.contains("# Live view check"), "{task_md}");
+  assert!(task_md.contains("Style the status header"), "{task_md}");
+  assert!(task_md.contains("web_fixture.txt | 1 +"), "{task_md}");
+  assert!(task_md.contains("diff --git a/web_fixture.txt b/web_fixture.txt"), "{task_md}");
+  assert!(task_md.contains("- View: /?session=abc"), "{task_md}");
+  assert!(task_md.contains("- View: /plans"), "{task_md}");
+
+  let cwd_entries = fs::read_to_string(record_dir.join("cwd_entries.txt")).expect("cwd_entries.txt");
+  let pngs: Vec<&str> = cwd_entries.lines().filter(|name| name.ends_with(".png")).collect();
+  assert_eq!(pngs.len(), 4, "expected 2 views x 2 sizes = 4 PNGs: {cwd_entries}");
+  for png in pngs {
+    assert!(task_md.contains(png), "task.md missing PNG {png}: {task_md}");
+  }
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_two_views_sharing_first_80_chars_produce_distinct_png_filenames() {
+  let (world, pid) = setup_judge_world();
+  let prefix = "/diff?repo=~/workspace/charlie-bot&base=0123456789abcdef0123456789abcdef01234567&";
+  assert!(prefix.len() > 80);
+  let view_a = format!("{prefix}head=aaaaaaa");
+  let view_b = format!("{prefix}head=bbbbbbb");
+  let (target, short) = commit_with_file_and_views(&world, "Two long diff views", &[&view_a, &view_b]);
+  let known = format!("{view_a}\n{view_b}");
+  let stdout = format!("VERDICT {view_a} shows View A rendered.\nVERDICT {view_b} shows View B rendered.\n");
+
+  let run = world.switch_forward_live(&target, pid, &drain_line("run-live"), &known, &[("FAKE_JUDGE_STDOUT", &stdout)]);
+
+  assert_eq!(run.code, 0, "{}", world.report(&run));
+  let shot_dir = world.logs.join("live-screenshots/switch_test").join(&short);
+  let pngs: Vec<String> = fs::read_dir(&shot_dir)
+    .expect("shot dir")
+    .filter_map(|entry| {
+      let name = entry.expect("entry").file_name().to_string_lossy().into_owned();
+      name.ends_with(".png").then_some(name)
+    })
+    .collect();
+  assert_eq!(pngs.len(), 2, "two distinct PNGs expected for two long views: {pngs:?}");
+  assert_ne!(pngs[0], pngs[1]);
+}

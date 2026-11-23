@@ -485,7 +485,8 @@ pub enum CallClass {
   Compaction,
   /// The web search tool; one option with an endpoint and a credential.
   WebSearch,
-  /// Week labelling and week review; one option with an endpoint and a credential, never a pool.
+  /// Week labelling, week review, and release-switch live screenshot checks; one vision-capable option with an
+  /// endpoint and a credential, never a pool.
   Judge,
 }
 

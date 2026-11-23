@@ -650,10 +650,12 @@ holds, and only the reference before side's line carries a verdict. The chrome t
 closed browser fails its unanswered DevTools calls and drops its pipe handles. The scenario tests check the status
 counting against synthetic poll records of both answer shapes: the baseline's whole row map and the change's `{token,
 rows, gone}`. A poll that finishes after the window is not counted, and its unread body does not fail the window; a
-poll that finishes inside the window with no body read does. The tab tests check the switch's row handling against a stub sidebar that keeps rows back: a row absent
-from the document or hidden in it is clicked only after its group's Show all paints it, and a row that no toggle reaches
-fails the step. The open tests check the CPU rate's sharing (a shared rate stands, beside the one the side's own
-reference derives), the reference's document (a reference repetition whose document crossed the link gives no rate) and
+poll that finishes inside the window with no body read does. The tab tests check the switch's row handling against a
+stub sidebar that keeps rows back: a row absent from the document or hidden in it is clicked only after its group's
+Show all paints it, and a row that no toggle reaches fails the step. They also check that showing a tab waits for the
+other tabs to report hidden, and that an idle wait leaves out the requests its caller matches. The open tests check the
+CPU rate's sharing (a shared rate stands, beside the one the side's own reference derives), the reference's document (a
+reference repetition whose document crossed the link gives no rate) and
 the host interference (a dropped request, a failed navigation or a release open the host pushed past `OPEN.openByMs`
 names the interference; any other load failure stays the repetition's own record; a repetition the host spoiled is
 rerun, bounded, and its reruns recorded). The open record's tests check that a reload inside an open keeps the first

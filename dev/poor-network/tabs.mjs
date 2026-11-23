@@ -6,6 +6,9 @@
 import { INTERCEPT_PATTERNS } from './assets.mjs';
 
 const POLL_MS = 25;
+// The wait for a background tab to report hidden after the visible tab is activated: Chrome's visibility change
+// follows the activation command by a frame or more, and later while the host is loaded.
+const VISIBILITY_TIMEOUT_MS = 30000;
 // The localStorage key the web client reads its access key from (web/static/js/config.js).
 const ACCESS_KEY_NAME = 'charliebot_access_key';
 // The wait for a row that a group's "Show all" fetches: the full listing crosses the link beside the background load.
@@ -704,16 +707,28 @@ export class Tabs {
     this.#tabs = this.#tabs.filter((candidate) => candidate !== tab);
   }
 
-  // Shows `tab` and hides every other tab, as the window does for the tab a person looks at.
+  // Shows `tab` and hides every other tab, as the window does for the tab a person looks at. The activation reaches
+  // the other tabs' documents after the DevTools command returns, later while the host is loaded, so this waits for
+  // their hidden state; a tab that never reports it fails the step.
   async show(tab) {
     await this.#browser.activate(tab.page);
-    for (const other of this.#tabs) {
-      if (other !== tab) {
+    const others = this.#tabs.filter((other) => other !== tab);
+    const deadline = Date.now() + VISIBILITY_TIMEOUT_MS;
+    for (;;) {
+      const visible = [];
+      for (const other of others) {
         const state = await other.evaluate('document.visibilityState');
         if (state !== 'hidden') {
-          throw new Error(`${other.name} is ${state} while ${tab.name} is shown`);
+          visible.push(`${other.name} is ${state}`);
         }
       }
+      if (visible.length === 0) {
+        return;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(`${visible.join(', ')} while ${tab.name} is shown`);
+      }
+      await sleep(POLL_MS);
     }
   }
 

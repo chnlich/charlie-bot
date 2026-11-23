@@ -193,3 +193,42 @@ test('waitIdle skips requests matched by ignore while waiting on others', async 
   assert.equal(tab.requests.get('poll').finishAt, null);
   assert.notEqual(tab.requests.get('asset').finishAt, null);
 });
+
+// A browser whose tabs report their document's visibility. The activation reaches the other documents after
+// `hideDelayMs`, as Chrome's does: Target.activateTarget returns before the other tabs report hidden.
+function visibilityBrowser(hideDelayMs) {
+  const pages = [];
+  return {
+    pages,
+    activate: async (page) => {
+      setTimeout(() => {
+        for (const other of pages) {
+          if (other !== page) other.state = 'hidden';
+        }
+      }, hideDelayMs);
+    },
+    send: async () => ({}),
+    onMessage: () => {},
+    newPage: async () => {
+      const page = {
+        targetId: `page-${pages.length + 1}`,
+        state: 'visible',
+        send: async () => ({}),
+        evaluate: async () => page.state,
+      };
+      pages.push(page);
+      return page;
+    },
+  };
+}
+
+test('show waits for a background tab whose hidden state follows the activation', async () => {
+  const browser = visibilityBrowser(80);
+  const tabs = new Tabs({browser, assets: new Map(), accessKey: 'k', origin: 'https://front.test', cdn: 'link'});
+  const shown = await tabs.open('visible');
+  await tabs.open('hidden-1');
+  await tabs.open('hidden-2');
+  await tabs.show(shown);
+  assert.equal(browser.pages[0].state, 'visible');
+  assert.deepEqual(browser.pages.slice(1).map((page) => page.state), ['hidden', 'hidden']);
+});

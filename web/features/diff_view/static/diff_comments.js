@@ -3,6 +3,10 @@
   const PREFIX = 'cbdc';
   const FILE_BODY_SELECTOR = '[data-cbdc-file-path]';
   const QUOTE_LIMIT = 400;
+  // The tray's offset from the viewport's bottom edge, and the gap in px between an open editor's bottom edge and the
+  // tray's top edge.
+  const TRAY_BOTTOM = 14;
+  const TRAY_CLEARANCE = 12;
   const outputEl = document.getElementById('diff-output');
 
   let currentComparison = window.__cbdiffPage.getComparison();
@@ -194,9 +198,12 @@
         border-color: #2563eb; background: #2563eb; color: white;
       }
       .${PREFIX}-tray button:disabled { cursor: not-allowed; opacity: .55; }
+      /* The tray stays within half the viewport. keepEditorAboveTray scrolls an open editor up to the tray's top
+         edge, so the band above the tray must hold the editor, about 150 px with its footer. A 680 px tray on an
+         844 px phone leaves about 100 px below the top bar, and the editor's footer then stays under the tray. */
       .${PREFIX}-tray {
-        position: fixed; right: 14px; bottom: 14px; z-index: 20;
-        width: min(360px, calc(100vw - 28px)); max-height: min(680px, calc(100vh - 28px));
+        position: fixed; right: ${TRAY_BOTTOM}px; bottom: ${TRAY_BOTTOM}px; z-index: 20;
+        width: min(360px, calc(100vw - 28px)); max-height: min(680px, 50vh);
         display: none; flex-direction: column; gap: 8px; overflow: hidden;
         border: 1px solid #cbd5e1; border-radius: 9px; padding: 10px;
         background: white; color: #0f172a; box-shadow: 0 18px 50px rgba(15, 23, 42, .22);
@@ -205,8 +212,10 @@
       /* The header names the target session, which the select below also names. A long name
          stays on this one clamped line: wrapped, it takes more height than the tray has and
          pushes the list and actions past the tray's overflow clip. */
+      /* The header's overflow clip gives it no minimum height, so under the tray's half-viewport cap the flex column
+         would shrink it below its line. flex: none keeps the line; the list, which scrolls, takes the shrink. */
       .${PREFIX}-tray-header {
-        font-weight: 650; color: #334155;
+        flex: none; font-weight: 650; color: #334155;
         overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       }
       .${PREFIX}-target { display: flex; flex-direction: column; gap: 4px; }
@@ -503,6 +512,15 @@
     cancelButton.addEventListener('click', closeEditor);
     addButton.addEventListener('click', submit);
     textarea.focus();
+    keepEditorAboveTray(editor);
+  }
+
+  // The tray is fixed over the lower part of the page. The focus scroll can leave the textarea at the viewport's bottom
+  // edge, which puts the editor's footer under the tray. Scroll up by the overlap, so the whole editor clears the tray.
+  function keepEditorAboveTray(editor) {
+    if (tray.style.display === 'none') return;
+    const overlap = editor.getBoundingClientRect().bottom - (tray.getBoundingClientRect().top - TRAY_CLEARANCE);
+    if (overlap > 0) window.scrollBy(0, overlap);
   }
 
   function closeEditor() {
@@ -830,6 +848,10 @@
     // The picker waits while the URL's session is unresolved, because the URL's choice wins; otherwise it stays enabled
     // while the list is absent, so a press retries a failed list load.
     targetSelect.disabled = sending || querySessionStatus === 'loading' || querySessionStatus === 'error';
+    // While the tray shows, the page extends below its last row by the tray's height and offsets. Without that
+    // extension, an editor on the last rows scrolls up only as far as the page continues below it.
+    const trayBand = tray.offsetHeight + TRAY_BOTTOM + TRAY_CLEARANCE;
+    document.body.style.paddingBottom = pending.length > 0 ? `${trayBand}px` : '';
   }
 
   function removeEntry(index) {

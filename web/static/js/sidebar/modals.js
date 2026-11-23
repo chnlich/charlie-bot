@@ -2,19 +2,25 @@
   const Sidebar = globalThis.Sidebar;
 
 let renameSessionId = null;
+let renameRowEl = null;
 let renameNameEl = null;
 let sessionActionModalState = null;
 
-// While the field is open it replaces the row's name, so the name's text is hidden. A pointer device's hover buttons
-// start 4 px past the field's end, and the name's text between the field and those buttons would otherwise show.
-function hideRenameName(nameEl) {
+// While the field is open it replaces the row's name line. The row's name text is hidden, because a pointer device's
+// hover buttons start 4 px past the field's end and the name's text between the field and those buttons would
+// otherwise show. The row also takes the `renaming` class, which keeps the hover buttons' cover on that line
+// (sidebar-interactions.css), so they do not paint over the row's second line — the time and the backend.
+function hideRenameName(rowEl, nameEl) {
+  renameRowEl = rowEl;
   renameNameEl = nameEl;
+  rowEl.classList.add('renaming');
   nameEl.style.visibility = 'hidden';
 }
 
 function showRenameName() {
-  if (!renameNameEl) return;
-  renameNameEl.style.visibility = '';
+  if (renameRowEl) renameRowEl.classList.remove('renaming');
+  if (renameNameEl) renameNameEl.style.visibility = '';
+  renameRowEl = null;
   renameNameEl = null;
 }
 
@@ -56,7 +62,7 @@ function startRename(e, id) {
     const boxLeft = valueRect.left - padLeft;
     input.style.left = boxLeft + 'px';
     input.style.width = buttonsLeft - 4 - boxLeft + 'px';
-    if (nameEl) hideRenameName(nameEl);
+    if (nameEl) hideRenameName(link, nameEl);
   } else {
     input.style.left = rect.left + 'px';
     input.style.width = rect.width + 'px';

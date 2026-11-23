@@ -7,6 +7,21 @@
    phone that row sits in the fixed drawer (z-index 100), so the field takes the
    row menu's z-index to paint above the drawer instead of behind it. */
 #rename-input { z-index: 150; }
+/* A pointer device's row actions carry an opaque full-row cover, which hides the text end under their
+   buttons. While the rename field is open the field replaces the row's name line, so that cover runs
+   over the row's second line — the time and the backend — and cuts it mid-glyph at the action's edge,
+   4 px past the field's end. The row's `renaming` class (sidebar/modals.js) gives the actions the name
+   line's band instead: from 4 px to 28 px of the row, its 8 px padding-top and 20 px name line less 4 px
+   at the top for a 24 px box. Every action stays visible, aligned with the field, and the second line
+   stays whole below them. The static starred star stays in flow and takes no part; the touch layout
+   paints its own buttons and keeps its 44 px boxes. */
+@media (hover: hover) {
+  .session-row.renaming > button:not(.\!opacity-100) {
+    top: 4px;
+    bottom: auto;
+    height: 24px;
+  }
+}
 /* The Task & context dialog (index.html, sidebar/modals.js) names the session it
    was opened for in its title, and the dialog's body reads that session's task
    and next run context. The title is the dialog's only statement of which

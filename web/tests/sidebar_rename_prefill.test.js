@@ -53,6 +53,7 @@ function fakeRect(width) {
 // buttons as {left, width}; a width of 0 is a button with no box.
 function makeDom({rowWidth = 220, rowName = 'demo session', fullName = rowName, headerName = 'demo session',
   headerHeight = 28, withRow = true, buttons = []}) {
+  const rowClasses = new Set();
   const input = {
     value: '',
     style: {},
@@ -72,12 +73,17 @@ function makeDom({rowWidth = 220, rowName = 'demo session', fullName = rowName, 
     querySelectorAll: () => buttons.map((b) => ({
       getBoundingClientRect: () => ({top: 100, left: b.left, width: b.width, height: 24, right: b.left + b.width}),
     })),
+    classList: {
+      add(name) { rowClasses.add(name); },
+      remove(name) { rowClasses.delete(name); },
+      contains(name) { return rowClasses.has(name); },
+    },
   } : null;
   const headerEl = {textContent: headerName, getBoundingClientRect: () => ({...fakeRect(400), height: headerHeight})};
   const elements = {'rename-input': input, 'header-session-name': headerEl};
   if (rowEl) elements['session-s1'] = rowEl;
   return {
-    input, nameSpan, rowEl, headerEl,
+    input, nameSpan, rowEl, rowClasses, headerEl,
     document: {getElementById: (id) => (id in elements ? elements[id] : null)},
   };
 }
@@ -145,6 +151,7 @@ test('Enter on an untouched shortened field commits the full name', async () => 
   assert.equal(fetches[0].url, '/api/sessions/s1');
   assert.deepEqual(JSON.parse(fetches[0].opts.body), {name: 'Slack #docs-review 2026-11-10 12:17'});
   assert.equal(dom.nameSpan.style.visibility, '', 'the commit left the row name hidden');
+  assert.ok(!dom.rowClasses.has('renaming'), 'the commit left the hover actions on the name line');
 });
 
 test('the field ends 4 px before the leftmost row button that has a box', () => {
@@ -162,12 +169,14 @@ test('a row with no button that has a box runs the field to its right edge less 
   assert.equal(dom.input.style.width, '228px');
 });
 
-test('the row name is hidden while the field is open and shown again on Escape', () => {
+test('the row name is hidden and the row is renaming while the field is open', () => {
   const dom = makeDom({rowName: 'demo session'});
   const context = clickRename(dom);
   assert.equal(dom.nameSpan.style.visibility, 'hidden', 'the name text shows beside the field');
+  assert.ok(dom.rowClasses.has('renaming'), 'the hover actions keep their full-row cover over the second line');
   context.handleRenameKey({key: 'Escape', preventDefault() {}});
   assert.equal(dom.nameSpan.style.visibility, '');
+  assert.ok(!dom.rowClasses.has('renaming'), 'Escape left the hover actions on the name line');
 });
 
 test('hostile names round-trip exactly through the prefill', () => {

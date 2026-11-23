@@ -631,11 +631,12 @@ test('openSessionRowMenu builds the item list from the button\u2019s data attrib
     return [...items].map((item) => item.label);
   };
 
-  // A root manager, unbound: all four items; each core item's onSelect calls
-  // its action. (Move to group opens the group selector modal, outside this
-  // harness's reach; the browser harness covers it.)
+  // A root manager, unbound: the four core items, then Add schedule\u2026 from
+  // cron.js; each core item's onSelect calls its action. (Move to group opens
+  // the group selector modal, outside this harness's reach; the browser
+  // harness covers it.)
   assert.deepEqual(open({currentGroup: 'Work', profile: 'manager'}, 'r1'),
-    ['Rename', 'Move to group\u2026', 'Task & context', 'Move under\u2026']);
+    ['Rename', 'Move to group\u2026', 'Task & context', 'Move under\u2026', 'Add schedule\u2026']);
   items[0].onSelect(click);
   items[2].onSelect(click);
   assert.deepEqual(calls, [
@@ -646,7 +647,7 @@ test('openSessionRowMenu builds the item list from the button\u2019s data attrib
 
   // A child manager moves with its parent: no Move to group.
   assert.deepEqual(open({taskParent: 'r1', profile: 'manager'}, 'c1'),
-    ['Rename', 'Task & context', 'Move under\u2026']);
+    ['Rename', 'Task & context', 'Move under\u2026', 'Add schedule\u2026']);
   calls.length = 0;
   items[1].onSelect(click);
   assert.deepEqual(calls, [['taskContext', 'c1']]);
@@ -678,10 +679,10 @@ test('touch menus lead with the Later toggle and child creation and trail with A
   };
 
   // A root manager: the two touch-only leads, the desktop items in their
-  // order, then the separator and Archive.
+  // order (Add schedule\u2026 last, from cron.js), then the separator and Archive.
   assert.deepEqual(open({currentGroup: 'Work', profile: 'manager'}, 'm1'),
     ['Add to Later', 'New child session', 'Rename', 'Move to group\u2026', 'Task & context',
-     'Move under\u2026', '---', 'Archive']);
+     'Move under\u2026', 'Add schedule\u2026', '---', 'Archive']);
   items[0].onSelect(click);
   items[1].onSelect(click);
   items[items.length - 1].onSelect(click);
@@ -694,7 +695,7 @@ test('touch menus lead with the Later toggle and child creation and trail with A
   // A task-tree child keeps the desktop order minus Move to group.
   assert.deepEqual(open({taskParent: 'r1', profile: 'manager'}, 'c1'),
     ['Add to Later', 'New child session', 'Rename', 'Task & context', 'Move under\u2026',
-     '---', 'Archive']);
+     'Add schedule\u2026', '---', 'Archive']);
 
   // A starred row reads its state off the star button (only star-r1 resolves
   // to the repainted solid star): Remove from Later toggles away from

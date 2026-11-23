@@ -12,5 +12,5 @@ Classify each View line as one of three verdicts:
 
 If a screenshot shows an unrelated existing defect outside the changed region, report it only in the reason text and keep the verdict based on the commit's own change.
 
-Emit exactly one line per listed View line and no other text, in this form:
-VERDICT <View line> <shows|not-visible|broken> <one-sentence reason>
+Emit exactly one line per listed View line and no other text, in this form, where `<view>` is the URL that line names:
+VERDICT <view> <shows|not-visible|broken> <one-sentence reason>

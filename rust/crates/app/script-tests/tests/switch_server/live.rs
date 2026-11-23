@@ -456,11 +456,7 @@ fn test_judge_backend_run_failure_exits_7_and_logs_error() {
 
   assert_eq!(run.code, 7, "{}", world.report(&run));
   assert!(!world.root().join("restored").exists(), "{}", world.report(&run));
-  assert!(
-    run.stdout.contains(&format!("live view check: commit {short}: judge failed:")),
-    "{}",
-    world.report(&run)
-  );
+  assert!(run.stdout.contains(&format!("live view check: commit {short}: judge failed:")), "{}", world.report(&run));
   assert!(run.stdout.contains("gateway returned 503 overloaded"), "{}", world.report(&run));
 }
 
@@ -475,11 +471,7 @@ fn test_judge_unset_calls_config_exits_7_and_logs_missing_key() {
 
   assert_eq!(run.code, 7, "{}", world.report(&run));
   assert!(!world.root().join("restored").exists(), "{}", world.report(&run));
-  assert!(
-    run.stdout.contains(&format!("live view check: commit {short}: judge failed:")),
-    "{}",
-    world.report(&run)
-  );
+  assert!(run.stdout.contains(&format!("live view check: commit {short}: judge failed:")), "{}", world.report(&run));
   assert!(run.stdout.contains("backends.calls.judge"), "{}", world.report(&run));
 }
 
@@ -502,9 +494,9 @@ fn test_judge_verdict_with_leading_text_on_same_line_is_accepted() {
 
   assert_eq!(run.code, 0, "{}", world.report(&run));
   assert!(
-    run.stdout.contains(&format!(
-      "live view check: commit {short} view /?session=abc shows: The badge uses the new color."
-    )),
+    run
+      .stdout
+      .contains(&format!("live view check: commit {short} view /?session=abc shows: The badge uses the new color.")),
     "{}",
     world.report(&run)
   );

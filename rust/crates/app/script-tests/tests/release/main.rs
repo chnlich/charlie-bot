@@ -1430,6 +1430,30 @@ fn test_trial_serve_stops_the_tmux_server_it_started_and_removes_its_tree() {
   assert_eq!(fs::read_dir(tree_root).expect("the tree root").count(), 0, "{}", run.describe());
 }
 
+#[test]
+#[ignore = "integration"]
+fn test_trial_serve_stops_the_tmux_server_even_when_its_socket_was_removed() {
+  let world = ServeWorld::new();
+  let seed = world.seed_home("seed", "1");
+  let tree_root = world.tree_root();
+  let pid_file = world.sandbox.root().join("tmux-lost-socket.pid");
+  // Remove the tmux socket directory while the command runs, then fail the command, so teardown must find and end
+  // the surviving tmux server without a socket on a failure exit path.
+  let script = format!(
+    "tmux -L charliebot new-session -d -s probe cat && tmux -L charliebot display-message -p '#{{pid}}' > '{}' && rm -rf \"$TMUX_TMPDIR\"/tmux-* && exit 1",
+    pid_file.display()
+  );
+
+  let run = world.serve(tree_root, &seed, &["sh", "-c", script.as_str()]);
+
+  assert_eq!(run.code, 1, "{}", run.describe());
+  let tmux_pid: i32 =
+    fs::read_to_string(&pid_file).expect("the tmux server pid").trim().parse().expect("a numeric tmux server pid");
+  assert!(!process_is_running(tmux_pid), "the trial left tmux server {tmux_pid} running: {}", run.describe());
+  assert!(run.stdout.contains("SERVE PASS ChildProcess:"), "{}", run.describe());
+  assert_eq!(fs::read_dir(tree_root).expect("the tree root").count(), 0, "{}", run.describe());
+}
+
 /// Runs `trial` in its own process group and waits at most `limit` for it. A trial still running at the limit has its
 /// group killed, so the server it started dies too, and the run's code is -1: the caller's assertions name the hang.
 fn run_within(trial: &mut Command, limit: Duration) -> Run {

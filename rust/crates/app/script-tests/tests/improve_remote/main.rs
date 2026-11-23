@@ -131,7 +131,7 @@ fn a_round_worker_whose_parent_is_a_cron_session_still_runs_over_ssh() {
 /// The in-flight list's run from `cwd`.
 fn run_inflight_list_from(world: &World, env: &harness::Env, cwd: &Path) -> harness::Run {
   let mut command = harness::command("bash", env);
-  command.arg(world.repo.join("dev/improve/inflight-files.sh")).arg("improve/perf/").current_dir(cwd);
+  command.arg(world.repo.join("dev/improve/inflight-files.sh")).arg(format!("improve/{DIRECTION}/")).current_dir(cwd);
   harness::run(&mut command)
 }
 
@@ -477,6 +477,7 @@ exit 0
 const FOCUS_DIRECTION: &str = "focused";
 const SYMLINK_DIRECTION: &str = "symlink_review";
 const SCOPE_TMPDIR_DIRECTION: &str = "scope_tmpdir";
+const OTHER_DIRECTION: &str = "test_ux";
 
 /// The run of the runner's `--in-scope` form alone, with the stub improve-sandbox that records the scope's variables and
 /// the Codex home. The scope writes the review's login into the launch's review directory, and the round's credentials
@@ -788,7 +789,9 @@ fn the_round_writes_only_the_evidence_copy_on_this_host() {
   assert!(!tree.is_empty(), "the launcher copied no evidence back:\n{}", run.describe());
   for path in &tree {
     assert!(
-      path == "perf" || path == "perf/evidence" || path.starts_with("perf/evidence/"),
+      path == DIRECTION
+        || *path == format!("{DIRECTION}/evidence")
+        || path.starts_with(&format!("{DIRECTION}/evidence/")),
       "the launcher wrote outside {}/{DIRECTION}/evidence: {path}",
       evidence_root.display()
     );
@@ -1211,7 +1214,7 @@ fn a_start_removes_a_dead_launchs_member_credential_and_keeps_a_live_launchs() {
   let dead = world.remote_home.join("improve/launch/20261001T000000Z-7-70");
   fs::create_dir_all(&dead).expect("the dead launch's directory");
   write_member_credential(&dead, &[("ANTHROPIC_AUTH_TOKEN", "synthetic-dead-launch-token")]);
-  let mut leader = spawn_live_round(&world, "ux");
+  let mut leader = spawn_live_round(&world, OTHER_DIRECTION);
   let live = world.remote_home.join("improve/launch/20261103T120000Z-9-900/member-credential");
   write_member_credential(
     live.parent().expect("the live launch's directory"),
@@ -1410,7 +1413,7 @@ fn the_runner_generates_a_missing_shared_mock_home_before_the_round_starts() {
   assert_eq!(run.code, 0, "{}", run.describe());
   assert_eq!(
     fs::read_to_string(&world.mock_home_log).expect("the mock-home calls"),
-    format!("version\ngenerate {}\nround perf\n", mock_home.display()),
+    format!("version\ngenerate {}\nround {DIRECTION}\n", mock_home.display()),
     "the runner did not generate the complete mock home before starting the round"
   );
   assert_eq!(
@@ -1464,7 +1467,10 @@ fn the_forwarded_variables_reach_the_round_and_the_run_token_and_this_hosts_conf
   let config_dir = format!("{remote_home}/.claude-improve");
   assert_eq!(value("CLAUDE_CONFIG_DIR"), Some(config_dir.as_str()));
   let tmpdir = value("TMPDIR").expect("the round's TMPDIR");
-  assert!(tmpdir.starts_with("/tmp/improve-perf-tmp/"), "the round's TMPDIR is not under the session TMPDIR: {tmpdir}");
+  assert!(
+    tmpdir.starts_with(&format!("/tmp/improve-{DIRECTION}-tmp/")),
+    "the round's TMPDIR is not under the session TMPDIR: {tmpdir}"
+  );
   assert!(!text.contains("CHARLIEBOT_RUN_TOKEN"), "the run token reached the round:\n{text}");
   assert!(!text.contains(world::REMOTE_HOST), "a launcher setting reached the round:\n{text}");
 }
@@ -1587,15 +1593,18 @@ fn the_direction_comes_from_the_worker_session_and_its_task_file() {
   let world = World::new();
   // A task file of another session comes first in the directory. Its direction must not win.
   fs::write(
-    world.sandbox.dir("profile/config.d/cron.d").join("improve-ux.yaml"),
-    "prompt_file: dev/improve/ux.md\nsession_id: 00000000-0000-0000-0000-000000000000\n",
+    world.sandbox.dir("profile/config.d/cron.d").join(format!("improve-{OTHER_DIRECTION}.yaml")),
+    format!("prompt_file: dev/improve/{OTHER_DIRECTION}.md\nsession_id: 00000000-0000-0000-0000-000000000000\n"),
   )
   .expect("another task file");
   let run = world.run(&world.env());
   assert_eq!(run.code, 0, "{}", run.describe());
   let scope = fs::read_to_string(&world.systemd_run_log).expect("the scope record");
-  assert!(scope.contains("--unit improve-perf"), "the round ran in another direction's scope: {scope}");
-  assert!(!scope.contains("--unit improve-ux"), "{scope}");
+  assert!(
+    scope.contains(&format!("--unit improve-{DIRECTION}")),
+    "the round ran in another direction's scope: {scope}"
+  );
+  assert!(!scope.contains(&format!("--unit improve-{OTHER_DIRECTION}")), "{scope}");
 }
 
 #[test]
@@ -1633,7 +1642,7 @@ fn an_existing_scope_exits_5_and_starts_no_claude() {
   assert!(!world.claude_ran(), "a round started inside the previous round's scope");
   assert!(stderr(&run).contains("previous round"), "{}", run.describe());
   let scope = fs::read_to_string(&world.systemd_run_log).expect("the scope record");
-  assert!(scope.contains("--unit improve-perf"), "{scope}");
+  assert!(scope.contains(&format!("--unit improve-{DIRECTION}")), "{scope}");
 }
 
 #[test]
@@ -1652,7 +1661,10 @@ fn a_failed_scope_is_reset_and_the_round_starts() {
   assert!(failed < reset, "the reset did not follow the failed report:\n{calls:?}");
   assert!(stderr(&run).contains(&format!("cleared the failed scope improve-{DIRECTION}.scope")), "{}", run.describe());
   let scope = fs::read_to_string(&world.systemd_run_log).expect("the scope record");
-  assert!(scope.contains("--unit improve-perf"), "the round started no scope after the reset: {scope}");
+  assert!(
+    scope.contains(&format!("--unit improve-{DIRECTION}")),
+    "the round started no scope after the reset: {scope}"
+  );
 }
 
 #[test]
@@ -1683,7 +1695,7 @@ fn an_active_scope_whose_round_is_over_is_stopped_and_the_round_starts() {
     run.describe()
   );
   let scope = fs::read_to_string(&world.systemd_run_log).expect("the scope record");
-  assert!(scope.contains("--unit improve-perf"), "the round started no scope after the stop: {scope}");
+  assert!(scope.contains(&format!("--unit improve-{DIRECTION}")), "the round started no scope after the stop: {scope}");
 }
 
 #[test]
@@ -1805,7 +1817,8 @@ fn the_heartbeat_stops_the_scope_after_the_launcher_is_killed() {
   });
   assert!(started, "the round never started a scope:\n{}", world.ssh_arguments());
   launcher.kill().expect("kill the launcher");
-  let stopped = wait_until(Duration::from_secs(5), || world.systemctl_calls().contains("stop improve-perf.scope"));
+  let stopped =
+    wait_until(Duration::from_secs(5), || world.systemctl_calls().contains(&format!("stop improve-{DIRECTION}.scope")));
   let calls = world.systemctl_calls();
   let _ = launcher.wait();
   assert!(stopped, "the heartbeat did not stop the scope within 5 seconds: {calls:?}");
@@ -1845,14 +1858,14 @@ fn stop_live_round(leader: &mut std::process::Child) {
 fn a_running_rounds_clone_adds_its_checked_out_branchs_files_to_the_list() {
   let world = World::new();
   // A standalone clone of another direction, like the host worker's five clones on the remote host.
-  let clone = world.other_direction_clone("ux");
+  let clone = world.other_direction_clone(OTHER_DIRECTION);
   // A file whose removal main lands after the topic branch's base, as a rename's old name does.
   fs::write(clone.join("dropped.md"), "old\n").expect("the dropped fixture file");
   world.git(&clone, &["add", "-A"]);
   world.git(&clone, &["commit", "-q", "-m", "add the dropped file"]);
   // The committed change rides the checked-out topic branch, as a round's branch does, and it
   // touches the old path beside the live one.
-  world.git(&clone, &["switch", "-q", "-c", "improve/ux/topic"]);
+  world.git(&clone, &["switch", "-q", "-c", &format!("improve/{OTHER_DIRECTION}/topic")]);
   fs::write(clone.join("committed.md"), "topic\n").expect("the committed fixture file");
   fs::write(clone.join("dropped.md"), "topic\n").expect("the dropped path's topic change");
   world.git(&clone, &["add", "-A"]);
@@ -1862,13 +1875,13 @@ fn a_running_rounds_clone_adds_its_checked_out_branchs_files_to_the_list() {
   world.git(&clone, &["rm", "-q", "dropped.md"]);
   world.git(&clone, &["commit", "-q", "-m", "drop the old name"]);
   world.git(&clone, &["push", "-q", "origin", "main"]);
-  world.git(&clone, &["switch", "-q", "improve/ux/topic"]);
+  world.git(&clone, &["switch", "-q", &format!("improve/{OTHER_DIRECTION}/topic")]);
   // The uncommitted change sits in the checkout. The untracked file has no git entry at all.
   fs::write(clone.join("base.md"), "changed\n").expect("the uncommitted change");
   fs::write(clone.join("dropped.md"), "uncommitted\n").expect("the dropped path's uncommitted change");
   fs::write(clone.join("untracked.md"), "new\n").expect("the untracked file");
   // The ux round is running while this perf round builds its list, as a burst's rounds do.
-  let mut leader = spawn_live_round(&world, "ux");
+  let mut leader = spawn_live_round(&world, OTHER_DIRECTION);
 
   let run = world.run(&world.env());
 
@@ -1879,10 +1892,10 @@ fn a_running_rounds_clone_adds_its_checked_out_branchs_files_to_the_list() {
   // Every path the running ux round's clone holds prints with its branch: the committed paths
   // carry unmerged commits, and the uncommitted and untracked paths are uncommitted work.
   for carried in [
-    "committed.md\timprove/ux/topic",
-    "base.md\timprove/ux/topic",
-    "dropped.md\timprove/ux/topic",
-    "untracked.md\timprove/ux/topic",
+    format!("committed.md\timprove/{OTHER_DIRECTION}/topic"),
+    format!("base.md\timprove/{OTHER_DIRECTION}/topic"),
+    format!("dropped.md\timprove/{OTHER_DIRECTION}/topic"),
+    format!("untracked.md\timprove/{OTHER_DIRECTION}/topic"),
   ] {
     assert!(
       list.lines().any(|line| line == carried),
@@ -2099,10 +2112,10 @@ fn an_unowned_rebased_branch_keeps_its_committed_path() {
 #[ignore = "integration"]
 fn an_idle_clones_branches_name_no_path_and_the_branch_stays() {
   let world = World::new();
-  let clone = world.other_direction_clone("ux");
+  let clone = world.other_direction_clone(OTHER_DIRECTION);
   // The checked-out branch of a round that ended, with its committed, uncommitted and untracked
   // paths still in the checkout, as the host leaves a finished clone.
-  world.git(&clone, &["switch", "-q", "-c", "improve/ux/ended"]);
+  world.git(&clone, &["switch", "-q", "-c", &format!("improve/{OTHER_DIRECTION}/ended")]);
   fs::write(clone.join("committed.md"), "topic\n").expect("the committed file");
   world.git(&clone, &["add", "-A"]);
   world.git(&clone, &["commit", "-q", "-m", "synthetic ended topic"]);
@@ -2110,11 +2123,11 @@ fn an_idle_clones_branches_name_no_path_and_the_branch_stays() {
   fs::write(clone.join("untracked.md"), "new\n").expect("the untracked file");
   // An older round's branch that no checkout carries.
   world.git(&clone, &["switch", "-q", "main"]);
-  world.git(&clone, &["switch", "-q", "-c", "improve/ux/old"]);
+  world.git(&clone, &["switch", "-q", "-c", &format!("improve/{OTHER_DIRECTION}/old")]);
   fs::write(clone.join("old.md"), "old\n").expect("the old branch's file");
   world.git(&clone, &["add", "-A"]);
   world.git(&clone, &["commit", "-q", "-m", "synthetic old topic"]);
-  world.git(&clone, &["switch", "-q", "improve/ux/ended"]);
+  world.git(&clone, &["switch", "-q", &format!("improve/{OTHER_DIRECTION}/ended")]);
 
   let run = world.run(&world.env());
 
@@ -2122,7 +2135,7 @@ fn an_idle_clones_branches_name_no_path_and_the_branch_stays() {
   let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
   assert!(list.trim().is_empty(), "the idle clone still claims paths without a running round:\n{list}");
   assert!(
-    !world.git(&clone, &["branch", "--list", "improve/ux/old"]).trim().is_empty(),
+    !world.git(&clone, &["branch", "--list", &format!("improve/{OTHER_DIRECTION}/old")]).trim().is_empty(),
     "the old branch left the clone"
   );
 }
@@ -2131,18 +2144,18 @@ fn an_idle_clones_branches_name_no_path_and_the_branch_stays() {
 #[ignore = "integration"]
 fn a_running_rounds_clone_keeps_all_changed_paths() {
   let world = World::new();
-  let clone = world.other_direction_clone("ux");
+  let clone = world.other_direction_clone(OTHER_DIRECTION);
   // The topic adds two files and deletes `base.md`, which origin/main never drops.
-  world.git(&clone, &["switch", "-q", "-c", "improve/ux/partial"]);
+  world.git(&clone, &["switch", "-q", "-c", &format!("improve/{OTHER_DIRECTION}/partial")]);
   fs::write(clone.join("landed.md"), "landed\n").expect("the landed topic's file");
   fs::write(clone.join("unlanded.md"), "unlanded\n").expect("the unlanded topic's file");
   fs::remove_file(clone.join("base.md")).expect("remove the base file");
   world.git(&clone, &["add", "-A"]);
   world.git(&clone, &["commit", "-q", "-m", "synthetic partial topic"]);
   // Main later lands the added path, then changes it again.
-  let origin = world.other_direction_origin("ux").display().to_string();
-  let landing = world.sandbox.dir("landing/ux");
-  world.git(&world.sandbox.dir("landing"), &["clone", "-q", &origin, "ux"]);
+  let origin = world.other_direction_origin(OTHER_DIRECTION).display().to_string();
+  let landing = world.sandbox.dir(&format!("landing/{OTHER_DIRECTION}"));
+  world.git(&world.sandbox.dir("landing"), &["clone", "-q", &origin, OTHER_DIRECTION]);
   fs::write(landing.join("landed.md"), "landed\n").expect("the landed version");
   world.git(&landing, &["add", "-A"]);
   world.git(&landing, &["commit", "-q", "-m", "land the partial topic's file"]);
@@ -2150,7 +2163,7 @@ fn a_running_rounds_clone_keeps_all_changed_paths() {
   world.git(&landing, &["commit", "-q", "-am", "move the landed file on"]);
   world.git(&landing, &["push", "-q", "origin", "main"]);
   // The ux round is running while this perf round builds its list.
-  let mut leader = spawn_live_round(&world, "ux");
+  let mut leader = spawn_live_round(&world, OTHER_DIRECTION);
 
   let run = world.run(&world.env());
 
@@ -2161,7 +2174,11 @@ fn a_running_rounds_clone_keeps_all_changed_paths() {
   listed.sort_unstable();
   assert_eq!(
     listed,
-    ["base.md\timprove/ux/partial", "landed.md\timprove/ux/partial", "unlanded.md\timprove/ux/partial"],
+    [
+      format!("base.md\timprove/{OTHER_DIRECTION}/partial"),
+      format!("landed.md\timprove/{OTHER_DIRECTION}/partial"),
+      format!("unlanded.md\timprove/{OTHER_DIRECTION}/partial"),
+    ],
     "the live clone loses a changed path:\n{list}"
   );
 }
@@ -2170,8 +2187,8 @@ fn a_running_rounds_clone_keeps_all_changed_paths() {
 #[ignore = "integration"]
 fn a_process_in_another_directions_clone_keeps_its_checked_out_branchs_paths() {
   let world = World::new();
-  let clone = world.other_direction_clone("ux");
-  world.git(&clone, &["switch", "-q", "-c", "improve/ux/live"]);
+  let clone = world.other_direction_clone(OTHER_DIRECTION);
+  world.git(&clone, &["switch", "-q", "-c", &format!("improve/{OTHER_DIRECTION}/live")]);
   fs::write(clone.join("committed.md"), "topic\n").expect("the committed file");
   world.git(&clone, &["add", "-A"]);
   world.git(&clone, &["commit", "-q", "-m", "synthetic live topic"]);
@@ -2195,7 +2212,9 @@ fn a_process_in_another_directions_clone_keeps_its_checked_out_branchs_paths() {
   process.wait().expect("reap the clone process");
   assert_eq!(run.code, 0, "{}", run.describe());
   let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
-  for named in ["committed.md\timprove/ux/live", "dirty.md\timprove/ux/live"] {
+  for named in
+    [format!("committed.md\timprove/{OTHER_DIRECTION}/live"), format!("dirty.md\timprove/{OTHER_DIRECTION}/live")]
+  {
     assert!(list.lines().any(|line| line == named), "the in-flight list drops the process-held path {named}:\n{list}");
   }
 }
@@ -2204,7 +2223,7 @@ fn a_process_in_another_directions_clone_keeps_its_checked_out_branchs_paths() {
 #[ignore = "integration"]
 fn an_other_directions_clone_whose_fetch_fails_stops_the_round_with_exit_1() {
   let world = World::new();
-  let clone = world.other_direction_clone("ux");
+  let clone = world.other_direction_clone(OTHER_DIRECTION);
   // The clone's origin is gone, so the fetch of its origin/main fails. The round must stop rather
   // than build its in-flight list without the ux clone's files.
   let gone = world.sandbox.root().join("gone.git").display().to_string();
@@ -2312,7 +2331,7 @@ fn two_concurrent_runners_build_tools_once_and_preserve_one_shared_mock_home() {
   // Each direction brings its own clone, whose origin the other direction's runner can fetch, and
   // its own launch directory, records and TMPDIR.
   let mut commands = Vec::new();
-  for (index, direction) in [DIRECTION, "ux"].into_iter().enumerate() {
+  for (index, direction) in [DIRECTION, OTHER_DIRECTION].into_iter().enumerate() {
     let bare = world.sandbox.dir(&format!("remotes/{index}/charlie-bot.git"));
     let bare_text = bare.display().to_string();
     world.git(&world.repo, &["clone", "-q", "--bare", ".", &bare_text]);
@@ -2401,7 +2420,7 @@ fn two_concurrent_runners_build_tools_once_and_preserve_one_shared_mock_home() {
     fs::read_to_string(mock_home.join("manifest.json")).expect("the shared mock-home manifest"),
     "synthetic complete mock home\n"
   );
-  for direction in [DIRECTION, "ux"] {
+  for direction in [DIRECTION, OTHER_DIRECTION] {
     assert!(mock_home_barrier.join(direction).is_file(), "the {direction} round did not read alongside its peer");
   }
   let builds = fs::read_to_string(&cargo_log).unwrap_or_default();
@@ -2415,7 +2434,7 @@ fn two_concurrent_runners_build_tools_once_and_preserve_one_shared_mock_home() {
       "a round's {tool} link names another commit"
     );
   }
-  for (direction, run) in std::iter::zip([DIRECTION, "ux"], &runs) {
+  for (direction, run) in std::iter::zip([DIRECTION, OTHER_DIRECTION], &runs) {
     let records = world.sandbox.dir(&format!("records-{direction}"));
     let ran = records.join("claude-argv.txt");
     assert!(ran.is_file(), "the {direction} round did not run the tools of the commit:\n{}", run.describe());
@@ -2434,9 +2453,9 @@ fn two_concurrent_runners_build_tools_once_and_preserve_one_shared_mock_home() {
 #[ignore = "integration"]
 fn another_clones_locked_origin_main_ref_does_not_stop_the_rounds_in_flight_read() {
   let world = World::new();
-  let clone = world.other_direction_clone("ux");
+  let clone = world.other_direction_clone(OTHER_DIRECTION);
   // The committed change rides a topic branch, as a round's branch does.
-  world.git(&clone, &["switch", "-q", "-c", "improve/ux/topic"]);
+  world.git(&clone, &["switch", "-q", "-c", &format!("improve/{OTHER_DIRECTION}/topic")]);
   fs::write(clone.join("committed.md"), "topic\n").expect("the committed fixture file");
   world.git(&clone, &["add", "-A"]);
   world.git(&clone, &["commit", "-q", "-m", "synthetic topic"]);
@@ -2446,7 +2465,7 @@ fn another_clones_locked_origin_main_ref_does_not_stop_the_rounds_in_flight_read
   world.git(&clone, &["add", "-A"]);
   world.git(&clone, &["commit", "-q", "-m", "advance main"]);
   world.git(&clone, &["push", "-q", "origin", "main"]);
-  world.git(&clone, &["switch", "-q", "improve/ux/topic"]);
+  world.git(&clone, &["switch", "-q", &format!("improve/{OTHER_DIRECTION}/topic")]);
   // The uncommitted change sits in the checkout. The untracked file has no git entry at all.
   fs::write(clone.join("base.md"), "changed\n").expect("the uncommitted change");
   fs::write(clone.join("untracked.md"), "new\n").expect("the untracked file");
@@ -2499,7 +2518,7 @@ fn a_locked_origin_main_ref_does_not_stop_the_launchers_in_flight_list() {
 
   let mut command = harness::command("bash", &world.env());
   // The launcher runs the script out of its checkout, so this run does too.
-  command.arg(world.repo.join("dev/improve/inflight-files.sh")).arg("improve/perf/");
+  command.arg(world.repo.join("dev/improve/inflight-files.sh")).arg(format!("improve/{DIRECTION}/"));
   let run = harness::run(&mut command);
 
   assert_eq!(run.code, 0, "{}", run.describe());
@@ -2540,7 +2559,7 @@ fn an_unowned_worktree_keeps_a_path_that_main_deleted() {
   env.insert("FAKE_GH_PRS".to_string(), pull_requests.display().to_string());
 
   let mut command = harness::command("bash", &env);
-  command.arg(world.repo.join("dev/improve/inflight-files.sh")).arg("improve/perf/");
+  command.arg(world.repo.join("dev/improve/inflight-files.sh")).arg(format!("improve/{DIRECTION}/"));
   let run = harness::run(&mut command);
 
   assert_eq!(run.code, 0, "{}", run.describe());
@@ -2639,7 +2658,7 @@ fn unlanded_worktree_with_uncommitted_state(world: &World, name: &str) -> std::p
 /// The in-flight list's run out of its checkout, as the launcher does.
 fn run_inflight_list_with_env(world: &World, env: &harness::Env) -> harness::Run {
   let mut command = harness::command("bash", env);
-  command.arg(world.repo.join("dev/improve/inflight-files.sh")).arg("improve/perf/");
+  command.arg(world.repo.join("dev/improve/inflight-files.sh")).arg(format!("improve/{DIRECTION}/"));
   harness::run(&mut command)
 }
 
@@ -3023,7 +3042,7 @@ fn the_member_cache_keeps_the_live_and_last_used_versions_and_prunes_the_rest() 
   }
   std::os::unix::fs::symlink("codex-0.102.0", members.join(".current-codex")).expect("the current pointer");
   let stop = world.sandbox.root().join("stop-live-round");
-  let mut live = world.spawn_live_runner(&stop, &["launch", "perf", "0123456789abcdef", "codex", "0.101.0"]);
+  let mut live = world.spawn_live_runner(&stop, &["launch", DIRECTION, "0123456789abcdef", "codex", "0.101.0"]);
   let run = harness::run(&mut world.member_cli_command("codex", world::LOCAL_CODEX_VERSION));
   fs::write(&stop, "").expect("the stop file");
   live.wait().expect("the live runner stand-in ends");
@@ -3054,7 +3073,7 @@ fn a_round_prunes_the_tools_of_commits_that_no_live_process_names() {
   }
   let stop = world.sandbox.root().join("stop-live-round");
   let mut live =
-    world.spawn_live_runner(&stop, &["launch", "perf", live_commit, "claude", world::LOCAL_CLAUDE_VERSION]);
+    world.spawn_live_runner(&stop, &["launch", DIRECTION, live_commit, "claude", world::LOCAL_CLAUDE_VERSION]);
   let run = world.run(&world.env());
   fs::write(&stop, "").expect("the stop file");
   live.wait().expect("the live runner stand-in ends");

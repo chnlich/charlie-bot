@@ -1,0 +1,55 @@
+{
+  "argv": ["web", "status", "set", "--file", "{root}/status.json", "--session", "abc"],
+  "cwd": "{root}",
+  "env": {"PATH": "{root}/bin", "HOME": "{root}/user", "CHARLIEBOT_REPO_ROOT": "{repo}"},
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\nbackends:\n  pools:\n    - {id: probe-pool, label: Probe Pool, rule: rotate, members: [probe-option]}\n  calls:\n    worker: probe-pool\n    improve: probe-pool\n    verify: probe-pool\n    review: probe-pool\n    cold_read: probe-pool\n    probe: probe-pool\n    autoname: probe-pool\n    triage: probe-pool\n  options:\n    - id: probe-option\n      label: Probe Option\n      type: cc-claude\n      model: claude-probe-test\n",
+    "bin/claude": "#!/bin/sh\n/bin/cat > /dev/null\nprintf '%s\\n' '(1) \"Please approve the release.\"'\n",
+    "status.json": "{\"now\": \"New step\", \"waiting\": [{\"text\": \"Should we release?\", \"context\": \"The release is ready now. Options are proceed or wait; proceed is recommended.\", \"link\": null}]}"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "unread": [
+          {"text": "Should we release?", "context": "The release is ready now. Options are proceed or wait; proceed is recommended.", "link": null}
+        ]
+      }
+    },
+    {"status": 200, "body": {"web_status": {"now": "Old step"}, "descendants": [], "children": [], "derived_waiting": []}},
+    {"status": 200, "body": {"item_sha256": "digest"}}
+  ],
+  "expect": {
+    "stdout": "Waiting on you: Should we release?\nBackend: probe-option\n(1) \"Please approve the release.\"\n\nFAIL Now: \"Please approve the release.\"\nNothing was stored.\n",
+    "stderr": "",
+    "exit": 3,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/web/status/unread",
+        "query": "",
+        "headers": {"Authorization": null, "X-CharlieBot-Caller-Session": null, "Content-Type": "application/json"},
+        "body": {"session_id": "abc", "text": "{\"now\": \"New step\", \"waiting\": [{\"text\": \"Should we release?\", \"context\": \"The release is ready now. Options are proceed or wait; proceed is recommended.\", \"link\": null}]}"}
+      },
+      {
+        "method": "GET",
+        "path": "/api/internal/web/status",
+        "query": "session_id=abc",
+        "headers": {"Authorization": null, "X-CharlieBot-Caller-Session": null, "Content-Type": null},
+        "body": null
+      },
+      {
+        "method": "POST",
+        "path": "/api/internal/web/ask-check",
+        "query": "",
+        "headers": {"Authorization": null, "X-CharlieBot-Caller-Session": null, "Content-Type": "application/json"},
+        "body": {
+          "session_id": "abc",
+          "item": {"text": "Should we release?", "context": "The release is ready now. Options are proceed or wait; proceed is recommended.", "link": null},
+          "backend": "probe-option",
+          "answer": "(1) \"Please approve the release.\""
+        }
+      }
+    ]
+  }
+}

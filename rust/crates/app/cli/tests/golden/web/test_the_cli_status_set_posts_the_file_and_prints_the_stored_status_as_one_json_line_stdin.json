@@ -9,7 +9,7 @@
     "abc"
   ],
   "cwd": "{root}",
-  "stdin": "{\"now\": \"n\"}",
+  "stdin": "{\"goal\": \"g\"}",
   "files": {
     "home/config.yaml": "server:\n  port: {port}\n"
   },
@@ -46,7 +46,7 @@
         },
         "body": {
           "session_id": "abc",
-          "text": "{\"now\": \"n\"}"
+          "text": "{\"goal\": \"g\"}"
         }
       },
       {
@@ -60,7 +60,7 @@
         },
         "body": {
           "session_id": "abc",
-          "text": "{\"now\": \"n\"}"
+          "text": "{\"goal\": \"g\"}"
         }
       }
     ]

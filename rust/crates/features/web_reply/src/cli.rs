@@ -1,10 +1,11 @@
 //! The `web` verbs: record a web reply, print the For-you layer, and set, confirm or
 //! show the session status.
 //!
-//! `status set` runs the fork assertions of each unread item's linked page, then cold-reads each unread Waiting on you
-//! item before it stores anything. The item's host-served link is read, the ask probe goes to the light backends in
-//! pool rotation, and each answer is recorded with `ask-check`. When a page fails its fork assertions or any item was
-//! read, the status is not stored: the verb exits 3 so the caller revises and runs it again.
+//! `status set` runs the fork assertions of each unread item's linked page, cold-reads a changed Now line, then
+//! cold-reads each unread Waiting on you item before it stores anything. The item's host-served link is read, the ask
+//! probe goes to the light backends in pool rotation, and each answer is recorded with `ask-check`. When a page fails
+//! its fork assertions, Now has findings, or any item was read, the status is not stored: the verb exits 3 so the
+//! caller revises and runs it again.
 
 use std::ffi::OsString;
 use std::future::Future;
@@ -47,7 +48,7 @@ enum WebCommand {
 
 #[derive(Subcommand)]
 enum StatusCommand {
-  /// Cold read Waiting on you items before storing the status
+  /// Cold read a changed Now line and Waiting on you items before storing the status
   Set(StatusSetArgs),
   /// Confirm that the stored status needs no change
   Confirm,
@@ -77,7 +78,7 @@ struct SessionArgs {
 
 #[derive(Args)]
 struct StatusSetArgs {
-  /// JSON object with any of goal, now, waiting, remaining; prints cold reads and exits 3 before storing;
+  /// JSON object with any of goal, now, waiting, remaining; cold-read findings or unread items exit 3 before storing.
   /// - reads stdin
   #[arg(long)]
   file: String,
@@ -138,7 +139,7 @@ fn reply(args: &ReplyArgs, lazy_host: &LazyHost) -> Result<(), CliExit> {
     } else {
       let host = lazy_host.get().map_err(anyhow_exit)?;
       let (system_prompt, questions) = cold_read::load_reply_texts(&host.repo_root).map_err(anyhow_exit)?;
-      let probe_prompt = cold_read::reply_probe_input(&text, &questions);
+      let probe_prompt = cold_read::text_probe_input(&text, &questions);
       let probe = block_on(cold_read::run_probe(host, &probe_prompt, &system_prompt))?.map_err(anyhow_exit)?;
       let Some(backend) = probe.backend_id else {
         for (backend, error) in &probe.attempts {
@@ -150,7 +151,8 @@ fn reply(args: &ReplyArgs, lazy_host: &LazyHost) -> Result<(), CliExit> {
         std::process::exit(1);
       };
       let answer = probe.answer.expect("a successful reply probe has the answering backend's response");
-      let model_findings = cold_read::parse_reply_findings(&answer).map_err(anyhow_exit)?;
+      let model_findings =
+        cold_read::parse_reply_findings(&answer, cold_read::REPLY_QUESTION_COUNT).map_err(anyhow_exit)?;
       if !model_findings.is_empty() {
         client::post(
           "/api/internal/web/reply-check",
@@ -210,43 +212,84 @@ fn dialog(args: &SessionArgs) -> Result<(), CliExit> {
 fn status_set(args: &StatusSetArgs, lazy_host: &LazyHost) -> Result<(), CliExit> {
   let session_id = resolve::resolve_from_env(args.session.as_deref())?;
   let text = files::read_reply_text(&args.file)?;
-  let request = json!({ "session_id": session_id, "text": text });
+  let request = json!({ "session_id": &session_id, "text": &text });
   let unread = client::post("/api/internal/web/status/unread", request.clone(), None, &[])?;
   let unread = list(field(&unread, "unread")?)?;
-  if unread.is_empty() {
+  let requested_now = requested_now(&text)?;
+
+  let now_to_check = match requested_now {
+    Some(now) => {
+      let current = status_read(&session_id)?;
+      should_cold_read_now(&now, &current)?.then_some(now)
+    }
+    None => None,
+  };
+  if unread.is_empty() && now_to_check.is_none() {
     let result = client::post("/api/internal/web/status", request, None, &[])?;
     print!("{}", json_out::render(&result, None));
     return Ok(());
   }
 
   let host = lazy_host.get().map_err(anyhow_exit)?;
-  gate_fork_assertions(host, unread)?;
-  let (system_prompt, questions) = cold_read::load_ask_texts(&host.repo_root).map_err(anyhow_exit)?;
-  for item in unread {
-    let link = item.get("link").and_then(Value::as_str);
-    let linked_page = match file_urls::host_file(link).map_err(CliExit::error)? {
-      None => None,
-      Some(path) => Some(files::read_text_mode(&path)?),
-    };
-    let probe_prompt = cold_read::ask_probe_input(item, linked_page.as_deref(), &questions).map_err(anyhow_exit)?;
+  if !unread.is_empty() {
+    gate_fork_assertions(host, unread)?;
+  }
+  let mut now_findings = Vec::new();
+  if let Some(now) = now_to_check {
+    let (system_prompt, questions) =
+      cold_read::load_prompt_pair(&host.repo_root, cold_read::NOW_SYSTEM_SECTION, cold_read::NOW_QUESTIONS_SECTION)
+        .map_err(anyhow_exit)?;
+    let probe_prompt = cold_read::text_probe_input(&now, &questions);
     let probe = block_on(cold_read::run_probe(host, &probe_prompt, &system_prompt))?.map_err(anyhow_exit)?;
-    let Some(backend) = probe.backend_id else {
+    if probe.backend_id.is_none() {
       for (backend, error) in &probe.attempts {
         eprintln!("attempt {backend} failed: {error}");
       }
       if probe.attempts.is_empty() {
-        eprintln!("No light backend was available for this item.");
+        eprintln!("No light backend was available for the Now line.");
       }
       std::process::exit(1);
     };
-    let answer = probe.answer.expect("a successful ask probe has the answering backend's response");
-    client::post(
-      "/api/internal/web/ask-check",
-      json!({ "session_id": session_id, "item": item, "backend": backend, "answer": answer }),
-      None,
-      &[],
-    )?;
-    println!("Waiting on you: {}\nBackend: {backend}\n{answer}\n", text_repr::value_str(field(item, "text")?));
+    let answer = probe.answer.expect("a successful Now probe has the answering backend's response");
+    now_findings = cold_read::parse_reply_findings(&answer, cold_read::NOW_QUESTION_COUNT).map_err(anyhow_exit)?;
+  }
+
+  if !unread.is_empty() {
+    let (system_prompt, questions) = cold_read::load_ask_texts(&host.repo_root).map_err(anyhow_exit)?;
+    for item in unread {
+      let link = item.get("link").and_then(Value::as_str);
+      let linked_page = match file_urls::host_file(link).map_err(CliExit::error)? {
+        None => None,
+        Some(path) => Some(files::read_text_mode(&path)?),
+      };
+      let probe_prompt = cold_read::ask_probe_input(item, linked_page.as_deref(), &questions).map_err(anyhow_exit)?;
+      let probe = block_on(cold_read::run_probe(host, &probe_prompt, &system_prompt))?.map_err(anyhow_exit)?;
+      let Some(backend) = probe.backend_id else {
+        for (backend, error) in &probe.attempts {
+          eprintln!("attempt {backend} failed: {error}");
+        }
+        if probe.attempts.is_empty() {
+          eprintln!("No light backend was available for this item.");
+        }
+        std::process::exit(1);
+      };
+      let answer = probe.answer.expect("a successful ask probe has the answering backend's response");
+      client::post(
+        "/api/internal/web/ask-check",
+        json!({ "session_id": session_id, "item": item, "backend": backend, "answer": answer }),
+        None,
+        &[],
+      )?;
+      println!("Waiting on you: {}\nBackend: {backend}\n{answer}\n", text_repr::value_str(field(item, "text")?));
+    }
+  }
+  for finding in &now_findings {
+    println!("FAIL Now: {finding}");
+  }
+  if now_findings.is_empty() && unread.is_empty() {
+    let result = client::post("/api/internal/web/status", request, None, &[])?;
+    print!("{}", json_out::render(&result, None));
+    return Ok(());
   }
   println!("Nothing was stored.");
   std::process::exit(3);
@@ -285,9 +328,40 @@ fn status_confirm() -> Result<(), CliExit> {
 
 fn status_show(args: &SessionArgs) -> Result<(), CliExit> {
   let session_id = resolve::resolve_from_env(args.session.as_deref())?;
-  let result = client::get("/api/internal/web/status", Some(vec![("session_id".to_string(), session_id)]))?;
+  let result = status_read(&session_id)?;
   println!("{}", render_status(&result)?);
   Ok(())
+}
+
+/// The status response the `show` and `set` verbs read.
+fn status_read(session_id: &str) -> Result<Value, CliExit> {
+  client::get("/api/internal/web/status", Some(vec![("session_id".to_string(), session_id.to_string())]))
+}
+
+/// The non-empty Now value named by a status file, or no Now check for a missing or empty value.
+fn requested_now(text: &str) -> Result<Option<String>, CliExit> {
+  let status: Value = serde_json::from_str(text).map_err(|error| CliExit::error(error.to_string()))?;
+  match status.get("now") {
+    None | Some(Value::Null) => Ok(None),
+    Some(Value::String(now)) if now.is_empty() => Ok(None),
+    Some(Value::String(now)) => Ok(Some(now.clone())),
+    Some(_) => Err(CliExit::error("status JSON now must be a string or null")),
+  }
+}
+
+/// Whether a non-empty new Now differs from the status returned by `status_read`.
+fn should_cold_read_now(now: &str, result: &Value) -> Result<bool, CliExit> {
+  let status = field(result, event_types::WEB_STATUS)?;
+  let stored_now = if status.is_null() {
+    None
+  } else {
+    match field(status, "now")? {
+      Value::Null => None,
+      Value::String(value) => Some(value.as_str()),
+      _ => return Err(CliExit::error("the status response carries a Now value that is not a string")),
+    }
+  };
+  Ok(stored_now != Some(now))
 }
 
 /// The GET result as plain text, the session's Goal, Remaining, Now and Waiting on you, then the derived items the
@@ -435,7 +509,7 @@ fn anyhow_exit(error: anyhow::Error) -> CliExit {
 mod tests {
   use serde_json::json;
 
-  use super::render_status;
+  use super::{render_status, requested_now, should_cold_read_now};
 
   /// A GET result for a status that carries `status` and no descendant, child or derived rows.
   fn status_result(status: serde_json::Value) -> serde_json::Value {
@@ -490,5 +564,14 @@ mod tests {
         "Now: Reviewing (updated 2026-11-02T03:10:00Z)",
       ]
     );
+  }
+
+  #[test]
+  fn a_status_set_cold_reads_only_a_non_empty_changed_now() {
+    assert_eq!(requested_now(r#"{"goal":"Ship"}"#).unwrap(), None);
+    assert_eq!(requested_now(r#"{"now":""}"#).unwrap(), None);
+    assert!(!should_cold_read_now("Unchanged", &status_result(json!({"now": "Unchanged"}))).unwrap());
+    assert!(should_cold_read_now("Changed", &status_result(json!({"now": "Unchanged"}))).unwrap());
+    assert!(should_cold_read_now("First Now", &status_result(serde_json::Value::Null)).unwrap());
   }
 }

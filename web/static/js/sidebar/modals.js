@@ -2,7 +2,21 @@
   const Sidebar = globalThis.Sidebar;
 
 let renameSessionId = null;
+let renameNameEl = null;
 let sessionActionModalState = null;
+
+// While the field is open it replaces the row's name, so the name's text is hidden. A pointer device's hover buttons
+// start 4 px past the field's end, and the name's text between the field and those buttons would otherwise show.
+function hideRenameName(nameEl) {
+  renameNameEl = nameEl;
+  nameEl.style.visibility = 'hidden';
+}
+
+function showRenameName() {
+  if (!renameNameEl) return;
+  renameNameEl.style.visibility = '';
+  renameNameEl = null;
+}
 
 function startRename(e, id) {
   e.preventDefault();
@@ -20,6 +34,7 @@ function startRename(e, id) {
   const valueEl = nameEl || header;
   if (!anchor || !valueEl) return;
   renameSessionId = id;
+  showRenameName();
   const rect = anchor.getBoundingClientRect();
   const valueRect = valueEl.getBoundingClientRect();
   const input = document.getElementById('rename-input');
@@ -29,8 +44,8 @@ function startRename(e, id) {
   input.style.height = valueRect.height + 'px';
   if (linkUsable) {
     // The field's text starts at the name's left edge, so the field's own left padding is taken off its box.
-    // The field ends 4 px short of the row's first shown button (the star or the Settings gear), so it covers neither.
-    // A hidden button has no box, so only the buttons with a width count.
+    // The field ends 4 px short of the row's leftmost button that has a box (the star or the Settings gear), so it
+    // covers neither. The touch layout gives its hidden buttons no box, so they do not count.
     const padLeft = parseFloat(getComputedStyle(input).paddingLeft);
     const buttonBoxes = [...link.querySelectorAll(':scope > button')]
       .map((button) => button.getBoundingClientRect())
@@ -41,6 +56,7 @@ function startRename(e, id) {
     const boxLeft = valueRect.left - padLeft;
     input.style.left = boxLeft + 'px';
     input.style.width = buttonsLeft - 4 - boxLeft + 'px';
+    if (nameEl) hideRenameName(nameEl);
   } else {
     input.style.left = rect.left + 'px';
     input.style.width = rect.width + 'px';
@@ -71,6 +87,7 @@ async function commitRename() {
   if (input.classList.contains('hidden')) return;
   const newName = input.value.trim();
   input.classList.add('hidden');
+  showRenameName();
   if (!newName || !renameSessionId) return;
 
   try {
@@ -92,6 +109,7 @@ async function commitRename() {
 
 function cancelRename() {
   document.getElementById('rename-input').classList.add('hidden');
+  showRenameName();
   renameSessionId = null;
 }
 

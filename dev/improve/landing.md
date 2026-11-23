@@ -70,8 +70,9 @@ These scripts run from the server's checkout at each launch, so a change reaches
 
 ## Step 1: set the clone
 
-The whole round runs on the remote host, in the direction's own clone, `~/improve/<direction>/charlie-bot`.
-Every command of the round runs there, so this host's profile home and runtime clone stay out of reach.
+The round runs on the remote host. Topic work uses the direction's clone,
+`~/improve/<direction>/charlie-bot`; Step 6's reviewer uses a separate scratch clone.
+This keeps this host's profile home and runtime clone out of reach.
 The write boundary allows writes in that clone, in the evidence directory and in two scratch directories.
 The scratch directories are `/tmp/improve-<direction>/` and the session TMPDIR, `/tmp/improve-<direction>-tmp/`.
 Two rounds of one direction never run together: the runner's scope name, `improve-<direction>.scope`, refuses the second round.

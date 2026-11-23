@@ -2194,7 +2194,8 @@ impl TaskExecutionAdapter {
           .transpose()?;
         if let Some(route_pool) = route.as_ref().and_then(|route| {
           route.backends.iter().find(|backend| {
-            cfg.backends
+            cfg
+              .backends
               .pool(backend)
               .is_some_and(|pool| pool.members.iter().any(|member| member.backend.as_str() == failed_backend))
           })

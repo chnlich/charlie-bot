@@ -139,8 +139,9 @@ pub fn scan_file(vocab: &Vocabulary, text: &str, path: &Path) -> Vec<Found> {
 }
 
 /// The code of a line, with each comment blanked to a space so that the words on either side of it stay apart. A line
-/// comment starts at its marker outside a string; a shell comment also needs a token boundary. A block comment starts at
-/// its opening delimiter. Strings and block comments that span lines keep their state for the next line.
+/// comment starts at its marker outside a string; a shell comment also needs a token boundary, and a `$#` or `${#` is a
+/// parameter expansion, never a comment. A block comment starts at its opening delimiter. Strings and block comments that
+/// span lines keep their state for the next line.
 fn strip_comments(line: &str, syntax: Syntax, state: &mut LexState) -> String {
   let mut code = String::with_capacity(line.len());
   let mut resume = 0;
@@ -186,6 +187,8 @@ fn strip_comments(line: &str, syntax: Syntax, state: &mut LexState) -> String {
     } else if matches!(ch, '"' | '\'') || (syntax.backticks_quote && ch == '`') {
       state.quote = Some(Quote { character: ch, triple: false });
     } else if rest.starts_with(syntax.line)
+      && !code.ends_with('$')
+      && !code.ends_with("${")
       && (!syntax.line_needs_boundary
         || code.chars().last().is_none_or(|previous| {
           previous.is_whitespace() || matches!(previous, ';' | '|' | '&' | '(' | ')' | '{' | '}')
@@ -424,7 +427,7 @@ mod tests {
   }
 
   /// Python, Perl, awk and JavaScript comments start next to code. A shell `#` needs a token boundary, not merely a
-  /// character boundary.
+  /// character boundary, and a `$#` or `${#` parameter expansion is code.
   #[test]
   fn line_comments_follow_their_language_boundaries() {
     for (path, line) in [
@@ -439,6 +442,13 @@ mod tests {
 
     let shell_word = classes("x=claude-opus#suffix\n", "run.sh");
     assert!(shell_word.contains(&(1, Class::OptionId, "claude-opus".to_string())), "{shell_word:?}");
+
+    let parameter_expansions =
+      [("run.pl", "my $n = $#ARGV; my $m = \"claude-opus-5-5\";\n"), ("run.sh", "n=${#ARR[@]}; m=claude-opus-5-5\n")];
+    for (path, line) in parameter_expansions {
+      let found = classes(line, path);
+      assert!(found.contains(&(1, Class::ModelId, "claude-opus-5-5".to_string())), "{path}: {found:?}");
+    }
   }
 
   /// Escaped quotes and JavaScript template strings keep comment markers inside the string; code after them is scanned.

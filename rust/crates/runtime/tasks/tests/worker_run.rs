@@ -518,7 +518,7 @@ async fn a_follow_up_upload_on_a_worker_node_reaches_its_continuation_prompt() -
   assert_eq!(record.input_event_ids, vec![admitted_id.to_string()]);
   let builds = scripts.builds();
   // The scripted type resumes by CLI flag, so the held native id reaches the continuation as `--resume <id>`
-  // (`route_resume_session_style`); the case reads the same id from its `resume_session_id` keyword.
+  // (`Registry::resume_parts`); the case reads the same id from its `resume_session_id` keyword.
   assert_eq!(builds[1].launch.extra_flags, ["--resume", "native-1"]);
   assert!(builds[1].prompt_contains(&upload_path), "the continuation prompt names the upload");
   Ok(())

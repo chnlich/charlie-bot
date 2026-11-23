@@ -1408,27 +1408,13 @@ mod tests {
   use charliebot_claude_code::claude_accounts;
   use charliebot_claude_code::claude_idle_compaction::{self, IdleProcessIdentity};
   use charliebot_claude_code::claude_lifecycle::ClaudeCodeLifecycle;
-  use charliebot_registry::backend::{BackendLifecycle, ResumeStyle};
+  use charliebot_registry::backend::BackendLifecycle;
   use charliebot_store::metadata::TaskProfile;
 
   use super::*;
-  use crate::run_support::route_resume_session_style;
   use crate::test_fixtures;
 
   const CC_SESSION_ID: &str = "11111111-2222-3333-4444-555555555555";
-
-  #[test]
-  fn resume_session_routing_matches_backend_style() {
-    assert_eq!(
-      route_resume_session_style(ResumeStyle::CliFlag, Some("synthetic-native-id")).unwrap(),
-      (vec!["--resume".to_string(), "synthetic-native-id".to_string()], None)
-    );
-    assert_eq!(
-      route_resume_session_style(ResumeStyle::NativeId, Some("synthetic-native-id")).unwrap(),
-      (Vec::new(), Some("synthetic-native-id".to_string()))
-    );
-    assert_eq!(route_resume_session_style(ResumeStyle::NativeId, Some("")).unwrap(), (Vec::new(), None));
-  }
 
   #[tokio::test]
   async fn turn_context_state_reads_the_current_shared_metadata() {

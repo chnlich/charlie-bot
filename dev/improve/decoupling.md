@@ -13,6 +13,9 @@ Your branch prefix is `improve/decoupling/`.
 
 Change a dependency edge or move code to the crate that owns it.
 A change to one function's behavior belongs to another direction.
+A configuration-in-code finding may sit in any tracked file that runs: `rust/`, `web/`, `dev/` and `scripts/`.
+When the finding sits under `dev/improve/`, name it in the final message and open no pull request.
+Those files launch, confine and review this round, so a change to them needs the user's decision.
 
 ## Topics
 
@@ -29,10 +32,26 @@ A finding is one of these:
 - a name that two crates spell for one concept
 - a crate with two responsibilities
 - a user setting that two stores write, or that two edit entries write to different stores
+- a value in code that the user's configuration owns
 
 An edit entry is a form or an API endpoint that writes a user setting.
 Two edit entries that write the same record are one store and raise no finding.
 For example, the session header title and the menu Rename both write the session record.
+
+The user's configuration owns each value that chooses what runs: a backend, pool or option id, a model id, an API base
+or gateway URL, a credential name, and the harness that a call runs on.
+CharlieBot's general keys for these choices sit under `backends` in `config.yaml`, and
+`configs/config.example.yaml` shows their form.
+Code reads each such value through its key, and a script reads it through `charliebot backend resolve`.
+These raise no finding:
+- a test
+- a mock or fixture
+- the example configuration under `configs/`
+- a code comment, which describes a choice and makes none
+- a backend crate's own harness binary, argv and usage kind, in that crate; another backend's name still raises one
+
+In a configuration-in-code finding, name the value and each code site that writes it, and the configuration key
+that owns it.
 
 In a user-setting finding, name:
 
@@ -45,7 +64,9 @@ One finding per round keeps the review focused.
 ## Evidence
 
 Count the dependency edges or the duplicate spellings before and after the change.
-For a user-setting finding, count its stores and edit entries (write sites) with `git grep` before and after the change.
-Write the counts, with the command that produced them, in the pull request's `## Evidence` section.
+For a user-setting finding, count its stores and edit entries (write sites) before and after the change.
+For a configuration-in-code finding, count the code sites that write the value before and after the change, and name
+the key that supplies it after.
+Write the counts in the pull request's `## Evidence` section.
 Let CI run the structure tests and the full suite, because a green run proves that the layout still holds.
 The count shows the reviewer that the coupling fell.

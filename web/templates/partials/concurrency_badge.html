@@ -5,12 +5,13 @@
     browser and artifact pages) carry neither the bar nor this fragment. The counting belongs to
     rust/crates/runtime/session-api/src/concurrency.rs; the script at the end of this fragment only displays it.
 
-    A page that sets `defer_concurrency_badge_poll` before including this fragment (the chat page) gets a badge that
-    paints from the markup above and starts the poll after the document. The poller's bytes then travel as one request
-    after DOMContentLoaded, off the document's bytes and on the page's load. The page's own handlers call
-    `ConcurrencyBadge` through optional chaining, so they tolerate the script arriving late. Every other page leaves
-    the flag unset and gets the script inline: the home page and the events viewer then load one request fewer, and
-    the badge's status read still starts at DOMContentLoaded, because the script reads `document.readyState` first.
+    A page that sets `defer_concurrency_badge_poll` before including this fragment gets a badge that paints from the
+    markup above and starts the poll after the document. The chat page, the diff viewer, the host authorization page and
+    the token usage page set it. The poller's bytes then travel as one request after DOMContentLoaded, off the
+    document's bytes and on the page's load. The page's own handlers call `ConcurrencyBadge` through optional chaining,
+    so they tolerate the script arriving late. The home page and the events viewer leave the flag unset and get the
+    script inline, so they load one request fewer. Their badge's status read still starts at DOMContentLoaded, because
+    the script reads `document.readyState` first.
 
     A copy inside a `<template>` is inert markup: its scripts never run, so it would carry the poller's bytes to the
     page and do nothing with them. The includer sets `concurrency_badge_markup_only` for that copy, which leaves the

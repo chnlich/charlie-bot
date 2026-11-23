@@ -403,8 +403,29 @@ See `charliebot --help` for CLI subcommands.
 Each cron task lives in its own file under `$CHARLIEBOT_HOME/config.d/cron.d/` and binds one session.
 The task file holds the schedule and timezone, the enabled flag, the prompt file path, the repo, allow_failure, the bound session_id, the mode, handler and steps fields, and improve_host.
 The bound session's record holds its name, backend and group.
-Agents create a task with `POST /api/cron/tasks`, edit it with `PUT /api/cron/tasks/{name}` (an enable or disable is an edit of `enabled`), and delete it with `DELETE /api/cron/tasks/{name}`. A field that the API does not take (mode, handler, steps, improve_host), and the prompt text, which is the file at `prompt_file`, are edited in the task file. An agent sets the session's backend with `POST /api/sessions/{id}/backend` and its group with `POST /api/sessions/{id}/group`.
-The session page header edits the bound session's name and backend like any session. Each bound task's settings and prompt text appear read-only in that session's Task & context dialog.
+Agents manage cron tasks through three routes:
+- `POST /api/cron/tasks` creates a task;
+- `PUT /api/cron/tasks/{name}` edits a task (an enable or disable edits `enabled`);
+- `DELETE /api/cron/tasks/{name}` deletes a task.
+
+Both write routes (`POST /api/cron/tasks` and `PUT /api/cron/tasks/{name}`) run the scheduler's validator before writing the file and answer HTTP 400 when any of these checks fails:
+- the five-field `cron` expression fails to parse;
+- the `timezone` is an unknown IANA timezone (or `"local"` fails to resolve);
+- the schedule has no occurrence within the scheduler's eight-year horizon.
+
+Task-file edits handle the prompt file at `prompt_file` and the fields outside the API:
+- `mode`;
+- `handler`;
+- `steps`;
+- `improve_host`.
+
+An agent sets the session's backend with `POST /api/sessions/{id}/backend` and its group with `POST /api/sessions/{id}/group`.
+The session page header edits the bound session's name and backend like any session. Each bound task's settings and prompt text appear read-only in that session's Task & context dialog. A bound row's Settings menu opens `Edit schedule…` to delete the task while keeping the session, or to edit these fields:
+- `cron`;
+- `timezone`;
+- `enabled`.
+
+An unbound manager row's Settings menu opens `Add schedule…` to create a `prompt_file` task bound to that session.
 Operational notes live in the `charliebot` skill.
 Call `/api/cron` with your run
 token (`CHARLIEBOT_RUN_TOKEN`), the credential of this agent run. The access key is the user's credential.

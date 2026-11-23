@@ -445,6 +445,15 @@ The fired message is prefixed with the reason; per-target detail is in the suffi
 - A newly added cron task first fires on its next occurrence after one full tick: the scheduler looks back a single tick from load, so a new daily expression starts the following day.
 - Cron config lives one job per file under `$CHARLIEBOT_HOME/config.d/cron.d/<name>.yaml`, and the loader hot-reloads on a file or `prompt_file` mtime change — no restart is needed. A broken file yields an error entry for that job alone (logged as `cron_task_load_failed`) while every other job keeps loading, scheduling, and rendering through `GET /api/cron/tasks`.
 - The cron timezone defaults to `America/Los_Angeles` in the config model and the API: pin it explicitly for local tasks. Reread `config.d/cron.d/` at implementation time — concurrent sessions may mutate it.
+- Schedule validation runs through the scheduler's own `validate_schedule` across every entry point:
+  - `POST /api/cron/tasks`;
+  - `PUT /api/cron/tasks/{name}`;
+  - the file loader (`load_snapshot`);
+  - `--check-config`.
+  The write routes answer HTTP 400 and leave the task file untouched when any check fails:
+  - an invalid five-field `cron` expression;
+  - an unknown IANA `timezone` or an unresolvable `"local"` alias;
+  - a schedule with no fire inside the eight-year horizon.
 - At each due fire of a `prompt_file` or `steps` task, the server first checks the bound session's backend. When that backend names no current option or pool id, the fire records `failed`, posts the error to that session, and queues no input. A `handler` task uses no backend, so its fire runs whatever the bound session's backend names. Every fire that the backend check does not fail follows the skip rules and the source rules below.
 - Before every fire and every manual run, the server runs the backend-literal check (`charliebot backend check`) over the profile's `improve`, `prompts`, `scripts` and `skills` directories and over the task's own `prompt_file` and step prompt files. Each site it finds records the fire `failed`, posts one `file:line` line per site to the bound session, and queues no input; a check that cannot run does the same with its error. At server start the same sites go to the bound session of each enabled task, and the server starts anyway.
 - The server handles each cron fire that the backend check does not fail and that it does not skip by the task's source:

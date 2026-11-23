@@ -50,7 +50,8 @@
 #
 # Each side runs as the command of `scripts/release/trial.sh --serve`, so the trial starts, checks and stops the server
 # the bench measures, and proves that no process of the trial remains. The bench's own children (Chrome, the proxy, the
-# TLS front) end with the bench. The server's charlie-code backend is the scripted stub in dev/poor-network/stub. The
+# TLS front) end with the bench. The server's charlie-code backend is the scripted stub in dev/poor-network/stub; the
+# run hands the trial that same stand-in endpoint as its probe answer, so the bench host needs no live server. The
 # trial's tree is unique to this invocation and side, so two invocations on one commit never share a tree.
 #
 # Each side's trial tree goes under TMPDIR when the caller sets it, and under /tmp otherwise, so a caller inside a
@@ -355,6 +356,13 @@ backends:
       model: bench/stub
       api_base: http://127.0.0.1:9/v1
 YAML
+# The trial reads its probe endpoint from the live home's `backends.calls.probe` through the home's server, and the
+# bench host runs no server. CHARLIEBOT_TRIAL_PROBE_ANSWER names the answer instead: the same stand-in option, which the
+# stub never calls.
+probe_answer="$live_home/probe-answer.json"
+cat >"$probe_answer" <<'JSON'
+{"option": {"id": "bench-endpoint", "model": "bench/stub", "api_base": "http://127.0.0.1:9/v1"}}
+JSON
 
 # Builds the server of a tree at a commit: $1 the source directory, $2 its target directory name under out_dir.
 build_server() {
@@ -378,6 +386,7 @@ run_side() {
   local label=$commit
   [[ $name == after ]] && label=$after_label
   export CHARLIEBOT_HOME=$live_home
+  export CHARLIEBOT_TRIAL_PROBE_ANSWER=$probe_answer
   export CHARLIEBOT_RELEASE_RUN_DIR="$run_dir/evidence-$name"
   export POOR_NETWORK_REPLY_DIR="$run_dir/replies"
   # Chrome's process-singleton socket lives under TMPDIR, and the trial points TMPDIR into its tree. The caller's own

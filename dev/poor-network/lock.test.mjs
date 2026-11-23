@@ -504,6 +504,20 @@ test('side-commit.sh fetches a commit the bench tree lacks from its source and n
   }
 });
 
+// trial.sh reads its probe endpoint from the live home's `backends.calls.probe` through that home's server, and the
+// bench host runs no server. The bench home names one stand-in option, so run.sh hands the trial that option's answer.
+test('run.sh answers the trial\'s probe with the bench home\'s stand-in endpoint', () => {
+  const source = fs.readFileSync(RUN, 'utf8');
+  const yaml = source.slice(source.indexOf('cat >"$live_home/config.yaml"'), source.indexOf('\nYAML\n'));
+  const json = source.slice(source.indexOf('{"option"'), source.indexOf('\nJSON\n'));
+  const field = (text, name) => new RegExp(`^\\s+${name}: (\\S+)$`, 'm').exec(text)[1];
+  const option = { id: field(yaml, '- id'), model: field(yaml, 'model'), api_base: field(yaml, 'api_base') };
+  assert.deepEqual(JSON.parse(json).option, option);
+  const assigned = source.indexOf('probe_answer="$live_home/probe-answer.json"');
+  const exported = source.indexOf('export CHARLIEBOT_TRIAL_PROBE_ANSWER=$probe_answer');
+  assert.ok(assigned > 0 && assigned < exported, 'the answer file is named before the trial reads its path');
+});
+
 test('run.sh names each side\'s commit in the bench tree before that side\'s trial starts', () => {
   const source = fs.readFileSync(RUN, 'utf8');
   const beforeNamed = source.indexOf('name_trial_commit "$before_commit"');

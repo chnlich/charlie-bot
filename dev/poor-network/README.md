@@ -248,7 +248,9 @@ three default cron tasks' sessions are the rows that the server's first schedule
 bench counts them as the mock's rows and waits for that tick before it measures the view. Each carries a task spec of
 synthetic acceptance criteria and context references, sized so the rows' median matches the live view's; the default
 shape writes no task spec. The mock's sessions carry no task boundary, so the server refuses a message to them. The bench therefore creates its sessions through `POST /api/sessions/`, on the trial's backend
-option. Those sessions are rows of the default view too, so the view holds `VIEW.rows` rows.
+option. Those sessions are rows of the default view too, so the view holds `VIEW.rows` rows. The trial resolves its
+probe endpoint from a stand-in answer file that `run.sh` names in `CHARLIEBOT_TRIAL_PROBE_ANSWER`, because the bench host
+runs no server to answer `backends.calls.probe`.
 
 The view's shape comes from a live release's default "all" view: 124 rows, a raw median row of 3,260 bytes, and a switch
 target whose bootstrap content takes a median 26,592 bytes on the wire. The bench checks the row count before any

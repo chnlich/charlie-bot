@@ -172,7 +172,7 @@ async fn one_test_refuses_every_agent_work_entry_with_403() {
     (Method::POST, "/api/cron/tasks/synthetic-run/run", "{}"),
     (Method::POST, "/api/internal/improve", "{}"),
     (Method::POST, "/api/internal/schedule-trigger", "{}"),
-    (Method::POST, "/api/sessions", r#"{"request_id":"child","task_parent_id":"slack-thread","profile":"manager"}"#),
+    (Method::POST, "/api/sessions/", r#"{"request_id":"child","task_parent_id":"slack-thread","profile":"manager"}"#),
     (Method::POST, "/api/sessions/slack-thread/fork", r#"{"event_index":0}"#),
     (Method::POST, "/api/sessions/slack-thread/elone", r#"{"event_index":0}"#),
   ];

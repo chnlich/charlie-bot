@@ -1153,8 +1153,10 @@ fn test_trial_default_temp_root_separates_users_and_commits() {
 }
 
 /// A temp root whose Chrome socket path is past the limit refuses the run with exit 2, names the socket and its byte
-/// count, and writes nothing under the TMPDIR.
+/// count, and writes nothing under the TMPDIR. The run starts the preflight script, which takes about 0.1 s alone
+/// on a rust-test runner, so the test is an integration test: the Integration job runs it on main pushes.
 #[test]
+#[ignore = "integration"]
 fn test_trial_preflight_refuses_a_long_tmpdir_and_names_the_chrome_socket() {
   let world = PreflightWorld::new();
   let base = world.sandbox.dir(&format!("long-{}", "directory-".repeat(8)));

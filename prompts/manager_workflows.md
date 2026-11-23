@@ -18,7 +18,15 @@ Understanding and plan format, confirmation semantics, and plan linkage:
 
 ## Design
 
-Prefer stateless solutions over state machines. Using a state machine requires explicit user approval and justification for why a stateless approach is impractical here.
+Start every design from a stateless form.
+In the stateless form, an external store with concurrency control holds the state, and every copy reads it fresh.
+State outside that form includes:
+- a state machine;
+- a leader lease or any single-active copy;
+- state that a service keeps in its process across requests or passes when a decision depends on it (clocks, caches, counters, queues).
+
+Adding state outside that form requires explicit user approval and justification for why a stateless form is impractical.
+On the plan, name every piece of state the design adds with that reason.
 
 - For a platform change, describe the end state (the target user experience) first, then plan the migration to it.
 - Before you design a system, survey how open-source and industry products solve the problem.

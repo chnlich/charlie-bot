@@ -151,3 +151,28 @@ test('a worker switched from a pool to one option shows that option alone, whate
   assert.equal(model[3], 'Opus 5');
   assert.equal(model[2], 'CC · Opus 5');
 });
+
+// The date line is the wrapper that holds the .session-time span. A pool row's wrapper is a block, so its label takes
+// the line under the date; a single-option row's wrapper is a flex row, so its label sits beside the date.
+function dateLineClass(html) {
+  const wrapper = html.match(/<span class="([^"]*)"><span class="session-time/);
+  assert.ok(wrapper, 'row is missing its date line');
+  return wrapper[1];
+}
+
+test('a pool-session row puts its label on its own line below the date', () => {
+  const html = row({backend: 'auto', pool_member: 'claude-opus-5', native_model: 'claude-opus-5-5'});
+  const model = modelSpan(html);
+  assert.ok(model, 'row is missing a .session-backend span');
+  assert.match(model[1], /\bblock\b/);
+  assert.doesNotMatch(dateLineClass(html), /\bflex\b/);
+  assert.ok(html.indexOf('session-time') < html.indexOf('session-backend'));
+});
+
+test('a single-option row keeps its label beside the date on one line', () => {
+  const html = row({backend: 'claude-opus-5'});
+  const model = modelSpan(html);
+  assert.ok(model, 'row is missing a .session-backend span');
+  assert.doesNotMatch(model[1], /\bblock\b/);
+  assert.match(dateLineClass(html), /\bflex\b/);
+});

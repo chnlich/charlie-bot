@@ -603,31 +603,41 @@ function expandSessionGroup(key) {
 }
 
 // Model label for a session row, from the one label function. A worker row carries the pool id in `pool` when its
-// backend is a pool, since its `backend` then holds the member its run uses. A pool row shows its whole label; a
-// single-option row shows the option without the backend-family prefix, because the 320px sidebar leaves only
-// ~67px next to the timestamp. Returns null when the session carries no backend id.
+// backend is a pool, since its `backend` then holds the member its run uses. A pool row shows its whole label, on its
+// own line under the date (renderSessionTimeLine). A single-option row shows the option without the backend-family
+// prefix, because beside the date the 320px sidebar leaves only ~67px. Returns null when the session carries no
+// backend id.
 function sessionBackendLabel(session) {
   const backendId = (session && session.backend) || '';
   if (!backendId) return null;
   const sessionBackend = session.pool || backendId;
+  const pool = isPoolBackend(sessionBackend);
   const full = sessionModelLabel(sessionBackend, session.pool_member, session.native_model, 'full');
-  const display = isPoolBackend(sessionBackend)
-    ? full
-    : sessionModelLabel(sessionBackend, null, null, 'compact');
-  return { full, display };
+  const display = pool ? full : sessionModelLabel(sessionBackend, null, null, 'compact');
+  return { full, display, pool };
 }
 
 function renderSessionTimeLine(s, timeIso, timeHtml, staticTime = false) {
   const label = sessionBackendLabel(s);
-  const model = label
-    ? `<span class="session-backend truncate" title="${escapeHtmlAttr(label.full)}">${escapeHtml(label.display)}</span>`
-    : '';
   // A static row formats its time once at build. Without data-time it stays
   // outside updateRelativeTimes's [data-time] sweep, so a long archived list
   // never joins the periodic full-table refresh.
   const timeAttr = staticTime ? '' : ` data-time="${timeIso}"`;
   // The line sits on slate-850, where slate-500 holds about 3.4:1.
   // slate-400 is still quieter than the name and holds about 6.3:1.
+  if (label && label.pool) {
+    // A pool row's label takes its own line under the date, the layout of the scheduled-task lines (cron.js). Beside
+    // the date the 320px sidebar leaves a label about 67px wide, so the pool and member cannot both show. Both lines
+    // are block boxes, so the row is one line taller than a single-option row.
+    return `<span class="block text-xs text-slate-400">`
+      + `<span class="session-time block"${timeAttr}>${timeHtml}</span>`
+      + `<span class="session-backend block truncate" title="${escapeHtmlAttr(label.full)}">`
+      + `${escapeHtml(label.display)}</span>`
+      + `</span>`;
+  }
+  const model = label
+    ? `<span class="session-backend truncate" title="${escapeHtmlAttr(label.full)}">${escapeHtml(label.display)}</span>`
+    : '';
   return `<span class="flex items-center gap-1.5 text-xs text-slate-400">`
     + `<span class="session-time flex-shrink-0"${timeAttr}>${timeHtml}</span>`
     + model

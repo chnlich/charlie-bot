@@ -190,6 +190,9 @@ delegations to those backends, attach the verified patch file so the worker can 
   Registration prints one JSON object with `trigger_id`, `fire_at`, and the launch record (`launch_id`, `host`, `pid`,
   `log`, `exit_file`); the wake carries the exit status and log path, and a non-zero exit wakes as `watch failed`.
   Normal master calls use the server's session; explicit mismatches in `--session` are rejected.
+- **Cancel a pending trigger** — `charliebot session trigger cancel <trigger_id>` cancels one pending trigger of this
+  session by the `trigger_id` that registration printed. `charliebot session trigger cancel --help` states what the
+  cancel stops and how a refusal reads.
 
 - **One trigger watches many targets — a single trigger covers every parallel job.** When master is waiting on N parallel runs, pass all targets to one `charliebot session trigger --watch <spec> <spec> ...` where each spec self-describes its kind (`PID`, `host:pid`, `slurm:jobid`, `host:slurm:jobid`) and kinds may be freely mixed. The trigger fires when ALL listed targets have finished or `--max-wait` elapses. Spawning N triggers wastes the trigger machinery and produces N wake-ups for one logical event. The per-session pending-trigger cap and the sixth registration's exit-2 behavior are contract in `prompts/master.md`, section Delayed Triggers.
 

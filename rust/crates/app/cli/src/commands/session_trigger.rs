@@ -1,9 +1,10 @@
 //! The `session trigger` verb: register a wake that fires when the watched
 //! targets finish or `--max-wait` elapses, or start `--cmd` detached and register the wake on its wrapper.
+//! `session trigger cancel TRIGGER_ID` cancels one pending trigger of the caller's own session.
 //!
-//! Exit codes: 0 registered; 2 usage error, a 422 refusal or a failed readback check; 3 the ssh start failed or the
-//! remote PID did not parse (nothing registered); 1 the client contract. Under `--cmd` every failed registration exits
-//! 2 after the started wrapper is killed.
+//! Exit codes: 0 registered or cancelled; 2 usage error, a 422 refusal or a failed readback check; 3 the ssh start
+//! failed or the remote PID did not parse (nothing registered); 1 the client contract, which covers a cancel refusal.
+//! Under `--cmd` every failed registration exits 2 after the started wrapper is killed.
 
 use std::fs;
 use std::io;
@@ -15,6 +16,7 @@ use charliebot_cli_common::client;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::resolve;
+use charliebot_cli_common::route;
 use charliebot_core::config;
 use charliebot_core::int_text;
 use charliebot_core::text_repr;
@@ -164,11 +166,15 @@ impl Args {
 }
 
 /// The trigger verb's parser for the `session` command: unique long-option prefixes, and the last
-/// value of a repeated flag.
+/// value of a repeated flag. The `cancel` subcommand takes no registration flag, so `--max-wait` and `--message`
+/// stay required for a registration and a cancel refuses them.
 pub fn command() -> Command {
   with_infer_long_args(
     Command::new("trigger")
-      .about("Schedule a delayed trigger for a CharlieBot session")
+      .about("Schedule a delayed trigger for a CharlieBot session; `trigger cancel` cancels a pending one")
+      .args_conflicts_with_subcommands(true)
+      .subcommand_negates_reqs(true)
+      .subcommand(cancel_command())
       .arg(
         Arg::new("session")
           .long("session")
@@ -234,8 +240,27 @@ pub fn command() -> Command {
   )
 }
 
-/// Run one parsed `session trigger` invocation: the registration.
+/// The `cancel` subcommand: one trigger id.
+fn cancel_command() -> Command {
+  Command::new("cancel").about("Cancel one of this session's pending triggers by id").long_about(CANCEL_LONG_ABOUT).arg(
+    Arg::new("trigger-id").value_name("TRIGGER_ID").required(true).help("The trigger_id that registration printed"),
+  )
+}
+
+/// The `cancel` help. The cancel is the server's: it stops the wake and signals no process.
+const CANCEL_LONG_ABOUT: &str = "\
+Cancel the pending trigger TRIGGER_ID of the caller's own session, as registration resolves the session.
+
+A cancel stops the wake only. A `--cmd` process that the trigger started keeps running.
+
+A refusal exits 1 and prints the server's reason: a trigger of another session, an unknown trigger, or a trigger that
+has already fired or been cancelled.";
+
+/// Run one parsed `session trigger` invocation: the registration, or the `cancel` subcommand.
 pub fn run(matches: &ArgMatches) -> Result<(), CliExit> {
+  if let Some(("cancel", cancel_matches)) = matches.subcommand() {
+    return cancel_trigger(cancel_matches);
+  }
   let args = Args::from_matches(matches);
   if args.cmd.is_some() && args.watch.is_some() {
     return Err(CliExit::usage(
@@ -351,6 +376,32 @@ fn start_and_register(sessions_dir: &Path, session_id: &str, args: &Args, cmd: &
   }
   json_out::print_result(&Value::Object(output));
   Ok(())
+}
+
+/// `session trigger cancel TRIGGER_ID`: the server cancels the trigger if it is pending in the caller's own session.
+fn cancel_trigger(matches: &ArgMatches) -> Result<(), CliExit> {
+  base_url::refuse_in_round()?;
+  let session_id = resolve::resolve_from_env(None)?;
+  let trigger_id = matches.get_one::<String>("trigger-id").expect("clap requires the trigger id").clone();
+  let sessions_dir = config::sessions_dir_in(&home_dir()?);
+  let endpoint = route::fill(triggers::CANCEL_TRIGGER_PATH, &[session_id.as_str(), trigger_id.as_str()]);
+  let record = trigger_files::trigger_path(&sessions_dir.join(&session_id), &trigger_id);
+  client::post(&endpoint, json!({}), Some(Box::new(move || Ok(cancelled_on_disk(&record)))), &[])?;
+  json_out::print_result(&json!({ (triggers::TRIGGER_ID_FIELD): trigger_id, "status": "cancelled" }));
+  Ok(())
+}
+
+/// The readback of a cancel whose response was lost: a trigger file that reads `cancelled` means the cancel landed.
+/// Any other state answers None, and the client reports the outcome as unknown.
+fn cancelled_on_disk(record: &Path) -> Option<Value> {
+  let stored = match metadata::read_metadata_value(record) {
+    Ok(stored) => stored,
+    Err(error) => {
+      eprintln!("warning: could not read {}: {error}", record.display());
+      return None;
+    }
+  };
+  (stored.get("status").and_then(Value::as_str) == Some("cancelled")).then(|| json!({ "ok": true }))
 }
 
 /// The registration POST under the client contract: a 422 exits 2, and a sent-but-lost call reads back.
@@ -504,6 +555,22 @@ mod tests {
     assert!(parse_watch_target("0").is_err());
     assert!(parse_watch_target(":12").is_err());
     assert!(parse_watch_target("neptune:abc").is_err());
+  }
+
+  #[test]
+  fn cancel_takes_one_trigger_id_and_refuses_registration_flags() {
+    let matches = command().try_get_matches_from(["trigger", "cancel", "tr-1"]).expect("cancel parses");
+    let (name, cancel) = matches.subcommand().expect("cancel is the subcommand");
+    assert_eq!(name, "cancel");
+    assert_eq!(cancel.get_one::<String>("trigger-id").map(String::as_str), Some("tr-1"));
+    assert!(
+      command().try_get_matches_from(["trigger", "--max-wait", "60", "--message", "wake", "cancel", "tr-1"]).is_err(),
+      "a cancel next to registration flags is refused, not silently ignored"
+    );
+    assert!(
+      command().try_get_matches_from(["trigger", "--message", "wake"]).is_err(),
+      "a registration without --max-wait is still refused"
+    );
   }
 
   #[test]

@@ -35,6 +35,7 @@ type Handler = Box<dyn Fn(&Value) -> Option<(u16, Value)> + Send + Sync>;
 struct StubApi {
   port: u16,
   bodies: Arc<Mutex<Vec<Value>>>,
+  paths: Arc<Mutex<Vec<String>>>,
   requests: Arc<AtomicUsize>,
   stop: Arc<AtomicBool>,
   thread: Option<JoinHandle<()>>,
@@ -46,10 +47,12 @@ impl StubApi {
     listener.set_nonblocking(true).expect("the listener goes nonblocking");
     let port = listener.local_addr().expect("the listener has an address").port();
     let bodies = Arc::new(Mutex::new(Vec::new()));
+    let paths = Arc::new(Mutex::new(Vec::new()));
     let requests = Arc::new(AtomicUsize::new(0));
     let stop = Arc::new(AtomicBool::new(false));
     let thread = {
       let bodies = bodies.clone();
+      let paths = paths.clone();
       let requests = requests.clone();
       let stop = stop.clone();
       std::thread::spawn(move || {
@@ -66,6 +69,7 @@ impl StubApi {
                 continue;
               }
               bodies.lock().expect("the body lock").push(request.body.clone());
+              paths.lock().expect("the path lock").push(request.path.clone());
               if let Some((status, answer)) = handler(&request.body) {
                 write_response(&mut stream, status, &answer);
               }
@@ -78,11 +82,16 @@ impl StubApi {
         }
       })
     };
-    StubApi { port, bodies, requests, stop, thread: Some(thread) }
+    StubApi { port, bodies, paths, requests, stop, thread: Some(thread) }
   }
 
   fn bodies(&self) -> Vec<Value> {
     self.bodies.lock().expect("the body lock").clone()
+  }
+
+  /// The request path of each POST the stub read, in arrival order.
+  fn paths(&self) -> Vec<String> {
+    self.paths.lock().expect("the path lock").clone()
   }
 
   fn request_count(&self) -> usize {
@@ -99,9 +108,11 @@ impl Drop for StubApi {
   }
 }
 
-/// One request the stub read: whether it is a POST, and its JSON body (a GET carries none, so its body is null).
+/// One request the stub read: whether it is a POST, its path, and its JSON body. A GET carries no body,
+/// so its body is null.
 struct Request {
   post: bool,
+  path: String,
   body: Value,
 }
 
@@ -133,13 +144,16 @@ fn read_request(stream: &mut TcpStream) -> Request {
   } else {
     serde_json::from_slice(&buffer[body_start..body_start + length]).expect("the request body is JSON")
   };
-  Request { post: head.starts_with("POST "), body }
+  let path = head.split_whitespace().nth(1).expect("the request line names a path").to_string();
+  Request { post: head.starts_with("POST "), path, body }
 }
 
 fn write_response(stream: &mut TcpStream, status: u16, answer: &Value) {
   let body = serde_json::to_vec(answer).expect("the answer serializes");
   let reason = match status {
     200 => "OK",
+    404 => "Not Found",
+    409 => "Conflict",
     422 => "Unprocessable Entity",
     other => panic!("the stub has no reason phrase for {other}"),
   };
@@ -210,6 +224,19 @@ impl Sandbox {
   /// Run `charliebot session trigger ARGS` with the given HOME: the environment holds only these three variables.
   fn run_as(&self, args: &[&str], home: &Path) -> Run {
     self.run_with(args, &[("CHARLIEBOT_HOME", self.home.as_path()), ("HOME", home)])
+  }
+
+  /// Run `charliebot session trigger ARGS` inside a Run of session `s1`: the server writes that session's id into
+  /// CHARLIEBOT_SESSION_ID, and the CLI resolves its session from there.
+  fn run_in_session(&self, args: &[&str]) -> Run {
+    self.run_with(
+      args,
+      &[
+        ("CHARLIEBOT_HOME", self.home.as_path()),
+        ("HOME", self.root.path()),
+        ("CHARLIEBOT_SESSION_ID", Path::new("s1")),
+      ],
+    )
   }
 
   /// Run `charliebot session trigger ARGS` with exactly `vars` set beyond PATH, whose stub `ssh` directory comes first.
@@ -638,6 +665,39 @@ fn test_max_wait_at_the_cap_registers() {
 
   assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
   assert_eq!(stub.bodies()[0]["delay_seconds"], 14400);
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_cancel_posts_the_run_session_route_and_prints_the_trigger() {
+  let sandbox = Sandbox::new();
+  let stub = StubApi::start(Box::new(|_| Some((200, json!({ "ok": true })))));
+  sandbox.write_config(stub.port);
+
+  let run = sandbox.run_in_session(&["cancel", "trig-1"]);
+
+  assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+  assert_eq!(stub.paths(), ["/api/internal/triggers/s1/trig-1/cancel"]);
+  let printed: Value = serde_json::from_str(&run.stdout).expect("the cancel prints one JSON object");
+  assert_eq!(printed, json!({ "trigger_id": "trig-1", "status": "cancelled" }));
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_cancel_refusal_exits_1_with_the_server_reason() {
+  let refusals =
+    [(404, "Trigger not found"), (409, "trigger trig-1 is already fired: only a pending trigger can be cancelled")];
+  for (status, reason) in refusals {
+    let sandbox = Sandbox::new();
+    let stub = StubApi::start(Box::new(move |_| Some((status, json!({ "detail": reason })))));
+    sandbox.write_config(stub.port);
+
+    let run = sandbox.run_in_session(&["cancel", "trig-1"]);
+
+    assert_eq!(run.code, Some(1), "a {status} refusal exits 1: stderr: {}", run.stderr);
+    assert!(run.stderr.contains(reason), "stderr carries the server's reason: {}", run.stderr);
+    assert!(run.stdout.is_empty(), "a refused cancel prints no success object: {}", run.stdout);
+  }
 }
 
 #[test]

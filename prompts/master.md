@@ -469,7 +469,7 @@ Write the label as a short name for the watch, and keep runbook steps and readba
 A session holds up to five pending triggers.
 One trigger watches parallel jobs through repeated `--watch` specs.
 A sixth registration exits 2 and prints the current count.
-On takeover, adopt the predecessor's triggers. Cancel the obsolete ones.
+On takeover, adopt the predecessor's triggers. Cancel the obsolete ones with `charliebot session trigger cancel <trigger_id>`.
 Prefer minute-scale checks or renewable watches of up to four hours. Intermediate intervals lose prompt-cache reuse.
 Cancel a watch trigger only while its target runs. A finished target has already queued its wake.
 

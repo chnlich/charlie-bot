@@ -135,7 +135,7 @@ release. By workflow:
 - `charliebot delegate` — delegate a task to a worker agent
 - `charliebot improve start` / `improve stop` — start, or stop after the current iteration, an autonomous improvement loop on this session
 - `charliebot plan` — present, amend, approve, close, diff, and list a session's plans
-- `charliebot session` — create sessions, page the task tree, relay a message to another session (`send`), archive, retry, and set a task's approver; `session trigger` schedules a delayed trigger
+- `charliebot session` — create sessions, page the task tree, relay a message to another session (`send`), archive, retry, and set a task's approver; `session trigger` schedules a delayed trigger, and `session trigger cancel` cancels a pending one
 
 **Pages and replies**
 

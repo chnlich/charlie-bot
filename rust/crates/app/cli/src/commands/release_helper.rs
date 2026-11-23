@@ -1089,7 +1089,7 @@ fn first_endpoint_member(
 ) -> Result<Value, String> {
   for member in members {
     let answer = resolve(member)?;
-    let api_base = answer.get("option").and_then(|option| option.get("api_base")).and_then(Value::as_str);
+    let api_base = answer.get("option").and_then(|option| option.get(config::API_BASE_KEY)).and_then(Value::as_str);
     if api_base.is_some_and(|api_base| !api_base.is_empty()) {
       return Ok(answer);
     }

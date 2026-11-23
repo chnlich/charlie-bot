@@ -169,7 +169,6 @@ fn register_fakechat(registry: &mut Registry) -> Result<(), RegistryError> {
 }
 
 /// Records each launch the dispatcher asks for, and launches nothing.
-#[derive(Default)]
 struct RecordingExecutor {
   launches: Mutex<Vec<(String, Vec<Value>)>>,
 }
@@ -331,7 +330,7 @@ impl Home {
     let completion = features.startup.require::<TaskCompletion>().expect("the completion is in startup");
     let sequence: Arc<dyn charliebot_registry::sequence::SequenceCompletion> = completion.clone();
     let run: Arc<dyn charliebot_tasks::dispatch::RunFinishedCompletion> = completion;
-    let executor = Arc::new(RecordingExecutor::default());
+    let executor = Arc::new(RecordingExecutor { launches: Mutex::new(Vec::new()) });
     let dispatcher = Dispatcher::new(Arc::clone(&features.store), Arc::clone(&features), sequence, run);
     let dyn_executor: Arc<dyn DispatchExecutor> = executor.clone();
     dispatcher.set_executor(Some(dyn_executor));
@@ -439,7 +438,6 @@ fn router_command(directory: &TempDir, body: &str, arguments: &[&str]) -> Vec<St
 }
 
 /// The fakechat adapter over an in-memory thread: posts and acks record, and `read_eligible` returns `thread`.
-#[derive(Default)]
 struct FakeAdapter {
   posts: Mutex<Vec<(Value, String, String)>>,
   post_keys: Mutex<HashSet<String>>,
@@ -451,17 +449,31 @@ struct FakeAdapter {
 }
 
 impl FakeAdapter {
+  /// An adapter with an empty thread. `yield_before_post` yields before each post lands, and `refuse_posts` fails
+  /// every post.
+  fn new(yield_before_post: bool, refuse_posts: bool) -> Self {
+    Self {
+      posts: Mutex::new(Vec::new()),
+      post_keys: Mutex::new(HashSet::new()),
+      yield_before_post,
+      refuse_posts,
+      acks: Mutex::new(Vec::new()),
+      removed: Mutex::new(Vec::new()),
+      thread: Mutex::new(Vec::new()),
+    }
+  }
+
   fn with_thread(messages: &[(&str, &str)]) -> Arc<Self> {
     Self::with_thread_yield_before_post(messages, false)
   }
 
   /// An adapter whose every post fails: the platform refuses each write.
   fn refusing_posts() -> Arc<Self> {
-    Arc::new(Self { refuse_posts: true, ..Self::default() })
+    Arc::new(Self::new(false, true))
   }
 
   fn with_thread_yield_before_post(messages: &[(&str, &str)], yield_before_post: bool) -> Arc<Self> {
-    let adapter = Self { yield_before_post, ..Self::default() };
+    let adapter = Self::new(yield_before_post, false);
     *adapter.thread.lock().expect("the thread lock is never poisoned") = messages
       .iter()
       .map(|(id, text)| ThreadMessage {

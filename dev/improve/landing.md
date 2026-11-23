@@ -200,21 +200,21 @@ Before a serve trial side runs, set `CHARLIEBOT_RELEASE_RUN_DIR` to that round d
 
     export CHARLIEBOT_RELEASE_RUN_DIR=~/improve/<direction>/evidence/<UTC round start>
 
-The trial writes its own evidence under that directory.
+The side record stays in that directory. The trial and its measurement command write their raw output in the side output
+location named by the record.
 Without the variable the trial writes `~/charliebot-release-logs`, which the write boundary refuses, so the step fails.
 The round's runner sets `CHARLIEBOT_TRIAL_PROBE_ANSWER` to the launch's probe answer, so the trial takes its probe model from that file: the round's host runs no server to resolve `backends.calls.probe`.
 
-Each serve trial side leaves one side record in the round directory, and the record names the side's raw output location.
+Each serve trial side leaves one side record in the round directory, and the record names that side's unique raw output location.
 The round keeps every side record, including the records of sides it discards.
-A timing side writes all of its raw output, the trial's own output included, to its side output location, `IMPROVE_SIDE_OUTPUT`, so no later side overwrites it.
-The record's four lines are listed in the header of `dev/improve/trial-side.sh`.
+A timing side writes all of its raw output, the trial's own output included, to `IMPROVE_SIDE_OUTPUT`, so no later side overwrites it.
+The record fields are listed in the header of `dev/improve/trial-side.sh`.
 
 The pull request names each screenshot by its file name and width, at the widths and states that the Web UI Screenshots rule in `prompts/task_base.md` sets.
 The pull request names no link to an evidence file and no host path; the evidence text stands on its own.
 A pull request that cites a timing or memory figure names each side record that produced the figure, with one `Side record:` line per record that carries the record's file name only.
 Each cited record is complete, and its raw output location holds the side's output.
-A ready pull request names at least one side record when the round directory holds side records.
-The posting script checks these records at `pr-create` and `pr-merge`.
+A ready pull request names at least one side record when the round's evidence directory holds side records.
 Step 9 carries the evidence files to the user.
 
 Push the branch and open one pull request against `main` through the posting script:
@@ -365,11 +365,12 @@ When the branch exists with an open pull request, another direction holds the re
 A second repair would race the first for the same branch, so this round waits: write an `improve-waiting: main repair held by another direction` comment file, post it on this round's pull request through the posting script, and end the round.
 
 When the branch exists with no open pull request, the round that pushed it died before it opened one.
-Check out the branch, open its pull request through the posting script, and continue at repair step 5:
+Check out the branch, open its pull request through the posting script with the round's evidence directory, and continue
+at repair step 5:
 
     git fetch origin main-repair/current
     git switch -c main-repair/current origin/main-repair/current
-    dev/improve/github-post.sh pr-create --title "<repair topic>" --body-file <body file> --head main-repair/current
+    dev/improve/github-post.sh pr-create --title "<repair topic>" --body-file <body file> --evidence-dir <the round's evidence directory> --head main-repair/current
 
 A "pull request already exists" refusal means that another direction opened it first: wait as above.
 
@@ -393,7 +394,7 @@ These steps return `main` to green and resume the step that needed it.
    A red check follows the inside-diff fix steps with the same two-fix budget.
 5. Confirm that the repair still carries a diff against a fresh `origin/main`.
    An emptied repair has nothing to merge, so close it through the posting script with `--delete-branch` and a comment file that reads `improve-abandoned: main repair — nothing left to merge`, then return to the sending step.
-6. Review the repair pull request with Step 6, act on its findings, and merge it through `dev/improve/github-post.sh pr-merge <PR>` once it is green and its merge head carries a clean verdict (Step 7).
+6. Review the repair pull request with Step 6, act on its findings, and merge it through `dev/improve/github-post.sh pr-merge --evidence-dir <the round's evidence directory> <PR>` once it is green and its merge head carries a clean verdict (Step 7).
    A repair lands on `main` as well, so it gets the same review as a topic.
    Wait for the merge's main run with `gh run watch`, then return to the sending step.
 7. When the failure names no fix, or the repair pull request is abandoned,

@@ -1,6 +1,6 @@
 //! The scheduled-task service and its croniter-compatible five-field scan.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -179,8 +179,11 @@ impl CronScheduler {
   /// hardcoded backend choice; `None` when the fire may run. Every cron task is checked, a handler's fire included.
   fn literal_refusal(&self, task: &ScheduledTaskConfig, cfg: &CharlieBotConfig) -> anyhow::Result<Option<String>> {
     let repo = self.features.startup.require::<RepoRoot>()?;
-    let prompt_pointers =
-      task.prompt_file.iter().chain(task.steps.iter().flatten().filter_map(|step| step.prompt_file.as_ref()));
+    let prompt_pointers = task
+      .prompt_file
+      .iter()
+      .chain(task.steps.iter().flatten().filter_map(|step| step.prompt_file.as_ref()))
+      .filter(|pointer| !pointer.is_empty());
     let mut prompts = Vec::new();
     for pointer in prompt_pointers {
       prompts.push(loader::resolve_path(pointer, repo.path()).map_err(anyhow::Error::msg)?);
@@ -263,8 +266,8 @@ impl CronScheduler {
     }
   }
 
-  /// The session ids that the enabled cron tasks are bound to.
-  fn enabled_bound_sessions(&self) -> anyhow::Result<Vec<String>> {
+  /// The distinct session ids that the enabled cron tasks are bound to.
+  fn enabled_bound_sessions(&self) -> anyhow::Result<BTreeSet<String>> {
     let cfg = self.features.config.get()?;
     let snapshot = loader::load_snapshot(&self.features, &cfg)?;
     Ok(snapshot.tasks.into_iter().filter(|task| task.enabled).filter_map(|task| task.session_id).collect())

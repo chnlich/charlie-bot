@@ -76,17 +76,33 @@ else
   printf 'preflight: cannot list the build host trees (status %s): %s\n' "$status" "$REMOTE_RUN_OUTPUT" >&2
   exit "$status"
 fi
+if remote_run_capture "find \"$base/tree-owners\" -mindepth 1 -maxdepth 1 -printf \"%f\\n\""; then
+  remote_record_names=$REMOTE_RUN_OUTPUT
+else
+  status=$?
+  printf 'preflight: cannot list the build host tree owner records (status %s): %s\n' "$status" "$REMOTE_RUN_OUTPUT" >&2
+  exit "$status"
+fi
+remote_names=$(printf '%s\n%s\n' "$remote_tree_names" "$remote_record_names" | sort -u)
 
-# Remove only trees owned by this caller host whose local root is gone. A path-only legacy record
-# cannot establish its caller host, so it remains untouched. Refuse a name whose recorded root is
-# a different live directory: two local trees must never share one remote tree.
+# Sweep every build host tree and owner record by name. The caller decides whether its recorded local root
+# exists, and the build host decides the rest under its owner lock (remote-exec.pl --sweep-tree). A record whose
+# tree is missing is dropped; a tree whose recorded local root is gone is removed. Records for other hosts and
+# path-only legacy records stay untouched, because this caller host cannot prove it owns them. Refuse a name
+# whose recorded root is a different live directory: two local trees must never share one remote tree.
 while IFS= read -r remote_name; do
   [[ -n "$remote_name" ]] || continue
   if [[ ! "$remote_name" =~ ^[A-Za-z0-9._-]+$ ]]; then
-    printf 'sweep: build host tree has an unsafe directory name: %s\n' "$remote_name" >&2
+    printf 'sweep: build host name is unsafe: %s\n' "$remote_name" >&2
     exit 2
   fi
-  remote_record_command="if [[ -f \"$base/tree-owners/$remote_name\" ]]; then cat -- \"$base/tree-owners/$remote_name\"; else printf '__NO_LOCAL_ROOT_RECORD__'; fi"
+  if grep -Fxq -- "$remote_name" <<< "$remote_tree_names"; then
+    listed=1
+  else
+    listed=0
+  fi
+  # An entry of any kind counts as a record, so a symlink or directory reaches the read and fails there.
+  remote_record_command="if [[ -e \"$base/tree-owners/$remote_name\" || -L \"$base/tree-owners/$remote_name\" ]]; then cat -- \"$base/tree-owners/$remote_name\"; else printf '__NO_LOCAL_ROOT_RECORD__'; fi"
   if remote_run_capture "$remote_record_command"; then
     owner_record=$REMOTE_RUN_OUTPUT
   else
@@ -96,6 +112,10 @@ while IFS= read -r remote_name; do
     exit "$status"
   fi
   if [[ "$owner_record" == '__NO_LOCAL_ROOT_RECORD__' ]]; then
+    # A name that only the record listing showed had its record removed since the listing: nothing is left.
+    if (( listed == 0 )); then
+      continue
+    fi
     if [[ "$remote_name" == "$tree_name" ]]; then
       printf 'sync: build host tree %s has no local-root record; refusing to overwrite it\n' "$remote_name" >&2
       exit 2
@@ -125,23 +145,50 @@ while IFS= read -r remote_name; do
     continue
   fi
   if [[ -d "$recorded_root" ]]; then
-    if [[ "$remote_name" == "$tree_name" && "$recorded_root" != "$sync_root" ]]; then
+    root_state=live
+    if (( listed == 1 )) && [[ "$remote_name" == "$tree_name" && "$recorded_root" != "$sync_root" ]]; then
       printf 'sync: build host tree %s belongs to local directory %s, not %s\n' \
         "$remote_name" "$recorded_root" "$sync_root" >&2
       exit 2
     fi
-    continue
+    # A live directory keeps its tree; a record whose tree is missing still goes to the build host to be dropped.
+    if (( listed == 1 )); then
+      continue
+    fi
+  else
+    root_state=gone
   fi
-  remote_remove=$(remote_run_remove_tree_command "$REMOTE_RUN_CALLER_HOST" "$base/trees/$remote_name")
-  if remote_run_capture "$remote_remove"; then
-    printf 'sweep: removed build host tree %s because its recorded local directory is gone\n' "$remote_name" >&2
+  sweep_command=$(remote_run_sweep_tree_command "$REMOTE_RUN_CALLER_HOST" "$base/trees/$remote_name" "$root_state")
+  if remote_run_capture "$sweep_command"; then
+    outcome=$REMOTE_RUN_OUTPUT
   else
     status=$?
-    printf 'sweep: failed to remove build host tree %s (status %s): %s\n' \
+    printf 'sweep: failed to sweep build host tree %s (status %s): %s\n' \
       "$remote_name" "$status" "$REMOTE_RUN_OUTPUT" >&2
     exit "$status"
   fi
-done <<< "$remote_tree_names"
+  case "$outcome" in
+    removed)
+      printf 'sweep: removed build host tree %s because its recorded local directory is gone\n' "$remote_name" >&2
+      ;;
+    dropped)
+      if [[ "$root_state" == live ]]; then
+        local_root_state='still exists'
+      else
+        local_root_state='is gone'
+      fi
+      printf 'sweep: dropped the owner record of build host tree %s because the tree is missing; ' \
+        "$remote_name" >&2
+      printf 'its recorded local directory %s\n' "$local_root_state" >&2
+      ;;
+    kept|absent)
+      ;;
+    *)
+      printf 'sweep: build host tree %s returned an unknown outcome: %q\n' "$remote_name" "$outcome" >&2
+      exit 2
+      ;;
+  esac
+done <<< "$remote_names"
 
 exclude_args=(
   --exclude=/.git
@@ -153,7 +200,7 @@ exclude_args=(
 # rsync expands a leading ~ on the remote path itself; a $HOME would reach it unexpanded.
 remote_tree="$REMOTE_RUN_HOST:~/$REMOTE_RUN_REMOTE_BASE/trees/$tree_name/"
 
-marker_query="if [[ -f \"$base/tree-owners/$tree_name\" ]]; then cat -- \"$base/tree-owners/$tree_name\"; else printf '__NO_LOCAL_ROOT_RECORD__'; fi"
+marker_query="if [[ -e \"$base/tree-owners/$tree_name\" || -L \"$base/tree-owners/$tree_name\" ]]; then cat -- \"$base/tree-owners/$tree_name\"; else printf '__NO_LOCAL_ROOT_RECORD__'; fi"
 if remote_run_capture "$marker_query"; then
   existing_record=$REMOTE_RUN_OUTPUT
 else
@@ -187,14 +234,15 @@ if [[ "$existing_record" != '__NO_LOCAL_ROOT_RECORD__' ]]; then
   fi
 fi
 
-encoded_owner=$(printf 'host=%s\nroot=%s\n' "$REMOTE_RUN_CALLER_HOST" "$sync_root" | base64 -w0)
-remote_marker_write="printf '%s' '$encoded_owner' | base64 -d > \"$base/tree-owners/$tree_name\""
-if remote_run_capture "$remote_marker_write"; then
+# The claim writes the owner record and creates the tree together, under the build host's owner lock. A claim that
+# fails leaves neither, and one that stops after its record leaves a record the next sweep drops.
+encoded_root=$(printf '%s' "$sync_root" | base64 -w0)
+remote_claim=$(remote_run_claim_tree_command "$REMOTE_RUN_CALLER_HOST" "$base/trees/$tree_name" "$encoded_root")
+if remote_run_capture "$remote_claim"; then
   :
 else
   status=$?
-  printf 'sync: cannot record the local tree owner on the build host (status %s): %s\n' \
-    "$status" "$REMOTE_RUN_OUTPUT" >&2
+  printf 'sync: cannot claim build host tree %s (status %s): %s\n' "$tree_name" "$status" "$REMOTE_RUN_OUTPUT" >&2
   exit "$status"
 fi
 

@@ -399,10 +399,20 @@ remote_run_remote_command() {
     "$REMOTE_RUN_REMOTE_BASE" "$(remote_run_base_path)" "$REMOTE_RUN_EXEC_NAME" "$payload"
 }
 
-remote_run_remove_tree_command() {
-  local caller_host=$1 tree_path=$2
-  printf 'REMOTE_RUN_REMOTE_BASE="%s" exec "%s/%s" --remove-tree "%s" "%s"' \
-    "$REMOTE_RUN_REMOTE_BASE" "$(remote_run_base_path)" "$REMOTE_RUN_EXEC_NAME" "$caller_host" "$tree_path"
+# The root state is live or gone: whether the caller host still has the recorded local directory.
+remote_run_sweep_tree_command() {
+  local caller_host=$1 tree_path=$2 root_state=$3
+  printf 'REMOTE_RUN_REMOTE_BASE="%s" exec "%s/%s" --sweep-tree "%s" "%s" "%s"' \
+    "$REMOTE_RUN_REMOTE_BASE" "$(remote_run_base_path)" "$REMOTE_RUN_EXEC_NAME" \
+    "$caller_host" "$tree_path" "$root_state"
+}
+
+# The local root travels base64-encoded, so no path character reaches the remote shell's quoting.
+remote_run_claim_tree_command() {
+  local caller_host=$1 tree_path=$2 encoded_root=$3
+  printf 'REMOTE_RUN_REMOTE_BASE="%s" exec "%s/%s" --claim-tree "%s" "%s" "%s"' \
+    "$REMOTE_RUN_REMOTE_BASE" "$(remote_run_base_path)" "$REMOTE_RUN_EXEC_NAME" "$caller_host" "$tree_path" \
+    "$encoded_root"
 }
 
 remote_run_stop_tree_command() {

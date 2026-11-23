@@ -56,7 +56,8 @@ that belongs to one machine. The runner reads the CharlieBot `config.yaml` on ea
 
 The build host's state layout, under its `$HOME` and the remote base: `trees/<tree name>` for the
 synced trees, `tree-owners/<tree name>` for `host=<caller hostname>` and `root=<local absolute path>`,
-`slots/` for the four build slot locks, `slot-waits.log` for the slot wait record, `cargo/` and
+`tree-owners.lock` for the lock that serializes every owner record and tree change, `slots/` for the four
+build slot locks, `slot-waits.log` for the slot wait record, `cargo/` and
 `rustup/` for the toolchain,
 `bin/` for uv and sccache, `node/` for Node, `python/` and `cache/` for the uv and sccache
 caches, and one `remote-exec-<hash>.pl` for each `remote-exec.pl` content a run has synced. A run
@@ -70,16 +71,21 @@ executes the copy named for its own checkout's content hash.
 3. The sweep: it checks local roots only for records whose caller hostname matches this machine.
    Records for other hosts stay untouched. A path-only record from an older runner has no host and
    stays untouched; a same-name legacy tree refuses the sync because its owner cannot be proved.
-   Before removing an owned tree or replacing its contents, `remote-exec.pl` sends TERM to every
-   same-owner process whose cwd or executable path is inside the tree, waits two seconds, then sends
-   KILL to survivors. It reports the stopped pids and removes or syncs the tree only after no matching
-   process remains. A process inspection, stop, or removal error leaves the tree in place and fails the
-   run.
-4. The upload: rsync with the tree's `.gitignore` as filters, excluding `.git`, `.venv`,
+   A record of this host whose tree is missing is dropped, and the output names it, whether or not its
+   local root still exists; the next sync of that root claims the tree again. A tree whose recorded local
+   root is gone is removed. Before removing an owned tree or replacing its contents, `remote-exec.pl`
+   sends TERM to every same-owner process whose cwd or executable path is inside the tree, waits two
+   seconds, then sends KILL to survivors. It reports the stopped pids and removes or syncs the tree only
+   after no matching process remains. A process inspection, stop, or removal error leaves the tree in
+   place and fails the run.
+4. The claim: `remote-exec.pl` writes the tree's owner record and then creates the tree, under the owner
+   lock. A claim whose tree cannot be created removes its record again, so a record and its tree are
+   written together and a record outlives a stopped claim only until the next sweep drops it.
+5. The upload: rsync with the tree's `.gitignore` as filters, excluding `.git`, `.venv`,
    `__pycache__`, and `rust/target`. A remote path the local tree ignores is protected from the
    sync's delete. After a cargo upload, the local `rust/target` is deleted: the build host owns
    the build outputs.
-5. The remote preparation, before the command:
+6. The remote preparation, before the command:
    - a synthetic git commit with an `origin/main` ref in the synced tree, refreshed after every
      upload, so tests that read git history pass;
    - a short `TMPDIR` on the `/dev/shm` tmpfs, so release trial socket paths fit the trial's
@@ -89,10 +95,10 @@ executes the copy named for its own checkout's content hash.
      missing, and its targets otherwise;
    - the environment: the runner's cargo, uv, and node first, then `~/.local/go/bin`,
      `~/.pixi/bin`, and `~/.local/bin`.
-6. The command: cargo and cargo-capable uv commands take one of four build slots, get sccache and
+7. The command: cargo and cargo-capable uv commands take one of four build slots, get sccache and
    `CARGO_BUILD_JOBS=4`, and log their slot wait to `slot-waits.log`; every command runs under
    `nice -n 10`.
-7. The copy-back: rsync of the command's changes to the original directory.
+8. The copy-back: rsync of the command's changes to the original directory.
 
 `remote-exec.pl` makes itself a child subreaper on the build host, so daemons the command starts,
 tmux servers included, are adopted instead of reparented away. It stops every descendant when the

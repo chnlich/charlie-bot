@@ -2,8 +2,9 @@
 //! run. It stops with exit 2 while the host is unset. It starts every run with a connectivity check whose Tailscale
 //! login link exits 86 and whose other failures and time limit exit 87. The exit 86 stop text names the `/host-auth`
 //! page. After the check, the command's exit code comes back unchanged, 255 included. Owner records identify the
-//! caller host and local root; a sweep removes only records for its own host. `remote-exec.pl` stops processes with a
-//! cwd or executable path inside a tree before syncing or deleting it. For commands, it uses a short TMPDIR on the
+//! caller host and local root; a sweep drops or removes only records for its own host. `remote-exec.pl` stops
+//! processes with a cwd or executable path inside a tree before syncing or deleting it. For commands, it uses a short
+//! TMPDIR on the
 //! /dev/shm tmpfs, stops descendants on exit or signal, and detects a closed SSH output channel. The local work
 //! guard's refusal names the same host and prints in full while the host is unset.
 
@@ -48,12 +49,23 @@ log="${FAKE_SSH_LOG:?}"
 printf '%s\n' "$*" >>"$log"
 last="${*: -1}"
 case "$last" in
-  *--remove-tree*)
+  *--sweep-tree*)
     if [[ -n "${FAKE_STOP_FAIL:-}" ]]; then
       echo 'remote-exec: failed to stop a process in the build tree' >&2
       exit 23
     fi
+    # A tree that vanishes after the sweep listed it: the state a concurrent run's removal leaves.
+    if [[ -n "${FAKE_VANISH_TREE:-}" ]]; then
+      rm -rf -- "$FAKE_VANISH_TREE"
+    fi
+    [[ -n "${FAKE_BUILD_HOME:-}" ]] || exit 0
     HOME="$FAKE_BUILD_HOME" eval "$last"
+    exit $?
+    ;;
+  *--claim-tree*)
+    [[ -n "${FAKE_BUILD_HOME:-}" ]] || exit 0
+    HOME="$FAKE_BUILD_HOME" eval "$last"
+    exit $?
     ;;
   *--stop-tree*)
     if [[ -n "${FAKE_STOP_FAIL:-}" ]]; then
@@ -88,6 +100,9 @@ exit 0
 
 const FAKE_RSYNC: &str = r##"
 printf '%s\n' "rsync $*" >>"${FAKE_SSH_LOG:?}"
+if [[ -n "${FAKE_UPLOAD_STATUS:-}" && "${*: -1}" == *"/trees/"* ]]; then
+  exit "$FAKE_UPLOAD_STATUS"
+fi
 if [[ -n "${FAKE_BUILD_HOME:-}" ]]; then
   source="${@: -2:1}"
   destination="${@: -1}"
@@ -316,7 +331,7 @@ fn a_same_name_tree_whose_recorded_directory_is_gone_is_removed_and_the_run_succ
     "{}",
     run.describe()
   );
-  assert!(!base.join("trees/project").exists(), "the stale tree survived the sweep: {}", run.describe());
+  assert!(!base.join("trees/project/leftover.txt").exists(), "the stale tree survived the sweep: {}", run.describe());
   let record = fs::read_to_string(base.join("tree-owners/project")).expect("the new owner record");
   assert_eq!(record, owner_record("host-a", &project), "the run did not record the current owner");
 }
@@ -420,6 +435,160 @@ fn a_failed_tree_stop_keeps_the_tree_and_fails_the_sweep() {
   assert!(run.stderr.contains("failed to stop a process in the build tree"), "{}", run.describe());
   assert!(remote_tree.exists(), "the tree was removed after its stop failed: {}", run.describe());
   assert_eq!(fs::read_to_string(base.join("tree-owners/orphan-tree")).expect("the stale owner record"), record);
+}
+
+/// A record whose tree and local root are both gone is dropped, the drop is named, and the run succeeds.
+#[test]
+#[ignore = "integration"]
+fn a_sweep_drops_a_record_whose_tree_and_local_root_are_gone() {
+  let sandbox = Sandbox::new();
+  sandbox.stub("ssh", FAKE_SSH);
+  sandbox.stub("rsync", FAKE_RSYNC);
+  install_cli(&sandbox);
+  let project = project(&sandbox);
+  let base = install_fake_build_home(&sandbox);
+  let gone_owner = sandbox.root().join("gone-owner/src");
+  std::fs::write(base.join("tree-owners/stale-tree"), owner_record("host-a", &gone_owner))
+    .expect("the stale owner record");
+
+  let run = run_with_fake_build_home(&sandbox, &project);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(run.stderr.contains("dropped the owner record of build host tree stale-tree"), "{}", run.describe());
+  assert!(!base.join("tree-owners/stale-tree").exists(), "the stale record survived the sweep: {}", run.describe());
+  assert!(!base.join("trees/stale-tree").exists(), "the sweep created the stale tree: {}", run.describe());
+}
+
+/// A record whose tree is missing while its local root exists is dropped, and the sync of that root claims the name
+/// again, so the tree and its record come back together.
+#[test]
+#[ignore = "integration"]
+fn a_missing_tree_with_a_live_local_root_is_recreated_by_the_next_sync() {
+  let sandbox = Sandbox::new();
+  sandbox.stub("ssh", FAKE_SSH);
+  sandbox.stub("rsync", FAKE_RSYNC);
+  install_cli(&sandbox);
+  let project = project(&sandbox);
+  let base = install_fake_build_home(&sandbox);
+  std::fs::write(base.join("tree-owners/project"), owner_record("host-a", &project)).expect("the owner record");
+
+  let run = run_with_fake_build_home(&sandbox, &project);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(run.stderr.contains("dropped the owner record of build host tree project"), "{}", run.describe());
+  assert!(base.join("trees/project").is_dir(), "the sync did not recreate the tree: {}", run.describe());
+  let record = fs::read_to_string(base.join("tree-owners/project")).expect("the owner record");
+  assert_eq!(record, owner_record("host-a", &project), "the sync did not reclaim the name: {}", run.describe());
+}
+
+/// A record this caller host cannot prove it owns stays as it is, even when its tree is missing: another host's record,
+/// and a path-only legacy record.
+#[test]
+#[ignore = "integration"]
+fn a_sweep_keeps_records_this_host_cannot_prove_it_owns_when_their_tree_is_missing() {
+  let sandbox = Sandbox::new();
+  sandbox.stub("ssh", FAKE_SSH);
+  sandbox.stub("rsync", FAKE_RSYNC);
+  install_cli(&sandbox);
+  let project = project(&sandbox);
+  let base = install_fake_build_home(&sandbox);
+  let host_b_record = owner_record("host-b", &sandbox.root().join("host-b/missing-root"));
+  std::fs::write(base.join("tree-owners/host-b-stale"), &host_b_record).expect("the host B owner record");
+  let legacy_record = sandbox.root().join("missing-legacy-root").display().to_string();
+  std::fs::write(base.join("tree-owners/legacy-stale"), &legacy_record).expect("the legacy owner record");
+
+  let run = run_with_fake_build_home(&sandbox, &project);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert_eq!(fs::read_to_string(base.join("tree-owners/host-b-stale")).expect("the host B record"), host_b_record);
+  assert_eq!(fs::read_to_string(base.join("tree-owners/legacy-stale")).expect("the legacy record"), legacy_record);
+}
+
+/// A tree that a concurrent run removes after this sweep listed it: the sweep drops the record it finds, and the run
+/// succeeds. The fake removes the tree between the listing and the sweep's call, the interleaving that failed the run.
+#[test]
+#[ignore = "integration"]
+fn a_tree_removed_after_the_listing_drops_its_record_and_the_run_succeeds() {
+  let sandbox = Sandbox::new();
+  sandbox.stub("ssh", FAKE_SSH);
+  sandbox.stub("rsync", FAKE_RSYNC);
+  install_cli(&sandbox);
+  let project = project(&sandbox);
+  let base = install_fake_build_home(&sandbox);
+  let vanishing = base.join("trees/vanishing-tree");
+  std::fs::create_dir_all(&vanishing).expect("the vanishing tree");
+  let gone_owner = sandbox.root().join("gone-owner");
+  std::fs::write(base.join("tree-owners/vanishing-tree"), owner_record("host-a", &gone_owner))
+    .expect("the stale owner record");
+  let mut env = fake_build_home_env(&sandbox);
+  env.insert("FAKE_VANISH_TREE".to_string(), vanishing.display().to_string());
+
+  let run = run_runner(&env, &project, &["echo", "remote"]);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(run.stderr.contains("dropped the owner record of build host tree vanishing-tree"), "{}", run.describe());
+  assert!(!base.join("tree-owners/vanishing-tree").exists(), "{}", run.describe());
+}
+
+/// A record entry that is not a regular file fails the sweep: a dangling symlink is never skipped as absent.
+#[test]
+#[ignore = "integration"]
+fn a_dangling_owner_record_entry_fails_the_sweep() {
+  let sandbox = Sandbox::new();
+  sandbox.stub("ssh", FAKE_SSH);
+  sandbox.stub("rsync", FAKE_RSYNC);
+  install_cli(&sandbox);
+  let project = project(&sandbox);
+  let base = install_fake_build_home(&sandbox);
+  std::os::unix::fs::symlink(sandbox.root().join("nowhere"), base.join("tree-owners/odd-tree"))
+    .expect("the dangling owner record");
+
+  let run = run_with_fake_build_home(&sandbox, &project);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("odd-tree"), "{}", run.describe());
+}
+
+/// A claim whose tree cannot be created leaves no owner record: the record is written first and removed again when the
+/// tree's creation fails.
+#[test]
+#[ignore = "integration"]
+fn a_claim_whose_tree_cannot_be_created_leaves_no_owner_record() {
+  let sandbox = Sandbox::new();
+  sandbox.stub("ssh", FAKE_SSH);
+  sandbox.stub("rsync", FAKE_RSYNC);
+  install_cli(&sandbox);
+  let project = project(&sandbox);
+  let base = install_fake_build_home(&sandbox);
+  std::fs::set_permissions(base.join("trees"), fs::Permissions::from_mode(0o500)).expect("make the trees read-only");
+
+  let run = run_with_fake_build_home(&sandbox, &project);
+  std::fs::set_permissions(base.join("trees"), fs::Permissions::from_mode(0o700)).expect("restore the trees directory");
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(!base.join("tree-owners/project").exists(), "a failed claim left its owner record: {}", run.describe());
+  assert!(!base.join("trees/project").exists(), "a failed claim created its tree: {}", run.describe());
+}
+
+/// An upload that fails after its claim keeps the claimed tree and its owner record together.
+#[test]
+#[ignore = "integration"]
+fn a_failed_upload_keeps_the_claimed_tree_with_its_owner_record() {
+  let sandbox = Sandbox::new();
+  sandbox.stub("ssh", FAKE_SSH);
+  sandbox.stub("rsync", FAKE_RSYNC);
+  install_cli(&sandbox);
+  let project = project(&sandbox);
+  let base = install_fake_build_home(&sandbox);
+  let mut env = fake_build_home_env(&sandbox);
+  env.insert("FAKE_UPLOAD_STATUS".to_string(), "23".to_string());
+
+  let run = run_runner(&env, &project, &["echo", "remote"]);
+
+  assert_eq!(run.code, 23, "{}", run.describe());
+  assert!(base.join("trees/project").is_dir(), "the claimed tree is missing: {}", run.describe());
+  let record = fs::read_to_string(base.join("tree-owners/project")).expect("the owner record");
+  assert_eq!(record, owner_record("host-a", &project), "{}", run.describe());
 }
 
 /// Two live local directories must never share one build-host tree: the same-name refusal holds

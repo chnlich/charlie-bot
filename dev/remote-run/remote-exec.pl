@@ -16,11 +16,15 @@
 # instead of reparented away. It stops descendants when the command exits, receives a signal, or
 # loses its SSH output channel. Tree stop and removal check cwd and executable paths before changing files.
 # A shell cannot make itself a child subreaper, which is why this program is perl.
+#
+# A tree's owner record and the tree change together under the tree owner lock: a claim writes the record and
+# then creates the tree, and a sweep drops a record whose tree is missing or removes the tree and then its record.
+# The sweep therefore never sees a claim half done.
 
 use strict;
 use warnings;
 
-use Fcntl qw(:flock O_RDWR O_WRONLY O_CREAT O_APPEND);
+use Fcntl qw(:flock O_RDWR O_WRONLY O_CREAT O_TRUNC O_APPEND);
 use Cwd qw(abs_path);
 use Errno qw(EACCES EINTR ENOENT ESRCH);
 use File::Path qw(rmtree remove_tree);
@@ -328,8 +332,18 @@ sub stop_tree_processes {
   }
 }
 
-sub build_tree_for_caller {
-  my ($caller_host, $requested_tree, $allow_missing) = @_;
+# Serializes every change to an owner record and its tree. Stop takes no lock: it changes neither.
+sub lock_tree_owners {
+  my $path = "$base/tree-owners.lock";
+  sysopen my $handle, $path, O_RDWR | O_CREAT, 0600 or fail(2, "cannot open the tree owner lock $path: $!");
+  flock $handle, LOCK_EX or fail(2, "cannot lock the tree owners at $path: $!");
+  return $handle;
+}
+
+# The tree's name and the state owner's uid, once the caller host and the tree's place under the trees directory
+# and the state directory's mode are checked. Every tree mode starts here.
+sub tree_request {
+  my ($caller_host, $requested_tree) = @_;
   fail(2, "invalid caller host: $caller_host") unless $caller_host =~ /\A[A-Za-z0-9._-]+\z/;
   my $trees_root = abs_path("$base/trees");
   fail(2, "cannot resolve build tree directory $base/trees: $!") unless defined $trees_root;
@@ -340,7 +354,15 @@ sub build_tree_for_caller {
   fail(2, "refusing to operate on a path outside the build host trees: $requested_tree")
     unless $canonical_parent eq $trees_root;
 
-  my $owner_path = "$base/tree-owners/$name";
+  my @base_stat = stat $base;
+  fail(2, "cannot inspect remote-run state directory $base: $!") unless @base_stat;
+  fail(2, "remote-run state directory must be private (mode 0700): $base") if $base_stat[2] & 0077;
+  return ($name, $base_stat[4]);
+}
+
+# The record's caller host and local root. A missing, symlinked, unreadable or path-only record is an error.
+sub read_owner_record {
+  my ($owner_path) = @_;
   fail(2, "tree owner record is missing or is a symlink: $owner_path") unless -f $owner_path && !-l $owner_path;
   open my $owner_file, '<', $owner_path or fail(2, "cannot read tree owner record $owner_path: $!");
   my $owner;
@@ -349,45 +371,66 @@ sub build_tree_for_caller {
     $owner = <$owner_file> // '';
   }
   $owner =~ s/\n\z//;
-  my ($recorded_host) = $owner =~ /\Ahost=([A-Za-z0-9._-]+)\nroot=\/[^\n]*\z/;
+  my ($recorded_host, $root) = $owner =~ /\Ahost=([A-Za-z0-9._-]+)\nroot=(\/[^\n]*)\z/;
   fail(2, "tree owner record is invalid or has no caller host: $owner_path") unless defined $recorded_host;
+  return ($recorded_host, $root);
+}
+
+sub check_owner_host {
+  my ($caller_host, $name) = @_;
+  my ($recorded_host) = read_owner_record("$base/tree-owners/$name");
   fail(2, "tree $name belongs to caller host $recorded_host, not $caller_host")
     unless $recorded_host eq $caller_host;
+}
 
-  my @base_stat = stat $base;
-  fail(2, "cannot inspect remote-run state directory $base: $!") unless @base_stat;
-  fail(2, "remote-run state directory must be private (mode 0700): $base") if $base_stat[2] & 0077;
-
-  if (!-e $requested_tree) {
-    return (undef, $name, $owner_path, $base_stat[4]) if $allow_missing && !-l $requested_tree;
-    fail(2, "build host tree is missing or is a symlink: $requested_tree");
-  }
+# The tree at $requested_tree, or nothing when no entry is there. A symlink, a non-directory, or a tree the state
+# owner does not own is an error.
+sub present_tree {
+  my ($requested_tree, $name, $base_uid) = @_;
+  return unless -e $requested_tree || -l $requested_tree;
   fail(2, "build host tree is not a directory or is a symlink: $requested_tree")
     unless -d $requested_tree && !-l $requested_tree;
   my $tree = abs_path($requested_tree);
   fail(2, "cannot resolve build host tree $requested_tree: $!") unless defined $tree;
+  my $trees_root = abs_path("$base/trees");
   fail(2, "refusing to operate on a path outside the build host trees: $requested_tree")
     unless $tree eq "$trees_root/$name";
   my @tree_stat = stat $tree;
   fail(2, "cannot inspect build host tree $tree: $!") unless @tree_stat;
-  fail(2, "build host tree $tree is not owned by the remote-run state owner")
-    unless $tree_stat[4] == $base_stat[4];
-  return ($tree, $name, $owner_path, $tree_stat[4]);
+  fail(2, "build host tree $tree is not owned by the remote-run state owner") unless $tree_stat[4] == $base_uid;
+  return ($tree, $tree_stat[4]);
+}
+
+sub write_owner_record {
+  my ($owner_path, $caller_host, $root) = @_;
+  sysopen my $file, $owner_path, O_WRONLY | O_CREAT | O_TRUNC, 0644
+    or fail(2, "cannot write tree owner record $owner_path: $!");
+  my $written = print {$file} "host=$caller_host\nroot=$root\n";
+  return if $written && close $file;
+  fail_claim($owner_path, "cannot write tree owner record $owner_path: $!");
+}
+
+# Removes the record that a failed claim wrote, then fails with $message.
+sub fail_claim {
+  my ($owner_path, $message) = @_;
+  unlink $owner_path or fail(2, "$message; cannot remove the record $owner_path: $!");
+  fail(2, $message);
 }
 
 sub stop_build_tree {
   my ($caller_host, $requested_tree) = @_;
-  my ($tree, $name, $owner_path, $tree_uid) = build_tree_for_caller($caller_host, $requested_tree, 1);
+  my ($name, $base_uid) = tree_request($caller_host, $requested_tree);
+  check_owner_host($caller_host, $name);
+  my ($tree, $tree_uid) = present_tree($requested_tree, $name, $base_uid);
   return 0 unless defined $tree;
   stop_tree_processes($tree, $tree_uid);
   return 0;
 }
 
-sub remove_build_tree {
-  my ($caller_host, $requested_tree) = @_;
-  my ($tree, $name, $owner_path, $tree_uid) = build_tree_for_caller($caller_host, $requested_tree, 0);
+# Stops the processes in $tree, removes it, then removes its record. A failed removal leaves both in place.
+sub remove_tree_and_record {
+  my ($tree, $tree_uid, $owner_path) = @_;
   stop_tree_processes($tree, $tree_uid);
-
   my $errors = [];
   remove_tree($tree, { error => \$errors });
   if (@$errors || -e $tree) {
@@ -396,7 +439,58 @@ sub remove_build_tree {
     fail(2, "cannot remove build host tree $tree after stopping its processes: " . join('; ', @details));
   }
   unlink $owner_path or fail(2, "cannot remove tree owner record $owner_path after removing $tree: $!");
-  return 0;
+}
+
+# One own-host record's sweep, decided under the owner lock. $root_state is the caller's view of the recorded local
+# directory, which only the caller can check: a live directory keeps its tree, and a gone one has its tree removed.
+# A missing tree drops its record whatever the root state, because no tree is then shared. Prints the outcome:
+# dropped, kept, removed, or absent (the record was gone before the lock).
+sub sweep_build_tree {
+  my ($caller_host, $requested_tree, $root_state) = @_;
+  fail(2, "the recorded local directory must be live or gone: $root_state") unless $root_state =~ /\A(?:live|gone)\z/;
+  my ($name, $base_uid) = tree_request($caller_host, $requested_tree);
+  my $lock = lock_tree_owners();
+  my $owner_path = "$base/tree-owners/$name";
+  if (!-e $owner_path && !-l $owner_path) {
+    fail(2, "build host tree $name exists without an owner record") if -e $requested_tree || -l $requested_tree;
+    return 'absent';
+  }
+  check_owner_host($caller_host, $name);
+  my ($tree, $tree_uid) = present_tree($requested_tree, $name, $base_uid);
+  if (!defined $tree) {
+    unlink $owner_path or fail(2, "cannot remove tree owner record $owner_path for the missing tree: $!");
+    return 'dropped';
+  }
+  return 'kept' if $root_state eq 'live';
+  remove_tree_and_record($tree, $tree_uid, $owner_path);
+  return 'removed';
+}
+
+# A caller host's claim on $requested_tree for its local root, under the owner lock. The record is written before the
+# tree is created, so a claim that stops between the two leaves a record the sweep drops, never a tree without its
+# record. A tree that exists is accepted only with the record of this same claim.
+sub claim_build_tree {
+  my ($caller_host, $requested_tree, $encoded_root) = @_;
+  my ($name, $base_uid) = tree_request($caller_host, $requested_tree);
+  my $root = decode_base64($encoded_root);
+  fail(2, "the local root of build host tree $name is not an absolute path") unless $root =~ m{\A/[^\n]*\z};
+  my $lock = lock_tree_owners();
+  my $owner_path = "$base/tree-owners/$name";
+  my $recorded = -e $owner_path || -l $owner_path;
+  if ($recorded) {
+    my ($recorded_host, $recorded_root) = read_owner_record($owner_path);
+    fail(2, "tree $name belongs to caller host $recorded_host at $recorded_root; "
+        . "this claim is caller host $caller_host at $root")
+      unless $recorded_host eq $caller_host && $recorded_root eq $root;
+  }
+  my ($tree) = present_tree($requested_tree, $name, $base_uid);
+  if (defined $tree) {
+    fail(2, "build host tree $name exists without an owner record") unless $recorded;
+    return;
+  }
+  write_owner_record($owner_path, $caller_host, $root);
+  return if mkdir $requested_tree, 0777;
+  fail_claim($owner_path, "cannot create build host tree $requested_tree: $!");
 }
 
 sub caller_output_channel_closed {
@@ -631,12 +725,22 @@ sub main {
     $base = resolve_base();
     return stop_build_tree(@ARGV);
   }
-  if (@ARGV && $ARGV[0] eq '--remove-tree') {
-    fail(2, 'usage: remote-exec --remove-tree <caller host> <tree path>') unless @ARGV == 3;
+  if (@ARGV && $ARGV[0] eq '--sweep-tree') {
+    fail(2, 'usage: remote-exec --sweep-tree <caller host> <tree path> <live|gone>') unless @ARGV == 4;
     shift @ARGV;
     install_signal_handlers();
     $base = resolve_base();
-    return remove_build_tree(@ARGV);
+    my $outcome = sweep_build_tree(@ARGV);
+    print "$outcome\n";
+    return 0;
+  }
+  if (@ARGV && $ARGV[0] eq '--claim-tree') {
+    fail(2, 'usage: remote-exec --claim-tree <caller host> <tree path> <base64 local root>') unless @ARGV == 4;
+    shift @ARGV;
+    install_signal_handlers();
+    $base = resolve_base();
+    claim_build_tree(@ARGV);
+    return 0;
   }
   fail(2, 'usage: remote-exec <base64 command payload>') unless @ARGV == 1;
   install_signal_handlers();

@@ -23,9 +23,9 @@ A credential value never enters any text the round writes, and no write reaches 
 A leak-rule hit is the only hit the round rewrites: the round removes the matched content from the text, rewrites it, and runs the subcommand again.
 The script sends nothing on a hit, so the posted text is always text that passed.
 A credential hit stops the round. The kind that the check names is the round's stop reason, and the round writes no rewrite of the text.
-A merge goes through the posting script's `pr-merge`, which refuses a web page change whose evidence directory fails
-the screenshot check or whose pull request body names no `View:` line, and carries the `View:` lines into the squash
-commit message. Each `View:` line follows the View contract of the Web UI Screenshots rule in `prompts/task_base.md`.
+A merge goes through the posting script's `pr-merge`, which refuses a merge whose head lacks a clean verdict, refuses a web
+page change whose evidence directory fails the screenshot check or whose pull request body names no `View:` line, and
+carries the `View:` lines into the squash commit message. Each `View:` line follows the View contract of the Web UI Screenshots rule in `prompts/task_base.md`.
 Calls that carry no round-written text stay bare `gh` calls through `gh-shim.sh`, which checks their arguments. This includes:
 
 - `gh api -X PUT "repos/{owner}/{repo}/pulls/<PR>/update-branch"`;
@@ -126,7 +126,8 @@ List the open pull requests whose head branch starts with `improve/<direction>/`
 When more than one is open, take the oldest.
 An adopted pull request is the whole round.
 Switch the clone to its branch.
-Run Step 6 unless a review verdict comment already sits on the pull request, then run Step 7.
+When the newest verdict comment (Step 6) names the current head and reports no issues, run Step 7.
+Otherwise run Step 6: a head without a verdict gets its review, and a head whose verdict reports findings starts with its fixes.
 When its newest comment starts `improve-waiting:`, read Step 8 first.
 End the round after it closes, merged or abandoned, and open no new pull request.
 This rule finishes a started topic before a new one.
@@ -239,8 +240,13 @@ A review that fails names its reason and its resume handle on stderr, and the ro
 Each review's scratch directory and its `events.ndjson` stay on disk until the next round's start (Step 1), whether the review passed or failed.
 A failed review's scratch directory and its `events.ndjson` are named in the round's final message.
 
-The round posts the verdict as one pull-request comment through `dev/improve/github-post.sh pr-comment`, and the comment carries the verdict without the event stream.
-Act on every finding on the same branch before the merge.
+The round posts each verdict as one pull-request comment through `dev/improve/github-post.sh pr-comment`, with `--verdict-head` naming the full head sha that the review read.
+That comment is the verdict comment: it carries the verdict without the event stream, and `pr-merge` reads its head sha.
+A verdict is clean when it reports no issues; otherwise it reports findings.
+A verdict with findings is acted on: the round fixes every finding on the same branch, pushes the fix, and reruns this same review, with the same launch, once on the new head.
+A round runs at most two reviews, so that rerun is its last review.
+When the rerun reports findings, the round leaves the pull request open.
+Its verdict comment names the head and the open findings, and Step 2 adopts the pull request in the next round.
 A review that cannot run or fails leaves the pull request open, and the round reports the reason in its final message.
 One foreground tool call ends at 15 minutes. A review of any length completes: the round waits past that limit and reads back its outcome.
 Every wait of a round stays inside the round's run until the verdict is posted and the merge or no-PR outcome is reached.
@@ -249,8 +255,11 @@ A silent skip breaks the protocol.
 
 ## Step 7: land the pull request or abandon it
 
-Merge only when the pull request carries a review verdict comment and is ready for review (category rule).
-A pull request without one waits: the round that posted no verdict leaves it open, and Step 2 adopts it in the next round to run the review first.
+Merge only when the merge head carries a clean verdict and the pull request is ready for review (category rule).
+A head change after the verdict makes that verdict stale: a review fix, a rebase, an update from main, a CI fix or any other push.
+A pure update from main with no conflict is a head change too, and it keeps no earlier verdict.
+The merge head then needs a clean verdict from Step 6's review of that head, and the round counts that review against its two reviews.
+When the round has no review left for the merge head, it leaves the pull request open and ends the round; Step 2 adopts it in the next round.
 When the pull request is a draft, leave it open for its runner and end the round after its verdict.
 
 Before the merge, the pull request's title and body describe its final commits.
@@ -298,13 +307,14 @@ A non-empty diff merges through the posting script, with the round's evidence di
 
     dev/improve/github-post.sh pr-merge --evidence-dir <the round's evidence directory> <PR>
 
-The merge checks a web page change's screenshots, and its squash message comes from the pull request's title and body, which the posting script checks before it sends them.
+The merge checks the verdict on its head and a web page change's screenshots, and its squash message comes from the pull request's title and body, which the posting script checks before it sends them.
 
 Read a red check with `gh run view --log-failed <run-id>`.
 The failure class selects the fix steps below.
 
 A failure inside this diff earns at most two fixes on the same branch.
 Each fix pulls the branch with `git pull --ff-only`, fixes the failure, pushes through the posting script, and watches the checks again.
+The fixed head then needs its clean verdict under the merge rule above.
 When the check stays red after the second fix, abandon the pull request with `improve-abandoned: <topic> — <reason>` in a comment file, through `pr-close` as above.
 
 Name the topic in the comment, because Step 3 reads it to skip the topic on the next round.
@@ -379,7 +389,7 @@ These steps return `main` to green and resume the step that needed it.
    A red check follows the inside-diff fix steps with the same two-fix budget.
 5. Confirm that the repair still carries a diff against a fresh `origin/main`.
    An emptied repair has nothing to merge, so close it through the posting script with `--delete-branch` and a comment file that reads `improve-abandoned: main repair — nothing left to merge`, then return to the sending step.
-6. Review the repair pull request with Step 6, act on its findings, and merge it through `dev/improve/github-post.sh pr-merge <PR>` once it is green and carries its verdict comment (Step 7).
+6. Review the repair pull request with Step 6, act on its findings, and merge it through `dev/improve/github-post.sh pr-merge <PR>` once it is green and its merge head carries a clean verdict (Step 7).
    A repair lands on `main` as well, so it gets the same review as a topic.
    Wait for the merge's main run with `gh run watch`, then return to the sending step.
 7. When the failure names no fix, or the repair pull request is abandoned,

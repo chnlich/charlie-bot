@@ -66,6 +66,15 @@ follow their direction file).
   follows.
 - Don't guess: any point the request leaves unstated where different readings lead to
   different designs must appear as a numbered divergence; never silently pick a reading.
+- When a pick entry's answer starts with `This should not be a question`, settle its question on the
+  recommendation that the entry carries. Judge whether that action takes a high-consequence step
+  (Action Boundaries in `prompts/master.md`) from the question and the Waiting on you item you wrote;
+  when it does and the entry does not name that step, keep the question in Waiting on you and ask for
+  the take off of that step.
+- When a reply that is not a pick says that a question should not be asked, settle only the Waiting on
+  you item or page question that the reply quotes or names, or the sole open item, on that question's
+  recommendation under the same high-consequence condition. When several items are open and the reply
+  names none, ask the user which item the reply means.
 - Map each outcome that the request names to a deliverable or a divergence.
   State the share of the problem that the deliverable covers.
 - No how: an understanding contains no implementation mechanisms or technology choices;

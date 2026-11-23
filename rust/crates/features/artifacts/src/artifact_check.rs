@@ -2665,6 +2665,48 @@ mod tests {
     assert_eq!(serde_json::to_value(&forks).expect("the forks serialize"), expected);
   }
 
+  /// The rule files carry the not-a-question sentences: the two pick and chat-reply rules the skill's
+  /// Don't guess list holds, and the web reply's three-part answer for a marked pick.
+  #[test]
+  fn the_rule_files_carry_the_not_a_question_sentences() {
+    let skill = fs::read_to_string(repo_root().join("skills/plan-approval/SKILL.md")).expect("the skill reads");
+    assert!(
+      skill
+        .contains("When a pick entry's answer starts with `This should not be a question`, settle its question on the"),
+      "the pick rule is missing from the skill's Don't guess list"
+    );
+    assert!(
+      skill.contains(
+        "When a reply that is not a pick says that a question should not be asked, settle only the Waiting on"
+      ),
+      "the chat-reply rule is missing from the skill's Don't guess list"
+    );
+    let reply = fs::read_to_string(repo_root().join("prompts/web_reply.md")).expect("the reply rules read");
+    assert!(
+      reply.contains("When the answer starts with `This should not be a question`, state in the web reply:"),
+      "the marked pick answer rule is missing from the web reply"
+    );
+    assert!(
+      reply.contains("- the reply that undoes the choice, as `plan-approval SKILL.md` (Don't guess) says."),
+      "the undo reply rule is missing from the web reply"
+    );
+  }
+
+  /// Every pickable question carries a recommendation — the not-a-question button reads it — so an
+  /// open fork without one keeps failing the page check.
+  #[test]
+  #[ignore = "integration"]
+  fn an_open_fork_without_a_recommendation_fails_the_open_shape_check() {
+    let page = fork_page(
+      "Ship the fix.",
+      "<ul><li>「keep」: keep the file.</li><li>「delete」: delete the file.</li></ul><p class=\"trade\">Tradeoff.</p>",
+    );
+    let outcomes = run_only("plan", &page, &[FORK_OPEN_SHAPE]);
+    assert_eq!(outcomes.len(), 1);
+    assert!(!outcomes[0].passed);
+    assert!(outcomes[0].detail.contains("is missing p.rec"), "{}", outcomes[0].detail);
+  }
+
   #[test]
   fn an_option_inside_a_closed_details_is_not_a_pick() {
     let page = "<div class=\"fork\"><p class=\"q\"><span class=\"fn\">1</span> Which one?</p><ul>\

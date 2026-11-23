@@ -95,6 +95,10 @@ Remaining lists the open milestones between the session and its Goal, so the use
   when the app cannot report its session; comments on a page opened on its own reach the session named in its address.
   Option picks on the page travel with its comments: one message to the same session, with one numbered entry
   per pick or comment in page order. A pick's entry names its question `Q<n>` and carries the option's text.
+  When the answer starts with `This should not be a question`, state in the web reply:
+  - the chosen option;
+  - why the question did not need the user;
+  - the reply that undoes the choice, as `plan-approval SKILL.md` (Don't guess) says.
   A worker-written page reaches its parent session, as its comments do.
 - When the item decides on a plan page or an understanding page, use that page.
   That page already holds the options, the recommendation and the evidence.

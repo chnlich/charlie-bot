@@ -82,7 +82,8 @@ The runner makes the round's `TMPDIR` as a new directory under the session TMPDI
 A round deletes a path only when the round created that path with `mktemp -d` during the same round.
 No round removes either scratch directory by name.
 The runner owns `codex-home/` under `/tmp/improve-<direction>/`, and a round leaves it in place.
-A killed round's scratch goes when the next round of its direction starts: the runner removes the `TMPDIR` directories that it made for earlier rounds.
+Each round's `TMPDIR` goes when the next round of its direction starts: before the round's agent starts, the runner removes the `TMPDIR` directories that earlier rounds made.
+Each review's scratch directory sits under one of those `TMPDIR` directories.
 
 Before the round's agent starts, the runner sets the clone to `origin/main`: it fetches `origin` and detaches the clone's HEAD there, so the clone's hooks come from `main`.
 The runner keeps the clone's local branches and its uncommitted changes.
@@ -226,7 +227,8 @@ The write boundary allows the scratch directory and the session directory, and d
 The verdict is the review's final text on stdout.
 The raw event stream stays in the review's working directory as `events.ndjson`.
 A review that fails names its reason and its resume handle on stderr, and the round quotes that reason verbatim in the final message.
-A failed review's scratch directory and its `events.ndjson` stay on disk until the next round's start (Step 1), and the round names them in its final message.
+Each review's scratch directory and its `events.ndjson` stay on disk until the next round's start (Step 1), whether the review passed or failed.
+A failed review's scratch directory and its `events.ndjson` are named in the round's final message.
 
 The round posts the verdict as one pull-request comment through `dev/improve/github-post.sh pr-comment`, and the comment carries the verdict without the event stream.
 Act on every finding on the same branch before the merge.
@@ -377,16 +379,11 @@ When the main run failed, repair main by the steps above.
 When the repair returns with main still failed, end the round with no change.
 When the main run passed, start at step 1 of the outside-diff steps above.
 
-## Cleanup before the report
-
-Delete each completed review's scratch directory, through the exact path `mktemp` returned.
-Copies of session data and other large scratch live only there, and deleting by a rebuilt path risks the wrong directory.
-The evidence directory stays: it holds the round's screenshots and measurement logs.
-
 ## Step 9: report once at the end
 
 Before the round ends, write the round's final report to `report.md` in its evidence directory.
 The report carries the same content as the final message, so it survives a lost final message.
+The evidence directory stays after the round: it holds the round's screenshots and measurement logs.
 
 Write one final message at the end of the round.
 It names:

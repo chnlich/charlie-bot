@@ -48,9 +48,12 @@ mod tests {
     let (_dir, complete_credentials) = credentials("slack:\n  bot_token: bot\n  app_token: app\n");
     assert!(!configured(&SlackConfig::default(), &complete_credentials));
     assert!(!configured(
-      &SlackConfig { allowed_user_ids: vec!["U0SYNTHETIC".to_string()] },
+      &SlackConfig { allowed_user_ids: vec!["U0SYNTHETIC".to_string()], colleague_user_ids: Vec::new() },
       &credentials("slack:\n  bot_token: bot\n").1,
     ));
-    assert!(configured(&SlackConfig { allowed_user_ids: vec!["U0SYNTHETIC".to_string()] }, &complete_credentials,));
+    assert!(configured(
+      &SlackConfig { allowed_user_ids: vec!["U0SYNTHETIC".to_string()], colleague_user_ids: Vec::new() },
+      &complete_credentials,
+    ));
   }
 }

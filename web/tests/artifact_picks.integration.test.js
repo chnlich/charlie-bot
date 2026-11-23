@@ -934,6 +934,26 @@ if (TASK_A_SHOTS_PREFIX) {
         await sleep(650);
         assert.match(await page.evaluate(TRAY_STATUS), /Undone/);
       }, {viewport, source: COVER_PAGE_PATH, sessionDetailDelayMs: 500});
+
+      await withPlanPage(async (page) => {
+        await page.evaluate('document.querySelector(".__cbc-pick-naq").click()');
+        await sleep(FRAME_WAIT_MS);
+        assert.equal(await page.evaluate('document.querySelector(".__cbc-pick-naq").getAttribute("aria-pressed")'),
+          'true', 'the not-a-question pick is selected before the archived send');
+        await page.evaluate(CLICK_SEND);
+        await sleep(SEND_WAIT_MS);
+        assert.equal(await page.evaluate(TRAY_ITEMS), 1, 'the refused pick stays pending');
+        assert.equal(await page.evaluate(TRAY_STATUS_IS_ERROR), true, 'the archive refusal is an error');
+        assert.match(await page.evaluate(TRAY_STATUS), /archived/);
+        await page.evaluate(SCROLL_TO_NOT_A_QUESTION);
+        const archivedReport = await page.evaluate(`(${coverProbe})()`);
+        assertCoverClear(archivedReport, 'archived-session refusal state');
+        await saveTaskAShot(page, viewport, 'archived-session');
+      }, {
+        viewport,
+        source: COVER_PAGE_PATH,
+        sessionDetail: {name: 'Viewing session', archived: true, successor_session_id: 'next-session'},
+      });
     });
   }
 }

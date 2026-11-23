@@ -2355,7 +2355,7 @@ async fn continued_review_non_quota_failure_reports_failure_to_parent() -> anyho
       "type": "result",
       "subtype": "error",
       "is_error": true,
-      "result": "API Error: 500 Internal Server Error",
+      "result": "API Error: 400 Bad Request",
     }))
     .expect("JSON event serializes")
   );
@@ -2409,6 +2409,7 @@ async fn continued_review_non_quota_failure_reports_failure_to_parent() -> anyho
     RunKind::Review,
   )
   .await?;
+  assert_eq!(continuation.review_of_run_id.as_deref(), Some("run-work"));
   stack.dispatch.set_executor(None);
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, &continuation.id).await?, RunOutcomeKind::Failed);
 

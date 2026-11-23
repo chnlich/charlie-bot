@@ -14,6 +14,7 @@ use charliebot_compat::routing::{post_only, refuse_other_methods};
 use charliebot_core::event_types;
 use charliebot_core::repo_root::RepoRoot;
 use charliebot_registry::caller::CallerIdentity;
+use charliebot_registry::colleague_gate::refuse_colleague_work;
 use charliebot_registry::context::FeatureContext;
 use serde_json::{Map, Value, json};
 
@@ -72,6 +73,9 @@ async fn create_task(
     Ok(body) => body,
     Err(response) => return *response,
   };
+  if let Some(refusal) = refuse_colleague_work(&features, &caller).await {
+    return refusal;
+  }
   let values = match body.validate(&config::CREATE_MODEL) {
     Ok(Some(Value::Object(values))) => values,
     Ok(_) => return internal_error("ValueError", "create body did not validate as an object"),
@@ -156,6 +160,9 @@ async fn update_task(
     Ok(body) => (body, Vec::new()),
     Err(response) => return *response,
   };
+  if let Some(refusal) = refuse_colleague_work(&features, &caller).await {
+    return refusal;
+  }
   let mut values = match body.validate(&config::UPDATE_MODEL) {
     Ok(Some(Value::Object(values))) => values,
     Ok(_) => return internal_error("ValueError", "update body did not validate as an object"),
@@ -245,7 +252,14 @@ async fn delete_task(State(features): State<Arc<FeatureContext>>, Path(name): Pa
   }
 }
 
-async fn run_task(State(features): State<Arc<FeatureContext>>, Path(name): Path<String>) -> Response {
+async fn run_task(
+  State(features): State<Arc<FeatureContext>>,
+  caller: CallerIdentity,
+  Path(name): Path<String>,
+) -> Response {
+  if let Some(refusal) = refuse_colleague_work(&features, &caller).await {
+    return refusal;
+  }
   match scheduler::run_task_now(&features, &name).await {
     Ok(result) => responses::fast_json(
       StatusCode::ACCEPTED,

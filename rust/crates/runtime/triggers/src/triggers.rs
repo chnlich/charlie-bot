@@ -21,6 +21,7 @@ use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, TaggedV
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
 use charliebot_core::{event_types, parallel_walk, ssh, text_repr};
+use charliebot_registry::colleague_gate::guard_agent_work;
 use charliebot_registry::context::{FeatureContext, StartupStop};
 use charliebot_store::metadata::UtcDateTime;
 use charliebot_store::trigger_files::{
@@ -2359,6 +2360,9 @@ async fn schedule_trigger(State(features): State<Arc<FeatureContext>>, request: 
     Ok(body) => body,
     Err(response) => return *response,
   };
+  if let Some(refusal) = guard_agent_work(&features, &parts.headers).await {
+    return refusal;
+  }
   let payload = match body.validate(&SCHEDULE_TRIGGER_BODY) {
     Ok(Some(payload)) => payload,
     Ok(None) => unreachable!("a required request body validates to an object"),

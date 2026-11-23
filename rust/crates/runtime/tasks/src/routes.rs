@@ -15,6 +15,7 @@ use charliebot_cli_common::fields::SESSION_ID;
 use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, RequestBody};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
+use charliebot_registry::colleague_gate::{guard_agent_work, refuse_colleague_work};
 
 use charliebot_core::config::CallClass;
 use charliebot_core::event_types;
@@ -353,6 +354,9 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
     Ok(caller) => caller,
     Err(response) => return response,
   };
+  if let Some(refusal) = refuse_colleague_work(&features, &caller_identity).await {
+    return refusal;
+  }
   let session_meta = match features.store.get_session(&request.session_id).await {
     Ok(Some(meta)) => meta,
     Ok(None) => return responses::json(StatusCode::NOT_FOUND, &json!({ "detail": SESSION_NOT_FOUND_DETAIL })),
@@ -813,6 +817,9 @@ async fn send_message(
     Ok(body) => body,
     Err(response) => return *response,
   };
+  if let Some(refusal) = guard_agent_work(&features, &parts.headers).await {
+    return refusal;
+  }
   match require_session(&features, &session_id).await {
     Ok(true) => {}
     Ok(false) => return responses::json(StatusCode::NOT_FOUND, &json!({ "detail": SESSION_NOT_FOUND_DETAIL })),
@@ -945,6 +952,9 @@ async fn session_message(State(features): State<Arc<FeatureContext>>, request: a
     Ok(body) => body,
     Err(response) => return *response,
   };
+  if let Some(refusal) = guard_agent_work(&features, &parts.headers).await {
+    return refusal;
+  }
   let request = match parse_session_message_request(&body) {
     Ok(request) => request,
     Err(response) => return *response,
@@ -1088,6 +1098,9 @@ async fn retry_run(
     Ok(body) => body,
     Err(response) => return *response,
   };
+  if let Some(refusal) = guard_agent_work(&features, &parts.headers).await {
+    return refusal;
+  }
   match require_session(&features, &session_id).await {
     Ok(true) => {}
     Ok(false) => return responses::json(StatusCode::NOT_FOUND, &json!({ "detail": SESSION_NOT_FOUND_DETAIL })),

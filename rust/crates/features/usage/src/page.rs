@@ -278,11 +278,19 @@ fn week_context(
 }
 
 /// The to-date view's label and model count. The label names the window: this week's Monday midnight, then the last
-/// capture, both in Pacific time. A host with no capture yet names no end.
+/// capture, both in Pacific time. A host with no capture yet names no end, and so does one whose last capture predates
+/// this Monday, which leaves the window empty.
 fn to_date_context(read: &LedgerRead, models: usize) -> anyhow::Result<Value> {
   let end = match read.last_capture {
     None => "no capture yet".to_string(),
-    Some(moment) => pacific::stamp(pacific::instant_of(moment)?)?,
+    Some(moment) => {
+      let instant = pacific::instant_of(moment)?;
+      if read.to_date.end == read.to_date.start {
+        "no records this week yet".to_string()
+      } else {
+        pacific::stamp(instant)?
+      }
+    }
   };
   Ok(json!({"label": format!("{} → {end}", pacific::stamp(read.to_date.start)?), "models": models}))
 }

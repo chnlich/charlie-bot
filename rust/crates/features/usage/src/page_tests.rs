@@ -731,6 +731,25 @@ fn this_week_to_date_runs_from_monday_midnight_to_the_capture() {
   assert_eq!(table.to_date_rows, aggregate.to_date_rows);
 }
 
+/// A last capture that predates this Monday leaves the to-date window empty, and its label names no end before the
+/// window's start.
+#[test]
+#[ignore = "integration"]
+fn the_to_date_label_names_no_end_before_its_start() {
+  let home = tempfile::tempdir().expect("a temporary home");
+  let features = page_features(home.path(), registry());
+  add_records(
+    home.path(),
+    "/logs/cc.jsonl",
+    "sig-cc",
+    &[record("sunday", CC, "claude-sonnet-4", "2026-03-08T20:00:00Z", 10, "acct-a")],
+  );
+  stamp_capture(home.path(), "2026-03-08T20:00:00Z");
+  let read = read_ledger_at(&features, at("2026-03-10T20:00:00Z")).expect("the ledger reads");
+  let context = token_usage_context(&read, &features.registry).expect("the context builds");
+  assert_eq!(context["ctx"]["to_date"]["label"], "2026-03-09 00:00 PDT → no records this week yet");
+}
+
 #[test]
 #[ignore = "integration"]
 fn rows_rank_by_output_then_model_not_by_total() {

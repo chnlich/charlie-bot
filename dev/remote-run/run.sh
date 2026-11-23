@@ -25,6 +25,7 @@ fi
 remote_run_read_config
 remote_run_validate_base
 remote_run_local_preflight
+remote_run_read_caller_host
 remote_run_resolve_root
 sync_root=$REMOTE_RUN_WORKTREE_ROOT
 remote_run_tree_name
@@ -76,10 +77,9 @@ else
   exit "$status"
 fi
 
-# Remove remote trees whose local root is gone, the tree this run syncs into included: a stale
-# record under the current name comes from an earlier run whose local directory is gone. Refuse a
-# name whose recorded root is a different live directory: two local trees must never share one
-# remote tree, or the delete would mix their files.
+# Remove only trees owned by this caller host whose local root is gone. A path-only legacy record
+# cannot establish its caller host, so it remains untouched. Refuse a name whose recorded root is
+# a different live directory: two local trees must never share one remote tree.
 while IFS= read -r remote_name; do
   [[ -n "$remote_name" ]] || continue
   if [[ ! "$remote_name" =~ ^[A-Za-z0-9._-]+$ ]]; then
@@ -88,14 +88,14 @@ while IFS= read -r remote_name; do
   fi
   remote_record_command="if [[ -f \"$base/tree-owners/$remote_name\" ]]; then cat -- \"$base/tree-owners/$remote_name\"; else printf '__NO_LOCAL_ROOT_RECORD__'; fi"
   if remote_run_capture "$remote_record_command"; then
-    recorded_root=$REMOTE_RUN_OUTPUT
+    owner_record=$REMOTE_RUN_OUTPUT
   else
     status=$?
     printf 'sweep: cannot read the local-root record for build host tree %s (status %s): %s\n' \
       "$remote_name" "$status" "$REMOTE_RUN_OUTPUT" >&2
     exit "$status"
   fi
-  if [[ "$recorded_root" == '__NO_LOCAL_ROOT_RECORD__' ]]; then
+  if [[ "$owner_record" == '__NO_LOCAL_ROOT_RECORD__' ]]; then
     if [[ "$remote_name" == "$tree_name" ]]; then
       printf 'sync: build host tree %s has no local-root record; refusing to overwrite it\n' "$remote_name" >&2
       exit 2
@@ -103,10 +103,26 @@ while IFS= read -r remote_name; do
     printf 'sweep: kept build host tree %s because it has no local-root record\n' "$remote_name" >&2
     continue
   fi
-  if [[ "$recorded_root" != /* || "$recorded_root" == *$'\n'* ]]; then
-    printf 'sweep: build host tree %s has an invalid local-root record: %q\n' \
-      "$remote_name" "$recorded_root" >&2
+  if ! remote_run_parse_owner_record "$owner_record"; then
+    printf 'sweep: build host tree %s has an invalid owner record: %q\n' \
+      "$remote_name" "$owner_record" >&2
     exit 2
+  fi
+  if [[ "$REMOTE_RUN_OWNER_FORMAT" == legacy ]]; then
+    if [[ "$remote_name" == "$tree_name" ]]; then
+      printf 'sync: build host tree %s has legacy owner record %q without a caller host; refusing to overwrite it\n' \
+        "$remote_name" "$owner_record" >&2
+      exit 2
+    fi
+    printf 'sweep: kept build host tree %s because its legacy owner record has no caller host\n' \
+      "$remote_name" >&2
+    continue
+  fi
+  recorded_root=$REMOTE_RUN_OWNER_ROOT
+  if [[ "$REMOTE_RUN_OWNER_HOST" != "$REMOTE_RUN_CALLER_HOST" ]]; then
+    printf 'sweep: kept build host tree %s owned by caller host %s; this caller host is %s\n' \
+      "$remote_name" "$REMOTE_RUN_OWNER_HOST" "$REMOTE_RUN_CALLER_HOST" >&2
+    continue
   fi
   if [[ -d "$recorded_root" ]]; then
     if [[ "$remote_name" == "$tree_name" && "$recorded_root" != "$sync_root" ]]; then
@@ -116,7 +132,7 @@ while IFS= read -r remote_name; do
     fi
     continue
   fi
-  remote_remove="rm -rf -- \"$base/trees/$remote_name\" && rm -f -- \"$base/tree-owners/$remote_name\""
+  remote_remove=$(remote_run_remove_tree_command "$REMOTE_RUN_CALLER_HOST" "$base/trees/$remote_name")
   if remote_run_capture "$remote_remove"; then
     printf 'sweep: removed build host tree %s because its recorded local directory is gone\n' "$remote_name" >&2
   else
@@ -145,19 +161,39 @@ else
   printf 'sync: cannot inspect build host tree ownership (status %s): %s\n' "$status" "$REMOTE_RUN_OUTPUT" >&2
   exit "$status"
 fi
-if [[ "$existing_record" != '__NO_LOCAL_ROOT_RECORD__' && "$existing_record" != "$sync_root" ]]; then
-  printf 'sync: build host tree %s belongs to local directory %s, not %s\n' \
-    "$tree_name" "$existing_record" "$sync_root" >&2
-  exit 2
+if [[ "$existing_record" != '__NO_LOCAL_ROOT_RECORD__' ]]; then
+  if ! remote_run_parse_owner_record "$existing_record"; then
+    printf 'sync: build host tree %s has an invalid owner record: %q\n' "$tree_name" "$existing_record" >&2
+    exit 2
+  fi
+  if [[ "$REMOTE_RUN_OWNER_FORMAT" == legacy ]]; then
+    printf 'sync: build host tree %s has legacy owner record %q without a caller host; refusing to overwrite it\n' \
+      "$tree_name" "$existing_record" >&2
+    exit 2
+  fi
+  if [[ "$REMOTE_RUN_OWNER_HOST" != "$REMOTE_RUN_CALLER_HOST" || "$REMOTE_RUN_OWNER_ROOT" != "$sync_root" ]]; then
+    printf 'sync: build host tree %s belongs to caller host %s at %s; this run is caller host %s at %s\n' \
+      "$tree_name" "$REMOTE_RUN_OWNER_HOST" "$REMOTE_RUN_OWNER_ROOT" "$REMOTE_RUN_CALLER_HOST" "$sync_root" >&2
+    exit 2
+  fi
+  remote_stop=$(remote_run_stop_tree_command "$REMOTE_RUN_CALLER_HOST" "$base/trees/$tree_name")
+  if remote_run_capture "$remote_stop"; then
+    :
+  else
+    status=$?
+    printf 'sync: failed to stop processes in build host tree %s (status %s): %s\n' \
+      "$tree_name" "$status" "$REMOTE_RUN_OUTPUT" >&2
+    exit "$status"
+  fi
 fi
 
-encoded_root=$(printf '%s' "$sync_root" | base64 -w0)
-remote_marker_write="printf '%s' '$encoded_root' | base64 -d > \"$base/tree-owners/$tree_name\""
+encoded_owner=$(printf 'host=%s\nroot=%s\n' "$REMOTE_RUN_CALLER_HOST" "$sync_root" | base64 -w0)
+remote_marker_write="printf '%s' '$encoded_owner' | base64 -d > \"$base/tree-owners/$tree_name\""
 if remote_run_capture "$remote_marker_write"; then
   :
 else
   status=$?
-  printf 'sync: cannot record the local tree path on the build host (status %s): %s\n' \
+  printf 'sync: cannot record the local tree owner on the build host (status %s): %s\n' \
     "$status" "$REMOTE_RUN_OUTPUT" >&2
   exit "$status"
 fi

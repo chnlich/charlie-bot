@@ -1,5 +1,5 @@
 #!/usr/bin/env perl
-# Run one synced-tree command with a build slot, a short private TMPDIR, and descendant cleanup.
+# Run one synced-tree command or stop/remove a build-host tree.
 #
 # The runner sends this program one base64 payload: the synced tree root, the directory to run in,
 # the CPython version the local project pins, and the command. On the build host it prepares the
@@ -12,15 +12,19 @@
 # - the environment: the runner's cargo, uv, and node, then ~/.local/go/bin and ~/.pixi/bin;
 # - a build slot with sccache for cargo and cargo-capable uv commands.
 #
-# It makes itself a child subreaper, so tmux servers and other daemons the command starts are
-# adopted instead of reparented away, and it stops every descendant when the command ends. A shell
-# cannot do either: the subreaper call is the prctl syscall, which is why this program is perl.
+# A command run makes this process a child subreaper, so tmux servers and other daemons are adopted
+# instead of reparented away. It stops descendants when the command exits, receives a signal, or
+# loses its SSH output channel. Tree stop and removal check cwd and executable paths before changing files.
+# A shell cannot make itself a child subreaper, which is why this program is perl.
 
 use strict;
 use warnings;
 
 use Fcntl qw(:flock O_RDWR O_WRONLY O_CREAT O_APPEND);
-use File::Path qw(rmtree);
+use Cwd qw(abs_path);
+use Errno qw(EINTR ENOENT ESRCH);
+use File::Path qw(rmtree remove_tree);
+use IO::Poll qw(POLLERR POLLHUP POLLNVAL POLLOUT);
 use MIME::Base64 qw(decode_base64);
 use POSIX qw(uname strftime WNOHANG);
 use Time::HiRes qw(time clock_gettime CLOCK_MONOTONIC);
@@ -47,6 +51,7 @@ my $SIGTERM_NUMBER = 15;
 my %PRCTL_SYSCALL = ('x86_64' => 157, 'aarch64' => 167);
 
 my $shutdown_signal;    # The number of the first signal received, once received.
+my $descendant_stop_failed = 0;
 my $base;               # The runner's state directory on this host, under $HOME.
 
 sub fail {
@@ -123,12 +128,23 @@ sub install_signal_handlers {
 
 sub direct_children {
   my ($pid) = @_;
-  opendir my $tasks, "/proc/$pid/task" or return [];
+  local $! = 0;
+  opendir my $tasks, "/proc/$pid/task" or do {
+    return [] if $!{ENOENT} || $!{ESRCH};
+    fail(2, "cannot list child tasks for process $pid: $!");
+  };
   my %children;
-  for my $task (grep !/\A\.\.?\z/, readdir $tasks) {
+  my @tasks = grep !/\A\.\.?\z/, readdir $tasks;
+  fail(2, "cannot read child tasks for process $pid: $!") if $!;
+  for my $task (@tasks) {
     if (open my $children_file, '<', "/proc/$pid/task/$task/children") {
-      my $line = <$children_file> // '';
+      local $! = 0;
+      my $line = <$children_file>;
+      fail(2, "cannot read child list for process $pid task $task: $!") if !defined($line) && $!;
+      $line //= '';
       $children{$_} = 1 for split ' ', $line;
+    } elsif (!$!{ENOENT} && !$!{ESRCH}) {
+      fail(2, "cannot read child list for process $pid task $task: $!");
     }
   }
   return [sort { $a <=> $b } keys %children];
@@ -176,13 +192,13 @@ sub stop_descendants {
     # would hold the wait until the deadline.
     waitpid $_, WNOHANG for @{direct_children($$)};
     my $pids = descendant_pids($$);
-    return unless @$pids;
+    return 0 unless @$pids;
     if (time() >= $deadline) {
       my @lines = map {
         "remote-exec: process $_ outlived the ${STOP_WAIT_SECONDS}s stop wait: " . command_line($_)
       } @$pids;
       print STDERR "$_\n" for @lines;
-      return;
+      return 1;
     }
     my $name = time() < $term_deadline ? 'TERM' : 'KILL';
     for my $pid (reverse @$pids) {
@@ -200,6 +216,184 @@ sub process_start_ticks {
   # The fields after the parenthesised command name start at field 3, so field 22 is index 19.
   my @fields = split ' ', ($stat =~ s/.*\)//r);
   return $fields[19];
+}
+
+sub path_is_inside_tree {
+  my ($path, $tree) = @_;
+  $path =~ s/ \(deleted\)\z//;
+  return $path eq $tree || index($path, "$tree/") == 0;
+}
+
+# The mode-0700 base prevents non-root processes with another uid from entering a tree. Scan every
+# process owned by the tree owner, and fail if /proc cannot identify one of those processes.
+sub processes_in_tree {
+  my ($tree, $tree_uid) = @_;
+  local $! = 0;
+  opendir my $proc, '/proc' or fail(2, "cannot list /proc while checking $tree: $!");
+  my @processes;
+  my @entries = readdir $proc;
+  fail(2, "cannot read /proc while checking $tree: $!") if $!;
+  for my $entry (grep { /\A[0-9]+\z/ } @entries) {
+    my $pid = 0 + $entry;
+    my @proc_stat = stat "/proc/$pid";
+    if (!@proc_stat) {
+      next if $!{ENOENT} || $!{ESRCH};
+      fail(2, "cannot inspect process $pid while checking $tree: $!");
+    }
+    next if $proc_stat[4] != $tree_uid;
+    my $start_ticks = process_start_ticks($pid);
+    if (!defined $start_ticks) {
+      next if $!{ENOENT} || $!{ESRCH};
+      fail(2, "cannot read process $pid start time while checking $tree: $!");
+    }
+    my $inside = 0;
+    for my $name (qw(cwd exe)) {
+      my $path = readlink "/proc/$pid/$name";
+      if (!defined $path) {
+        next if $!{ENOENT} || $!{ESRCH};
+        fail(2, "cannot inspect process $pid $name while checking $tree: $!");
+      }
+      if (path_is_inside_tree($path, $tree)) {
+        $inside = 1;
+        last;
+      }
+    }
+    push @processes, { pid => $pid, start_ticks => $start_ticks } if $inside;
+  }
+  return [sort { $a->{pid} <=> $b->{pid} } @processes];
+}
+
+sub signal_tree_processes {
+  my ($processes, $signal, $tree) = @_;
+  for my $process (@$processes) {
+    my $pid = $process->{pid};
+    my $current_start = process_start_ticks($pid);
+    if (!defined $current_start) {
+      next if $!{ENOENT} || $!{ESRCH};
+      fail(2, "cannot recheck process $pid before SIG$signal in $tree: $!");
+    }
+    next unless $current_start eq $process->{start_ticks};
+    next if kill $signal, $pid;
+    my $after_failed_signal = process_start_ticks($pid);
+    if (!defined $after_failed_signal) {
+      next if $!{ENOENT} || $!{ESRCH};
+      fail(2, "cannot recheck process $pid after failed SIG$signal in $tree: $!");
+    }
+    next unless $after_failed_signal eq $process->{start_ticks};
+    fail(2, "cannot send SIG$signal to process $pid in $tree: $!");
+  }
+}
+
+sub stop_tree_processes {
+  my ($tree, $tree_uid) = @_;
+  my %stopped;
+  my $term_deadline = monotonic() + $TERM_PHASE_SECONDS;
+  while (1) {
+    my $processes = processes_in_tree($tree, $tree_uid);
+    if (!@$processes) {
+      print STDERR "remote-exec: stopped process $_ in tree $tree\n" for sort { $a <=> $b } keys %stopped;
+      return;
+    }
+    $stopped{$_->{pid}} = 1 for @$processes;
+    signal_tree_processes($processes, 'TERM', $tree);
+    last if monotonic() >= $term_deadline;
+    select undef, undef, undef, 0.05;
+  }
+
+  my $kill_deadline = monotonic() + $TERM_PHASE_SECONDS;
+  while (1) {
+    my $processes = processes_in_tree($tree, $tree_uid);
+    if (!@$processes) {
+      print STDERR "remote-exec: stopped process $_ in tree $tree\n" for sort { $a <=> $b } keys %stopped;
+      return;
+    }
+    $stopped{$_->{pid}} = 1 for @$processes;
+    signal_tree_processes($processes, 'KILL', $tree);
+    if (monotonic() >= $kill_deadline) {
+      fail(2, "processes remain in $tree after SIGKILL: " . join(' ', map { $_->{pid} } @$processes));
+    }
+    select undef, undef, undef, 0.05;
+  }
+}
+
+sub build_tree_for_caller {
+  my ($caller_host, $requested_tree, $allow_missing) = @_;
+  fail(2, "invalid caller host: $caller_host") unless $caller_host =~ /\A[A-Za-z0-9._-]+\z/;
+  my $trees_root = abs_path("$base/trees");
+  fail(2, "cannot resolve build tree directory $base/trees: $!") unless defined $trees_root;
+  my ($requested_parent, $name) = $requested_tree =~ m{\A(.+)/([A-Za-z0-9._-]+)\z};
+  fail(2, "refusing to operate on a path outside the build host trees: $requested_tree") unless defined $name;
+  my $canonical_parent = abs_path($requested_parent);
+  fail(2, "cannot resolve build tree parent $requested_parent: $!") unless defined $canonical_parent;
+  fail(2, "refusing to operate on a path outside the build host trees: $requested_tree")
+    unless $canonical_parent eq $trees_root;
+
+  my $owner_path = "$base/tree-owners/$name";
+  fail(2, "tree owner record is missing or is a symlink: $owner_path") unless -f $owner_path && !-l $owner_path;
+  open my $owner_file, '<', $owner_path or fail(2, "cannot read tree owner record $owner_path: $!");
+  my $owner;
+  {
+    local $/;
+    $owner = <$owner_file> // '';
+  }
+  $owner =~ s/\n\z//;
+  my ($recorded_host) = $owner =~ /\Ahost=([A-Za-z0-9._-]+)\nroot=\/[^\n]*\z/;
+  fail(2, "tree owner record is invalid or has no caller host: $owner_path") unless defined $recorded_host;
+  fail(2, "tree $name belongs to caller host $recorded_host, not $caller_host")
+    unless $recorded_host eq $caller_host;
+
+  my @base_stat = stat $base;
+  fail(2, "cannot inspect remote-run state directory $base: $!") unless @base_stat;
+  fail(2, "remote-run state directory must be private (mode 0700): $base") if $base_stat[2] & 0077;
+
+  if (!-e $requested_tree) {
+    return (undef, $name, $owner_path, $base_stat[4]) if $allow_missing && !-l $requested_tree;
+    fail(2, "build host tree is missing or is a symlink: $requested_tree");
+  }
+  fail(2, "build host tree is not a directory or is a symlink: $requested_tree")
+    unless -d $requested_tree && !-l $requested_tree;
+  my $tree = abs_path($requested_tree);
+  fail(2, "cannot resolve build host tree $requested_tree: $!") unless defined $tree;
+  fail(2, "refusing to operate on a path outside the build host trees: $requested_tree")
+    unless $tree eq "$trees_root/$name";
+  my @tree_stat = stat $tree;
+  fail(2, "cannot inspect build host tree $tree: $!") unless @tree_stat;
+  fail(2, "build host tree $tree is not owned by the remote-run state owner")
+    unless $tree_stat[4] == $base_stat[4];
+  return ($tree, $name, $owner_path, $tree_stat[4]);
+}
+
+sub stop_build_tree {
+  my ($caller_host, $requested_tree) = @_;
+  my ($tree, $name, $owner_path, $tree_uid) = build_tree_for_caller($caller_host, $requested_tree, 1);
+  return unless defined $tree;
+  stop_tree_processes($tree, $tree_uid);
+}
+
+sub remove_build_tree {
+  my ($caller_host, $requested_tree) = @_;
+  my ($tree, $name, $owner_path, $tree_uid) = build_tree_for_caller($caller_host, $requested_tree, 0);
+  stop_tree_processes($tree, $tree_uid);
+
+  my $errors = [];
+  remove_tree($tree, { error => $errors });
+  if (@$errors || -e $tree) {
+    my @details = map { my ($path, $message) = %$_; "$path: $message" } @$errors;
+    push @details, "$tree still exists" if -e $tree;
+    fail(2, "cannot remove build host tree $tree after stopping its processes: " . join('; ', @details));
+  }
+  unlink $owner_path or fail(2, "cannot remove tree owner record $owner_path after removing $tree: $!");
+}
+
+sub caller_output_channel_closed {
+  my $poll = IO::Poll->new();
+  $poll->mask(\*STDOUT, POLLOUT);
+  my $ready = $poll->poll(0);
+  if ($ready < 0) {
+    return 0 if $!{EINTR};
+    fail(2, "cannot check the caller output channel: $!");
+  }
+  return ($poll->events(\*STDOUT) & (POLLERR | POLLHUP | POLLNVAL)) != 0;
 }
 
 # A descendant that outlived its remote-exec keeps the TMPDIR it was started with.
@@ -247,6 +441,10 @@ sub acquire_slot {
   }
   my $warned;
   while (!defined $shutdown_signal) {
+    if (caller_output_channel_closed()) {
+      $shutdown_signal = $SIGTERM_NUMBER;
+      last;
+    }
     for my $handle (@handles) {
       next unless flock $handle, LOCK_EX | LOCK_NB;
       my $acquired_at = monotonic();
@@ -319,7 +517,24 @@ sub run_step {
     %ENV = %$env;
     exec @argv or fail(127, "cannot start the $label step: $!");
   }
-  waitpid $pid, 0;
+  while (1) {
+    my $waited = waitpid($pid, WNOHANG);
+    last if $waited == $pid;
+    if ($waited < 0) {
+      next if $!{EINTR};
+      fail(2, "cannot wait for the $label step: $!");
+    }
+    if (defined $shutdown_signal || caller_output_channel_closed()) {
+      $shutdown_signal = $SIGTERM_NUMBER if !defined $shutdown_signal;
+      $descendant_stop_failed ||= stop_descendants();
+      return;
+    }
+    select undef, undef, undef, 0.1;
+  }
+  if (defined $shutdown_signal) {
+    $descendant_stop_failed ||= stop_descendants();
+    return;
+  }
   my $status = $?;
   fail($status >> 8 ? $status >> 8 : 2, "the $label step failed with status $status")
     if $status != 0;
@@ -395,6 +610,20 @@ sub cargo_capable {
 }
 
 sub main {
+  if (@ARGV && $ARGV[0] eq '--stop-tree') {
+    fail(2, 'usage: remote-exec --stop-tree <caller host> <tree path>') unless @ARGV == 3;
+    shift @ARGV;
+    install_signal_handlers();
+    $base = resolve_base();
+    return stop_build_tree(@ARGV);
+  }
+  if (@ARGV && $ARGV[0] eq '--remove-tree') {
+    fail(2, 'usage: remote-exec --remove-tree <caller host> <tree path>') unless @ARGV == 3;
+    shift @ARGV;
+    install_signal_handlers();
+    $base = resolve_base();
+    return remove_build_tree(@ARGV);
+  }
   fail(2, 'usage: remote-exec <base64 command payload>') unless @ARGV == 1;
   install_signal_handlers();
   my $parent_pid = getppid();
@@ -407,13 +636,22 @@ sub main {
 
   my $cwd = $relative_dir eq '.' ? $tree : "$tree/$relative_dir";
   fail(2, "command directory does not exist: $cwd") unless -d $cwd;
+  return 128 + $SIGTERM_NUMBER if caller_output_channel_closed();
 
   remove_stale_temp_dirs();
   my $temp_dir = create_temp_dir();
   my $env = build_environment($python_version, $temp_dir);
 
   install_node_modules($env, $tree);
+  if (defined $shutdown_signal) {
+    rmtree $temp_dir;
+    return $descendant_stop_failed ? 2 : 128 + $shutdown_signal;
+  }
   install_toolchain($env, $tree, $cwd);
+  if (defined $shutdown_signal) {
+    rmtree $temp_dir;
+    return $descendant_stop_failed ? 2 : 128 + $shutdown_signal;
+  }
 
   my $cargo = "$base/cargo/bin/cargo";
   fail(127, "cargo is missing: $cargo; run setup") if $argv->[0] eq 'cargo' && !-f $cargo;
@@ -430,7 +668,9 @@ sub main {
     $env->{CARGO_BUILD_JOBS} = $CARGO_BUILD_JOBS;
     ($slot_handle, $slot_wait_seconds, $slot_acquired_at) = acquire_slot(monotonic());
     if (!defined $slot_handle) {
-      return 128 + ($shutdown_signal // $SIGTERM_NUMBER);
+      $descendant_stop_failed ||= stop_descendants();
+      rmtree $temp_dir;
+      return $descendant_stop_failed ? 2 : 128 + ($shutdown_signal // $SIGTERM_NUMBER);
     }
   }
 
@@ -443,7 +683,12 @@ sub main {
   @command = ('nice', '-n', '10', @command);
   my $status;
   if (defined $shutdown_signal) {
-    return 128 + $shutdown_signal;
+    $descendant_stop_failed ||= stop_descendants();
+    if (defined $slot_handle) {
+      release_slot($slot_handle, $slot_started_at, $slot_wait_seconds, $slot_acquired_at, $argv);
+    }
+    rmtree $temp_dir;
+    return $descendant_stop_failed ? 2 : 128 + $shutdown_signal;
   }
 
   my $command_pid = fork();
@@ -455,6 +700,10 @@ sub main {
   }
 
   while (!defined $status && !defined $shutdown_signal) {
+    if (caller_output_channel_closed()) {
+      $shutdown_signal = $SIGTERM_NUMBER;
+      last;
+    }
     reap_adopted_children($command_pid);
     if (waitpid($command_pid, WNOHANG) == $command_pid) {
       $status = $?;
@@ -462,21 +711,19 @@ sub main {
     }
     select undef, undef, undef, 0.1;
   }
-  if (!defined $status) {
-    kill 'TERM', $command_pid if kill 0, $command_pid;
-    waitpid $command_pid, 0;
-  } else {
+  if (defined $status) {
     my $remaining = descendant_pids($$);
     print STDERR "remote-exec: command left child processes; stopping process ids @$remaining\n"
       if @$remaining;
   }
 
   # Every exit after the start stops what the command left running, adopted orphans included.
-  stop_descendants();
+  $descendant_stop_failed ||= stop_descendants();
   if (defined $slot_handle) {
     release_slot($slot_handle, $slot_started_at, $slot_wait_seconds, $slot_acquired_at, $argv);
   }
   rmtree $temp_dir;
+  return 2 if $descendant_stop_failed;
   return 128 + $shutdown_signal if !defined $status;
   return $status & 127 ? 128 + ($status & 127) : $status >> 8;
 }

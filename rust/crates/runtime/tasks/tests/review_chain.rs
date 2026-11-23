@@ -245,6 +245,30 @@ async fn wait_for_task_state(stack: &Stack, session_id: &str, expected: &str) ->
   }
 }
 
+async fn wait_for_trigger_pause_notice(
+  stack: &Stack,
+  initiator_id: &str,
+  session_id: &str,
+  run_id: &str,
+) -> anyhow::Result<()> {
+  let notice_id = control_events::stable_trigger_pause_notice_id(session_id, run_id);
+  let deadline = Instant::now() + TEST_DEADLINE;
+  loop {
+    let has_notice = stack
+      .run_event_values(initiator_id)?
+      .iter()
+      .any(|event| event["type"] == event_types::AGENT_MESSAGE && event["id"].as_str() == Some(notice_id.as_str()));
+    if has_notice {
+      return Ok(());
+    }
+    anyhow::ensure!(
+      Instant::now() < deadline,
+      "initiator {initiator_id} did not receive the pending-trigger notice for run {run_id}"
+    );
+    tokio::time::sleep(Duration::from_millis(10)).await;
+  }
+}
+
 async fn wait_for_worktree_removed(path: &Path) -> anyhow::Result<()> {
   let deadline = Instant::now() + TEST_DEADLINE;
   while path.exists() {
@@ -2362,6 +2386,9 @@ async fn continued_review_non_quota_failure_reports_failure_to_parent() -> anyho
   fs::write(control.path().join("release-1"), "release")?;
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, &first_review.id).await?, RunOutcomeKind::Success);
   stack.node_pass(&worker.id).await?;
+  wait_for_trigger_pause_notice(&stack, &manager.id, &worker.id, &first_review.id).await?;
+  assert_eq!(stack.store().task_state(&worker.id)?, "open");
+  assert!(child_reports(&stack, &manager.id)?.is_empty());
 
   fs::remove_file(pending_trigger_path(&stack, &worker.id))?;
   stack

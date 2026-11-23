@@ -104,32 +104,40 @@ struct DelegateCli {
     help = "Session ID (optional; taken from the CHARLIEBOT_SESSION_ID the server writes into the master environment)"
   )]
   session: Option<String>,
-  #[arg(long, help = "Git repo path (rules in the epilog)", conflicts_with = "bound_task")]
+  #[arg(long, help = "Git repo path (rules in the epilog)", conflicts_with = task_routes::DELEGATE_BOUND_TASK_FIELD)]
   repo: Option<String>,
   #[arg(
     long,
-    required_unless_present = "bound_task",
-    conflicts_with = "bound_task",
+    required_unless_present = task_routes::DELEGATE_BOUND_TASK_FIELD,
+    conflicts_with = task_routes::DELEGATE_BOUND_TASK_FIELD,
     help = "Markdown task spec (format in the epilog)"
   )]
   task_spec_file: Option<String>,
-  #[arg(long, help = "Worktree base branch (rules in the epilog)", conflicts_with = "bound_task")]
+  #[arg(
+    long,
+    help = "Worktree base branch (rules in the epilog)",
+    conflicts_with = task_routes::DELEGATE_BOUND_TASK_FIELD
+  )]
   base_branch: Option<String>,
   #[arg(
     long,
     help = "Backend option id from $CHARLIEBOT_HOME/config.yaml (rules in the epilog)",
-    conflicts_with = "bound_task"
+    conflicts_with = task_routes::DELEGATE_BOUND_TASK_FIELD
   )]
   backend: Option<String>,
   #[arg(
     long,
-    required_unless_present = "bound_task",
-    conflicts_with = "bound_task",
+    required_unless_present = task_routes::DELEGATE_BOUND_TASK_FIELD,
+    conflicts_with = task_routes::DELEGATE_BOUND_TASK_FIELD,
     value_parser = clap::value_parser!(i32).range(0..=1),
     help = "0 or 1 (rule in the epilog)"
   )]
   keep_worktree: Option<i32>,
-  #[arg(long, help = "Replay id (v2 task-tree sessions; rule in the epilog)", conflicts_with = "bound_task")]
+  #[arg(
+    long,
+    help = "Replay id (v2 task-tree sessions; rule in the epilog)",
+    conflicts_with = task_routes::DELEGATE_BOUND_TASK_FIELD
+  )]
   request_id: Option<String>,
   // The store owns the task-type names. Cold read is the artifacts feature's child, so the command names these four.
   #[arg(
@@ -141,12 +149,16 @@ struct DelegateCli {
       StoreTaskType::Verify.as_str(),
     ]),
     help = "Task profile (rules in the epilog); omitted, implement",
-    conflicts_with = "bound_task"
+    conflicts_with = task_routes::DELEGATE_BOUND_TASK_FIELD
   )]
   task_type: Option<String>,
   #[arg(long, help = "Start a round of the named scheduled prompt task")]
   bound_task: Option<String>,
-  #[arg(long, requires = "bound_task", help = "Add a session note; the task must have a repo")]
+  #[arg(
+    long,
+    requires = task_routes::DELEGATE_BOUND_TASK_FIELD,
+    help = "Add a session note; the task must have a repo"
+  )]
   note: Option<String>,
 }
 

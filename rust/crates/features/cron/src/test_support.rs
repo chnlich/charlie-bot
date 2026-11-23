@@ -628,7 +628,12 @@ pub async fn bound_delegate(
   use axum::body::Body;
   use axum::http::{Method, Request, header};
   use tower::ServiceExt;
-  let body = json!({"session_id": session_id, "description": note, "bound_task": task_name}).to_string();
+  let body = json!({
+    "session_id": session_id,
+    "description": note,
+    (charliebot_tasks::routes::DELEGATE_BOUND_TASK_FIELD): task_name,
+  })
+  .to_string();
   let request = Request::builder()
     .method(Method::POST)
     .uri(charliebot_tasks::routes::DELEGATE_PATH)

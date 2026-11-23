@@ -741,9 +741,16 @@ fn a_codex_member_without_its_login_exits_7_before_any_input_is_sent() {
 #[ignore = "integration"]
 fn a_profile_home_on_the_host_exits_7_and_starts_no_scope() {
   let world = World::new();
-  fs::create_dir_all(world.remote_home.join(".charliebot")).expect("a profile home on the host");
+  let host_profile_home = world.remote_home.join(".charliebot");
+  fs::create_dir_all(&host_profile_home).expect("a profile home on the host");
   let run = world.run(&world.env());
-  assert_refused_before_start(&world, &run, ".charliebot exists");
+  assert_refused_before_start(&world, &run, &host_profile_home.display().to_string());
+  let round_home = world.remote_home.join("improve/home").display().to_string();
+  assert!(
+    stderr(&run).contains(&format!("{round_home} needs no change")),
+    "the refusal does not say the round home needs no change: {}",
+    run.describe()
+  );
 }
 
 #[test]

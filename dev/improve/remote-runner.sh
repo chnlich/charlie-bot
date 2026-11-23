@@ -892,7 +892,8 @@ check_round_dependencies() {
       || fail 7 "the round has no Codex login: $MEMBER_CREDENTIAL holds no IMPROVE_CODEX_AUTH record"
   fi
   [[ ! -e $HOME_DIR/.charliebot ]] \
-    || fail 7 "$HOME_DIR/.charliebot exists; the round's profile home is $ROUND_HOME, and no live profile home may sit beside it"
+    || fail 7 "a live profile home sits on this host: move $HOME_DIR/.charliebot off the host user's home," \
+      "for example into a dated scratch directory; the round's profile home $ROUND_HOME needs no change"
 }
 
 # The write boundary must start before the round does. A kernel below Landlock ABI 6 makes improve-sandbox refuse at

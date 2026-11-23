@@ -34,10 +34,12 @@
 # The round reads its direction from this invocation, so the scope name, the boundary and TMPDIR
 # name one direction only. Two rounds of one direction never run together: the scope name refuses
 # the second one. A killed round leaves its scope in the failed state, so the runner clears a
-# failed scope of the same name before the start. A loaded scope whose round is over is stale: a
-# process that outlived the round, a detached mock-home helper for instance, keeps the unit active
-# and refuses every later fire, so the runner stops it, every process in the cgroup included,
-# before the start. A live round's launch directory and leader refuse the round with exit 5.
+# failed scope of the same name before the start. The round ends the scope it started: every
+# process the round left in it stops, and the runner names them, so a finished round leaves no
+# loaded unit behind. A scope a finished round left loaded is stale: a process that outlived the
+# round, a test run's child for instance, keeps the unit active. The start reads the scope's own
+# processes: a live round's leader in that list refuses the round with exit 5, and anything else
+# there is a leftover, so the runner stops the scope, every process in the cgroup included.
 #
 # The clone sync and check run before the CLI build, so a refused clone starts no build. The runner deletes
 # its launch directory when it exits; the round's evidence is a separate directory, which the
@@ -292,8 +294,10 @@ other_inflight_files() {
   done
 }
 
-# Whether a live round of one direction holds its scope. The clone scan calls this for the other
-# directions, and the start below calls it for its own.
+# Whether a live round of one direction runs anywhere on the host. The clone scan calls this for the
+# other directions, and the start's login sweep for its own. It also counts the wrapper, which runs
+# before its scope starts; the start itself reads the scope's own processes
+# (scope_list_holds_round), because only a process inside the scope can hold the unit.
 #
 # The evidence is the round's own: its leader, the `--in-scope` bash that the systemd-run call
 # below starts from the round's launch directory, and that launch directory, which the wrapper
@@ -324,6 +328,40 @@ round_is_live() {
     esac
     launch_dir=$(dirname -- "${arguments[1]}")
     [[ -d $launch_dir ]] || continue
+    return 0
+  done
+  return 1
+}
+
+# The processes of one direction's scope: the pids the unit's cgroup holds, as one space-separated line. Every
+# process the scope holds is in that list, and a process outside it cannot hold the unit. Fails when the unit's
+# cgroup cannot be read, so the caller decides what an unreadable scope means.
+scope_processes() {
+  local cgroup procs
+  cgroup=$(systemctl --user show --property=ControlGroup --value "improve-$1.scope" 2>/dev/null) || cgroup=
+  [[ -n $cgroup && -r /sys/fs/cgroup$cgroup/cgroup.procs ]] || return 1
+  procs=$(paste -sd ' ' "/sys/fs/cgroup$cgroup/cgroup.procs") || return 1
+  printf '%s' "$procs"
+}
+
+# Whether one direction's scope holds a live round: a process in that list runs the round's leader,
+# `bash <launch dir>/remote-runner.sh --in-scope <launch id> <direction> <member kind>`. A round runs inside its
+# scope from its first moment, so its leader is in the list while the round runs. This is narrower than
+# round_is_live, which also counts a wrapper that has not started its scope yet: such a wrapper holds no scope, so
+# it is no evidence that one holds a round.
+scope_list_holds_round() {
+  local live_direction=$1 pid
+  local -a arguments=()
+  for pid in $2; do
+    [[ -r /proc/$pid/cmdline ]] || continue
+    arguments=()
+    while IFS= read -r -d '' argument; do
+      arguments+=("$argument")
+    done <"/proc/$pid/cmdline"
+    (( ${#arguments[@]} >= 5 )) || continue
+    [[ ${arguments[1]} == "$HOME_DIR"/improve/launch/*/remote-runner.sh ]] || continue
+    [[ ${arguments[2]} == --in-scope ]] || continue
+    [[ ${arguments[4]} == "$live_direction" ]] || continue
     return 0
   done
   return 1
@@ -904,11 +942,35 @@ check_boundary_starts() {
     || fail 7 "the write boundary does not start, so the round does not start: ${output:-improve-sandbox printed no diagnostic}"
 }
 
+# End this launch's scope. A round can leave processes behind it -- a test run whose child outlived it, a review
+# that outlived its agent -- and a process left in the scope keeps the unit loaded after the round, so the next
+# fire of the direction finds the unit. The scope ends with the round: every process in its cgroup stops, and the
+# message names them. Only the launch that started the scope ends it: the leader's `started` marker proves this
+# launch reached the scope, and a refused launch leaves no marker, so a live round's scope, another direction's,
+# and the trial server of another round stay.
+end_round_scope() {
+  local procs
+  [[ -e $LAUNCH_DIR/started ]] || return 0
+  systemctl --user is-active --quiet "improve-$direction.scope" || return 0
+  procs=$(scope_processes "$direction") || procs=
+  if ! systemctl --user stop "improve-$direction.scope"; then
+    printf "%s cannot end the round's scope improve-%s.scope\n" "$STDERR_PREFIX" "$direction" >&2
+    return 0
+  fi
+  if [[ -n $procs ]]; then
+    printf "%s ended the round's scope improve-%s.scope: the processes %s it left went with it\n" \
+      "$STDERR_PREFIX" "$direction" "$procs" >&2
+  else
+    printf "%s ended the round's scope improve-%s.scope\n" "$STDERR_PREFIX" "$direction" >&2
+  fi
+}
+
 # Whether this launch owns the round's Codex auth.json files, the member's and the review's. It turns on right before this
 # launch's scope starts, and off again when systemd-run refuses the scope as already loaded: a refused launch never owns
 # the live round's files.
 OWNS_CODEX_AUTH=0
 cleanup_launch_dir() {
+  end_round_scope
   [[ $LAUNCH_DIR == "$HOME_DIR"/improve/launch/* ]] && rm -rf -- "$LAUNCH_DIR"
   if (( OWNS_CODEX_AUTH )); then
     rm -f -- "$CODEX_HOME_TARGET/auth.json" "$REVIEW_CODEX_HOME/auth.json"
@@ -916,6 +978,11 @@ cleanup_launch_dir() {
   return 0
 }
 trap cleanup_launch_dir EXIT
+# A signal this wrapper can handle ends the round the way the round's own end does: the scope ends, so the member
+# and every process it started stop.
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # The clone's identity, sync and pre-push check. The launch copies the file as it copies the in-flight rule.
 [[ -r $LAUNCH_DIR/clone-check.sh ]] \
@@ -965,22 +1032,25 @@ export PATH="$RUNNER_ROOT/members/$kind-$member_version/bin:$RUNNER_ROOT/members
 # A failed scope is dead: an OOM kill or another fatal end leaves the unit failed, and systemd-run
 # then refuses the same unit name forever, so the runner clears it before the start.
 #
-# An active scope holds either a live round or a finished one whose scope stayed loaded: on
-# 2026-11-01 a detached mock-home helper kept improve-perf.scope active for 36 minutes after its
-# round had exited cleanly, and every later fire of the direction refused with `already loaded`.
-# A live round keeps the refusal below; a stale scope is stopped first, and the stop takes every
-# process in the cgroup, because the leftover process is the reason the unit survived.
+# An active scope holds a live round of the direction, or a finished one whose scope stayed loaded.
+# The scope's own process list decides: a round runs inside its scope from its first moment, so the
+# round's leader is in the cgroup while the round runs, and a process outside the scope cannot hold
+# the unit at all. A live round's leader keeps the refusal below; anything else in the list is a
+# leftover -- on 2026-11-01 a detached mock-home helper, and on 2026-11-23 a test run whose two
+# children outlived the round -- so the scope is stopped, every process in the cgroup included.
 if systemctl --user is-failed --quiet "improve-$direction.scope"; then
   systemctl --user reset-failed "improve-$direction.scope"
   printf '%s cleared the failed scope improve-%s.scope\n' "$STDERR_PREFIX" "$direction" >&2
 elif systemctl --user is-active --quiet "improve-$direction.scope"; then
-  if round_is_live "$direction"; then
-    fail 5 "the previous round still runs: unit improve-$direction.scope exists"
+  if ! procs=$(scope_processes "$direction"); then
+    # The unit can end between the two checks: then it holds no round and nothing is left to stop.
+    if systemctl --user is-active --quiet "improve-$direction.scope"; then
+      fail 1 "cannot read the processes of improve-$direction.scope, so the launch cannot tell a live round from a leftover"
+    fi
+    procs=
   fi
-  cgroup=$(systemctl --user show --property=ControlGroup --value "improve-$direction.scope" 2>/dev/null) || cgroup=
-  procs=
-  if [[ -n $cgroup ]]; then
-    procs=$(paste -sd ' ' "/sys/fs/cgroup$cgroup/cgroup.procs" 2>/dev/null) || procs=
+  if scope_list_holds_round "$direction" "$procs"; then
+    fail 5 "the previous round still runs: unit improve-$direction.scope exists"
   fi
   systemctl --user stop "improve-$direction.scope"
   if [[ -n $procs ]]; then

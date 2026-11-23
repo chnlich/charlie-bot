@@ -1678,11 +1678,16 @@ fn a_failed_scope_is_reset_and_the_round_starts() {
 #[ignore = "integration"]
 fn an_active_scope_whose_round_is_over_is_stopped_and_the_round_starts() {
   let world = World::new();
+  // The scope a finished round left: active, its launch directory gone, and only the processes the round left
+  // in it -- two stand-ins here, as the perf round's two test children were. No process of the round is alive, so
+  // the start stops the scope and names what it stopped. It still needs the name free, like a real systemd-run
+  // after a stop that landed.
+  let cgroup = world.scope_cgroup("leftover");
+  let mut leftovers = world.spawn_scope_leftovers(&cgroup, 2);
+  let leftover_pids: Vec<String> = leftovers.iter().map(|child| child.id().to_string()).collect();
   let mut env = world.env();
-  // The scope a finished round left: active, its launch directory gone, no process of the round
-  // alive. The start still needs the name free, like a real systemd-run after a stop that landed.
-  env.insert("FAKE_SCOPE_STATE".to_string(), "active".to_string());
   env.insert("FAKE_SYSTEMD_RUN_EXISTING".to_string(), "1".to_string());
+  env.insert("FAKE_SCOPE_CGROUP".to_string(), cgroup.display().to_string());
   let run = world.run(&env);
   assert_eq!(run.code, 0, "{}", run.describe());
   assert!(world.claude_ran(), "the round did not start after the stale scope was stopped:\n{}", run.describe());
@@ -1696,11 +1701,21 @@ fn an_active_scope_whose_round_is_over_is_stopped_and_the_round_starts() {
     "the runner did not stop the stale scope:\n{calls}"
   );
   assert!(!calls.contains("reset-failed"), "the runner reset an active scope:\n{calls}");
+  let text = stderr(&run);
   assert!(
-    stderr(&run).contains(&format!("stopped the stale scope improve-{DIRECTION}.scope")),
+    text.contains(&format!("stopped the stale scope improve-{DIRECTION}.scope")),
     "the runner did not report the stale scope it stopped:\n{}",
     run.describe()
   );
+  for pid in &leftover_pids {
+    assert!(text.contains(pid.as_str()), "the stopped scope's report does not name process {pid}:\n{text}");
+    assert!(process_ended(pid.parse().expect("a pid")), "process {pid} outlived the stop of its scope");
+  }
+  // Any stand-in the stop missed ends here, so no later test sees it.
+  for child in &mut leftovers {
+    let _ = child.kill();
+    let _ = child.wait();
+  }
   let scope = fs::read_to_string(&world.systemd_run_log).expect("the scope record");
   assert!(scope.contains(&format!("--unit improve-{DIRECTION}")), "the round started no scope after the stop: {scope}");
 }
@@ -1714,9 +1729,12 @@ fn an_active_scope_with_a_launch_directory_but_no_leader_is_stopped_and_the_roun
   // process keeps the unit loaded.
   let launch = world.remote_home.join("improve/launch/20261101T083100Z-1-100");
   fs::create_dir_all(&launch).expect("the finished round's launch directory");
+  let cgroup = world.scope_cgroup("no-leader");
+  fs::create_dir_all(&cgroup).expect("the stand-in cgroup's directory");
+  fs::write(cgroup.join("cgroup.procs"), "").expect("the stand-in cgroup's empty process list");
   let mut env = world.env();
-  env.insert("FAKE_SCOPE_STATE".to_string(), "active".to_string());
   env.insert("FAKE_SYSTEMD_RUN_EXISTING".to_string(), "1".to_string());
+  env.insert("FAKE_SCOPE_CGROUP".to_string(), cgroup.display().to_string());
   let run = world.run(&env);
   assert_eq!(run.code, 0, "{}", run.describe());
   assert!(world.claude_ran(), "the round did not start after the stale scope was stopped:\n{}", run.describe());
@@ -1731,18 +1749,31 @@ fn an_active_scope_with_a_launch_directory_but_no_leader_is_stopped_and_the_roun
 #[ignore = "integration"]
 fn an_active_scope_with_a_live_round_still_refuses_with_status_5() {
   let world = World::new();
-  // The previous round: its launch directory, which its wrapper removes when it exits, and its
-  // leader, the --in-scope bash that runs from that directory. Both alive, so the second start of
-  // the direction refuses, and nothing stops the live round.
+  // The previous round: its leader, the --in-scope bash that runs from its launch directory, is
+  // listed in the scope's process list and is alive. The launch directory goes, because this test
+  // decides on the scope's own list: the start refuses the round on that list alone, and nothing
+  // stops the live round.
   let launch = world.remote_home.join("improve/launch/20261101T103100Z-1-200");
   fs::create_dir_all(&launch).expect("the live round's launch directory");
   let leader_script = launch.join("remote-runner.sh");
-  fs::write(&leader_script, "#!/usr/bin/env bash\nsleep 30\n").expect("the leader script");
+  let leader_started = world.sandbox.root().join("leader-started");
+  fs::write(&leader_script, "#!/usr/bin/env bash\n: >\"$LEADER_STARTED\"\nsleep 30\n").expect("the leader script");
   let mut command = harness::command("bash", &world.env());
+  command.env("LEADER_STARTED", &leader_started);
   command.arg(&leader_script).args(["--in-scope", "20261101T103100Z-1-200", DIRECTION]);
   let mut leader = harness::spawn(&mut command);
+  // The launch directory goes while the leader runs, so the leader must have opened its script first: a bash that
+  // starts after the removal finds no script and exits, and the test would exercise no live round.
+  assert!(
+    wait_until(Duration::from_secs(10), || leader_started.exists()),
+    "the leader never started from its launch directory"
+  );
+  fs::remove_dir_all(&launch).expect("the live round's launch directory goes");
+  let cgroup = world.scope_cgroup("live-round");
+  fs::create_dir_all(&cgroup).expect("the stand-in cgroup's directory");
+  fs::write(cgroup.join("cgroup.procs"), format!("{}\n", leader.id())).expect("the stand-in cgroup's process list");
   let mut env = world.env();
-  env.insert("FAKE_SCOPE_STATE".to_string(), "active".to_string());
+  env.insert("FAKE_SCOPE_CGROUP".to_string(), cgroup.display().to_string());
   let run = world.run(&env);
   // The leader's `sleep` survives a lone kill of the bash that started it: stop the children first.
   let _ = std::process::Command::new("pkill").args(["-KILL", "-P", &leader.id().to_string()]).status();
@@ -1761,6 +1792,42 @@ fn an_active_scope_with_a_live_round_still_refuses_with_status_5() {
     !world.systemd_run_log.exists(),
     "the runner tried to start a scope over the live round's:\n{}",
     world.systemd_run_log.display()
+  );
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_finished_round_ends_its_scope_and_leaves_no_process() {
+  let world = World::new();
+  // The round starts its own scope, and its agent leaves a process in it that outlives the agent, as
+  // a test run's child does. The round's end takes the scope with it: the process goes, and the
+  // report names it, so the next fire of the direction finds no loaded unit and no leftover.
+  let cgroup = world.scope_cgroup("round");
+  let leftover_pid = world.sandbox.root().join("leftover-pid");
+  let mut env = world.env();
+  env.insert("FAKE_SCOPE_CGROUP".to_string(), cgroup.display().to_string());
+  env.insert("FAKE_CLAUDE_LEFTOVER_CGROUP".to_string(), cgroup.display().to_string());
+  env.insert("FAKE_CLAUDE_LEFTOVER_PID".to_string(), leftover_pid.display().to_string());
+  let run = world.run(&env);
+  let pid: u32 = fs::read_to_string(&leftover_pid)
+    .unwrap_or_else(|error| panic!("the member wrote no leftover pid ({error}): {}", run.describe()))
+    .trim()
+    .parse()
+    .expect("a pid");
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(world.claude_ran(), "{}", run.describe());
+  let text = stderr(&run);
+  assert!(
+    text.contains(&format!("ended the round's scope improve-{DIRECTION}.scope")),
+    "the runner did not report the scope its round ended:\n{}",
+    run.describe()
+  );
+  assert!(text.contains(&pid.to_string()), "the round's report does not name the process {pid} it left:\n{text}");
+  assert!(process_ended(pid), "process {pid} outlived its round's scope");
+  let calls = world.systemctl_calls();
+  assert!(
+    calls.contains(&format!("stop improve-{DIRECTION}.scope")),
+    "the runner did not end its round's scope:\n{calls}"
   );
 }
 

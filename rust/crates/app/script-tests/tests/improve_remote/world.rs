@@ -169,6 +169,13 @@ if [[ -n ${IMPROVE_DIRECTION:-} ]]; then
     exit 93
   fi
 fi
+# A process the round leaves behind: it outlives the agent, as a test run's child does, and the
+# stand-in cgroup lists it, so ending the scope takes it.
+if [[ -n ${FAKE_CLAUDE_LEFTOVER_CGROUP:-} ]]; then
+  sleep 30 &
+  printf '%s\n' "$!" >"$FAKE_CLAUDE_LEFTOVER_PID"
+  printf '%s\n' "$!" >>"$FAKE_CLAUDE_LEFTOVER_CGROUP/cgroup.procs"
+fi
 printf '%s\n' "$@" >"$FAKE_CLAUDE_ARGV"
 # The record keeps every key out of the evidence: a real claude holds its environment in memory only, so the record
 # carries each key's digest in its place, and `unset` for a key that the environment does not hold.
@@ -369,11 +376,18 @@ esac
 "#;
 
 const SYSTEMD_RUN: &str = r#"# Fake systemd-run: record the call, then run the command after `--`. An already-loaded unit
-# refuses the start, unless a fake systemctl stop has ended that unit first.
+# refuses the start, unless a fake systemctl stop has ended that unit first. A stand-in cgroup
+# (FAKE_SCOPE_CGROUP) is the scope's process list: the scope starts with an empty list, as a real
+# scope does, and the processes that join it append their pids as a real cgroup lists them.
 printf '%s\n' "$*" >>"$FAKE_SYSTEMD_RUN_LOG"
 if [[ ${FAKE_SYSTEMD_RUN_EXISTING:-0} == 1 && ! -e $FAKE_SCOPE_STOPPED ]]; then
   printf 'Failed to start transient scope unit: Unit improve-test_perf.scope was already loaded or has a fragment file.\n' >&2
   exit 1
+fi
+if [[ -n ${FAKE_SCOPE_CGROUP:-} ]]; then
+  mkdir -p -- "$FAKE_SCOPE_CGROUP"
+  : >"$FAKE_SCOPE_CGROUP/cgroup.procs"
+  rm -f -- "$FAKE_SCOPE_STOPPED"
 fi
 arguments=("$@")
 separator=0
@@ -387,8 +401,9 @@ done
 exec "${arguments[@]:separator+1}"
 "#;
 
-const SYSTEMCTL: &str = r#"# Fake systemctl: record the call, answer is-failed and is-active from the scope's state, and mark
-# the scope stopped.
+const SYSTEMCTL: &str = r#"# Fake systemctl: record the call, answer is-failed and is-active from the scope's state and its
+# stand-in cgroup, report that cgroup's path, and end the scope on a stop: the scope's processes
+# are killed and its list is emptied, as the kernel's cgroup kill does.
 printf '%s\n' "$*" >>"$FAKE_SYSTEMCTL_LOG"
 case $* in
   *"is-failed"*)
@@ -399,10 +414,28 @@ case $* in
     exit 1
     ;;
   *"is-active"*)
+    [[ -e $FAKE_SCOPE_STOPPED ]] && exit 3
+    [[ -n ${FAKE_SCOPE_CGROUP:-} && -d $FAKE_SCOPE_CGROUP ]] && exit 0
     [[ ${FAKE_SCOPE_STATE:-} == active ]] && exit 0
     exit 3
     ;;
-  *"stop improve-"*) : >"$FAKE_SCOPE_STOPPED" ;;
+  *"show"*"ControlGroup"*)
+    # The runner reads the unit's ControlGroup under the kernel's cgroup root. A stand-in lives in
+    # the test sandbox, outside that root, so its path climbs out of the root to reach it.
+    if [[ -n ${FAKE_SCOPE_CGROUP:-} ]]; then
+      printf '/%s%s\n' "$(printf '../%.0s' {1..8})" "${FAKE_SCOPE_CGROUP#/}"
+    fi
+    ;;
+  *"stop improve-"*)
+    : >"$FAKE_SCOPE_STOPPED"
+    if [[ -n ${FAKE_SCOPE_CGROUP:-} && -r $FAKE_SCOPE_CGROUP/cgroup.procs ]]; then
+      while read -r pid; do
+        [[ $pid == "$$" ]] && continue
+        kill -KILL "$pid" 2>/dev/null || true
+      done <"$FAKE_SCOPE_CGROUP/cgroup.procs"
+      : >"$FAKE_SCOPE_CGROUP/cgroup.procs"
+    fi
+    ;;
 esac
 exit 0
 "#;
@@ -863,6 +896,32 @@ impl World {
       .stdin(Stdio::null())
       .spawn()
       .expect("the live runner stand-in starts")
+  }
+
+  /// The stand-in cgroup of one scope: a directory whose `cgroup.procs` lists the processes the scope holds, as a
+  /// real scope's cgroup does. The scope exists while that directory does; the stub systemd-run makes it, a test
+  /// makes it for a scope a previous round left behind, and the stub systemctl reports it as the unit's
+  /// ControlGroup.
+  pub fn scope_cgroup(&self, name: &str) -> PathBuf {
+    self.sandbox.root().join("scope").join(name)
+  }
+
+  /// The processes of an active scope that holds no round: `count` stand-in processes that a finished round left
+  /// in it, listed in the scope's stand-in cgroup. The caller kills any that a stop left behind.
+  pub fn spawn_scope_leftovers(&self, cgroup: &Path, count: usize) -> Vec<Child> {
+    fs::create_dir_all(cgroup).expect("the stand-in cgroup's directory");
+    let children: Vec<Child> = (0..count)
+      .map(|index| {
+        Command::new("sleep")
+          .arg("60")
+          .stdin(Stdio::null())
+          .spawn()
+          .unwrap_or_else(|error| panic!("scope leftover {index} starts: {error}"))
+      })
+      .collect();
+    let listed: String = children.iter().map(|child| format!("{}\n", child.id())).collect();
+    fs::write(cgroup.join("cgroup.procs"), listed).expect("the stand-in cgroup's process list");
+    children
   }
 
   /// The paths of the fake member CLIs that ran, in the order they ran.

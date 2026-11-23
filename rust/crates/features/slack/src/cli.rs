@@ -26,6 +26,7 @@ use clap::{Args, Parser, Subcommand};
 use serde_json::{Value, json};
 
 use crate::api::{ACK_PATH, REPLY_PATH};
+use crate::config::{NAME as SLACK_SECTION, SlackConfig};
 use crate::download;
 use crate::draft_target;
 use crate::token::{self, TokenKind};
@@ -152,7 +153,36 @@ fn run_request_at(home_dir: &Path, args: &RequestCommand) -> Result<(), CliExit>
   if token.trim().is_empty() {
     return Err(unavailable("slack", kind.key(), Some(&path)));
   }
-  request::write_stdout(&execute_request(&args.request, kind, &token)?)
+  let body = execute_request(&args.request, kind, &token)?;
+  request::write_stdout(&label_thread_replies(home_dir, &args.request.url, body)?)
+}
+
+/// The `conversations.replies` body with each message's `role` added from the profile's `slack:` section: `operator`,
+/// `colleague` or `other`. Every other response passes unchanged.
+fn label_thread_replies(home_dir: &Path, url: &str, body: Vec<u8>) -> Result<Vec<u8>, CliExit> {
+  let parsed = reqwest::Url::parse(url).map_err(|error| CliExit::usage(format!("invalid URL: {error}")))?;
+  if !parsed.path().ends_with("/conversations.replies") {
+    return Ok(body);
+  }
+  let raw = config::read_yaml_document(&home_dir.join(config::CONFIG_FILENAME))
+    .map_err(|error| CliExit::error(error.to_string()))?;
+  let slack = match raw.get(SLACK_SECTION) {
+    Some(section) => {
+      let section = serde_json::to_value(section).map_err(|error| CliExit::error(error.to_string()))?;
+      serde_json::from_value::<SlackConfig>(section).map_err(|error| CliExit::error(error.to_string()))?
+    }
+    None => SlackConfig::default(),
+  };
+  let mut payload: Value = serde_json::from_slice(&body).map_err(|error| CliExit::error(error.to_string()))?;
+  if let Some(messages) = payload.get_mut("messages").and_then(Value::as_array_mut) {
+    for message in messages.iter_mut() {
+      let role = slack.role_of(message);
+      if let Some(object) = message.as_object_mut() {
+        object.insert("role".to_string(), Value::String(role.to_string()));
+      }
+    }
+  }
+  serde_json::to_vec(&payload).map_err(|error| CliExit::error(error.to_string()))
 }
 
 fn execute_request(args: &RequestArgs, kind: TokenKind, token: &str) -> Result<Vec<u8>, CliExit> {
@@ -719,5 +749,33 @@ mod tests {
     let error = prepare_draft(&draft_args(Some("C0SYNTHETIC"), None, None, "/no/such/body")).unwrap_err();
     assert_eq!(error.code, 2);
     assert!(error_text(&error).contains("--file not found"));
+  }
+
+  #[test]
+  fn thread_replies_carry_each_senders_role_from_the_slack_section() {
+    let home = tempfile::tempdir().expect("temporary home");
+    std::fs::write(
+      home.path().join(config::CONFIG_FILENAME),
+      "slack:\n  allowed_user_ids: [U_ALLOWED]\n  colleague_user_ids: [U_COLLEAGUE]\n",
+    )
+    .expect("config file");
+    let body = br#"{"ok":true,"messages":[{"ts":"1","user":"U_ALLOWED"},{"ts":"2","user":"U_COLLEAGUE"},{"ts":"3","user":"U_OTHER"}]}"#;
+    let url = "https://slack.com/api/conversations.replies?channel=C_TEST&ts=1";
+
+    let labeled = label_thread_replies(home.path(), url, body.to_vec()).expect("replies label");
+
+    let payload: Value = serde_json::from_slice(&labeled).expect("labeled JSON");
+    let roles: Vec<&str> = payload["messages"]
+      .as_array()
+      .expect("messages")
+      .iter()
+      .map(|message| message["role"].as_str().expect("a role"))
+      .collect();
+    assert_eq!(roles, ["operator", "colleague", "other"]);
+    let other_url = "https://slack.com/api/conversations.info?channel=C_TEST";
+    assert_eq!(
+      label_thread_replies(home.path(), other_url, body.to_vec()).expect("other responses pass"),
+      body.to_vec()
+    );
   }
 }

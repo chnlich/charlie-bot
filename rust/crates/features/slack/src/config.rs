@@ -2,6 +2,7 @@
 
 use charliebot_core::config::{ConfigSection, SectionModel};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 const LEGACY_KEYS: &[(&str, &str)] = &[
   ("slack_allowed_user_ids", "slack.allowed_user_ids"),
@@ -27,6 +28,18 @@ struct RawSlackConfig {
   allowed_user_ids: Vec<String>,
   #[serde(default)]
   colleague_user_ids: Vec<String>,
+}
+
+impl SlackConfig {
+  /// The role of a thread message's sender: `operator` for an allowed id, `colleague` for a listed colleague, and
+  /// `other` for everyone else, including a message with no sender.
+  pub(crate) fn role_of(&self, message: &Value) -> &'static str {
+    match message.get("user").and_then(Value::as_str) {
+      Some(user) if self.allowed_user_ids.iter().any(|id| id == user) => "operator",
+      Some(user) if self.colleague_user_ids.iter().any(|id| id == user) => "colleague",
+      _ => "other",
+    }
+  }
 }
 
 impl TryFrom<RawSlackConfig> for SlackConfig {

@@ -161,8 +161,9 @@ follow their direction file).
 - When a plan revision or a fix round changes a look whose demo the user has seen on the understanding page, the parent
   approves it with a new demo, judging it against the demo the user saw and the user's words that the change answers;
   the user's notice shows both demos and waits for nothing.
-- A fix round that answers a user's complaint about a look quotes the user's words and carries a demo under the same
-  rule, with the user's words as the reference when the user saw no demo and the new demo alone in the notice.
+- A fix round that answers a user's complaint about a look quotes the user's words.
+  When a fix round or a plan revision changes a look the user has not seen as a demo, the round shows the user the new
+  demo and waits for the user's reply before it lands.
 - Each other decision that only the user makes waits for the user's answer in the child's session.
 - Before each high-consequence step, ask the user for a take off that names the step.
 - A pre take off names lines and steps ahead of time. It holds until those lines deliver.

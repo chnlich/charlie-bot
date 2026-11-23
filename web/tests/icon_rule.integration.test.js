@@ -277,6 +277,10 @@ const EXCEPTIONS = [
     ["items.push({label: 'Move to group…',", PROSE_REASON],
     ["? [{label: 'Move under…', onSelect: () => openSessionMovePicker(se", PROSE_REASON],
   ]),
+  ...byFile('web/features/cron/static/cron.js', [
+    ["{label: 'Edit schedule…', onSelect:", PROSE_REASON],
+    ["{label: 'Add schedule…', onSelect:", PROSE_REASON],
+  ]),
   ...byFile('web/static/js/sidebar/session-move.js', [
     ["heading.textContent = 'Move under…';", PROSE_REASON],
   ]),

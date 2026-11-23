@@ -9,6 +9,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow};
+use charliebot_core::proc_identity::{read_stat_text, stat_fields_after_command};
 use charliebot_core::str_methods;
 use charliebot_core::text_repr;
 use nix::errno::Errno;
@@ -522,8 +523,8 @@ fn read_process_record(pid: u32) -> Option<ProcessRecord> {
       argv.push(argument.to_owned());
     }
   }
-  let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-  let mut fields = stat.rsplit_once(')')?.1.split_whitespace();
+  let stat = read_stat_text(pid).ok()?;
+  let mut fields = stat_fields_after_command(&stat)?.split_whitespace();
   let parent_pid = fields.nth(1)?.parse().ok()?;
   Some(ProcessRecord { pid, parent_pid, exe_name, argv })
 }
@@ -531,11 +532,9 @@ fn read_process_record(pid: u32) -> Option<ProcessRecord> {
 /// The process group of `pid`, from `/proc/<pid>/stat`. The renderer browser leads its own group. An older
 /// launcher's browser keeps the ended launcher's group, whose remaining members are its fellow leftovers.
 fn read_process_group(pid: u32) -> anyhow::Result<u32> {
-  let stat = fs::read_to_string(format!("/proc/{pid}/stat")).context("the browser's proc stat is unreadable")?;
-  let mut fields = stat
-    .rsplit_once(')')
+  let stat = read_stat_text(pid).context("the browser's proc stat is unreadable")?;
+  let mut fields = stat_fields_after_command(&stat)
     .ok_or_else(|| anyhow!("the browser's proc stat has no command delimiter"))?
-    .1
     .split_whitespace();
   fields
     .nth(2)
@@ -715,8 +714,8 @@ mod tests {
 
   /// Whether `pid` still runs. A zombie has exited, and a missing `/proc` entry has been reaped.
   fn process_alive(pid: i32) -> bool {
-    let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) else { return false };
-    let state = stat.rsplit_once(')').and_then(|(_, fields)| fields.trim_start().chars().next());
+    let Some(stat) = u32::try_from(pid).ok().and_then(|pid| read_stat_text(pid).ok()) else { return false };
+    let state = stat_fields_after_command(&stat).and_then(|fields| fields.trim_start().chars().next());
     !matches!(state, Some('Z' | 'X'))
   }
 

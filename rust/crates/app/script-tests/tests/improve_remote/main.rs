@@ -1533,13 +1533,34 @@ fn an_unreachable_host_names_the_ssh_error_and_no_approval_page() {
   let run = world.run(&env);
   assert_eq!(run.code, 3, "{}", run.describe());
   let text = stderr(&run);
-  assert!(text.contains("did not answer at the preflight"), "the message does not name an absent host:\n{text}");
+  assert!(text.contains("failed at the preflight"), "the message does not name the failed ssh call:\n{text}");
   assert!(
     text.contains("ssh: connect to host synthetic-improve-host port 22: Connection timed out"),
     "the message does not quote the ssh error:\n{text}"
   );
+  assert!(!text.contains("did not answer"), "the message claims a cause beyond ssh's error:\n{text}");
   assert!(!text.contains("/host-auth"), "an unreachable host sent the line manager to the approval page:\n{text}");
   assert!(!world.claude_ran(), "the round started although the host did not answer");
+}
+
+/// A host that answers but refuses the login names the ssh error and no approval page. The evidence shows a host that
+/// answered, so the message claims no absent host: the defect was the blanket cause, not the approval alone.
+#[test]
+#[ignore = "integration"]
+fn a_publickey_denial_names_the_ssh_error_and_no_approval_page() {
+  let world = World::new();
+  let mut env = world.env();
+  env.insert("SSH_DENY_PUBLICKEY".to_string(), "1".to_string());
+  let run = world.run(&env);
+  assert_eq!(run.code, 3, "{}", run.describe());
+  let text = stderr(&run);
+  assert!(
+    text.contains("synthetic-user@improve.example.ts.net: Permission denied (publickey)."),
+    "the message does not quote the ssh error:\n{text}"
+  );
+  assert!(!text.contains("did not answer"), "the message claims an absent host although the host answered:\n{text}");
+  assert!(!text.contains("/host-auth"), "a publickey denial sent the line manager to the approval page:\n{text}");
+  assert!(!world.claude_ran(), "the round started although the login was denied");
 }
 
 /// A host that stops answering after the preflight gives the input send the same treatment: the ssh error, and no
@@ -1553,8 +1574,9 @@ fn a_failed_input_send_names_the_ssh_error_and_no_approval_page() {
   let run = world.run(&env);
   assert_eq!(run.code, 3, "{}", run.describe());
   let text = stderr(&run);
-  assert!(text.contains("did not answer at the input send"), "the message does not name an absent host:\n{text}");
+  assert!(text.contains("failed at the input send"), "the message does not name the failed ssh call:\n{text}");
   assert!(text.contains("Connection timed out"), "the message does not quote the ssh error:\n{text}");
+  assert!(!text.contains("did not answer"), "the message claims a cause beyond ssh's error:\n{text}");
   assert!(!text.contains("/host-auth"), "a failed send sent the line manager to the approval page:\n{text}");
   assert!(!world.claude_ran(), "the round started although the input send failed");
 }

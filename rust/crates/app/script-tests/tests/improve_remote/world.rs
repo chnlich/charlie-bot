@@ -107,6 +107,10 @@ if [[ -n ${SSH_UNREACHABLE_FILE:-} && -e $SSH_UNREACHABLE_FILE ]]; then
   cat -- "$SSH_UNREACHABLE_FILE" >&2
   exit 255
 fi
+if [[ ${SSH_DENY_PUBLICKEY:-0} == 1 ]]; then
+  printf 'synthetic-user@improve.example.ts.net: Permission denied (publickey).\n' >&2
+  exit 255
+fi
 if [[ ${SSH_FAIL_SEND:-0} == 1 && $remote == *'umask 077; mkdir -p'* ]]; then
   printf 'ssh: connect to host synthetic-improve-host port 22: Connection timed out\n' >&2
   exit 255

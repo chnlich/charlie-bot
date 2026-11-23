@@ -33,11 +33,11 @@
 # It writes only ~/improve/<direction>/evidence/.
 #
 # Exit codes: the agent's exit code; 1 a local failure, such as a missing input file; 3 an ssh step to the improve host
-# failed: the host asks for a login approval, it does not answer, or the input send fails, and the message names which;
-# 4 the direction's clone is missing, is not this protocol's clone, or holds uncommitted work that blocks its checkout
-# of origin/main; 5 the previous round of this direction still runs; 6 the round's direction cannot be read; 7 a round
-# dependency is missing, and stderr names it; 8 the member's login has less access-token life than a round needs, and
-# stderr names the login and its minutes left. Codes 3 to 8 start no agent
+# failed: either the host asks for a login approval, or stderr quotes ssh's error, or the bound that ended the wait
+# when ssh printed nothing; 4 the direction's clone is missing, is not this protocol's clone, or holds uncommitted work
+# that blocks its checkout of origin/main; 5 the previous round of this direction still runs; 6 the round's direction
+# cannot be read; 7 a round dependency is missing, and stderr names it; 8 the member's login has less access-token life
+# than a round needs, and stderr names the login and its minutes left. Codes 3 to 8 start no agent
 # and no scope, and codes 7 and 8 send nothing to the host. Code 7 also covers the review backend: an unresolved
 # `backends.calls.improve_review`, a missing key or login, or a login with too little life; and the probe: a
 # `backends.calls.probe` target with no member that names an api_base. The review never exits 8,
@@ -103,8 +103,9 @@ ssh_failure_evidence() {
 }
 
 # Exit 3 for a failed ssh call to the improve host, with the cause its evidence supports. An approval marker keeps the
-# /host-auth instruction; any other failure names a host that did not answer and quotes the ssh error or the bound that
-# ended the wait. `phase` names the step, and `no_output` describes the case where the call printed nothing.
+# /host-auth instruction; any other failure states that the ssh call failed and quotes ssh's error, or the bound that
+# ended the wait when ssh printed nothing. `phase` names the step, and `no_output` describes the case where the call
+# printed nothing.
 fail_ssh_call() {
   local phase=$1 output=$2 no_output=$3 evidence
   evidence=$(ssh_failure_evidence "$output" "$no_output")
@@ -114,7 +115,7 @@ fail_ssh_call() {
     fi
     fail 3 "the improve host $REMOTE_HOST asks for a login approval; approve the connection on the /host-auth page"
   fi
-  fail 3 "the improve host $REMOTE_HOST did not answer at the $phase: $evidence"
+  fail 3 "the ssh call to the improve host $REMOTE_HOST failed at the $phase: $evidence"
 }
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)

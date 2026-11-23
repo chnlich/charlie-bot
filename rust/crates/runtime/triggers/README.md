@@ -2,6 +2,7 @@
 
 Delayed or watched triggers for the Rust server. The crate owns the internal schedule and cancel routes, durable
 trigger records, waiters and startup recovery. The trigger step is registered after task recovery has completed.
+The cancel route answers an agent run token only for the triggers of the session that token names.
 
 ## Public API
 

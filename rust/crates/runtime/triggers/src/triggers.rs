@@ -15,12 +15,13 @@ use anyhow::{Context, anyhow};
 use axum::Router;
 use axum::body::Body;
 use axum::extract::{Path as AxumPath, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, TaggedVariant};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
 use charliebot_core::{event_types, parallel_walk, ssh, text_repr};
+use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::colleague_gate::guard_agent_work;
 use charliebot_registry::context::{FeatureContext, StartupStop};
 use charliebot_store::metadata::UtcDateTime;
@@ -2259,16 +2260,19 @@ fn format_suffix(reason: WaitReason, finished: &[String], held: &[String], still
 /// CLI.
 pub const SCHEDULE_TRIGGER_PATH: &str = "/api/internal/schedule-trigger";
 
+/// The route path that `session trigger cancel` posts to, with the session and trigger ids in its two parameters.
+pub const CANCEL_TRIGGER_PATH: &str = "/api/internal/triggers/{session_id}/{trigger_id}/cancel";
+
 /// The delayed trigger routes under the internal API paths.
 pub fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
     .route(SCHEDULE_TRIGGER_PATH, post_only(schedule_trigger))
-    .route("/api/internal/triggers/{session_id}/{trigger_id}/cancel", post_only(cancel_trigger_route))
+    .route(CANCEL_TRIGGER_PATH, post_only(cancel_trigger_route))
     .with_state(Arc::clone(features))
 }
 
 /// The route patterns `routes` mounts. The registry's trailing-slash redirect matches a path against them.
-pub const ROUTE_PATTERNS: &[&str] = &[SCHEDULE_TRIGGER_PATH, "/api/internal/triggers/{session_id}/{trigger_id}/cancel"];
+pub const ROUTE_PATTERNS: &[&str] = &[SCHEDULE_TRIGGER_PATH, CANCEL_TRIGGER_PATH];
 
 /// One manager built after recovery, with its durable pending triggers recovered. The manager also enters startup state
 /// as the pending-trigger owner that a worker's cancel reaches.
@@ -2461,22 +2465,62 @@ async fn schedule_trigger(State(features): State<Arc<FeatureContext>>, request: 
   responses::json(StatusCode::OK, &body)
 }
 
+/// `POST /api/internal/triggers/{session_id}/{trigger_id}/cancel`. An operator cancels a pending trigger of any
+/// session. An agent cancels only the triggers of the session its run token names, and another session's trigger
+/// answers 403. A trigger that is no longer pending answers 409 with its status, and an unknown trigger answers 404.
 async fn cancel_trigger_route(
   State(features): State<Arc<FeatureContext>>,
   AxumPath((session_id, trigger_id)): AxumPath<(String, String)>,
+  headers: HeaderMap,
 ) -> Response {
+  let caller = match caller::resolve_caller(&headers, &features) {
+    Ok(caller) => caller,
+    Err(response) => return response,
+  };
+  if let CallerIdentity::Agent { claims } = &caller
+    && claims.session_id != session_id
+  {
+    return responses::json(
+      StatusCode::FORBIDDEN,
+      &json!({ "detail": "an agent may only cancel its own session's triggers" }),
+    );
+  }
   let manager = match features.startup.require::<Arc<TriggerManager>>() {
     Ok(manager) => manager,
     Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
   };
   match manager.cancel_trigger(&session_id, &trigger_id).await {
-    Ok(_) => responses::json(StatusCode::OK, &json!({ "ok": true })),
-    Err(error)
-      if error.downcast_ref::<io::Error>().is_some_and(|io_error| io_error.kind() == io::ErrorKind::NotFound) =>
-    {
-      responses::json(StatusCode::NOT_FOUND, &json!({ "detail": "Trigger not found" }))
-    }
-    Err(error) => responses::internal_error("RuntimeError", error.to_string()),
+    Ok(true) => responses::json(StatusCode::OK, &json!({ "ok": true })),
+    Ok(false) => match manager.load_trigger(&session_id, &trigger_id).await {
+      Ok(trigger) => responses::json(
+        StatusCode::CONFLICT,
+        &json!({
+          "detail": format!(
+            "trigger {trigger_id} is already {}: only a pending trigger can be cancelled",
+            status_word(trigger.status)
+          )
+        }),
+      ),
+      Err(error) => cancel_failure(error),
+    },
+    Err(error) => cancel_failure(error),
+  }
+}
+
+/// The answer for a cancel that the store failed: an unknown trigger is a 404, and any other failure a 500.
+fn cancel_failure(error: anyhow::Error) -> Response {
+  if error.downcast_ref::<io::Error>().is_some_and(|io_error| io_error.kind() == io::ErrorKind::NotFound) {
+    return responses::json(StatusCode::NOT_FOUND, &json!({ "detail": "Trigger not found" }));
+  }
+  responses::internal_error("RuntimeError", error.to_string())
+}
+
+/// The word a trigger file stores for a status, which a refusal names.
+fn status_word(status: TriggerStatus) -> &'static str {
+  match status {
+    TriggerStatus::Pending => "pending",
+    TriggerStatus::Fired => "fired",
+    TriggerStatus::Cancelled => "cancelled",
   }
 }
 
@@ -2531,6 +2575,7 @@ mod tests {
   use charliebot_core::config::CREDENTIALS_FILENAME;
   use charliebot_core::credentials::load_credentials;
   use charliebot_core::hot_reload::HotReload;
+  use charliebot_core::run_token::{self, RunTokenClaims};
   use charliebot_core::test_support::LogCapture;
   use charliebot_registry::caller::CallerIdentity;
   use charliebot_registry::context::StartupState;
@@ -2540,7 +2585,7 @@ mod tests {
   use charliebot_registry::{FeatureContext, Registry};
   use charliebot_store::compact::CompactValue;
   use charliebot_store::metadata::{SessionMetadata, TaskApprover, TaskProfile, TaskSpec};
-  use charliebot_store::{ControlGuard, CreateTask, Store, StoreError, StoreResult, TaskCaller};
+  use charliebot_store::{ControlGuard, CreateTask, RunKind, RunRecord, Store, StoreError, StoreResult, TaskCaller};
   use charliebot_tasks::completion::ArchiveAuthority;
   use charliebot_tasks::completion::CANCELLED_TRIGGERS_FIELD;
   use charliebot_tasks::completion::TaskCompletion;
@@ -2572,6 +2617,9 @@ mod tests {
   }
 
   const SESSION_ID: &str = "synthetic-trigger-session";
+  const OTHER_SESSION_ID: &str = "synthetic-other-trigger-session";
+  const ACCESS_KEY: &str = "synthetic-access-key";
+  const AGENT_RUN_ID: &str = "synthetic-trigger-run";
 
   #[test]
   fn sacct_availability_searches_once_per_program_for_the_process() {
@@ -2594,7 +2642,8 @@ mod tests {
 
   fn feature_context() -> (tempfile::TempDir, Arc<FeatureContext>) {
     let home = tempfile::tempdir().expect("temporary home");
-    std::fs::write(home.path().join(CREDENTIALS_FILENAME), "charliebot: {}\n").expect("credentials file");
+    std::fs::write(home.path().join(CREDENTIALS_FILENAME), format!("charliebot:\n  access_key: {ACCESS_KEY}\n"))
+      .expect("credentials file");
     let registry = Arc::new(Registry::new());
     let config_value = registry.load_config(home.path()).expect("test config");
     let store = Arc::new(
@@ -4667,6 +4716,141 @@ mod tests {
     assert_eq!(response_json(cancelled).await, json!({ "ok": true }));
     assert_eq!(
       manager.load_trigger(SESSION_ID, &created.id).await.expect("cancelled record").status,
+      TriggerStatus::Cancelled
+    );
+  }
+
+  /// A cancel request with an optional bearer credential, as the CLI sends it under a run and the operator without one.
+  async fn post_cancel(router: &Router, path: &str, bearer: Option<&str>) -> Response {
+    let mut request = Request::builder().method(Method::POST).uri(path);
+    if let Some(token) = bearer {
+      request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
+    }
+    router.clone().oneshot(request.body(Body::empty()).expect("request builds")).await.expect("router handles request")
+  }
+
+  /// Registers a launched agent Run of `session_id` and returns the run token that binds it.
+  async fn register_agent_run(features: &FeatureContext, session_id: &str) -> String {
+    let claims = RunTokenClaims {
+      session_id: session_id.to_string(),
+      run_id: AGENT_RUN_ID.to_string(),
+      agent: "worker".to_string(),
+    };
+    let record = RunRecord {
+      id: AGENT_RUN_ID.to_string(),
+      session_id: session_id.to_string(),
+      kind: RunKind::Work,
+      input_event_ids: Vec::new(),
+      task_spec_hash: None,
+      task_spec_ref: None,
+      prompt_snapshot_ref: None,
+      retry_of_run_id: None,
+      review_of_run_id: None,
+      backend: None,
+      model: None,
+      native_session_id: None,
+      pid: None,
+      pid_start: None,
+      started_at: None,
+      ended_at: None,
+      exit_code: None,
+      repo_path: None,
+      base_branch: None,
+      branch_name: None,
+      worktree_path: None,
+      sequence_ref: None,
+      raw_log_ref: None,
+      events_ref: None,
+      result_ref: None,
+    };
+    let guard = features.store.control_lock().await;
+    features
+      .store
+      .register_run_locked(&guard, session_id, record, Some("synthetic run"))
+      .await
+      .expect("register the run");
+    drop(guard);
+    features.store.record_launch(session_id, AGENT_RUN_ID, 424242, "12345").await.expect("launch the run");
+    run_token::sign_run_token(&claims, ACCESS_KEY).expect("sign the run token")
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn cancel_route_refuses_a_trigger_that_is_no_longer_pending() {
+    let (_home, features) = feature_context();
+    add_session(&features, SESSION_ID);
+    let manager = Arc::new(TriggerManager::new(Arc::clone(&features)));
+    features.startup.insert(Arc::clone(&manager)).expect("insert trigger manager");
+    let router = routes(&features);
+    let cancelled =
+      manager.create_trigger(SESSION_ID, 3600, "cancel me", None, None, None, true).await.expect("create trigger");
+    let path = format!("/api/internal/triggers/{SESSION_ID}/{}/cancel", cancelled.id);
+    assert_eq!(post_cancel(&router, &path, None).await.status(), StatusCode::OK);
+    let again = post_cancel(&router, &path, None).await;
+    assert_eq!(again.status(), StatusCode::CONFLICT);
+    let cancelled_detail =
+      format!("trigger {} is already cancelled: only a pending trigger can be cancelled", cancelled.id);
+    assert_eq!(response_json(again).await, json!({ "detail": cancelled_detail }));
+
+    let fired =
+      manager.create_trigger(SESSION_ID, 3600, "fired first", None, None, None, true).await.expect("create trigger");
+    let mut record = manager.load_trigger(SESSION_ID, &fired.id).await.expect("read trigger");
+    record.status = TriggerStatus::Fired;
+    manager.save_trigger(&record).await.expect("record the fire");
+    let fired_path = format!("/api/internal/triggers/{SESSION_ID}/{}/cancel", fired.id);
+    let refused = post_cancel(&router, &fired_path, None).await;
+    assert_eq!(refused.status(), StatusCode::CONFLICT);
+    assert_eq!(
+      response_json(refused).await["detail"],
+      format!("trigger {} is already fired: only a pending trigger can be cancelled", fired.id)
+    );
+    assert_eq!(manager.load_trigger(SESSION_ID, &fired.id).await.expect("read trigger").status, TriggerStatus::Fired);
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn cancel_route_refuses_an_agent_for_another_sessions_trigger() {
+    let (_home, features) = feature_context();
+    add_session(&features, SESSION_ID);
+    add_session(&features, OTHER_SESSION_ID);
+    let manager = Arc::new(TriggerManager::new(Arc::clone(&features)));
+    features.startup.insert(Arc::clone(&manager)).expect("insert trigger manager");
+    let router = routes(&features);
+    let token = register_agent_run(&features, SESSION_ID).await;
+    let other = manager
+      .create_trigger(OTHER_SESSION_ID, 3600, "other session", None, None, None, true)
+      .await
+      .expect("create the other session's trigger");
+    let own = manager
+      .create_trigger(SESSION_ID, 3600, "own session", None, None, None, true)
+      .await
+      .expect("create own trigger");
+
+    let other_path = format!("/api/internal/triggers/{OTHER_SESSION_ID}/{}/cancel", other.id);
+    let refused = post_cancel(&router, &other_path, Some(&token)).await;
+    assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+      response_json(refused).await,
+      json!({ "detail": "an agent may only cancel its own session's triggers" })
+    );
+    assert_eq!(
+      manager.load_trigger(OTHER_SESSION_ID, &other.id).await.expect("read other trigger").status,
+      TriggerStatus::Pending
+    );
+
+    let own_path = format!("/api/internal/triggers/{SESSION_ID}/{}/cancel", own.id);
+    assert_eq!(post_cancel(&router, &own_path, Some(&token)).await.status(), StatusCode::OK);
+    let cancelled = manager.load_trigger(SESSION_ID, &own.id).await.expect("read own trigger");
+    assert_eq!(cancelled.status, TriggerStatus::Cancelled);
+    // The fire of the trigger as it stood before the cancel finds no pending record, so it wakes nothing.
+    let stale_fire = pending_trigger(&own.id, SESSION_ID, near_future(0), Vec::new());
+    manager.wait_and_fire(stale_fire, false).await.expect("a fire after the cancel returns");
+    assert_eq!(manager.load_trigger(SESSION_ID, &own.id).await.expect("read own trigger"), cancelled);
+
+    // The operator caller carries no run token, and it still cancels a pending trigger of any session.
+    assert_eq!(post_cancel(&router, &other_path, None).await.status(), StatusCode::OK);
+    assert_eq!(
+      manager.load_trigger(OTHER_SESSION_ID, &other.id).await.expect("read other trigger").status,
       TriggerStatus::Cancelled
     );
   }

@@ -41,19 +41,18 @@ let voiceInputStartPending = null;
 function setVoiceButtonState(state) {
   const button = document.getElementById('voice-btn');
   let classes;
-  let label;
   switch (state) {
     case 'starting':
       classes = ['bg-amber-600', 'border-amber-500'];
-      label = 'Preparing microphone…';
+      button.title = 'Preparing microphone…';
       break;
     case 'recording':
       classes = ['bg-red-600', 'border-red-500'];
-      label = 'Speak now';
+      button.title = 'Speak now';
       break;
     case 'idle':
       classes = ['bg-slate-800', 'border-slate-600'];
-      label = 'Voice input';
+      button.title = 'Voice input';
       break;
     default:
       throw new Error('Unknown voice button state: ' + state);
@@ -62,8 +61,7 @@ function setVoiceButtonState(state) {
       'bg-red-600', 'border-red-500');
   button.classList.add(...classes);
   button.dataset.state = state;
-  button.title = label;
-  button.setAttribute('aria-label', label);
+  button.setAttribute('aria-label', button.title);
 }
 
 // One promise per key: a second caller joins a pending request. The stylesheet

@@ -47,6 +47,7 @@ use anyhow::Context as _;
 use charliebot_backend_check::{Vocabulary, gate};
 use charliebot_core::git::ancestry_args;
 use charliebot_core::home::CHARLIEBOT_HOME_ENV;
+use charliebot_core::text_repr::string_field;
 use charliebot_registry::Registry;
 use charliebot_registry::pages::WEB_DIR_NAME;
 use charliebot_store::layout;
@@ -1482,10 +1483,6 @@ pub enum CiVerdict {
   NotStarted { workflow: String },
   Timeout,
   Failed { failing: Vec<CheckRow> },
-}
-
-fn string_field(value: &Value, field: &str) -> Option<String> {
-  value.get(field).and_then(Value::as_str).map(str::to_string)
 }
 
 /// Whether a rebase that rewrote the head counts as a retry: the landing's first rebase of a task

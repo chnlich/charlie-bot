@@ -18,6 +18,7 @@ use charliebot_compat::routing::post_only;
 
 use charliebot_core::config::CallClass;
 use charliebot_core::event_types;
+use charliebot_core::text_repr::string_field;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::registry::{ScheduledKind, ScheduledRoundStart};
@@ -242,21 +243,17 @@ fn parse_delegate_request(body: &RequestBody) -> Result<DelegateRequest, Box<Res
   Ok(DelegateRequest {
     session_id: values[SESSION_ID].as_str().expect("validated session_id is a string").to_string(),
     description: values[DELEGATE_DESCRIPTION_FIELD].as_str().expect("validated description is a string").to_string(),
-    base_branch: optional_string(&values, DELEGATE_BASE_BRANCH_FIELD),
-    backend: optional_string(&values, DELEGATE_BACKEND_FIELD),
-    repo_path: optional_string(&values, DELEGATE_REPO_PATH_FIELD),
+    base_branch: string_field(&values, DELEGATE_BASE_BRANCH_FIELD),
+    backend: string_field(&values, DELEGATE_BACKEND_FIELD),
+    repo_path: string_field(&values, DELEGATE_REPO_PATH_FIELD),
     task_type,
     keep_worktree: values.get(KEEP_WORKTREE_FIELD).and_then(Value::as_bool).unwrap_or(false),
     delegate_invocation: values.get(event_types::DELEGATE_INVOCATION).filter(|value| !value.is_null()).cloned(),
-    request_id: optional_string(&values, DELEGATE_REQUEST_ID_FIELD),
+    request_id: string_field(&values, DELEGATE_REQUEST_ID_FIELD),
     cold_read,
-    bound_task: optional_string(&values, DELEGATE_BOUND_TASK_FIELD),
+    bound_task: string_field(&values, DELEGATE_BOUND_TASK_FIELD),
     sent_refused_fields,
   })
-}
-
-fn optional_string(values: &Value, key: &str) -> Option<String> {
-  values.get(key).and_then(Value::as_str).map(str::to_string)
 }
 
 fn delegate_field_contract(request: &DelegateRequest) -> Result<(), String> {

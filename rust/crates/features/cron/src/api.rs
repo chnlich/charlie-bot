@@ -900,6 +900,7 @@ mod tests {
       send(&router, "POST", "/api/cron/tasks", create_body("operator-root-task", &prompt, None)).await;
     assert_eq!(status, StatusCode::OK);
     assert!(created.get("session_id").is_none());
+    assert!(created.get("next_run").is_none());
 
     // The access key may bind a session outside every agent subtree, and may clear a binding.
     let (status, created) = send_as(
@@ -1033,6 +1034,7 @@ mod tests {
       let (status, updated) = send(&router, "PUT", &format!("/api/cron/tasks/{name}"), body).await;
 
       assert_eq!(status, StatusCode::OK, "{name}: {updated}");
+      assert!(updated.get("next_run").is_none(), "{name}: the response omits the derived next fire");
       let after = super::read_yaml_mapping(path).unwrap();
       assert_eq!(Value::Object(after.clone()), updated, "the response is the file as written");
       assert_eq!(after["cron"], "35 * * * *");

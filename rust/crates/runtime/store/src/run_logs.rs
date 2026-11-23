@@ -1,7 +1,7 @@
 //! A run log's file name and bytes, plain or compressed.
 //!
 //! The `run_log_compaction` handler replaces a finished run's log files with `<name>.zst`. Metadata refs keep naming
-//! the plain file, so every reader resolves the name through this module: a plain file wins when it exists, otherwise
+//! the plain file, so every reader resolves the name through this module. A plain file wins when it exists. Otherwise
 //! the module opens the `.zst` sibling and yields the decompressed bytes. A writer always names the plain file, and
 //! only the compaction handler ever creates the compressed one.
 

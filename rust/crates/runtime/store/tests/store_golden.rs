@@ -2819,9 +2819,9 @@ fn extend_streamed(held: &str, append: &str, end: Option<u64>) -> String {
 
 /// Plain tool rows keep the frames that main produced before subagent cards existed.
 ///
-/// The request has an assistant message with parallel tool calls, a user message whose two results
-/// attach to the last row, a long output that is trimmed, and top-level tool_use and tool_result events.
-/// The expected frames were generated on 6784c2b303, before the aggregator learned about subagents.
+/// The request has an assistant message with parallel tool calls and a user message whose two results attach to the
+/// last row. It also has a long output that is trimmed, and top-level tool_use and tool_result events. The expected
+/// frames were generated on 6784c2b303, before the aggregator learned about subagents.
 #[test]
 fn message_aggregator_keeps_plain_tool_row_frames() {
   let fixture: Value = serde_json::from_str(GOLDEN_PLAIN_TOOL_ROWS_FIXTURE).unwrap();

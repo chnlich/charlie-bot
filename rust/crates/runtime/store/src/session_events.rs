@@ -114,11 +114,11 @@ impl Store {
     self.streaming_manager.close_all().await;
   }
 
-  /// Subscribe to one session's channel and run `load` under the session's event lock, so the read
-  /// and every append-broadcast pair of the same session are ordered: an event is either wholly
-  /// before the subscription (the catch-up replay carries it) or wholly after it (the subscription
-  /// does), never both. `persist_and_broadcast` holds the same lock across its append and its
-  /// broadcast, so a reader that runs under the lock cannot see an event twice.
+  /// Subscribe to one session's channel and run `load` under the session's event lock. The read and every
+  /// append-broadcast pair of the same session are ordered. An event is either wholly before the subscription or wholly
+  /// after it, never both. The catch-up replay carries an event that comes before the subscription, and the
+  /// subscription itself carries one that comes after. `persist_and_broadcast` holds the same lock across its append
+  /// and its broadcast, so a reader that runs under the lock cannot see an event twice.
   pub async fn subscribe_session_before_load<T, F, Fut>(&self, session_id: &str, load: F) -> (Subscription, T)
   where
     F: FnOnce() -> Fut,

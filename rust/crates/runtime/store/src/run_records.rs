@@ -157,8 +157,8 @@ impl fmt::Display for EventReadError {
 }
 
 /// The run event log at `path` as its event values, oldest first, under the strict decode. The name resolves to the
-/// plain or compressed file, which reads as text, and every line, a blank one included, must be one JSON value, so a
-/// bad line fails the read with that line's parse error. A missing log is `Err` with `NotFound`, so the caller decides
+/// plain or compressed file, which reads as text. Every line, a blank one included, must be one JSON value. So a bad
+/// line fails the read with that line's parse error. A missing log is `Err` with `NotFound`, so the caller decides
 /// whether that means no events.
 pub fn read_event_values(path: &Path) -> Result<Vec<Value>, EventReadError> {
   let bytes = read_log_bytes_or_missing(path)?;
@@ -1362,8 +1362,8 @@ mod tests {
 
   use crate::store::test_support::make_test_store;
 
-  /// A held listing answers the session's run-record reads without a file read until a run-record write drops it, and
-  /// the end of the hold sends every read back to disk.
+  /// A held listing answers the session's run-record reads without a file read. It answers until a run-record write
+  /// drops it. The end of the hold sends every read back to disk.
   #[tokio::test]
   async fn a_held_listing_answers_reads_until_a_write_drops_it() {
     let (_home, store) = make_test_store();

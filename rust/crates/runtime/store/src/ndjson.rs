@@ -124,8 +124,8 @@ struct SplitSizes {
 
 /// The boot walk's split sizes.
 ///
-/// A thread start takes the process's mapping lock for writing, behind every page fault of the logs mapped beside it,
-/// so a split pays only for the few logs that would end the walk's scan phase alone: on the 8,100-session lab home
+/// A thread start takes the process's mapping lock for writing, behind every page fault of the logs mapped beside it.
+/// So a split pays only for the few logs that would end the walk's scan phase alone. On the 8,100-session lab home,
 /// three logs of 600 reach the minimum.
 const BOOT_SPLIT: SplitSizes = SplitSizes { min_bytes: 32 << 20, chunk_bytes: 16 << 20, max_threads: 4 };
 
@@ -144,9 +144,9 @@ pub(crate) fn read_file_lines_split(
   Ok(split_lines_of_sized(&map, &line, &BOOT_SPLIT))
 }
 
-/// Every line of `bytes`, split across threads at the boot walk's sizes. A caller that already holds a log's mapping
-/// (a scan that resumes from a checkpoint) parses the bytes past its offset this way, with the same line rule and the
-/// same order a whole-file read gives.
+/// Every line of `bytes`, split across threads at the boot walk's sizes. A caller that already holds a log's mapping,
+/// such as a scan that resumes from a checkpoint, parses the bytes past its offset this way. It uses the same line rule
+/// and gives the same order as a whole-file read.
 pub(crate) fn split_lines_of(
   bytes: &[u8],
   line: &(impl Fn(&[u8], &ParseKeys) -> Option<CompactValue> + Sync),
@@ -238,8 +238,8 @@ pub(crate) fn encode_line(value: &Value) -> String {
 
 /// Append one JSON line with non-ASCII kept as is, and sync its data to disk.
 ///
-/// Returns the number of bytes the append wrote, so a caller that keeps a count of the file's lines can check that
-/// its own line is the whole of the file's growth.
+/// Returns the number of bytes the append wrote. A caller that keeps a count of the file's lines can check that its own
+/// line is the whole of the file's growth.
 pub(crate) fn append(path: &Path, value: &Value) -> StoreResult<usize> {
   let parent = path.parent().expect("an event-log path has a parent directory");
   fs::create_dir_all(parent).map_err(|error| StoreError::new(format!("{}: {error}", parent.display())))?;
@@ -373,8 +373,9 @@ mod tests {
     assert_eq!(events[1]["i"], CompactValue::PosInt(1));
   }
 
-  /// A split read gives the events a single-thread read gives, in the file's order: a split never cuts a line,
-  /// including a line longer than a run across a split point, blank and malformed lines, and a final line without `\n`.
+  /// A split read gives the events that a single-thread read gives, in the file's order. A split never cuts a line.
+  /// That holds for a line longer than a run across a split point, for blank and malformed lines, and for a final line
+  /// without `\n`.
   #[test]
   fn a_split_read_gives_the_events_of_a_whole_read() {
     let mut text = String::new();

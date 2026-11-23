@@ -59,8 +59,8 @@ pub const LAST_RUN_STATUS: &str = "last_run_status";
 /// rebinds a scheduled binding.
 pub const CRON_SLOT_FIELDS: [&str; 2] = [SCHEDULED_TASK, TASK_SCHEDULE_SLOTS];
 /// The session-metadata field holding the backend's native session id, which the next turn resumes. The store writes
-/// it, the registry's anchor reconciler names it in its correction warning, and the cold-storage sweep reads it from
-/// the raw metadata, so it is spelled once, here.
+/// it. The registry's anchor reconciler names it in its correction warning. The cold-storage sweep reads it from the
+/// raw metadata. So the name is spelled once, here.
 pub const CC_SESSION_ID_FIELD: &str = "cc_session_id";
 /// The session-metadata field holding the instant the session's native Claude Code conversation started.
 pub const CC_SESSION_STARTED_AT: &str = "cc_session_started_at";

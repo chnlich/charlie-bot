@@ -60,8 +60,8 @@ const LISTINGS_SWEEP_INTERVAL: Duration = Duration::from_secs(10);
 
 /// One filtered listing kept while the sorted corpus and the derived-archive set that shaped it still hold.
 ///
-/// The filtered rows follow only from those two inputs: a write through the store replaces the corpus, and an
-/// external edit moves it on the next sweep, while a tree-index refresh replaces the derived-archive set.
+/// The filtered rows follow only from those two inputs. A write through the store replaces the corpus. An external edit
+/// moves it on the next sweep. A tree-index refresh replaces the derived-archive set.
 struct CachedFilteredListing {
   /// The store by its address. A server holds one store for its lifetime, and an address a later store reuses
   /// cannot answer from the entry: that store's corpus and derived set are different allocations.
@@ -141,10 +141,10 @@ impl Store {
 
   /// The metadata corpus the listing memo already holds, when every condition the next read checks still holds.
   ///
-  /// `None` means the next read would walk the sessions directory and its metadata files, so a caller that must not
-  /// wait on a file read takes the same blocking path that read needs. [`Self::load_session_metas_snapshot_versioned`]
-  /// answers the conditions this checks with the very corpus it returns, so a caller that finds `Some` here reads
-  /// what that call would have returned.
+  /// `None` means the next read would walk the sessions directory and its metadata files. A caller that must not wait
+  /// on a file read then takes the same blocking path that read needs. [`Self::load_session_metas_snapshot_versioned`]
+  /// answers the conditions this checks with the very corpus it returns. So a caller that finds `Some` here reads what
+  /// that call would have returned.
   pub fn cached_session_metas_snapshot(&self) -> Option<Arc<Vec<Arc<SessionMetadata>>>> {
     let signature = stat_signature(&self.cfg.sessions_dir())?;
     let memo = self.listings_memo.lock().expect("listings memo mutex is not poisoned");
@@ -286,8 +286,8 @@ impl Store {
 
   /// The sequence controllers' row fields for a listing of `rows`.
   ///
-  /// A caller that already holds the rows asks for their fields alone. Each controller's bound ids and fields come
-  /// from one pass, so a controller that loads a snapshot for both reads it once, and one that binds nothing costs no
+  /// A caller that already holds the rows asks for their fields alone. Each controller's bound ids and fields come from
+  /// one pass. So a controller that loads a snapshot for both reads it once. A controller that binds nothing costs no
   /// per-row lookup.
   pub fn sequence_listing_fields(
     &self,

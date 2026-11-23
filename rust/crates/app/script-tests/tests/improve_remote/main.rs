@@ -1833,6 +1833,73 @@ fn a_finished_round_ends_its_scope_and_leaves_no_process() {
 
 #[test]
 #[ignore = "integration"]
+fn a_termed_wrapper_ends_its_scope_and_leaves_no_process() {
+  let world = World::new();
+  // When a signal the wrapper handles arrives while the round runs inside systemd-run, the wrapper ends its scope
+  // immediately instead of waiting for the round to exit, stops every process in it, and names what it stopped.
+  let cgroup = world.scope_cgroup("termed-round");
+  let leftover_pid = world.sandbox.root().join("leftover-pid");
+  let mut env = world.env();
+  env.insert("FAKE_SCOPE_CGROUP".to_string(), cgroup.display().to_string());
+  env.insert("FAKE_CLAUDE_LEFTOVER_CGROUP".to_string(), cgroup.display().to_string());
+  env.insert("FAKE_CLAUDE_LEFTOVER_PID".to_string(), leftover_pid.display().to_string());
+  env.insert("FAKE_CLAUDE_WAIT_FOR".to_string(), world.scope_stopped.display().to_string());
+  let mut command = world.launcher_command(&env);
+  command.stdin(Stdio::null());
+  command.stdout(Stdio::piped());
+  command.stderr(Stdio::piped());
+  let launcher = harness::spawn(&mut command);
+
+  assert!(
+    wait_until(Duration::from_secs(30), || {
+      fs::read_to_string(&leftover_pid).is_ok_and(|text| text.trim().parse::<u32>().is_ok())
+        && world.launch_directory().is_some_and(|launch| launch.join("started").exists())
+    }),
+    "the round never reached its scope:\n{}",
+    world.ssh_arguments()
+  );
+  let pid: u32 = fs::read_to_string(&leftover_pid).expect("leftover pid").trim().parse().expect("a pid");
+  let launch_script = world.launch_directory().expect("the launch directory").join("remote-runner.sh");
+  let launch_script_arg = launch_script.display().to_string();
+  let wrapper_pid = fs::read_dir("/proc")
+    .expect("/proc")
+    .flatten()
+    .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok())
+    .find(|candidate| {
+      let Ok(bytes) = fs::read(format!("/proc/{candidate}/cmdline")) else {
+        return false;
+      };
+      let args: Vec<&[u8]> = bytes.split(|byte| *byte == 0).collect();
+      args.get(1).is_some_and(|arg| *arg == launch_script_arg.as_bytes())
+        && args.get(2).is_some_and(|arg| *arg != b"--in-scope" && *arg != b"--prepare")
+    })
+    .expect("the remote-runner wrapper process");
+
+  let term = std::process::Command::new("kill")
+    .args(["-TERM", &wrapper_pid.to_string()])
+    .status()
+    .expect("send SIGTERM to wrapper");
+  assert!(term.success(), "kill -TERM {wrapper_pid} failed");
+
+  let start = Instant::now();
+  let output = launcher.wait_with_output().expect("wait for launcher");
+  assert!(
+    start.elapsed() < Duration::from_secs(10),
+    "the wrapper waited for the scope instead of ending it on SIGTERM ({:?})",
+    start.elapsed()
+  );
+  assert_eq!(output.status.code(), Some(143), "stderr:\n{}", String::from_utf8_lossy(&output.stderr));
+  let text = String::from_utf8_lossy(&output.stderr);
+  assert!(
+    text.contains(&format!("ended the round's scope improve-{DIRECTION}.scope")),
+    "the termed wrapper did not report ending its scope:\n{text}"
+  );
+  assert!(text.contains(&pid.to_string()), "the termed wrapper did not name process {pid}:\n{text}");
+  assert!(process_ended(pid), "process {pid} outlived the termed wrapper's scope");
+}
+
+#[test]
+#[ignore = "integration"]
 fn an_absent_scope_starts_without_a_reset() {
   let world = World::new();
   let run = world.run(&world.env());

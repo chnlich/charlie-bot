@@ -315,7 +315,7 @@ round_is_live() {
     arguments=()
     while IFS= read -r -d '' argument; do
       arguments+=("$argument")
-    done <"$proc"
+    done 2>/dev/null <"$proc" || continue
     (( ${#arguments[@]} >= 5 )) || continue
     [[ ${arguments[1]} == "$HOME_DIR"/improve/launch/*/remote-runner.sh ]] || continue
     case ${arguments[2]} in
@@ -357,7 +357,7 @@ scope_list_holds_round() {
     arguments=()
     while IFS= read -r -d '' argument; do
       arguments+=("$argument")
-    done <"/proc/$pid/cmdline"
+    done 2>/dev/null <"/proc/$pid/cmdline" || continue
     (( ${#arguments[@]} >= 5 )) || continue
     [[ ${arguments[1]} == "$HOME_DIR"/improve/launch/*/remote-runner.sh ]] || continue
     [[ ${arguments[2]} == --in-scope ]] || continue
@@ -377,7 +377,7 @@ launch_is_referenced() {
     arguments=()
     while IFS= read -r -d '' argument; do
       arguments+=("$argument")
-    done <"$proc"
+    done 2>/dev/null <"$proc" || continue
     for argument in "${arguments[@]}"; do
       [[ $argument == "$launch" ]] && return 0
     done
@@ -969,8 +969,13 @@ end_round_scope() {
 # launch's scope starts, and off again when systemd-run refuses the scope as already loaded: a refused launch never owns
 # the live round's files.
 OWNS_CODEX_AUTH=0
+SCOPE_PID=
 cleanup_launch_dir() {
   end_round_scope
+  if [[ -n $SCOPE_PID ]]; then
+    kill "$SCOPE_PID" 2>/dev/null || true
+    wait "$SCOPE_PID" 2>/dev/null || true
+  fi
   [[ $LAUNCH_DIR == "$HOME_DIR"/improve/launch/* ]] && rm -rf -- "$LAUNCH_DIR"
   if (( OWNS_CODEX_AUTH )); then
     rm -f -- "$CODEX_HOME_TARGET/auth.json" "$REVIEW_CODEX_HOME/auth.json"
@@ -1070,9 +1075,13 @@ scope_status=0
 if [[ $kind == codex || $review_kind == codex ]]; then
   OWNS_CODEX_AUTH=1
 fi
+# Background + wait lets HUP, INT and TERM traps fire during the round instead of waiting for systemd-run to exit.
 systemd-run --user --scope --unit "improve-$direction" \
   -p "MemoryMax=$UNIT_MEMORY_MAX" -p MemorySwapMax=0 -- \
-  bash "$LAUNCH_DIR/remote-runner.sh" --in-scope "$launch_id" "$direction" "$kind" 2>"$scope_stderr" || scope_status=$?
+  bash "$LAUNCH_DIR/remote-runner.sh" --in-scope "$launch_id" "$direction" "$kind" <&0 2>"$scope_stderr" &
+SCOPE_PID=$!
+wait "$SCOPE_PID" || scope_status=$?
+SCOPE_PID=
 cat -- "$scope_stderr" >&2 || true
 if (( scope_status != 0 )); then
   if grep -q 'already loaded' "$scope_stderr"; then

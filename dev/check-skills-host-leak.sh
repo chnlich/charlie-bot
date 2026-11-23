@@ -217,14 +217,14 @@ credential_check() {  # <values file> <field>
 # holds one `field<TAB>path` line per text and every named file must be readable. The first hit prints its kind and
 # field and exits 3; a clean list exits 0; a list or a text the process cannot read exits 2.
 credential_check_list() {  # <values file> <list file>
-  local values=$1 list=$2 field path status=0
-  [[ -r $list ]] || {
+  local values=$1 list=$2 field='' path='' status=0
+  [[ -f $list && -r $list ]] || {
     printf 'cannot read the credential check list: %s\n' "$list" >&2
     return 2
   }
-  while IFS=$'\t' read -r field path; do
+  while IFS=$'\t' read -r field path || [[ -n $field || -n $path ]]; do
     [[ -n "$field" ]] || continue
-    [[ -r $path ]] || {
+    [[ -f $path && -r $path ]] || {
       printf 'cannot read the text for %s: %s\n' "$field" "$path" >&2
       return 2
     }
@@ -299,8 +299,8 @@ case "${1:-}" in
     list=$2
     [[ -f $list && -r $list ]] || { printf 'cannot read the check list: %s\n' "$list" >&2; exit 2; }
     load_patterns
-    field=''
-    while IFS=$'\t' read -r field path; do
+    field='' path=''
+    while IFS=$'\t' read -r field path || [[ -n $field || -n $path ]]; do
       [[ -n $field ]] || continue
       [[ -f $path && -r $path ]] || { printf 'cannot read the text for %s: %s\n' "$field" "$path" >&2; exit 2; }
       if (( ! host_patterns_only )); then

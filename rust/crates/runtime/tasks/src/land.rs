@@ -486,10 +486,14 @@ async fn check_hooks_path(repo_path: &Path) -> anyhow::Result<()> {
   Ok(())
 }
 
-/// The decompressed content of a gzip blob; a corrupt member is a refusal, so a push never skips its content.
+/// The decompressed content of a gzip blob; an empty or corrupt member is a refusal, so a push never skips its
+/// content. `MultiGzDecoder` reads concatenated members so trailing data cannot hide past the first member.
 fn gunzip(name: &str, blob: &[u8]) -> anyhow::Result<Vec<u8>> {
+  if blob.is_empty() {
+    anyhow::bail!("cannot decompress {name} for the leak check: unexpected end of file");
+  }
   let mut plain = Vec::new();
-  flate2::read::GzDecoder::new(blob)
+  flate2::read::MultiGzDecoder::new(blob)
     .read_to_end(&mut plain)
     .map_err(|error| anyhow::anyhow!("cannot decompress {name} for the leak check: {error}"))?;
   Ok(plain)

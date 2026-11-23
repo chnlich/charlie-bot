@@ -134,6 +134,10 @@ Remaining lists the open milestones between the session and its Goal, so the use
 - The command refuses a link to an older version of a plan, or to a closed plan, and names the newest file.
 - The command cold-reads each remaining Waiting on you item and its linked page, and prints each restatement
   without storing.
+- When the file changes **Now**, the command cold-reads the new **Now** text alone and prints each part that names
+  something the user is to do.
+- When the reader quotes such a part, the command stores nothing; rewrite **Now** as the Status Block of
+  `prompts/master.md` defines it, then run the set again.
 - When an item's linked page fails a fork assertion of its genre, fix the page, then run the set again.
   The command takes the genre from the page's file-name prefix: plan, understanding, sitrep, debug, explain or waiting.
   A linked page whose name has no such prefix is not checked.
@@ -142,8 +146,8 @@ Remaining lists the open milestones between the session and its Goal, so the use
   - When a part reads `NOT STATED`, reads `FOLDED`, reads `NO DEMO`, or differs from your intent, revise the item.
   - When an item asks about a reversible step that Action Boundaries in `prompts/master.md` allow directly, remove
     the item, carry out the step, and state how to undo it in the web reply.
-- The command stores the status once the reader has read every item as it stands, and prints the stored session
-  status with `now_chars`, `now_over_budget` and `remaining_missing`.
+- The command stores the status once the reader has read every item as it stands and quotes nothing in a changed
+  **Now**, and prints the stored session status with `now_chars`, `now_over_budget` and `remaining_missing`.
 - `charliebot web status confirm` records the confirmation and cold reads nothing. It refuses a stale stored plan
   link and names the newest file.
 - After a context reset, read the session status with `charliebot web status show`.

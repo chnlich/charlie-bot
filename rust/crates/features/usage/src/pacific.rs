@@ -76,7 +76,7 @@ mod tests {
 
   #[test]
   fn last_week_spans_the_fall_change_as_169_hours() {
-    // 2026-11-03 12:00 PST. The clocks went back on 2026-11-01, so the week [10-26, 11-02) is 169 hours long.
+    // At noon on a Tuesday after the fall clock change, the last week runs Monday to Monday: 169 hours long.
     let week = Week::last_before(at("2026-11-03T20:00:00Z")).expect("the week resolves");
     assert_eq!(week.start, at("2026-10-26T07:00:00Z"));
     assert_eq!(week.end, at("2026-11-02T08:00:00Z"));
@@ -85,12 +85,12 @@ mod tests {
 
   #[test]
   fn a_monday_midnight_opens_the_week_it_starts() {
-    // 2026-10-26 00:00 PDT is the first instant of the week ending today, so last week is the one before it.
+    // Midnight on a Monday, Pacific time, opens the week it starts, so last week is the one before it.
     assert_eq!(
       Week::last_before(at("2026-10-26T07:00:00Z")).expect("the week resolves").start,
       at("2026-10-19T07:00:00Z")
     );
-    // One second earlier is still Sunday 2026-10-25 in Los Angeles, so the week before that Monday is last week.
+    // One second earlier is still Sunday in Los Angeles, so last week ends on the current week's Monday.
     assert_eq!(
       Week::last_before(at("2026-10-26T06:59:59Z")).expect("the week resolves").start,
       at("2026-10-12T07:00:00Z")

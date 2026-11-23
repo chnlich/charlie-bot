@@ -630,7 +630,7 @@ fn capture_usage_rows_are_absolutely_correct() {
     claude.total.int(),
     claude.in_fresh.int() + claude.cache_write.int() + claude.cache_read.int() + claude.output.int()
   );
-  // Stamps print their Pacific day: 2024-01-01T00:00Z is still December 31 in Los Angeles.
+  // Stamps print their Pacific day: a UTC midnight on New Year's Day is still December 31 in Los Angeles.
   assert_eq!((claude.first.as_str(), claude.last.as_str()), ("2023-12-31", "2024-01-01"));
   assert_eq!(claude.accounts.iter().map(|account| account.total.int()).sum::<i64>(), claude.total.int());
   let codex = row(&rows, "Codex", "codex-some");
@@ -1246,7 +1246,7 @@ fn capture_runs_clc_run_is_native_with_the_cached_split() {
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 0); // the unchanged run file is skipped
 }
 
-/// The Devin run of the SWE-2 example: 3,971,522 input tokens, 3,901,760 of them cache hits.
+/// A Devin result whose input count includes its cache hits, which make up most of that input.
 const DEVIN_RUN: &[u8] = b"{\"type\": \"result\", \"usage\": {\"input_tokens\": 3971522, \"cache_read_input_tokens\": 3901760, \"cache_creation_input_tokens\": 0, \"output_tokens\": 42556}}\n";
 
 #[test]

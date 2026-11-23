@@ -144,10 +144,8 @@ mod tests {
   }
 
   fn actual_checkout() -> RepoRoot {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-      .ancestors()
-      .nth(4)
-      .expect("the Slack crate sits under the checkout");
+    let root =
+      Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).expect("the Slack crate sits under the checkout");
     RepoRoot::new(Some(root.to_path_buf().into_os_string())).expect("the checkout root is valid")
   }
 

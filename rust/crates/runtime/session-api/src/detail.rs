@@ -16,7 +16,7 @@ use axum::response::Response;
 use charliebot_agents::model_pool::MISSING_BACKEND_OPTION;
 use charliebot_agents::pool_display::session_detail_shown;
 use charliebot_cli_common::fields::LIMIT;
-use charliebot_compat::compression::{accepts_gzip, gzip_level_one};
+use charliebot_compat::compression::{accepts_gzip, gzip_level_four, gzip_level_one};
 use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_compat::routing::get_only;
 use charliebot_compat::{responses, static_files};
@@ -1001,7 +1001,9 @@ async fn events_jsonl(
     let wants_gzip = accepts_gzip(request.headers());
     let result = tokio::task::spawn_blocking(move || {
       let (body, start) = events_window(&path, size, tail, before)?;
-      let gzip = wants_gzip.then(|| Bytes::from(gzip_level_one(&body)));
+      // A window is a run of event rows that repeat their keys. Level 1's short hash chain misses those repeats;
+      // level 4 finds them (see `gzip_level_four`).
+      let gzip = wants_gzip.then(|| Bytes::from(gzip_level_four(&body)));
       Ok::<_, StoreError>((body, gzip, start))
     })
     .await;

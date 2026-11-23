@@ -131,8 +131,8 @@
          the 24 px row. The number column widens by the box's own width, so a four-digit number keeps
          its whole text beside it. Side by side the width runs 4em to 5.4em; line by line it runs
          7.5em to 8.85em with 1.7em of left padding. The code's left padding follows it in both.
-         Diff2html lays each side of the side-by-side view out as a table of its own, so these widths
-         reach every diff table, and both sides stay level line by line. */
+         Diff2html gives each side of a side-by-side view its own table, so these widths reach every
+         diff table and both sides stay level line by line. */
       .d2h-diff-table .d2h-code-line,
       .d2h-diff-table .d2h-code-side-line { line-height: 21px; }
       .d2h-diff-table .d2h-code-side-line { padding-left: 5.9em; padding-right: 4.5em;

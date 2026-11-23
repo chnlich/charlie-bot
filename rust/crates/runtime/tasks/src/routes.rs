@@ -1632,6 +1632,61 @@ mod tests {
     run_token::sign_run_token(&claims, "synthetic-access-key").unwrap()
   }
 
+  /// A colleague gate that refuses every agent caller's work request, so the route guard alone decides each entry.
+  struct RefuseAgentWork;
+
+  impl charliebot_registry::colleague_gate::ColleagueGate for RefuseAgentWork {
+    fn refuse_agent_work<'a>(
+      &'a self,
+      _features: &'a FeatureContext,
+      _caller: &'a charliebot_registry::caller::CallerIdentity,
+    ) -> BoxFuture<'a, Option<&'static str>> {
+      Box::pin(async { Some("refused: synthetic colleague thread") })
+    }
+
+    fn admits_wake<'a>(
+      &'a self,
+      _features: &'a FeatureContext,
+      _session_id: &'a str,
+      _label: &'a str,
+    ) -> BoxFuture<'a, bool> {
+      Box::pin(async { true })
+    }
+  }
+
+  #[tokio::test]
+  async fn agent_work_entries_refuse_a_colleague_run_with_403() {
+    let (_home, features) = feature_context();
+    create_upload_session(&features, "synthetic-sender").await;
+    create_upload_session(&features, "synthetic-target").await;
+    install_dispatcher(&features);
+    let gate: Arc<dyn charliebot_registry::colleague_gate::ColleagueGate> = Arc::new(RefuseAgentWork);
+    features.startup.insert(gate).expect("the colleague gate inserts once");
+    let token = register_agent_run(&features, "synthetic-sender", "synthetic-run").await;
+    let router = routes(&features);
+    let auth = format!("Bearer {token}");
+    let cases = [
+      ("/api/chat/synthetic-sender/message", r#"{"content":"synthetic"}"#),
+      ("/api/sessions/synthetic-sender/retry", r#"{"request_id":"synthetic-retry","run_id":"synthetic-run"}"#),
+      (
+        "/api/internal/session-message",
+        r#"{"session_id":"synthetic-sender","target_session_id":"synthetic-target","content":"synthetic"}"#,
+      ),
+      (
+        "/api/internal/delegate",
+        r#"{"session_id":"synthetic-sender","description":"synthetic task","task_type":"script-run"}"#,
+      ),
+    ];
+    for (path, body) in cases {
+      let response =
+        send_body(&router, Method::POST, path, body.as_bytes().to_vec(), Some("application/json"), Some(&auth)).await;
+      assert_eq!(response.status(), StatusCode::FORBIDDEN, "{path}");
+      let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("the refusal body reads");
+      let refusal: Value = serde_json::from_slice(&bytes).expect("the refusal body is JSON");
+      assert_eq!(refusal["detail"], "refused: synthetic colleague thread", "{path}");
+    }
+  }
+
   #[tokio::test]
   #[ignore = "integration"]
   async fn session_message_replays_for_a_run_and_newly_admits_for_an_operator() {

@@ -268,7 +268,9 @@ mod tests {
   use serde_json::Map;
 
   use super::*;
-  use crate::test_support::{answer, feature_context, install_dispatcher, json_request};
+  use crate::test_support::{
+    RefuseAgentWork, answer, feature_context, install_dispatcher, json_request, launched_agent_token,
+  };
 
   /// Records the session and input contents of every launched run. Each run is reported as `run-1`.
   #[derive(Default)]
@@ -365,6 +367,33 @@ mod tests {
     assert!(executor.launches.lock().expect("launch log").is_empty());
     let parent_after = features.store.require_session(&parent.id).await.expect("parent session");
     assert_eq!(parent_after.status, parent.status);
+  }
+
+  /// Fork and elone from a colleague-started run are refused with 403 and persist no successor.
+  #[tokio::test]
+  async fn fork_and_elone_refuse_a_colleague_run_with_403() {
+    let (home, features, _executor) = recording_features();
+    let parent = seed_parent(&features.store, "synthetic-backend").await;
+    let token = launched_agent_token(&home, &features, &parent.id, "parent-run");
+    let gate: Arc<dyn charliebot_registry::colleague_gate::ColleagueGate> = Arc::new(RefuseAgentWork);
+    features.startup.insert(gate).expect("the colleague gate inserts once");
+    let sessions_before = session_dir_names(&features);
+
+    for route in ["fork", "elone"] {
+      let (mut headers, body) = json_request(json!({"event_index": 0}));
+      headers.insert(
+        axum::http::header::AUTHORIZATION,
+        axum::http::HeaderValue::from_str(&format!("Bearer {token}")).expect("bearer header"),
+      );
+      let response = match route {
+        "fork" => fork_session(State(Arc::clone(&features)), AxumPath(parent.id.clone()), headers, body).await,
+        _ => elone_session(State(Arc::clone(&features)), AxumPath(parent.id.clone()), headers, body).await,
+      };
+      let (status, detail) = answer(response).await;
+      assert_eq!(status, StatusCode::FORBIDDEN, "{route}");
+      assert_eq!(detail["detail"], "refused: synthetic colleague thread", "{route}");
+    }
+    assert_eq!(session_dir_names(&features), sessions_before, "a refused fork or elone persists no successor");
   }
 
   #[tokio::test]

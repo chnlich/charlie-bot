@@ -570,8 +570,8 @@ mod tests {
 
   use super::*;
   use crate::test_support::{
-    answer, create_node, feature_context, feature_context_with_auto, feature_context_with_config, install_dispatcher,
-    json_request,
+    RefuseAgentWork, answer, create_node, feature_context, feature_context_with_auto, feature_context_with_config,
+    install_dispatcher, json_request, launched_agent_token,
   };
 
   struct LogMessage(Arc<Mutex<Vec<String>>>);
@@ -955,6 +955,26 @@ mod tests {
 
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(detail, json!({"detail": "task metadata mutations require operator credentials"}));
+  }
+
+  /// A child task created by a colleague-started run is refused with 403 before the task exists.
+  #[tokio::test]
+  async fn a_child_task_create_refuses_a_colleague_run_with_403() {
+    let (home, features) = feature_context();
+    install_dispatcher(&features);
+    let manager = create_node(&features.store, "manager", None, TaskProfile::Manager).await;
+    let token = launched_agent_token(&home, &features, &manager.id, "manager-run");
+    let gate: Arc<dyn charliebot_registry::colleague_gate::ColleagueGate> = Arc::new(RefuseAgentWork);
+    features.startup.insert(gate).expect("the colleague gate inserts once");
+    let (mut headers, body) =
+      json_request(json!({"request_id": "colleague-child", "task_parent_id": manager.id, "profile": "manager"}));
+    headers.insert(AUTHORIZATION, HeaderValue::from_str(&format!("Bearer {token}")).expect("bearer header"));
+
+    let (status, detail) = answer(create_session(State(features.clone()), headers, body).await).await;
+
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(detail["detail"], "refused: synthetic colleague thread");
+    assert!(features.store.get_session("colleague-child").await.expect("read").is_none());
   }
 
   /// A run token resolves through `resolve_caller` to the agent path. A move inside the caller's subtree lands with

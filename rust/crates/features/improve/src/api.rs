@@ -316,6 +316,97 @@ mod tests {
 
   use super::*;
 
+  /// A feature context over a temporary home whose credentials carry an access key, for a caller that must verify.
+  fn caller_context() -> (tempfile::TempDir, Arc<FeatureContext>) {
+    let home = tempfile::tempdir().expect("temporary home");
+    std::fs::write(home.path().join(CREDENTIALS_FILENAME), "charliebot:\n  access_key: synthetic-access-key\n")
+      .expect("credentials file");
+    let registry = Arc::new(Registry::new());
+    let config_value = registry.load_config(home.path()).expect("test config");
+    let store = Arc::new(
+      charliebot_store::Store::new(
+        config_value.clone(),
+        registry.metadata_slots(),
+        charliebot_registry::store_hooks::store_hooks(Arc::clone(&registry)),
+      )
+      .expect("test store"),
+    );
+    let config_registry = Arc::clone(&registry);
+    let config_home = home.path().to_path_buf();
+    let config = Arc::new(charliebot_core::hot_reload::HotReload::new(
+      config_value.config_file(),
+      "improve_test_config_reload_failed",
+      Box::new(move || config_registry.load_config(&config_home)),
+    ));
+    let credential_home = home.path().to_path_buf();
+    let credentials = Arc::new(charliebot_core::hot_reload::HotReload::new(
+      home.path().join(CREDENTIALS_FILENAME),
+      "improve_test_credentials_reload_failed",
+      Box::new(move || charliebot_core::credentials::load_credentials(&credential_home)),
+    ));
+    let features = Arc::new(FeatureContext {
+      config,
+      credentials,
+      store,
+      registry,
+      startup: Arc::new(charliebot_registry::StartupState::default()),
+    });
+    (home, features)
+  }
+
+  /// A colleague gate that refuses every agent caller's work request, so the route guard alone decides the entry.
+  struct RefuseAgentWork;
+
+  impl charliebot_registry::colleague_gate::ColleagueGate for RefuseAgentWork {
+    fn refuse_agent_work<'a>(
+      &'a self,
+      _features: &'a FeatureContext,
+      _caller: &'a charliebot_registry::caller::CallerIdentity,
+    ) -> futures_util::future::BoxFuture<'a, Option<&'static str>> {
+      Box::pin(async { Some("refused: synthetic colleague thread") })
+    }
+
+    fn admits_wake<'a>(
+      &'a self,
+      _features: &'a FeatureContext,
+      _session_id: &'a str,
+      _label: &'a str,
+    ) -> futures_util::future::BoxFuture<'a, bool> {
+      Box::pin(async { true })
+    }
+  }
+
+  #[tokio::test]
+  async fn improve_start_refuses_a_colleague_run_with_403() {
+    let (_home, features) = caller_context();
+    let run_path = features.store.run_metadata_path("synthetic-caller", "caller-run");
+    std::fs::create_dir_all(run_path.parent().expect("run directory")).expect("run directory");
+    let run = serde_json::json!({"id": "caller-run", "session_id": "synthetic-caller", "kind": "manager_turn", "pid": 424242, "pid_start": "1"});
+    std::fs::write(&run_path, run.to_string()).expect("launched run record");
+    let claims = charliebot_core::run_token::RunTokenClaims {
+      session_id: "synthetic-caller".to_string(),
+      run_id: "caller-run".to_string(),
+      agent: "synthetic".to_string(),
+    };
+    let token = charliebot_core::run_token::sign_run_token(&claims, "synthetic-access-key").expect("run token");
+    let gate: Arc<dyn charliebot_registry::colleague_gate::ColleagueGate> = Arc::new(RefuseAgentWork);
+    features.startup.insert(gate).expect("the colleague gate inserts once");
+    let request = axum::http::Request::builder()
+      .method(axum::http::Method::POST)
+      .uri(wire::START_PATH)
+      .header(axum::http::header::CONTENT_TYPE, "application/json")
+      .header(axum::http::header::AUTHORIZATION, format!("Bearer {token}"))
+      .body(axum::body::Body::from("{}"))
+      .expect("request builds");
+
+    let response = start_improve_loop(axum::extract::State(Arc::clone(&features)), request).await;
+
+    assert_eq!(response.status(), axum::http::StatusCode::FORBIDDEN);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.expect("the refusal body reads");
+    let refusal: serde_json::Value = serde_json::from_slice(&bytes).expect("the refusal body is JSON");
+    assert_eq!(refusal["detail"], "refused: synthetic colleague thread");
+  }
+
   /// The factory the test registry never calls: the loop start only reads the config.
   struct NeverLaunched;
 

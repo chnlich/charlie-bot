@@ -17,6 +17,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_yaml::{Mapping, Value};
 
+use crate::repo_root::{CONFIG_EXAMPLE_FILE_NAME, CONFIGS_DIR_NAME};
 use crate::{paths, text_repr};
 
 pub const CONFIG_FILENAME: &str = "config.yaml";
@@ -1081,10 +1082,10 @@ pub fn load_config_file(
 /// options, pools and `session`.
 pub fn require_backends(cfg: &CharlieBotConfig) -> Result<(), ConfigError> {
   if cfg.backends.options.is_empty() {
-    return Err(ConfigError(
-      "config.yaml: backends.options lists no backend; copy the starter entries from configs/config.example.yaml"
-        .to_string(),
-    ));
+    return Err(ConfigError(format!(
+      "config.yaml: backends.options lists no backend; copy the starter entries from \
+       {CONFIGS_DIR_NAME}/{CONFIG_EXAMPLE_FILE_NAME}"
+    )));
   }
   if cfg.backends.new_session_backend().is_none() {
     return Err(ConfigError(

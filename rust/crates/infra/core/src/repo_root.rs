@@ -10,6 +10,14 @@ pub const REPO_ROOT_ENV: &str = "CHARLIEBOT_REPO_ROOT";
 /// seeds, and the per-feature defaults that their seeders read.
 pub const CONFIGS_DIR_NAME: &str = "configs";
 
+/// The starter `config.yaml` template in the checkout's `configs/` directory: home provisioning copies it to a new
+/// profile home, and the backend check reads it for the ids a repository's configuration names.
+pub const CONFIG_EXAMPLE_FILE_NAME: &str = "config.example.yaml";
+
+/// The starter `credentials.yaml` template in the checkout's `configs/` directory: home provisioning copies it to a
+/// new profile home.
+pub const CREDENTIALS_EXAMPLE_FILE_NAME: &str = "credentials.example.yaml";
+
 /// The charlie-bot checkout whose `web/`, page packages and `configs/` the server serves.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RepoRoot(PathBuf);

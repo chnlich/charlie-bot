@@ -12,11 +12,8 @@ use std::path::Path;
 use charliebot_compat::providers::GEMINI_HOST;
 use charliebot_core::config::{self, API_BASE_KEY, CharlieBotConfig};
 use charliebot_core::list_price;
-use charliebot_core::repo_root;
+use charliebot_core::repo_root::{CONFIG_EXAMPLE_FILE_NAME, CONFIGS_DIR_NAME};
 use charliebot_registry::Registry;
-
-/// The file name of the repository's configuration example, in the configs directory of the repository root.
-const CONFIG_EXAMPLE_FILE: &str = "config.example.yaml";
 
 /// The words a scan matches: option, pool and model ids, endpoint hosts, and registered id prefixes.
 #[derive(Debug, Default)]
@@ -38,7 +35,7 @@ impl Vocabulary {
       vocab.add_config(&config::load_config(home, &schema)?);
     }
     if let Some(repo) = repo {
-      let example = repo.join(repo_root::CONFIGS_DIR_NAME).join(CONFIG_EXAMPLE_FILE);
+      let example = repo.join(CONFIGS_DIR_NAME).join(CONFIG_EXAMPLE_FILE_NAME);
       if example.is_file() {
         vocab.add_config(&config::load_config_file(repo, &example, &schema)?);
       }

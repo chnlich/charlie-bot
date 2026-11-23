@@ -448,9 +448,8 @@ impl MessageAggregator {
     vec![json!({"type": "message", "message": self.committed(message)})]
   }
 
-  /// The committed message as the live feed sends it is meant for a page that received the stream frames. Such a page
-  /// holds the draft text, thinking and tool rows already, so the frame carries only what the page needs to commit
-  /// them.
+  /// The committed message as the live feed sends it assumes a page that received the stream frames. Such a page holds
+  /// the draft text, thinking and tool rows already, so the frame carries only what the page needs to commit them.
   fn committed(&self, mut message: Value) -> Value {
     if !self.omit_streamed_content || !self.emit_stream_deltas {
       return message;

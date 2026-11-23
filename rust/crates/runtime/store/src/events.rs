@@ -863,9 +863,10 @@ impl Store {
   ///
   /// A page's first open of a session counts the session's whole log. The mock home's largest log is 144 MB, and that
   /// read costs 30 ms of the open, single-threaded. A log over [`PARALLEL_COUNT_MIN_BYTES`] is counted in contiguous
-  /// ranges at once, one range per core up to [`MAX_COUNT_CORES`]. The split is safe because the count is one sum of
-  /// newline bytes, and a range boundary never changes it. The scan that counts the newlines also records where every
-  /// [`LINE_INDEX_STRIDE`]-th line starts. So a page far inside the log seeks there instead of reading the head.
+  /// ranges at once, one range per core up to [`MAX_COUNT_CORES`]. Ranges can be counted independently because the
+  /// count is one sum of newline bytes, and a range boundary never changes it. The scan that counts the newlines also
+  /// records where every [`LINE_INDEX_STRIDE`]-th line starts. So a page far inside the log seeks there instead of
+  /// reading the head.
   fn line_index(&self, path: &Path, signature: FileSignature) -> StoreResult<LineIndex> {
     if let Some(index) =
       lock(&self.event_read_caches, "event read cache mutex").count.fresh(&path.to_path_buf(), signature)

@@ -481,7 +481,7 @@ pub(crate) struct CachedTreeIndex {
   pub(crate) generation: u64,
   pub(crate) built_at: Instant,
   pub(crate) index: Arc<TreeIndex>,
-  /// The sessions directory's identity the renewal's name check last proved is the identity the build read before the
+  /// The sessions directory's identity the renewal's name check last proved. The build reads it before the directory's
   /// names. A renewal that finds the names and inputs hold moves it to the identity it read. A matching identity means
   /// the names cannot have moved, so the renewal compares the sessions' inputs alone.
   pub(crate) sessions_dir: Option<FileIdentity>,

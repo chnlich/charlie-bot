@@ -9,9 +9,9 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use charliebot_compat::providers::GEMINI_HOST;
 use charliebot_core::config::{self, API_BASE_KEY, CharlieBotConfig};
 use charliebot_core::list_price;
+use charliebot_core::providers::GEMINI_HOST;
 use charliebot_core::repo_root::{CONFIG_EXAMPLE_FILE_NAME, CONFIGS_DIR_NAME};
 use charliebot_registry::Registry;
 

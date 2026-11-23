@@ -2,8 +2,8 @@
 //! to an Anthropic message, and the OpenAI chat stream to Anthropic's events. Each keeps the golden fixture's
 //! operation order, so a request raises the first failure it records.
 
-use charliebot_compat::providers;
 use charliebot_core::event_types;
+use charliebot_core::providers;
 use charliebot_core::text_repr::{self, is_truthy, type_name};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
@@ -869,7 +869,7 @@ mod tests {
 
   #[test]
   fn stream_rules_follow_the_google_gemini_host() {
-    let gemini = format!("https://{}/v1beta/openai/", charliebot_compat::providers::GEMINI_HOST);
+    let gemini = format!("https://{}/v1beta/openai/", charliebot_core::providers::GEMINI_HOST);
     assert_eq!(stream_rules(&gemini).unwrap(), StreamRules::Gemini);
     assert_eq!(stream_rules("https://openai.example/v1").unwrap(), StreamRules::OpenAi);
   }

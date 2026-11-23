@@ -449,7 +449,6 @@ name = "charliebot-backend-check"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "charliebot-compat",
  "charliebot-core",
  "charliebot-registry",
  "ignore",

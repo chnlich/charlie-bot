@@ -735,6 +735,51 @@ mod tests {
     assert_eq!(persisted.get("session_id").and_then(serde_yaml::Value::as_str), Some(session_id));
   }
 
+  /// A colleague gate that refuses every agent caller's work request, so the route guard alone decides each entry.
+  struct RefuseAgentWork;
+
+  impl charliebot_registry::colleague_gate::ColleagueGate for RefuseAgentWork {
+    fn refuse_agent_work<'a>(
+      &'a self,
+      _features: &'a FeatureContext,
+      _caller: &'a charliebot_registry::caller::CallerIdentity,
+    ) -> futures_util::future::BoxFuture<'a, Option<&'static str>> {
+      Box::pin(async { Some("refused: synthetic colleague thread") })
+    }
+
+    fn admits_wake<'a>(
+      &'a self,
+      _features: &'a FeatureContext,
+      _session_id: &'a str,
+      _label: &'a str,
+    ) -> futures_util::future::BoxFuture<'a, bool> {
+      Box::pin(async { true })
+    }
+  }
+
+  #[tokio::test]
+  async fn cron_work_entries_refuse_a_colleague_run_with_403() {
+    let (home, features) = keyed_context();
+    let caller = manager(&features, "cron-colleague-caller").await.unwrap();
+    let token = agent_token(&features, &caller.id).await;
+    let prompt = home.path().join("synthetic-prompt.md");
+    std::fs::write(&prompt, "Synthetic scheduled prompt\n").unwrap();
+    let gate: Arc<dyn charliebot_registry::colleague_gate::ColleagueGate> = Arc::new(RefuseAgentWork);
+    features.startup.insert(gate).expect("the colleague gate inserts once");
+    let router = routes(&features);
+    let body = create_body("colleague-create", &prompt, Some(caller.id.as_str()));
+    let entries = [
+      ("POST", "/api/cron/tasks", body.clone()),
+      ("PUT", "/api/cron/tasks/colleague-update", body),
+      ("POST", "/api/cron/tasks/colleague-run/run", json!({})),
+    ];
+    for (method, path, body) in entries {
+      let (status, refusal) = send_as(&router, method, path, body, Some(&token)).await;
+      assert_eq!(status, StatusCode::FORBIDDEN, "{method} {path}");
+      assert_eq!(refusal["detail"], "refused: synthetic colleague thread", "{method} {path}");
+    }
+  }
+
   #[tokio::test]
   async fn an_agent_binds_a_new_task_only_to_its_own_session_or_below() {
     let (home, features) = keyed_context();

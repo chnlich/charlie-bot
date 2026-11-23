@@ -4083,6 +4083,64 @@ mod tests {
     );
   }
 
+  /// A colleague gate that refuses every agent caller's work request, so the route guard alone decides the entry.
+  struct RefuseAgentWork;
+
+  impl charliebot_registry::colleague_gate::ColleagueGate for RefuseAgentWork {
+    fn refuse_agent_work<'a>(
+      &'a self,
+      _features: &'a FeatureContext,
+      _caller: &'a CallerIdentity,
+    ) -> BoxFuture<'a, Option<&'static str>> {
+      Box::pin(async { Some("refused: synthetic colleague thread") })
+    }
+
+    fn admits_wake<'a>(
+      &'a self,
+      _features: &'a FeatureContext,
+      _session_id: &'a str,
+      _label: &'a str,
+    ) -> BoxFuture<'a, bool> {
+      Box::pin(async { true })
+    }
+  }
+
+  #[tokio::test]
+  async fn schedule_trigger_refuses_a_colleague_run_with_403() {
+    let (home, features) = feature_context();
+    add_task_node(&features, "synthetic-caller").await;
+    std::fs::write(home.path().join(CREDENTIALS_FILENAME), "charliebot:\n  access_key: synthetic-access-key\n")
+      .expect("credentials file");
+    let run_path = features.store.run_metadata_path("synthetic-caller", "caller-run");
+    std::fs::create_dir_all(run_path.parent().expect("run directory")).expect("run directory");
+    let run = json!({"id": "caller-run", "session_id": "synthetic-caller", "kind": "manager_turn", "pid": 424242, "pid_start": "1"});
+    std::fs::write(&run_path, run.to_string()).expect("launched run record");
+    let claims = charliebot_core::run_token::RunTokenClaims {
+      session_id: "synthetic-caller".to_string(),
+      run_id: "caller-run".to_string(),
+      agent: "synthetic".to_string(),
+    };
+    let token = charliebot_core::run_token::sign_run_token(&claims, "synthetic-access-key").expect("run token");
+    let gate: Arc<dyn charliebot_registry::colleague_gate::ColleagueGate> = Arc::new(RefuseAgentWork);
+    features.startup.insert(gate).expect("the colleague gate inserts once");
+    let request = Request::builder()
+      .method(Method::POST)
+      .uri(SCHEDULE_TRIGGER_PATH)
+      .header(header::CONTENT_TYPE, "application/json")
+      .header(header::AUTHORIZATION, format!("Bearer {token}"))
+      .body(Body::from(
+        json!({"session_id": "synthetic-caller", "delay_seconds": 60, "message": "synthetic wake"}).to_string(),
+      ))
+      .expect("request builds");
+
+    let response = routes(&features).oneshot(request).await.expect("router handles request");
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let refusal = response_json(response).await;
+    assert_eq!(refusal["detail"], "refused: synthetic colleague thread");
+    assert!(features.store.load_all_facts_view_sync("synthetic-caller").is_ok());
+  }
+
   #[tokio::test]
   async fn master_wake_reuses_an_existing_stable_input() {
     let (_home, features) = feature_context();

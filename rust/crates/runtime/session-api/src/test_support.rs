@@ -388,3 +388,53 @@ pub(crate) async fn answer(response: Response) -> (StatusCode, Value) {
   let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("response body");
   (status, serde_json::from_slice(&bytes).expect("JSON response"))
 }
+
+/// The access key the run-token tests sign with and write into the home's credentials.
+pub(crate) const ACCESS_KEY: &str = "synthetic-access-key";
+
+/// A colleague gate that refuses every agent caller's work request, so the route guard alone decides each entry.
+pub(crate) struct RefuseAgentWork;
+
+impl charliebot_registry::colleague_gate::ColleagueGate for RefuseAgentWork {
+  fn refuse_agent_work<'a>(
+    &'a self,
+    _features: &'a FeatureContext,
+    _caller: &'a charliebot_registry::caller::CallerIdentity,
+  ) -> futures_util::future::BoxFuture<'a, Option<&'static str>> {
+    Box::pin(async { Some("refused: synthetic colleague thread") })
+  }
+
+  fn admits_wake<'a>(
+    &'a self,
+    _features: &'a FeatureContext,
+    _session_id: &'a str,
+    _label: &'a str,
+  ) -> futures_util::future::BoxFuture<'a, bool> {
+    Box::pin(async { true })
+  }
+}
+
+/// Writes the access key into the home's credentials, launches run `run_id` of `session_id`, and returns the run token
+/// an agent sends for that run.
+pub(crate) fn launched_agent_token(
+  home: &GatedHome,
+  features: &FeatureContext,
+  session_id: &str,
+  run_id: &str,
+) -> String {
+  std::fs::write(
+    home.path().join(charliebot_core::config::CREDENTIALS_FILENAME),
+    format!("charliebot:\n  access_key: {ACCESS_KEY}\n"),
+  )
+  .expect("credentials file");
+  let run_path = features.store.run_metadata_path(session_id, run_id);
+  std::fs::create_dir_all(run_path.parent().expect("run directory")).expect("run directory");
+  let run = serde_json::json!({"id": run_id, "session_id": session_id, "kind": "manager_turn", "pid": 424242, "pid_start": "1"});
+  std::fs::write(&run_path, run.to_string()).expect("launched run record");
+  let claims = charliebot_core::run_token::RunTokenClaims {
+    session_id: session_id.to_string(),
+    run_id: run_id.to_string(),
+    agent: "synthetic".to_string(),
+  };
+  charliebot_core::run_token::sign_run_token(&claims, ACCESS_KEY).expect("run token")
+}

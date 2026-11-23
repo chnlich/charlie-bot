@@ -195,7 +195,7 @@ Keep every screenshot, measurement log and other evidence file in the round's ev
 Hourly rounds once overwrote each other's files under a per-day path, so the timestamp separates the rounds.
 The clone holds code only.
 
-Before a `trial.sh --serve` run, set `CHARLIEBOT_RELEASE_RUN_DIR` to that round directory and export it:
+Before a serve trial side runs, set `CHARLIEBOT_RELEASE_RUN_DIR` to that round directory and export it:
 
     export CHARLIEBOT_RELEASE_RUN_DIR=~/improve/<direction>/evidence/<UTC round start>
 
@@ -203,14 +203,23 @@ The trial writes its own evidence under that directory.
 Without the variable the trial writes `~/charliebot-release-logs`, which the write boundary refuses, so the step fails.
 The round's runner sets `CHARLIEBOT_TRIAL_PROBE_ANSWER` to the launch's probe answer, so the trial takes its probe model from that file: the round's host runs no server to resolve `backends.calls.probe`.
 
+Each serve trial side leaves one side record in the round directory, and the record names the side's raw output location.
+The round keeps every side record, including the records of sides it discards.
+A timing side writes its raw measurements to its side output location, `IMPROVE_SIDE_OUTPUT`, so no later side overwrites them.
+The record's four lines are listed in the header of `dev/improve/trial-side.sh`.
+
 The pull request names each screenshot by its file name and width, at the widths and states that the Web UI Screenshots rule in `prompts/task_base.md` sets.
 The pull request names no link to an evidence file and no host path; the evidence text stands on its own.
+A pull request that cites a timing or memory figure names each side record that produced the figure, with one `Side record:` line per record that carries the record's file name only.
+Each cited record is complete, and its raw output location holds the side's output.
+A ready pull request names at least one side record when the round directory holds side records.
+The posting script checks these records at `pr-create` and `pr-merge`.
 Step 9 carries the evidence files to the user.
 
 Push the branch and open one pull request against `main` through the posting script:
 
     dev/improve/github-post.sh push -u origin improve/<direction>/<topic slug>
-    dev/improve/github-post.sh pr-create --title "<topic>" --body-file <body file> --base main --head improve/<direction>/<topic slug>
+    dev/improve/github-post.sh pr-create --title "<topic>" --body-file <body file> --evidence-dir <the round's evidence directory> --base main --head improve/<direction>/<topic slug>
 
 When the body names pending measurements, add `--draft` to the pr-create command (category rule).
 

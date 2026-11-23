@@ -88,12 +88,16 @@ open, that session's events viewer and the home page. Each page takes 10 cold lo
 Startup latency is the interval from the server's first log timestamp to its first successful HTTP request. Repeat five
 runs and summarize them with their median.
 
-Memory reports peak resident memory after the same fixed 200 requests on each side. CPU reports user and system
-CPU time spent serving those 200 requests. Keep the workload identical between sides.
+Memory reports the server's peak resident memory during the fixed 200 requests only, on each side.
+The peak counts from the first of those requests to the last, so startup and earlier work stay out of the figure.
+The peak comes from the kernel's resident high-water counter, because a value sampled at intervals can miss a short spike.
+Both sides use the same method, and the pull request evidence names it.
+CPU reports user and system CPU time spent serving those 200 requests. Keep the workload identical between sides.
 
 ## Evidence
 
 The pull request evidence names each metric's before and after values, sample count and change, with enough retained
 logs for a reviewer to verify the result. The mock home and host differ from production, so absolute values are
 comparable only within one round and do not represent production measurements. The round's retained evidence includes
-the raw measurement logs.
+each timing side's raw measurements, in the side output location.
+The pull request cites the side record of each side that produced a figure, as Step 5 of `dev/improve/landing.md` sets.

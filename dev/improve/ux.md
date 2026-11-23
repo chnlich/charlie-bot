@@ -102,3 +102,5 @@ Evidence names the defect visible before and the resulting state after at each r
 before evidence shows the screen before and after the click, with the recorded click result that shows no effect. The
 screenshots stay in the round's evidence directory, and landing Step 9 carries them to the user, so the reviewer and
 user can assess the change without rerunning it.
+A side that reports a timing or a byte-over-time measurement keeps its raw output in the side output location, and the
+pull request cites its side record, as Step 5 of `dev/improve/landing.md` sets.

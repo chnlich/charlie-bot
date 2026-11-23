@@ -92,6 +92,7 @@ config section	features.code_server	code_server
 config section	features.slack	slack
 config section	features.discord	discord
 config section	features.feishu	feishu
+config section	features.disk_sweep	disk_sweep
 config section	features.host_auth	host_auth
 config section	features.voice	voice
 config section	backends.claude_code	accounts

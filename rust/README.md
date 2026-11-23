@@ -192,7 +192,7 @@ rust/
 - `diag` — the write-only client timing telemetry route
 - `diff_view` — the `/diff` page and the `/api/git` routes it calls
 - `discord` — the Discord gateway service, internal routes and thread reply verbs
-- `disk_sweep` — the task-worktree and scratch-directory cleanup
+- `disk_sweep` — the task-worktree and scratch-directory cleanup, its safety checks, the `disk_sweep:` config section and the read-only `disk-sweep list` verb
 - `drafts` — the approval card of a message or publication in the operator's name, and the operator-only send route
 - `explain` — the explain button's routes and their background generation
 - `failure_triage` — the failure-triage scan: failed runs and error logs grouped by signature, judged in code and by one model one-shot

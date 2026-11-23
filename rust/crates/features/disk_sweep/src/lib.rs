@@ -1,8 +1,11 @@
 //! The task-worktree and scratch-directory cleanup feature.
 
 mod archive;
+mod config;
 mod git;
+mod linked;
 mod process;
+mod references;
 pub mod sweep;
 
 use std::sync::Arc;
@@ -12,8 +15,10 @@ use charliebot_registry::{Registry, RegistryError};
 use chrono::Utc;
 use futures_util::FutureExt;
 
-/// `register`: the scheduled handler `disk_sweep`, which the cron scheduler fires for a task whose `handler` names it.
+/// `register`: the `disk_sweep:` config section and the scheduled handler `disk_sweep`, which the cron scheduler fires
+/// for a task whose `handler` names it.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
+  registry.config_section(config::section())?;
   registry.scheduled_handler("disk_sweep", run_handler)
 }
 
@@ -32,7 +37,7 @@ fn run_handler(context: Arc<FeatureContext>) -> futures_util::future::BoxFuture<
         .join("; ");
       anyhow::bail!("disk_sweep failed: {failures}");
     }
-    Ok(report.total_line())
+    Ok(report.apply_summary())
   }
   .boxed()
 }

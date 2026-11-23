@@ -1470,6 +1470,18 @@ const EXACT_LITERAL_OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_agents::backend_pool::RouterAnswer` and `ROUTER_ROUTED_FIELD`; the backend router answers \
            through them.",
   },
+  OwnerRow {
+    name: "prompt_overlay",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::config::OPTION_PROMPT_OVERLAY_KEY`; the option record's writer and reader and \
+           `charliebot config get backends` name the key from it.",
+  },
+  OwnerRow {
+    name: "billing",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::config::OPTION_BILLING_KEY`; the option record's writer and reader and `charliebot \
+           config get backends` name the key from it.",
+  },
 ];
 
 /// The phrases that one crate owns: the response detail sentences that a route answers with, and the log event

@@ -6,6 +6,7 @@ pub mod bash_hook;
 pub mod compaction_context;
 pub mod config;
 pub mod delegate;
+pub mod disk_sweep;
 pub mod files;
 pub mod gc_trash;
 pub mod google;

@@ -89,6 +89,10 @@ case "$last" in
   *update-ref*|*'missing build host tool'*) exit 0 ;;
   *)
     if [[ -n "${FAKE_BUILD_HOME:-}" ]]; then
+      if [[ -n "${FAKE_VANISH_OWNER:-}" && "$last" == *"tree-owners/$FAKE_VANISH_OWNER"* ]]; then
+        rm -rf -- "$FAKE_BUILD_HOME/scripts/remote-run/trees/$FAKE_VANISH_OWNER" \
+          "$FAKE_BUILD_HOME/scripts/remote-run/tree-owners/$FAKE_VANISH_OWNER"
+      fi
       HOME="$FAKE_BUILD_HOME" eval "$last"
     elif [[ "$last" == *tree-owners* ]]; then
       printf '__NO_LOCAL_ROOT_RECORD__'
@@ -530,6 +534,31 @@ fn a_tree_removed_after_the_listing_drops_its_record_and_the_run_succeeds() {
   assert!(!base.join("tree-owners/vanishing-tree").exists(), "{}", run.describe());
 }
 
+/// Another sweep can remove both entries after the listing; the current sync then reclaims the now-empty name.
+#[test]
+#[ignore = "integration"]
+fn a_tree_and_record_removed_after_the_listing_allow_the_current_sync_to_reclaim_the_name() {
+  let sandbox = Sandbox::new();
+  sandbox.stub("ssh", FAKE_SSH);
+  sandbox.stub("rsync", FAKE_RSYNC);
+  install_cli(&sandbox);
+  let project = project(&sandbox);
+  let base = install_fake_build_home(&sandbox);
+  std::fs::create_dir_all(base.join("trees/project")).expect("the stale tree");
+  let gone_owner = sandbox.root().join("gone-owner");
+  std::fs::write(base.join("tree-owners/project"), owner_record("host-a", &gone_owner))
+    .expect("the stale owner record");
+  let mut env = fake_build_home_env(&sandbox);
+  env.insert("FAKE_VANISH_OWNER".to_string(), "project".to_string());
+
+  let run = run_runner(&env, &project, &["echo", "remote"]);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(base.join("trees/project").is_dir(), "the run did not recreate the tree: {}", run.describe());
+  let record = fs::read_to_string(base.join("tree-owners/project")).expect("the reclaimed owner record");
+  assert_eq!(record, owner_record("host-a", &project), "the run did not reclaim the name: {}", run.describe());
+}
+
 /// A record entry that is not a regular file fails the sweep: a dangling symlink is never skipped as absent.
 #[test]
 #[ignore = "integration"]
@@ -547,6 +576,27 @@ fn a_dangling_owner_record_entry_fails_the_sweep() {
 
   assert_eq!(run.code, 2, "{}", run.describe());
   assert!(run.stderr.contains("odd-tree"), "{}", run.describe());
+}
+
+/// A symlink to a readable owner record is still an invalid record entry, even for a live tree and local root.
+#[test]
+#[ignore = "integration"]
+fn a_symlink_to_a_regular_owner_record_fails_the_sweep() {
+  let sandbox = Sandbox::new();
+  sandbox.stub("ssh", FAKE_SSH);
+  sandbox.stub("rsync", FAKE_RSYNC);
+  install_cli(&sandbox);
+  let project = project(&sandbox);
+  let base = install_fake_build_home(&sandbox);
+  std::fs::create_dir_all(base.join("trees/linked-tree")).expect("the linked tree");
+  let source = base.join("owner-record-source");
+  std::fs::write(&source, owner_record("host-a", &project)).expect("the owner record target");
+  std::os::unix::fs::symlink(&source, base.join("tree-owners/linked-tree")).expect("the symlinked owner record");
+
+  let run = run_with_fake_build_home(&sandbox, &project);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("not a regular file"), "{}", run.describe());
 }
 
 /// A claim whose tree cannot be created leaves no owner record: the record is written first and removed again when the

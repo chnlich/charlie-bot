@@ -399,6 +399,15 @@ remote_run_remote_command() {
     "$REMOTE_RUN_REMOTE_BASE" "$(remote_run_base_path)" "$REMOTE_RUN_EXEC_NAME" "$payload"
 }
 
+remote_run_owner_record_query() {
+  local owner_path=$1
+  printf 'if [[ -e "%s" || -L "%s" ]]; then
+  if [[ -f "%s" && ! -L "%s" ]]; then cat -- "%s";
+  else echo "tree owner record is not a regular file" >&2; exit 2; fi
+else printf "__NO_LOCAL_ROOT_RECORD__"; fi' \
+    "$owner_path" "$owner_path" "$owner_path" "$owner_path" "$owner_path"
+}
+
 # The root state is live or gone: whether the caller host still has the recorded local directory.
 remote_run_sweep_tree_command() {
   local caller_host=$1 tree_path=$2 root_state=$3

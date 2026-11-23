@@ -102,7 +102,7 @@ while IFS= read -r remote_name; do
     listed=0
   fi
   # An entry of any kind counts as a record, so a symlink or directory reaches the read and fails there.
-  remote_record_command="if [[ -e \"$base/tree-owners/$remote_name\" || -L \"$base/tree-owners/$remote_name\" ]]; then cat -- \"$base/tree-owners/$remote_name\"; else printf '__NO_LOCAL_ROOT_RECORD__'; fi"
+  remote_record_command=$(remote_run_owner_record_query "$base/tree-owners/$remote_name")
   if remote_run_capture "$remote_record_command"; then
     owner_record=$REMOTE_RUN_OUTPUT
   else
@@ -117,8 +117,32 @@ while IFS= read -r remote_name; do
       continue
     fi
     if [[ "$remote_name" == "$tree_name" ]]; then
-      printf 'sync: build host tree %s has no local-root record; refusing to overwrite it\n' "$remote_name" >&2
-      exit 2
+      # Another sweep may have removed this tree and record after the listings. Recheck under the owner lock before
+      # refusing the current name; a present tree without a record still fails there.
+      sweep_command=$(remote_run_sweep_tree_command "$REMOTE_RUN_CALLER_HOST" "$base/trees/$remote_name" live)
+      if remote_run_capture "$sweep_command"; then
+        outcome=$REMOTE_RUN_OUTPUT
+      else
+        status=$?
+        printf 'sweep: failed to recheck build host tree %s (status %s): %s\n' \
+          "$remote_name" "$status" "$REMOTE_RUN_OUTPUT" >&2
+        exit "$status"
+      fi
+      case "$outcome" in
+        absent|kept)
+          continue
+          ;;
+        dropped)
+          printf 'sweep: dropped the owner record of build host tree %s because the tree is missing\n' \
+            "$remote_name" >&2
+          continue
+          ;;
+        *)
+          printf 'sweep: build host tree %s returned an unknown outcome during recheck: %q\n' \
+            "$remote_name" "$outcome" >&2
+          exit 2
+          ;;
+      esac
     fi
     printf 'sweep: kept build host tree %s because it has no local-root record\n' "$remote_name" >&2
     continue
@@ -200,7 +224,7 @@ exclude_args=(
 # rsync expands a leading ~ on the remote path itself; a $HOME would reach it unexpanded.
 remote_tree="$REMOTE_RUN_HOST:~/$REMOTE_RUN_REMOTE_BASE/trees/$tree_name/"
 
-marker_query="if [[ -e \"$base/tree-owners/$tree_name\" || -L \"$base/tree-owners/$tree_name\" ]]; then cat -- \"$base/tree-owners/$tree_name\"; else printf '__NO_LOCAL_ROOT_RECORD__'; fi"
+marker_query=$(remote_run_owner_record_query "$base/tree-owners/$tree_name")
 if remote_run_capture "$marker_query"; then
   existing_record=$REMOTE_RUN_OUTPUT
 else

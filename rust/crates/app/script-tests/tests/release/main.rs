@@ -659,7 +659,7 @@ impl ServeWorld {
     let sandbox = Sandbox::new();
     // The tree root sits directly under the temporary directory, not under the sandbox. A --tree-root trial's Chrome
     // socket path is the root plus 68 bytes, and the sandbox's own name would exceed the limit under the runner's
-    // TMPDIR. RUNNER_TMPDIR's comment states the budget.
+    // TMPDIR. The socket budget is checked by the test_trial_preflight_* tests.
     let trees = tempfile::Builder::new().prefix(TREE_ROOT_PREFIX).tempdir().expect("the tree root");
     let repo = sandbox.dir("repo");
     fs::create_dir_all(repo.join("scripts/release")).expect("the script directory");
@@ -805,13 +805,6 @@ fn default_tree(tmp: &Path, commit: &str) -> PathBuf {
   tmp.join(format!("charliebot-release-trial-{uid}-{}", &commit[..12]))
 }
 
-/// A maximum-length TMPDIR in dev/remote-run's form: remote-exec.pl's `/dev/shm/` and its 16-byte name, `r`, the process
-/// id in hex, `-` and the start time in hex. remote-exec.pl owns that budget.
-const RUNNER_TMPDIR: &str = "/dev/shm/r50000-fffffffff";
-/// The uid of remote-exec.pl's budget: a 6-digit uid, which the runner's build host uses.
-const BUDGET_UID: &str = "999999";
-/// The first 12 hex characters of a commit, as the trial names its tree.
-const BUDGET_COMMIT: &str = "0123456789ab";
 /// The socket-path limit that trial.sh enforces; the script owns the budget.
 fn trial_socket_path_limit() -> usize {
   let script = fs::read_to_string(harness::repo_root().join("scripts/release/trial.sh")).expect("the trial script");
@@ -820,26 +813,184 @@ fn trial_socket_path_limit() -> usize {
   limits[0].parse().expect("a numeric trial socket-path limit")
 }
 
-/// The longest socket path that a trial creates under the runner's TMPDIR, over its default tree and a serve test's
-/// tree root (TREE_ROOT_PREFIX and six random characters, directly under TMPDIR), is under the sun_path limit.
+/// The uid that the preflight's id stub answers: six digits, the length of the round host's uid. The uid enters the
+/// socket paths only through tmux's `tmux-<uid>` directory, so the budget is checked at this length.
+const PREFLIGHT_UID: &str = "999999";
+
+/// The CLI beside the server: the verbs that the trial calls before its server starts. Any other verb fails the trial.
+const CLI_STUB: &str = r#"#!/usr/bin/env bash
+case "$*" in
+  'release-helper --help') ;;
+  'config get server.enable_local_work_guard') echo false ;;
+  'release-helper backend-option '*) echo 'http://127.0.0.1:9/v1' ;;
+  'release-helper free-port '*) echo 18650 ;;
+  'release-helper redact-stdin') cat ;;
+  *) echo "charliebot stub: unexpected arguments: $*" >&2; exit 1 ;;
+esac
+"#;
+
+/// The inputs of the socket preflight: a throwaway repository whose origin/main names its commit, the trial script, a
+/// CLI beside a server stand-in, and stubs for charlie-code and id. The stand-in is a copy of /bin/true, so a trial
+/// that passes the preflight stops at its server start with exit 1.
+struct PreflightWorld {
+  sandbox: Sandbox,
+  repo: PathBuf,
+  env: Env,
+  commit: String,
+  server: PathBuf,
+}
+
+impl PreflightWorld {
+  fn new() -> Self {
+    let sandbox = Sandbox::new();
+    let repo = sandbox.dir("repo");
+    fs::create_dir_all(repo.join("scripts/release")).expect("the script directory");
+    harness::copy_file(&harness::repo_root().join("scripts/release/trial.sh"), &repo.join("scripts/release/trial.sh"));
+    fs::write(repo.join("README.md"), "preflight\n").expect("the README");
+    let mut env = sandbox.env();
+    for (name, value) in [
+      ("GIT_AUTHOR_NAME", "preflight-test"),
+      ("GIT_AUTHOR_EMAIL", "preflight-test@example.invalid"),
+      ("GIT_COMMITTER_NAME", "preflight-test"),
+      ("GIT_COMMITTER_EMAIL", "preflight-test@example.invalid"),
+      ("GIT_CONFIG_GLOBAL", "/dev/null"),
+    ] {
+      env.insert(name.to_string(), value.to_string());
+    }
+    git(&env, &repo, &["init", "-q", "-b", "main"]);
+    git(&env, &repo, &["add", "."]);
+    git(&env, &repo, &["commit", "-q", "-m", "the preflight commit"]);
+    let commit = git(&env, &repo, &["rev-parse", "HEAD"]);
+    git(&env, &repo, &["update-ref", "refs/remotes/origin/main", &commit]);
+
+    let release = sandbox.dir("release");
+    harness::copy_file(Path::new("/bin/true"), &release.join("charliebot-server"));
+    harness::write_executable(&release.join("charliebot"), CLI_STUB);
+    sandbox.stub("charlie-code", "exit 0\n");
+    sandbox.stub(
+      "id",
+      &format!(
+        "[[ $* == -u ]] || {{ echo \"id stub: unexpected arguments: $*\" >&2; exit 1; }}\necho {PREFLIGHT_UID}\n"
+      ),
+    );
+    env.insert("CHARLIEBOT_HOME".to_string(), sandbox.dir("live-home").display().to_string());
+    env.insert("CHARLIEBOT_RELEASE_RUN_DIR".to_string(), sandbox.dir("evidence").display().to_string());
+    let server = release.join("charliebot-server");
+    Self { sandbox, repo, env, commit, server }
+  }
+
+  /// One trial of the world's commit with `tmpdir` as its TMPDIR, and `options` between --serve and the commit.
+  fn trial(&self, tmpdir: &Path, options: &[&str]) -> Run {
+    let mut env = self.env.clone();
+    env.insert("TMPDIR".to_string(), tmpdir.display().to_string());
+    let mut command = harness::command("bash", &env);
+    command
+      .arg(self.repo.join("scripts/release/trial.sh"))
+      .arg("--serve")
+      .args(options)
+      .arg(&self.commit)
+      .arg(&self.server)
+      .args(["--", "true"]);
+    harness::run(&mut command)
+  }
+}
+
+/// Asserts that the preflight passed `socket` and printed its byte count, which is under the socket-path limit.
+fn assert_socket_passes(run: &Run, socket: &str) {
+  let line = format!("PREFLIGHT PASS socket: {socket} ({} bytes)", socket.len());
+  assert!(run.stdout.contains(&line), "the preflight did not pass {socket}: {}", run.describe());
+}
+
+/// One round's scope TMPDIR, as the round runner makes it: a `scope.<8 characters>` directory under
+/// /tmp/improve-<direction>-tmp. The round's directory is made when it is absent and removed when this value drops only
+/// in that case. The scope directory is always this test's own.
+struct RoundScope {
+  round_dir: PathBuf,
+  created_round_dir: bool,
+  scope: TempDir,
+}
+
+impl RoundScope {
+  fn new(direction: &str) -> Self {
+    let round_dir = PathBuf::from(format!("/tmp/improve-{direction}-tmp"));
+    let created_round_dir = !round_dir.exists();
+    fs::create_dir_all(&round_dir).expect("the round's TMPDIR");
+    let scope =
+      tempfile::Builder::new().prefix("scope.").rand_bytes(8).tempdir_in(&round_dir).expect("the scope directory");
+    Self { round_dir, created_round_dir, scope }
+  }
+
+  fn path(&self) -> &Path {
+    self.scope.path()
+  }
+}
+
+impl Drop for RoundScope {
+  fn drop(&mut self) {
+    if self.created_round_dir
+      && let Err(error) = fs::remove_dir_all(&self.round_dir)
+    {
+      eprintln!("remove the round's TMPDIR {}: {error}", self.round_dir.display());
+    }
+  }
+}
+
+/// A trial under each round's scope TMPDIR passes the socket preflight with a six-digit uid, and it stops at its
+/// server start. The directions are `ux`, the reported round, and `decoupling`, the longest direction name on the round
+/// host. A shorter TMPDIR takes a smaller budget, so the other callers' TMPDIRs (dev/remote-run's and CI's) fit as well.
 #[test]
-fn test_trial_socket_paths_under_the_runner_tmpdir_stay_under_the_sun_path_limit() {
-  let tree_root = format!("{RUNNER_TMPDIR}/{TREE_ROOT_PREFIX}{}", "x".repeat(6));
-  let trial_tree = format!("{tree_root}/trial-{BUDGET_COMMIT}");
-  let default_trial_tree = format!("{RUNNER_TMPDIR}/charliebot-release-trial-{BUDGET_UID}-{BUDGET_COMMIT}");
-  let default_temp_root = format!("{RUNNER_TMPDIR}/trial-tmp-{BUDGET_UID}-{BUDGET_COMMIT}");
-  let sockets = [
-    format!("{trial_tree}/tmux/tmux-{BUDGET_UID}/charliebot"),
-    format!("{trial_tree}/tmp/org.chromium.Chromium.XXXXXX/SingletonSocket"),
-    format!("{default_trial_tree}/tmux/tmux-{BUDGET_UID}/charliebot"),
-    format!("{default_temp_root}/org.chromium.Chromium.XXXXXX/SingletonSocket"),
-  ];
-  let longest = sockets.iter().max_by_key(|path| path.len()).expect("the socket paths");
-  assert!(
-    longest.len() < trial_socket_path_limit(),
-    "the longest socket path under the runner's TMPDIR is {} bytes, over the trial's limit: {longest}",
-    longest.len()
-  );
+fn test_trial_preflight_passes_under_each_round_scope_tmpdir() {
+  let world = PreflightWorld::new();
+  let hex = &world.commit[..12];
+  for direction in ["ux", "decoupling"] {
+    let scope = RoundScope::new(direction);
+    let temp = scope.path().join(format!("t-{hex}"));
+    let tree = scope.path().join(format!("charliebot-release-trial-{PREFLIGHT_UID}-{hex}"));
+    let run = world.trial(scope.path(), &["--in-caller-scope"]);
+
+    assert_eq!(run.code, 1, "{direction}: {}", run.describe());
+    assert_socket_passes(&run, &format!("{}/tmux/tmux-{PREFLIGHT_UID}/charliebot", temp.display()));
+    assert_socket_passes(&run, &format!("{}/org.chromium.Chromium.XXXXXX/SingletonSocket", temp.display()));
+    assert!(
+      run.stdout.contains("FAIL serve Startup"),
+      "{direction}: the trial did not reach its server start: {}",
+      run.describe()
+    );
+    assert!(!run.stderr.contains("preflight failed"), "{direction}: {}", run.describe());
+    assert!(!temp.exists() && !tree.exists(), "{direction}: the trial left its tree or temp root: {}", run.describe());
+  }
+}
+
+/// A temp root whose Chrome socket path is past the limit refuses the run with exit 2, names the socket and its byte
+/// count, and writes nothing under the TMPDIR.
+#[test]
+fn test_trial_preflight_refuses_a_long_tmpdir_and_names_the_chrome_socket() {
+  let world = PreflightWorld::new();
+  let base = world.sandbox.dir(&format!("long-{}", "directory-".repeat(8)));
+  let socket = format!("{}/t-{}/org.chromium.Chromium.XXXXXX/SingletonSocket", base.display(), &world.commit[..12]);
+
+  let run = world.trial(&base, &["--in-caller-scope"]);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("socket path must stay under 108 bytes"), "{}", run.describe());
+  assert!(run.stderr.contains(&format!("{socket} ({} bytes)", socket.len())), "{}", run.describe());
+  assert_eq!(fs::read_dir(&base).expect("the base").count(), 0, "the refused run wrote into {}", base.display());
+}
+
+/// A --tree-root trial keeps both sockets under its temp root, inside its tree, and removes its tree when it ends.
+#[test]
+fn test_trial_preflight_with_tree_root_puts_both_sockets_under_its_temp_root() {
+  let world = PreflightWorld::new();
+  let tree_root = tempfile::Builder::new().prefix(TREE_ROOT_PREFIX).tempdir().expect("the tree root");
+  let root_arg = tree_root.path().display().to_string();
+  let temp = tree_root.path().join(format!("trial-{}", &world.commit[..12])).join("tmp");
+
+  let run = world.trial(tree_root.path(), &["--in-caller-scope", "--tree-root", &root_arg]);
+
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert_socket_passes(&run, &format!("{}/tmux/tmux-{PREFLIGHT_UID}/charliebot", temp.display()));
+  assert_socket_passes(&run, &format!("{}/org.chromium.Chromium.XXXXXX/SingletonSocket", temp.display()));
+  assert_eq!(fs::read_dir(tree_root.path()).expect("the tree root").count(), 0, "the tree root kept its tree");
 }
 
 fn mock_home() -> PathBuf {
@@ -1216,7 +1367,7 @@ fn test_trial_serve_refuses_a_tmux_socket_path_at_the_trial_limit() {
   let seed = world.seed_home("seed", "1");
   let tree_root = world.sandbox.dir(&format!("tree-root-{}", "long-directory-name-".repeat(3)));
   let uid = fs::metadata(&tree_root).expect("the tree root").uid();
-  let socket = format!("{}/trial-{}/tmux/tmux-{uid}/charliebot", tree_root.display(), &world.commit[..12]);
+  let socket = format!("{}/trial-{}/tmp/tmux/tmux-{uid}/charliebot", tree_root.display(), &world.commit[..12]);
   assert!(socket.len() >= trial_socket_path_limit(), "the fixture socket path is too short: {socket}");
 
   let run = world.serve(&tree_root, &seed, &["true"]);

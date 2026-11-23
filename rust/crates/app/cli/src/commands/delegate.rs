@@ -26,10 +26,12 @@ const DELEGATE_EPILOG: &str = r#"Task spec (--task-spec-file), six sections:
 
   ## Goal - one concise deliverable.
   ## Source Files - absolute paths, or `- (none)`; verify requires a listed path.
-  ## Required Behavior - the executable contract, state-machine semantics, and boundary rules.
-  ## Acceptance Tests - focused tests or verification commands.
+  ## Required Behavior - the target outcomes, permission or safety boundaries, and external contracts.
+  ## Acceptance Tests - the observable results that show each target outcome holds.
   ## Reviewer Checklist - concrete checks beyond "tests passed".
   ## Out of Scope - things the worker must not change.
+
+  The worker already carries the task_base.md and worker.md rules of its task type and the skills it loads: the spec does not restate them.
 
   --repo and --base-branch: give both, or omit both for a repo-less implement, quick-edit, or
   script-run task. verify forbids both.
@@ -562,7 +564,7 @@ mod tests {
     let help = help_text();
     assert!(help.contains("Delegate a task to a CharlieBot worker agent"));
     let char_count = help.chars().count();
-    assert!(char_count <= 5000, "help is {char_count} characters");
+    assert!(char_count <= 5200, "help is {char_count} characters");
     for name in [
       "--session",
       "--repo",

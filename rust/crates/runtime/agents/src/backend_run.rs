@@ -70,7 +70,18 @@ fn launch_for_option(
   let (session_id, run_id) = start.ids();
   let mut launch = match option.backend_type.as_str() {
     type_names::CC_CLAUDE | type_names::CC_ANTHROPIC_COMPATIBLE | type_names::CC_OPENAI_COMPATIBLE => {
-      let mut launch = LaunchArgs { cgroup_session_id: Some(session_id.to_string()), ..LaunchArgs::default() };
+      let mut launch = LaunchArgs {
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        log_dir: None,
+        cgroup_session_id: Some(session_id.to_string()),
+        remote_launch: None,
+        backend_kwargs: serde_json::Map::new(),
+        manager_turn: false,
+      };
       if let RunStart::New(_) = start {
         launch.backend_kwargs.insert("claude_session_id".to_string(), session_id.into());
       }

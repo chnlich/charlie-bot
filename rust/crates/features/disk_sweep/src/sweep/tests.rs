@@ -1158,7 +1158,7 @@ async fn test_a_read_only_scratch_tree_is_removed_and_the_outside_link_target_ke
   fs::write(outside.join("kept.txt"), b"kept\n").unwrap();
   std::os::unix::fs::symlink(&outside, candidate.join("outside-link")).unwrap();
   set_tree_mtime(&candidate, old_time);
-  // The link's own mtime is fresh at creation; the age gate reads it, so it must be aged like the rest.
+  // The link's own mtime is fresh at creation. The age gate reads it, so it must be aged like the rest.
   let aged =
     Command::new("touch").arg("-h").arg("-r").arg(&candidate).arg(candidate.join("outside-link")).status().unwrap();
   assert!(aged.success());

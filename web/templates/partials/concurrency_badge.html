@@ -10,8 +10,10 @@
     the token usage page set it. The poller's bytes then travel as one request after DOMContentLoaded, off the
     document's bytes and on the page's load. The page's own handlers call `ConcurrencyBadge` through optional chaining,
     so they tolerate the script arriving late. The home page and the events viewer leave the flag unset and get the
-    script inline, so they load one request fewer. Their badge's status read still starts at DOMContentLoaded, because
-    the script reads `document.readyState` first.
+    script inline, so they load one request fewer. Inline, the first status read still waits for DOMContentLoaded,
+    because the script reads `document.readyState` first. Its poll timer starts when the script runs, so a document
+    still parsing five seconds later can poll before DOMContentLoaded. The deferred form starts its timer after
+    DOMContentLoaded.
 
     A copy inside a `<template>` is inert markup: its scripts never run, so it would carry the poller's bytes to the
     page and do nothing with them. The includer sets `concurrency_badge_markup_only` for that copy, which leaves the

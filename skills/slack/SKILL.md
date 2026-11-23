@@ -78,6 +78,8 @@ Each DM channel has a `user` field — match it against the target user's ID to 
 GET https://slack.com/api/conversations.history?channel=CHANNEL_ID&limit=50
 ```
 
+A `conversations.replies` response carries a `role` on each message: `operator`, `colleague` or `other`, by the sender's listing in the server's Slack config.
+
 Use `oldest` and `latest` (Unix timestamps) to filter by date range. Use `cursor` for pagination.
 
 ### Read Threads

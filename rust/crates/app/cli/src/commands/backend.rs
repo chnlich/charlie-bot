@@ -24,7 +24,7 @@ use charliebot_cli_common::files;
 use charliebot_cli_common::json_out;
 use charliebot_core::config::{self, BackendOption};
 use charliebot_core::home;
-use charliebot_registry::backend::Env;
+use charliebot_registry::backend::{CLAUDE_CONFIG_DIR_FIELD, Env};
 use clap::{Args, Parser, Subcommand};
 use serde_json::{Value, json};
 
@@ -172,10 +172,10 @@ fn response_field(response: &Value, key: &str) -> Result<Value, CliExit> {
 }
 
 fn optional_claude_config_dir(response: &Value) -> Result<Option<String>, CliExit> {
-  match response.get("claude_config_dir") {
+  match response.get(CLAUDE_CONFIG_DIR_FIELD) {
     None | Some(Value::Null) => Ok(None),
     Some(Value::String(dir)) => Ok(Some(dir.clone())),
-    Some(other) => Err(CliExit::error(format!("claude_config_dir must be a string, got {other}"))),
+    Some(other) => Err(CliExit::error(format!("{CLAUDE_CONFIG_DIR_FIELD} must be a string, got {other}"))),
   }
 }
 

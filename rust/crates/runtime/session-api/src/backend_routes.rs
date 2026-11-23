@@ -13,6 +13,7 @@ use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
 use charliebot_core::config::{CallClass, CallTarget, yaml_mapping_to_json};
 use charliebot_registry::FeatureContext;
+use charliebot_registry::backend::CLAUDE_CONFIG_DIR_FIELD;
 use charliebot_registry::caller::CallerIdentity;
 use serde_json::{Value, json};
 
@@ -115,7 +116,7 @@ async fn resolve(
       let mut answer = serde_json::Map::new();
       answer.insert("option".to_string(), Value::Object(record));
       if let Some(dir) = claude_config_dir {
-        answer.insert("claude_config_dir".to_string(), Value::String(dir));
+        answer.insert(CLAUDE_CONFIG_DIR_FIELD.to_string(), Value::String(dir));
       }
       responses::json(StatusCode::OK, &Value::Object(answer))
     }

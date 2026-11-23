@@ -34,9 +34,13 @@ after(() => {
 });
 
 // The stub trial stands in for scripts/release/trial.sh: it runs the command after its -- and exits with its status.
-fs.writeFileSync(STUB_TRIAL, '#!/usr/bin/env bash\nwhile [[ $1 != -- ]]; do\n  shift\ndone\nshift\nexec "$@"\n', {
-  mode: 0o755,
-});
+fs.writeFileSync(
+  STUB_TRIAL,
+  '#!/usr/bin/env bash\nwhile [[ $1 != -- ]]; do\n  shift\ndone\nprintf \'trial output\\n\' >"$CHARLIEBOT_RELEASE_RUN_DIR/trial-raw.txt"\nshift\nexec "$@"\n',
+  {
+    mode: 0o755,
+  },
+);
 // The stub measurement writes its label to one raw file in the side's output, then exits with its status.
 fs.writeFileSync(MEASURE, '#!/usr/bin/env bash\nprintf \'%s\\n\' "$1" >"$IMPROVE_SIDE_OUTPUT/raw.txt"\nexit "$2"\n', {
   mode: 0o755,
@@ -188,6 +192,8 @@ test('two serve trial sides write two records, each with its own output location
   assert.equal(new Set(outputs).size, 2);
   const raw = outputs.map((output) => fs.readFileSync(path.join(output, 'raw.txt'), 'utf8').trim());
   assert.deepEqual(raw.sort(), ['after', 'before']);
+  const trialRaw = outputs.map((output) => fs.readFileSync(path.join(output, 'trial-raw.txt'), 'utf8').trim());
+  assert.deepEqual(trialRaw, ['trial output', 'trial output']);
 });
 
 test('a binary that changes between two sides gives two different digests', () => {
@@ -227,9 +233,30 @@ test('a lock-off ux side writes its side record beside its bench-lock record', (
   assert.equal(side.status, 0, side.stderr);
   const records = sideRecords(run);
   assert.equal(records.length, 1);
-  assert.equal(recordFields(records[0]).exit_status, '0');
+  const fields = recordFields(records[0]);
+  assert.equal(fields.exit_status, '0');
+  assert.equal(fs.readFileSync(path.join(fields.output, 'trial-raw.txt'), 'utf8').trim(), 'trial output');
   const benchRecords = fs.readdirSync(run).filter((name) => name.startsWith('bench-lock-'));
   assert.equal(benchRecords.length, 1);
+});
+
+test('a lock-off side records a failed binary hash as its exit status', () => {
+  const run = newRound('lockless-missing-binary');
+  const binary = path.join(run, 'missing-server');
+  const side = spawnSync(
+    'bash',
+    [TRIAL_SIDE, 'bash', STUB_TRIAL, '--serve', COMMIT, binary, '--', MEASURE, 'missing', '0'],
+    {
+      env: sideEnv({ IMPROVE_DIRECTION: 'ux', IMPROVE_TRIAL_USE_LOCK: '0', CHARLIEBOT_RELEASE_RUN_DIR: run }),
+      encoding: 'utf8',
+    },
+  );
+  assert.equal(side.status, 1);
+  const records = sideRecords(run);
+  assert.equal(records.length, 1);
+  const fields = recordFields(records[0]);
+  assert.equal(fields.exit_status, '1');
+  assert.equal(fields.binary_sha256, undefined);
 });
 
 test('a command without --serve writes no side record', () => {
@@ -295,7 +322,8 @@ test('the record check refuses a cited record whose raw output location is empty
   const binary = binaryOf('server-empty', 'server build\n');
   assert.equal(runSide({ run, binary, label: 'emptied', status: 0 }).status, 0);
   const [record] = sideRecords(run);
-  fs.rmSync(path.join(recordFields(record).output, 'raw.txt'));
+  fs.rmSync(recordFields(record).output, { recursive: true });
+  fs.mkdirSync(recordFields(record).output);
   const side = checkBody(run, [path.basename(record)], 0);
   assert.equal(side.status, 1);
   assert.match(side.stderr, /the raw output location is empty/);

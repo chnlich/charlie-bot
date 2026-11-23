@@ -9,13 +9,14 @@
 # dev/improve/side-record.sh writes, and the record holds these four lines:
 #
 #   commit=<the full sha that the trial serves: its <commit> argument>
-#   binary_sha256=<sha256 of its <server binary>, taken inside the bench lock as the trial starts>
+#   binary_sha256=<sha256 of its <server binary>, taken as the trial command starts>
 #   output=<the side's raw output directory, new for each side run>
 #   exit_status=<the side's exit status: the command's, or 75 when the lock wait runs out>
 #
-# The command runs with IMPROVE_SIDE_OUTPUT set to the output directory, and it writes its raw output there. The
-# commit and the binary come from the trial's own arguments, so the record names the binary that trial.sh serves. A
-# command without --serve runs as a side with no record.
+# The command runs with IMPROVE_SIDE_OUTPUT and CHARLIEBOT_RELEASE_RUN_DIR set to the output directory, and it writes
+# its raw output there. The commit and the binary come from the trial's own arguments, so the record names the binary
+# that trial.sh serves. A lock timeout has no binary hash because the trial command never starts. A command without
+# --serve runs as a side with no record.
 #
 # IMPROVE_TRIAL_USE_LOCK chooses whether the side holds the host's bench lock around its command. 1, the default,
 # holds the lock: the side waits at most IMPROVE_TRIAL_LOCK_WAIT_SECONDS (default 900, the round's 15 minutes) for
@@ -137,12 +138,16 @@ if (( IMPROVE_TRIAL_USE_LOCK == 0 )); then
   record=$(mktemp "$CHARLIEBOT_RELEASE_RUN_DIR/bench-lock-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX") || exit 1
   bench_lock_record "$record" start || exit 1
   open_side_record
+  status=0
   if [[ -n $SIDE_RECORD ]]; then
-    side_record_take_binary "$SIDE_RECORD" "$SIDE_BINARY" || exit 1
+    side_record_take_binary "$SIDE_RECORD" "$SIDE_BINARY" || status=$?
+    if (( status == 0 )); then
+      CHARLIEBOT_RELEASE_RUN_DIR=$SIDE_OUTPUT "$@" || status=$?
+    fi
+  else
+    "$@" || status=$?
   fi
-  "$@"
-  status=$?
-  bench_lock_record "$record" end || exit 1
+  bench_lock_record "$record" end || status=1
   close_side_record "$status"
   exit "$status"
 fi
@@ -189,6 +194,7 @@ status=0
    if [[ -n $record ]]; then
      source "$module" || exit $?
      side_record_take_binary "$record" "$binary" || exit $?
+     export CHARLIEBOT_RELEASE_RUN_DIR=$IMPROVE_SIDE_OUTPUT
    fi
    exec "$@"' improve-trial-side "$started_marker" "$SCRIPT_DIR/side-record.sh" "$SIDE_RECORD" "$SIDE_BINARY" "$@") \
   || status=$?

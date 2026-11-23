@@ -173,7 +173,8 @@ pub fn pid_readback_read(stdout: &str) -> PidProbeRead {
   let start = tagged(READBACK_START_TAG);
   let now_ns = match (start, tagged(READBACK_END_TAG)) {
     (Some(start), Some(end)) => Some(start + (end - start) / 2),
-    _ => start,
+    (Some(start), None) => Some(start),
+    (None, _) => None,
   };
   PidProbeRead { now_ns, end_ns: lines.iter().find_map(|line| parse_epoch_ns(line)) }
 }

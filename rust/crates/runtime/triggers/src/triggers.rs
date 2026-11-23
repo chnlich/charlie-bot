@@ -872,7 +872,7 @@ impl TriggerManager {
           &base,
         )
         .unwrap_or_else(|| seen_gone_only(seen_gone_at)),
-        _ => {
+        (None, _, _) | (_, None, _) | (_, _, None) => {
           tracing::warn!(target: "charliebot_triggers", trigger_id, target = %base, "remote_end_read_failed");
           seen_gone_only(seen_gone_at)
         }
@@ -885,7 +885,7 @@ impl TriggerManager {
         end_reading_or_warn(mtime_ns, now_ns, local_mid_ns, EndSource::ExitFileMtime, seen_gone_at, trigger_id, &base)
           .unwrap_or_else(|| seen_gone_only(seen_gone_at))
       }
-      _ => {
+      (None, _, _) | (_, None, _) | (_, _, None) => {
         tracing::warn!(target: "charliebot_triggers", trigger_id, target = %base, "remote_end_read_failed");
         seen_gone_only(seen_gone_at)
       }
@@ -2402,7 +2402,7 @@ async fn schedule_trigger(State(features): State<Arc<FeatureContext>>, request: 
             &json!({ "detail": "watch_targets pids must be positive integers" }),
           );
         }
-        _ => {}
+        WatchTarget::LocalPid { .. } | WatchTarget::RemotePid { .. } | WatchTarget::SlurmJob { .. } => {}
       }
     }
   }

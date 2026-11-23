@@ -55,7 +55,7 @@ pub const EXTRA_BODY_KEY: &str = "extra_body";
 const RETIRED_BACKENDS_KEYS: &[&str] = &["preference", "worker_default", "auto", "pool"];
 
 /// The top-level names `CharlieBotConfig` declares as fields.
-const FIELD_NAMES: &[&str] =
+pub const TOP_LEVEL_CONFIG_FIELD_NAMES: &[&str] =
   &["charliebot_home", "headless_chrome_bin", "server", "paths", "backends", "ui", "telegram", "remote_run", "github"];
 
 /// `CORE_LEGACY_KEYS`: the retired top-level keys the core config names, each with its new location.
@@ -893,9 +893,9 @@ pub fn load_config_file(
   let unknown: Vec<String> = data
     .keys()
     .filter(|key| {
-      !key
-        .as_str()
-        .is_some_and(|name| FIELD_NAMES.contains(&name) || schema.sections.iter().any(|section| section.key == name))
+      !key.as_str().is_some_and(|name| {
+        TOP_LEVEL_CONFIG_FIELD_NAMES.contains(&name) || schema.sections.iter().any(|section| section.key == name)
+      })
     })
     .map(yaml_key_repr)
     .collect();

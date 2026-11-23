@@ -179,7 +179,7 @@ async fn one_test_refuses_every_agent_work_entry_with_403() {
 
   for (method, path, body) in cases {
     let request = Request::builder()
-      .method(method)
+      .method(&method)
       .uri(path)
       .header(header::AUTHORIZATION, format!("Bearer {token}"))
       .header(header::CONTENT_TYPE, "application/json")

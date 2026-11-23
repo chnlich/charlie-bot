@@ -1,6 +1,7 @@
 //! The antigravity option fields: `print_timeout`, the `agy --print` turn budget.
 
 use charliebot_core::config::{OptionField, OptionFieldDefault};
+use charliebot_registry::option_model::{self, UnknownOptionFieldStyle};
 use serde_yaml::{Mapping, Value};
 
 /// The backend type this package registers: the `type` a `backends.options` entry names, and the key `SCHEMA` below
@@ -15,13 +16,7 @@ pub const SCHEMA: &[OptionField] = &[OptionField::field(PRINT_TIMEOUT, OptionFie
 
 /// The `print_timeout` the option sets, or `None` when it sets none. Any other key is refused.
 pub fn print_timeout(fields: &Mapping) -> Result<Option<String>, String> {
-  for key in fields.keys() {
-    match key.as_str() {
-      Some(PRINT_TIMEOUT) => {}
-      Some(name) => return Err(format!("unknown antigravity option field {name:?}")),
-      None => return Err(format!("antigravity option key must be a string: {key:?}")),
-    }
-  }
+  option_model::validate_field_names(fields, SCHEMA, TYPE_NAME, UnknownOptionFieldStyle::Unknown)?;
   match fields.get(PRINT_TIMEOUT) {
     None | Some(Value::Null) => Ok(None),
     Some(Value::String(timeout)) => Ok(Some(timeout.clone())),

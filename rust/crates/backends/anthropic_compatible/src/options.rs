@@ -6,7 +6,7 @@ use charliebot_core::backend_types;
 use charliebot_core::config::{
   API_BASE_KEY, CONTEXT_WINDOW_KEY, CREDENTIAL_KEY, EXTRA_BODY_KEY, OptionField, OptionFieldDefault,
 };
-use charliebot_registry::option_model::optional_text;
+use charliebot_registry::option_model::{self, UnknownOptionFieldStyle, optional_text};
 use serde_json::{Map, Value as JsonValue};
 use serde_yaml::{Mapping, Value};
 
@@ -46,13 +46,7 @@ pub struct CcAnthropicCompatibleOption {
 
 impl CcAnthropicCompatibleOption {
   pub fn from_fields(fields: &Mapping) -> Result<Self, String> {
-    for key in fields.keys() {
-      match key.as_str() {
-        Some(name) if SCHEMA.iter().any(|field| field.name == name) => {}
-        Some(name) => return Err(format!("unknown {TYPE_NAME} option field {name:?}")),
-        None => return Err(format!("{TYPE_NAME} option key must be a string: {key:?}")),
-      }
-    }
+    option_model::validate_field_names(fields, SCHEMA, TYPE_NAME, UnknownOptionFieldStyle::Unknown)?;
     let api_base = match fields.get(API_BASE_KEY) {
       None => return Err(format!("{TYPE_NAME} option api_base is required")),
       Some(Value::String(api_base)) if !api_base.is_empty() => api_base.clone(),

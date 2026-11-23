@@ -43,6 +43,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
+use anyhow::Context as _;
 use charliebot_backend_check::{Vocabulary, gate};
 use charliebot_core::git::ancestry_args;
 use charliebot_core::home::CHARLIEBOT_HOME_ENV;
@@ -659,27 +660,34 @@ async fn outbound_checks(
 
 /// The paths the backend-literal check reads for a landing: each changed file that still exists, and for a changed Rust
 /// file its crate. A `cfg(test)` module is test code by the declaration in its parent file, and that parent may be
-/// unchanged, so the crate's sources are read together.
-fn literal_check_paths(worktree: &Path, changed: &[String]) -> Vec<PathBuf> {
+/// unchanged, so the crate's sources are read together. A file the diff removed is left out; any other failure to stat
+/// a changed path is an error, so a file the check cannot see never passes.
+fn literal_check_paths(worktree: &Path, changed: &[String]) -> anyhow::Result<Vec<PathBuf>> {
   let mut paths = BTreeSet::new();
   for relative in changed {
     let file = worktree.join(relative);
-    if !file.is_file() {
-      continue;
+    match std::fs::metadata(&file) {
+      Ok(meta) if !meta.is_file() => continue,
+      Ok(_) => {}
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+      Err(error) => return Err(error).with_context(|| format!("cannot read the changed path {}", file.display())),
     }
-    let crate_dir = file
-      .ancestors()
-      .skip(1)
-      .take_while(|dir| dir.starts_with(worktree))
-      .find(|dir| dir.join("Cargo.toml").is_file())
-      .map(Path::to_path_buf);
-    let path = match crate_dir {
-      Some(dir) if file.extension().is_some_and(|ext| ext == "rs") => dir,
-      _ => file,
-    };
+    let is_rust = file.extension().is_some_and(|ext| ext == "rs");
+    let path = if is_rust { crate_of(&file, worktree)?.unwrap_or(file) } else { file };
     paths.insert(path);
   }
-  paths.into_iter().collect()
+  Ok(paths.into_iter().collect())
+}
+
+/// The directory of the nearest crate above `file` inside `worktree`: the first ancestor that holds a `Cargo.toml`.
+fn crate_of(file: &Path, worktree: &Path) -> anyhow::Result<Option<PathBuf>> {
+  for dir in file.ancestors().skip(1).take_while(|dir| dir.starts_with(worktree)) {
+    let manifest = dir.join("Cargo.toml");
+    if manifest.try_exists().with_context(|| format!("cannot read {}", manifest.display()))? {
+      return Ok(Some(dir.to_path_buf()));
+    }
+  }
+  Ok(None)
 }
 
 /// Refuses a landing whose `paths` hold a hardcoded backend choice that the check does not exempt, and names each site.
@@ -705,7 +713,7 @@ async fn backend_literal_check(
   base_ref: &str,
 ) -> anyhow::Result<()> {
   let changed = changed_paths(worktree, base_ref).await?;
-  refuse_backend_literals(registry, home, worktree, &literal_check_paths(worktree, &changed))
+  refuse_backend_literals(registry, home, worktree, &literal_check_paths(worktree, &changed)?)
 }
 
 /// Run one landing: the whole flow, ending in a written `landing.json` and the record returned. The backend-literal
@@ -2411,9 +2419,12 @@ esac
     fs::write(crate_dir.join("src/extra.rs"), "").unwrap();
     fs::create_dir_all(worktree.join("scripts")).unwrap();
     fs::write(worktree.join("scripts/run.sh"), "").unwrap();
+    fs::write(worktree.join("scripts/notes.txt"), "").unwrap();
     let changed =
       ["rust/crates/x/y/src/extra.rs".to_string(), "scripts/run.sh".to_string(), "scripts/removed.sh".to_string()];
-    assert_eq!(literal_check_paths(worktree, &changed), vec![crate_dir, worktree.join("scripts/run.sh")]);
+    assert_eq!(literal_check_paths(worktree, &changed).unwrap(), vec![crate_dir, worktree.join("scripts/run.sh")]);
+    // A path under a regular file fails to stat with something other than "not found": that is an error, not a skip.
+    assert!(literal_check_paths(worktree, &["scripts/notes.txt/run.sh".to_string()]).is_err());
   }
 
   /// A changed file that holds a backend literal refuses the landing and names its file and line; once the literal is

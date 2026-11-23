@@ -901,23 +901,29 @@ fn assert_socket_passes(run: &Run, socket: &str) {
   assert!(run.stdout.contains(&line), "the preflight did not pass {socket}: {}", run.describe());
 }
 
-/// One round's scope TMPDIR, as the round runner makes it: a `scope.<8 characters>` directory under
-/// /tmp/improve-<direction>-tmp. The round's directory is made when it is absent and removed when this value drops only
-/// in that case. The scope directory is always this test's own.
+/// One round's scope TMPDIR shape: `scope.<8 characters>` under `/tmp/improve-<direction>-tmp`. A random direction
+/// component of the same byte length keeps this test's parent private while preserving the round's path length.
 struct RoundScope {
-  round_dir: PathBuf,
-  created_round_dir: bool,
   scope: TempDir,
+  _round_dir: TempDir,
 }
 
 impl RoundScope {
   fn new(direction: &str) -> Self {
-    let round_dir = PathBuf::from(format!("/tmp/improve-{direction}-tmp"));
-    let created_round_dir = !round_dir.exists();
-    fs::create_dir_all(&round_dir).expect("the round's TMPDIR");
-    let scope =
-      tempfile::Builder::new().prefix("scope.").rand_bytes(8).tempdir_in(&round_dir).expect("the scope directory");
-    Self { round_dir, created_round_dir, scope }
+    let round_dir = tempfile::Builder::new()
+      .prefix("improve-")
+      .rand_bytes(direction.len())
+      .suffix("-tmp")
+      .tempdir_in("/tmp")
+      .expect("the isolated round's TMPDIR");
+    let scope = tempfile::Builder::new()
+      .prefix("scope.")
+      .rand_bytes(8)
+      .tempdir_in(round_dir.path())
+      .expect("the scope directory");
+    let expected_path = format!("/tmp/improve-{}-tmp/scope.{}", "x".repeat(direction.len()), "x".repeat(8));
+    assert_eq!(scope.path().to_str().expect("the round TMPDIR is UTF-8").len(), expected_path.len());
+    Self { scope, _round_dir: round_dir }
   }
 
   fn path(&self) -> &Path {
@@ -925,19 +931,9 @@ impl RoundScope {
   }
 }
 
-impl Drop for RoundScope {
-  fn drop(&mut self) {
-    if self.created_round_dir
-      && let Err(error) = fs::remove_dir_all(&self.round_dir)
-    {
-      eprintln!("remove the round's TMPDIR {}: {error}", self.round_dir.display());
-    }
-  }
-}
-
 /// A trial under each round's scope TMPDIR passes the socket preflight with a six-digit uid, and it stops at its
 /// server start. The directions are `ux`, the reported round, and `decoupling`, the longest direction name on the round
-/// host. A shorter TMPDIR takes a smaller budget, so the other callers' TMPDIRs (dev/remote-run's and CI's) fit as well.
+/// host. A shorter TMPDIR takes a smaller budget, so dev/remote-run and CI also fit.
 #[test]
 fn test_trial_preflight_passes_under_each_round_scope_tmpdir() {
   let world = PreflightWorld::new();

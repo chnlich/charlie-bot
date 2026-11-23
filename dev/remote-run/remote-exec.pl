@@ -35,9 +35,9 @@ my $CARGO_BUILD_JOBS = '4';
 # TMPDIR lives on a tmpfs, where fsync returns at once. On a disk each fsync waits for the drive's flush, and a
 # test that commits a SQLite database dozens of times then runs past the 0.1 s unit-test limit.
 # The name is <prefix><pid>-<start ticks> in hex: at most 16 bytes for pid_max 327680 and a start below 2^36
-# ticks, so TMPDIR is at most 25 bytes. Under a 6-digit uid, the release trial's default tree's Chrome socket path is
-# TMPDIR + 75 bytes, and a serve test's tree root gives TMPDIR + 77 bytes. The test asserts these against trial.sh's
-# socket-path limit at a 25-byte TMPDIR.
+# ticks, so TMPDIR is at most 25 bytes. The release trial's default temp root puts Chrome's socket at TMPDIR + 60 bytes
+# and, for a 6-digit uid, tmux's socket at TMPDIR + 43 bytes. A serve test's --tree-root gives Chrome's socket at TMPDIR
+# + 77 bytes. The preflight tests exercise the paths against trial.sh's socket-path limit.
 my $TEMP_ROOT = '/dev/shm/';
 my $TEMP_PREFIX = 'r';
 

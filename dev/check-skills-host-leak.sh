@@ -3,9 +3,14 @@
 #
 #   (no argument)                       scan the tracked files, or the files named, with the repository rules
 #   --stdin                             scan stdin with the repository rules and the host patterns
+#   --check-list <list>                 scan each `field<TAB>path` line of the list file, in one process
 #   --credential-values                 print the credential values this process holds, one `kind<TAB>value` per line
 #   --credential-check <values> <field> scan stdin for the exact value of any credential in the values file
 #   --credential-check-list <values> <list>  scan each `field<TAB>path` line of the list file, in one process
+#
+# Front options: --require-local-patterns fails closed when the local pattern file is missing, unreadable
+# or empty outside comments (--stdin, --check-list and file mode); --host-patterns-only scans with the
+# local patterns alone, skipping the built-in rules (--stdin and --check-list). Any other --option exits 2.
 #
 # Exit codes: 0 clean, 1 a pattern hit, 2 a setup refusal (nothing was checked), 3 a credential hit.
 # A credential hit prints the kind and the field; it never prints the value or the matched text.
@@ -19,14 +24,15 @@ tmp_patterns="$tmp_dir/patterns"
 : > "$tmp_patterns"
 source "$script_dir/leak-patterns.sh"
 
-built_in_regex='[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}|/data/(checkpoints|datasets|home)/|/home/[^/[:space:]]+/|\.ts\.net\b|\bhost3\b|[a-z][a-z0-9-]{2,}\.slack\.com'
+built_in_regex='[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}|/data/(checkpoints|datasets|home)/|/home/[^/[:space:]]+/|\.ts\.net\b|[a-z][a-z0-9-]{2,}\.slack\.com'
 
-# The built-in rule refuses every UUID except one: the session value of a View line, `View: /?session=<id>`, or the same
-# path with other query parameters before or after it. The landing rule requires that line for a session-page change
-# (prompts/task_base.md), and both readers take it as written: github-post.sh pr-merge reads the lines that start with
-# `View:`, and land.rs reads the query's `session=` pair. session_view_mask replaces that one value with a placeholder
-# before the rule runs, so the same UUID on the line's other parameters, or on any other line, still matches.
-session_view_mask='s/^(View:[[:space:]]*\/\?([^[:space:]]*&)?session=)'
+# The built-in rule refuses every UUID except one: the session value of a View line, `View: /<path>?session=<id>`,
+# or the same path with other query parameters before or after it. The landing rule requires that line for a
+# session-page change (prompts/task_base.md), and both readers take it as written: github-post.sh pr-merge reads the
+# lines that start with `View:`, and land.rs reads the query's `session=` pair. session_view_mask replaces that one
+# value with a placeholder before the rule runs, so the same UUID on the line's other parameters, on a View line in
+# a diff's added text, or on any other line, still matches.
+session_view_mask='s/^(View:[[:space:]]*\/[^[:space:]?]*\?([^[:space:]]*&)?session=)'
 session_view_mask+='[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
 session_view_mask+='([&[:space:]]|$)/\1admitted-session-id\3/'
 
@@ -208,11 +214,20 @@ credential_check() {  # <values file> <field>
 }
 
 # Check every text of one list in this one process, so a caller with many fields pays one interpreter start. The list
-# holds one `field<TAB>path` line per text. The first hit prints its kind and field and exits 3; a clean list exits 0.
+# holds one `field<TAB>path` line per text and every named file must be readable. The first hit prints its kind and
+# field and exits 3; a clean list exits 0; a list or a text the process cannot read exits 2.
 credential_check_list() {  # <values file> <list file>
   local values=$1 list=$2 field path status=0
+  [[ -r $list ]] || {
+    printf 'cannot read the credential check list: %s\n' "$list" >&2
+    return 2
+  }
   while IFS=$'\t' read -r field path; do
     [[ -n "$field" ]] || continue
+    [[ -r $path ]] || {
+      printf 'cannot read the text for %s: %s\n' "$field" "$path" >&2
+      return 2
+    }
     credential_check "$values" "$field" < "$path" && continue
     status=$?
     return "$status"
@@ -221,10 +236,43 @@ credential_check_list() {  # <values file> <list file>
 }
 
 # The built-in rules over one text: the admitted session values are masked, then the rule runs on the result. <text> is
-# the file to scan and <matches> receives the matching lines. Exit 0 is no match, 1 a match, 2 a masking failure.
+# the file to scan and <matches> receives the matching lines. Exit 0 is a match, 1 no match, 2 a masking failure.
 built_in_matches() {  # <text> <matches>
-  sed -E "$session_view_mask" "$1" > "$1.masked" || return 2
-  grep -aiEn "$built_in_regex" "$1.masked" > "$2"
+  sed -E "$session_view_mask" "$1" > "$2.masked" || return 2
+  grep -aiEn "$built_in_regex" "$2.masked" > "$2"
+}
+
+# The feishu rule over one text: candidate hosts minus the documented placeholders. <text> is the file to scan and
+# <matches> receives the matching lines. Exit 0 is a match, 1 no match, 2 a scan failure. The greps run without a
+# leading `!`: inside `!` the recorded status is the inverted one, which turns a clean read into a hit.
+feishu_matches() {  # <text> <matches>
+  local status
+  grep -aiEn '[a-z0-9]{6,}\.feishu\.cn' "$1" > "$2.candidates" && status=0 || status=$?
+  [[ "$status" -ne 1 ]] || return 1
+  [[ "$status" -eq 0 ]] || return "$status"
+  grep -vE 'open\.feishu\.cn|<tenant>\.feishu\.cn|xxx\.feishu\.cn' "$2.candidates" > "$2" && status=0 || status=$?
+  [[ "$status" -ne 1 ]] || return 1
+  return "$status"
+}
+
+require_local_patterns=0
+host_patterns_only=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --require-local-patterns) require_local_patterns=1; shift ;;
+    --host-patterns-only) host_patterns_only=1; shift ;;
+    --stdin|--check-list|--credential-values|--credential-check|--credential-check-list) break ;;
+    --*) printf 'unknown option: %s\n' "$1" >&2; exit 2 ;;
+    *) break ;;
+  esac
+done
+
+load_patterns() {
+  if (( require_local_patterns )); then
+    load_host_patterns --require
+  else
+    load_host_patterns
+  fi
 }
 
 case "${1:-}" in
@@ -243,25 +291,62 @@ case "${1:-}" in
     credential_check_list "$2" "$3"
     exit
     ;;
+  --check-list)
+    # One process scans every `field<TAB>path` text of the list with the leak rules: the local host patterns
+    # plus the built-in and feishu rules unless --host-patterns-only. The first hit prints `Leak hit in
+    # <field>:` and the matched lines, and exits 1; a list or a text the process cannot read exits 2.
+    [[ $# -eq 2 ]] || { printf 'usage: --check-list <list of field<TAB>path lines>\n' >&2; exit 2; }
+    list=$2
+    [[ -f $list && -r $list ]] || { printf 'cannot read the check list: %s\n' "$list" >&2; exit 2; }
+    load_patterns
+    field=''
+    while IFS=$'\t' read -r field path; do
+      [[ -n $field ]] || continue
+      [[ -f $path && -r $path ]] || { printf 'cannot read the text for %s: %s\n' "$field" "$path" >&2; exit 2; }
+      if (( ! host_patterns_only )); then
+        if built_in_matches "$path" "$tmp_dir/matches"; then
+          printf 'Leak hit in %s:\n' "$field"
+          cat "$tmp_dir/matches"
+          exit 1
+        else
+          status=$?
+          [[ "$status" -eq 1 ]] || exit "$status"
+        fi
+        if feishu_matches "$path" "$tmp_dir/matches"; then
+          printf 'Leak hit in %s:\n' "$field"
+          cat "$tmp_dir/matches"
+          exit 1
+        else
+          status=$?
+          [[ "$status" -eq 1 ]] || exit "$status"
+        fi
+      fi
+      if [[ -s $tmp_patterns ]]; then
+        if grep -aiEn -f "$tmp_patterns" "$path" > "$tmp_dir/matches"; then
+          printf 'Leak hit in %s (host patterns):\n' "$field"
+          cat "$tmp_dir/matches"
+          exit 1
+        else
+          status=$?
+          [[ "$status" -eq 1 ]] || exit "$status"
+        fi
+      fi
+    done < "$list"
+    printf 'Summary: 0 matches\n'
+    exit 0
+    ;;
 esac
 
 # Stdin mode scans one text with the full rules: built-in rules plus host patterns,
 # with no path test, so text cannot slip past the check by suffix or location.
 # It exits 1 on a hit, 0 on clean text, and 2 when the pattern file is unreadable.
 if [[ "${1:-}" == '--stdin' ]]; then
-  load_host_patterns
+  [[ $# -eq 1 ]] || { printf 'usage: --stdin takes no argument; the text arrives on stdin\n' >&2; exit 2; }
+  load_patterns
   cat > "$tmp_dir/content"
   matches=0
-  if built_in_matches "$tmp_dir/content" "$tmp_dir/matches"; then
-    printf 'Built-in pattern matches in stdin:\n'
-    cat "$tmp_dir/matches"
-    matches=$((matches + 1))
-  else
-    status=$?
-    [[ "$status" -eq 1 ]] || exit "$status"
-  fi
-  if grep -aiEn '[a-z0-9]{6,}\.feishu\.cn' "$tmp_dir/content" > "$tmp_dir/candidates"; then
-    if grep -vE 'open\.feishu\.cn|<tenant>\.feishu\.cn|xxx\.feishu\.cn' "$tmp_dir/candidates" > "$tmp_dir/matches"; then
+  if (( ! host_patterns_only )); then
+    if built_in_matches "$tmp_dir/content" "$tmp_dir/matches"; then
       printf 'Built-in pattern matches in stdin:\n'
       cat "$tmp_dir/matches"
       matches=$((matches + 1))
@@ -269,9 +354,14 @@ if [[ "${1:-}" == '--stdin' ]]; then
       status=$?
       [[ "$status" -eq 1 ]] || exit "$status"
     fi
-  else
-    status=$?
-    [[ "$status" -eq 1 ]] || exit "$status"
+    if feishu_matches "$tmp_dir/content" "$tmp_dir/matches"; then
+      printf 'Built-in pattern matches in stdin:\n'
+      cat "$tmp_dir/matches"
+      matches=$((matches + 1))
+    else
+      status=$?
+      [[ "$status" -eq 1 ]] || exit "$status"
+    fi
   fi
   if [[ -s "$tmp_patterns" ]]; then
     if grep -aiEn -f "$tmp_patterns" "$tmp_dir/content" > "$tmp_dir/matches"; then
@@ -290,7 +380,7 @@ fi
 
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
-load_host_patterns
+load_patterns
 
 manifest_scan=()
 shopt -s nullglob
@@ -343,6 +433,7 @@ read_file() {
 
 matches=0
 for file in "${builtin_files[@]}"; do
+  (( host_patterns_only )) && break
   read_file "$file" > "$tmp_dir/content"
   if built_in_matches "$tmp_dir/content" "$tmp_dir/matches"; then
     printf 'Built-in pattern matches in %s:\n' "$file"
@@ -352,15 +443,10 @@ for file in "${builtin_files[@]}"; do
     status=$?
     [[ "$status" -eq 1 ]] || exit "$status"
   fi
-  if grep -aiEn '[a-z0-9]{6,}\.feishu\.cn' "$tmp_dir/content" > "$tmp_dir/candidates"; then
-    if grep -vE 'open\.feishu\.cn|<tenant>\.feishu\.cn|xxx\.feishu\.cn' "$tmp_dir/candidates" > "$tmp_dir/matches"; then
-      printf 'Built-in pattern matches in %s:\n' "$file"
-      cat "$tmp_dir/matches"
-      matches=$((matches + 1))
-    else
-      status=$?
-      [[ "$status" -eq 1 ]] || exit "$status"
-    fi
+  if feishu_matches "$tmp_dir/content" "$tmp_dir/matches"; then
+    printf 'Built-in pattern matches in %s:\n' "$file"
+    cat "$tmp_dir/matches"
+    matches=$((matches + 1))
   else
     status=$?
     [[ "$status" -eq 1 ]] || exit "$status"
@@ -371,7 +457,10 @@ if [[ -s "$tmp_patterns" ]]; then
   for file in "${host_files[@]}"; do
     read_file "$file" > "$tmp_dir/content"
     if [[ "$file" == *.gz ]]; then
-      gzip -cd "$tmp_dir/content" > "$tmp_dir/uncompressed"
+      if ! gzip -cd "$tmp_dir/content" > "$tmp_dir/uncompressed"; then
+        printf 'cannot decompress %s for the host pattern scan\n' "$file" >&2
+        exit 2
+      fi
       scan="$tmp_dir/uncompressed"
     else
       scan="$tmp_dir/content"

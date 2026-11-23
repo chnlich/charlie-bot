@@ -179,7 +179,7 @@ fn link_mapped_nonpage_extensions_refused() {
   for extension in ["md", "diff", "patch"] {
     let path = directory.path().join(format!("report.{extension}"));
     fs::write(&path, "source text").expect("the mapped non-page file writes");
-    let link = file_server_link("https://chao9950x.tailb4091b.ts.net", &path);
+    let link = file_server_link("https://synthetic.invalid", &path);
     let reason = check_page_link(Some(&link)).expect_err("a mapped non-page extension is refused");
     assert!(reason.contains("non-page file"), "{reason}");
   }

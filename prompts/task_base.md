@@ -21,7 +21,11 @@ The codebase has a single user. Apply these principles:
 - **One owner per responsibility**: give each responsibility one owning module. When a change meets scattered
   ownership, consolidate it.
 - **One general mechanism**: serve every backend, tool and field through one general mechanism. A new case then reuses
-  that path, so the code keeps one path to test and maintain.
+  that path, so the code keeps one path to test and maintain. The backend of each call comes from the `backends` config.
+  Code names no model id, option id, pool id, gateway URL or agent CLI as the backend of a call. Instruction text names
+  no model id, option id, pool id or gateway URL as one. `charliebot backend check` refuses such a name at landing, in
+  CI and at each cron fire. At server start it reports such a name to each enabled cron task's bound session and does
+  not stop the server.
 - **Minimal schema**: a schema is the structure that a design stores or transmits: its records, fields, states,
   config keys, command flags and API fields. When a design has two or more workable schemas for what it adds or
   changes, recommend the smallest schema that serves most of the user's stated needs. Schema that the design keeps

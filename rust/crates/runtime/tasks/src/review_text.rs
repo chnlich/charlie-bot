@@ -29,7 +29,9 @@ The Later Messages section holds each message that the worker received\n\
 after the task spec, in claim order.\n\
 When a later message changes the task spec, judge the work against the later\n\
 message.\n\
-When the task spec and a skill disagree, follow the task spec.";
+When the task spec and a skill disagree, follow the task spec. \
+When a spec item contradicts a Coding Principle in these instructions, report the conflict with the item and the \
+principle named, and leave the branch unlanded.";
 
 const SCOPE_CHECK: &str = "**Scope check**: Flag any changes NOT requested in the task — extra flags, altered defaults,\n   \
 new parameters, behavioral changes. Workers must only do what was asked.";

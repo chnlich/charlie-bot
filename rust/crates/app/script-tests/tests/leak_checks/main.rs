@@ -745,6 +745,7 @@ const MERGE_GH_STUB: &str = r#"case "$1 $2" in
     case " $* " in
       *" title "*) cat "$GH_PR_TITLE" ;;
       *" body "*) cat "$GH_PR_BODY" ;;
+      *" isDraft "*) cat "$GH_PR_DRAFT" ;;
       *) printf '%s\n' 'https://github.com/chnlich/charlie-bot/pull/5046' ;;
     esac
     ;;
@@ -758,14 +759,15 @@ if [[ "$1 $2" == 'pr merge' ]]; then
 fi
 "#;
 
-/// One synthetic pull request for `pr-merge`: the changed paths, the title and body, the call log and the copied squash
-/// message, plus an evidence directory the caller fills with screenshots.
+/// One synthetic pull request for `pr-merge`: the changed paths, the title and body, the draft state, the call log and
+/// the copied squash message, plus an evidence directory the caller fills with screenshots.
 struct MergeWorld {
   sandbox: Sandbox,
   env: Env,
   gh_log: PathBuf,
   merge_body: PathBuf,
   evidence: PathBuf,
+  pr_draft: PathBuf,
 }
 
 impl MergeWorld {
@@ -782,16 +784,19 @@ impl MergeWorld {
     let pr_title = sandbox.root().join("pr-title");
     let pr_body_file = sandbox.root().join("pr-body");
     let merge_body = sandbox.root().join("merge-body");
+    let pr_draft = sandbox.root().join("pr-draft");
     std::fs::write(&changed_paths, changed).unwrap();
     std::fs::write(&pr_title, "Improve the status panel\n").unwrap();
     std::fs::write(&pr_body_file, pr_body).unwrap();
+    std::fs::write(&pr_draft, "false\n").unwrap();
     let mut env = env;
     env.insert("GH_CHANGED_PATHS".to_string(), changed_paths.display().to_string());
     env.insert("GH_PR_TITLE".to_string(), pr_title.display().to_string());
     env.insert("GH_PR_BODY".to_string(), pr_body_file.display().to_string());
+    env.insert("GH_PR_DRAFT".to_string(), pr_draft.display().to_string());
     env.insert("GH_MERGE_BODY".to_string(), merge_body.display().to_string());
     let evidence = sandbox.dir("evidence");
-    MergeWorld { sandbox, env, gh_log, merge_body, evidence }
+    MergeWorld { sandbox, env, gh_log, merge_body, evidence, pr_draft }
   }
 
   /// Writes `count` PNGs at each window size into the evidence directory.
@@ -880,6 +885,19 @@ fn a_pr_merge_carries_the_view_line_into_the_squash_message() {
   );
   assert!(message.lines().any(|line| line == "View: /?session=abc"), "{message}");
   assert!(message.contains("## Evidence"), "the pull request body stays in the squash message: {message}");
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_refuses_a_draft_pull_request() {
+  let world = MergeWorld::new("rust/crates/x/src/lib.rs\n", "## Evidence\nmeasurements pending.\n");
+  std::fs::write(&world.pr_draft, "true\n").unwrap();
+
+  let run = world.merge(&["5046"]);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("a draft waits for its measurements"), "{}", run.describe());
+  assert!(world.merge_calls().is_empty(), "nothing may merge: {}", run.describe());
 }
 
 // -- the credential check: one scanner for the round's writes and the landing --

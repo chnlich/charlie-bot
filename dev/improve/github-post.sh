@@ -14,9 +14,9 @@
 #
 # Calls that carry no round-written text stay bare gh: gh pr update-branch,
 # gh run rerun, and the read-only calls. A merge goes through pr-merge, which
-# refuses a web page change whose evidence directory fails the screenshot check
-# or whose pull request body names no View line, and carries the View lines into
-# the squash commit message.
+# refuses a draft pull request, a web page change whose evidence directory fails
+# the screenshot check or whose pull request body names no View line, and carries
+# the View lines into the squash commit message.
 #
 # pr-edit does not call gh pr edit: on gh 2.45 that fails on the Projects
 # (classic) lookup. It reads the PR's URL with gh pr view, then sends the
@@ -248,6 +248,22 @@ case "$subcommand" in
     [[ -n "$pr_selector" ]] || { usage; exit 2; }
     repo_args=()
     [[ -z "$pr_repo" ]] || repo_args=(--repo "$pr_repo")
+    # A draft waits for its measurements, so this check stays ahead of every read and merge of the pull request.
+    draft_state=$(gh pr view "$pr_selector" "${repo_args[@]}" --json isDraft --jq .isDraft) || {
+      printf 'Cannot read the draft state of PR %s; nothing was merged.\n' "$pr_selector" >&2
+      exit 2
+    }
+    case "$draft_state" in
+      false) ;;
+      true)
+        printf 'PR %s is a draft: a draft waits for its measurements; nothing was merged.\n' "$pr_selector" >&2
+        exit 2
+        ;;
+      *)
+        printf 'Cannot read the draft state of PR %s; nothing was merged.\n' "$pr_selector" >&2
+        exit 2
+        ;;
+    esac
     changed=$(gh pr diff --name-only "$pr_selector" "${repo_args[@]}") || {
       printf 'Cannot read the changed paths of PR %s; nothing was merged.\n' "$pr_selector" >&2
       exit 2

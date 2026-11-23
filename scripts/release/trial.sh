@@ -489,6 +489,7 @@ chmod 700 "$EVIDENCE_ROOT"
 EVIDENCE_CAPTURED=0
 
 CLEANUP_DONE=0
+SERVE_UNIT_STARTED=0
 SERVER_PID=
 SERVER_PIDS=()
 OWNED_CGROUP_PATHS=()
@@ -621,8 +622,9 @@ stop_current_server() {
 }
 
 cleanup_trial_tmux_servers() {
-  local socket server_pid state
+  local socket server_pid state pid uid pids rc=0
   local failed=0
+  uid=$(id -u)
   # tmux keeps each server's socket one level down, in $TMUX_ROOT/tmux-<uid>/. A server that has exited can leave its
   # socket file behind, so a socket that no server answers has no process to stop. The check waits for the server's
   # process to end, not for the file to go.
@@ -652,6 +654,48 @@ cleanup_trial_tmux_servers() {
       failed=1
     fi
   done
+  # When the socket file under $TMUX_ROOT was removed mid-run (or kill-server did not end the server), find any
+  # surviving tmux server started with this trial's TMUX_TMPDIR and stop it directly.
+  if pids=$(pgrep -u "$uid" '^tmux'); then
+    for pid in $pids; do
+      [[ -r /proc/$pid/environ ]] || continue
+      grep -Fzqx "TMUX_TMPDIR=$TMUX_ROOT" "/proc/$pid/environ" 2>/dev/null || continue
+      state=$(process_state "$pid")
+      [[ -n $state && $state != *Z* ]] || continue
+      if ! kill -TERM "$pid" 2>/dev/null; then
+        state=$(process_state "$pid")
+        [[ -z $state || $state == *Z* ]] && continue
+        printf 'trial tmux server SIGTERM failed: pid %s\n' "$pid" >&2
+        failed=1
+        continue
+      fi
+      for _ in $(seq 1 30); do
+        state=$(process_state "$pid")
+        [[ -z $state || $state == *Z* ]] && break
+        sleep 0.1
+      done
+      state=$(process_state "$pid")
+      if [[ -n $state && $state != *Z* ]]; then
+        kill -KILL "$pid" 2>/dev/null || true
+        for _ in $(seq 1 10); do
+          state=$(process_state "$pid")
+          [[ -z $state || $state == *Z* ]] && break
+          sleep 0.1
+        done
+      fi
+      state=$(process_state "$pid")
+      if [[ -n $state && $state != *Z* ]]; then
+        printf 'trial tmux server remains after fallback shutdown: pid %s\n' "$pid" >&2
+        failed=1
+      fi
+    done
+  else
+    rc=$?
+    if (( rc != 1 )); then
+      printf 'trial tmux fallback scan failed: pgrep exited %s\n' "$rc" >&2
+      failed=1
+    fi
+  fi
   return "$failed"
 }
 
@@ -750,6 +794,9 @@ cleanup_on_exit() {
       exit_status=1
     fi
     if ! cleanup_trial_tmux_servers; then
+      exit_status=1
+    fi
+    if (( IN_CALLER_SCOPE == 0 && SERVE_UNIT_STARTED == 1 )) && ! stop_serve_scope "$SERVE_UNIT"; then
       exit_status=1
     fi
     if ! capture_evidence; then
@@ -903,6 +950,7 @@ start_server() {
   else
     # The server runs inside a scope whose MemoryMax keeps a measurement beside the live server from pressing the host
     # into swap.
+    SERVE_UNIT_STARTED=1
     systemd-run --user --scope -p MemoryMax=2G --unit="$SERVE_UNIT" "$BINARY" >>"$SERVER_LOG" 2>&1 &
   fi
   SERVER_PID=$!
@@ -1032,20 +1080,66 @@ serve_home_has_active_run() {
 
 stop_serve_scope() {
   # The scope normally ends with the server process; the stop clears a unit that outlived an unclean server exit, and a
-  # scope whose server died abnormally is loaded in the failed state, which reset-failed unloads.
+  # scope whose server died abnormally is loaded in the failed state, which reset-failed unloads. systemd keeps a scope
+  # active while any process of its cgroup lives, so a daemonized child (such as tmux) keeps the scope up after the
+  # server exits. systemctl reads a bare name as a .service, so every call names the scope with its suffix. A stop or
+  # reset-failed can unload the unit and its ControlGroup, so the cgroup is read first, and any PID that stays in it is
+  # terminated too.
   local unit=$1
-  local active
-  active=$(systemctl --user is-active "$unit" 2>/dev/null)
-  if [[ $active == active ]] && ! systemctl --user stop "$unit"; then
+  local active cg procs_file pid state remaining fail=0
+  active=$(systemctl --user is-active "$unit.scope" 2>/dev/null)
+  cg=$(systemctl --user show -p ControlGroup --value "$unit.scope") || {
+    printf 'trial serve scope cgroup read failed: %s\n' "$unit" >&2
+    return 1
+  }
+  if [[ $active == active ]] && ! systemctl --user stop "$unit.scope"; then
     printf 'trial serve scope stop failed: %s\n' "$unit" >&2
-    return 1
+    fail=1
   fi
-  if [[ $active == failed ]] && ! systemctl --user reset-failed "$unit" >/dev/null 2>&1; then
+  if [[ $active == failed ]] && ! systemctl --user reset-failed "$unit.scope" >/dev/null 2>&1; then
     printf 'trial serve scope reset-failed failed: %s\n' "$unit" >&2
-    return 1
+    fail=1
+  fi
+  procs_file="${CGROUP_ROOT}${cg}/cgroup.procs"
+  if [[ -n $cg && -r $procs_file ]]; then
+    while IFS= read -r pid; do
+      [[ $pid =~ ^[0-9]+$ ]] || continue
+      state=$(process_state "$pid")
+      if [[ -n $state && $state != *Z* ]]; then
+        if ! kill -TERM "$pid" 2>/dev/null; then
+          state=$(process_state "$pid")
+          [[ -z $state || $state == *Z* ]] || fail=1
+        fi
+      fi
+    done <"$procs_file"
+    for _ in $(seq 1 30); do
+      remaining=$(cat "$procs_file" 2>/dev/null || true)
+      [[ -z $remaining ]] && break
+      sleep 0.1
+    done
+    while IFS= read -r pid; do
+      [[ $pid =~ ^[0-9]+$ ]] || continue
+      state=$(process_state "$pid")
+      if [[ -n $state && $state != *Z* ]]; then
+        if ! kill -KILL "$pid" 2>/dev/null; then
+          state=$(process_state "$pid")
+          [[ -z $state || $state == *Z* ]] || fail=1
+        fi
+      fi
+    done <"$procs_file"
+    for _ in $(seq 1 10); do
+      remaining=$(cat "$procs_file" 2>/dev/null || true)
+      [[ -z $remaining ]] && break
+      sleep 0.1
+    done
+    remaining=$(cat "$procs_file" 2>/dev/null || true)
+    if [[ -n $remaining ]]; then
+      printf 'trial serve scope cgroup remains populated: %s (%s)\n' "$unit" "$remaining" >&2
+      fail=1
+    fi
   fi
   printf 'SERVE scope stop unit=%s state=%s\n' "$unit" "${active:-unreachable}"
-  return 0
+  return "$fail"
 }
 
 run_serve_mode() {
@@ -1121,13 +1215,13 @@ run_serve_mode() {
   if ! stop_current_server 6; then
     cleanup_failed=1
   fi
-  if (( IN_CALLER_SCOPE == 0 )) && ! stop_serve_scope "$SERVE_UNIT"; then
-    cleanup_failed=1
-  fi
   if ! cleanup_owned_cgroups; then
     cleanup_failed=1
   fi
   if ! cleanup_trial_tmux_servers; then
+    cleanup_failed=1
+  fi
+  if (( IN_CALLER_SCOPE == 0 && SERVE_UNIT_STARTED == 1 )) && ! stop_serve_scope "$SERVE_UNIT"; then
     cleanup_failed=1
   fi
   for server_pid in "${SERVER_PIDS[@]}"; do

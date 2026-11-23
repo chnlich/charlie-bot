@@ -794,7 +794,7 @@
         [
           {
             "type": "result",
-            "result": "",
+            "result": "buffered end",
             "usage": {
               "input_tokens": 11,
               "output_tokens": 7,
@@ -807,7 +807,7 @@
         [
           {
             "type": "result",
-            "result": "",
+            "result": "buffered end",
             "usage": {
               "input_tokens": 0,
               "output_tokens": 0,
@@ -898,7 +898,7 @@
         [
           {
             "type": "result",
-            "result": "",
+            "result": "Planning the synthetic change",
             "usage": {
               "input_tokens": 120,
               "output_tokens": 30,
@@ -973,7 +973,7 @@
           },
           {
             "type": "result",
-            "result": "",
+            "result": "Answer body",
             "usage": {
               "input_tokens": 10,
               "output_tokens": 6,
@@ -1114,7 +1114,7 @@
           },
           {
             "type": "result",
-            "result": "",
+            "result": "again",
             "usage": {
               "input_tokens": 3,
               "output_tokens": 0,

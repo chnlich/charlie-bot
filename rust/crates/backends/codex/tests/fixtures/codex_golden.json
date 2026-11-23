@@ -3700,7 +3700,7 @@
       [
         {
           "type": "result",
-          "result": "",
+          "result": "From content",
           "usage": {
             "input_tokens": 1000,
             "output_tokens": 20,

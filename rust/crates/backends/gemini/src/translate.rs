@@ -12,15 +12,17 @@ use charliebot_agents::event_builders::{
   make_error_event, make_result_event, make_text_event, make_tool_result_event, make_tool_use_event,
 };
 
-/// One gemini stream's translator. It holds the assistant text that the stream has not flushed yet.
+/// One gemini stream's translator. It holds the assistant text that the stream has not flushed yet, and the last
+/// message it flushed, which the result event carries as the run's final answer.
 pub struct GeminiTranslator {
   text_buffer: String,
+  last_message: String,
 }
 
 impl GeminiTranslator {
   /// A translator for one stream, with no text buffered yet.
   pub fn new() -> Self {
-    Self { text_buffer: String::new() }
+    Self { text_buffer: String::new(), last_message: String::new() }
   }
 
   /// One stream-json event translated. A type this translator does not handle flushes the buffer.
@@ -68,14 +70,17 @@ impl GeminiTranslator {
           Some(Value::Object(stats)) => stats,
           Some(other) => bail!("gemini result stats must be a JSON object, got {other}"),
         };
-        events.push(make_result_event(
+        let mut result = make_result_event(
           int_field(stats, "input_tokens")?,
           int_field(stats, "output_tokens")?,
           int_field(stats, "cached")?,
           0,
           json!(0),
           None,
-        ));
+        );
+        // The stream's result carries no text, so the run's final answer is its last flushed assistant message.
+        result["result"] = json!(self.last_message);
+        events.push(result);
         Ok(events)
       }
       other => {
@@ -108,7 +113,9 @@ impl GeminiTranslator {
     if self.text_buffer.is_empty() {
       return Vec::new();
     }
-    vec![make_text_event(&std::mem::take(&mut self.text_buffer))]
+    let text = std::mem::take(&mut self.text_buffer);
+    self.last_message.clone_from(&text);
+    vec![make_text_event(&text)]
   }
 }
 
@@ -163,7 +170,7 @@ mod tests {
       translate(json!({"type": "result", "stats": {"input_tokens": 10, "output_tokens": 5, "cached": 3}})),
       vec![json!({
         "type": "result",
-        "result": "",
+        "result": "hello",
         "usage": {
           "input_tokens": 10,
           "output_tokens": 5,

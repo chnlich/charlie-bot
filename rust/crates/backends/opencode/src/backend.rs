@@ -782,6 +782,9 @@ pub struct OpenCodeTranslator {
   model: String,
   model_limit: Option<Map<String, Value>>,
   streamed_parts: HashSet<(String, i64)>,
+  /// The text of each assistant message, its parts in order. The result event carries the last message's text.
+  message_text: HashMap<String, String>,
+  last_message_id: Option<String>,
   tool_names: HashMap<String, String>,
   usage_input: i64,
   usage_output: i64,
@@ -811,6 +814,8 @@ impl OpenCodeTranslator {
       model,
       model_limit,
       streamed_parts: HashSet::new(),
+      message_text: HashMap::new(),
+      last_message_id: None,
       tool_names: HashMap::new(),
       usage_input: 0,
       usage_output: 0,
@@ -853,17 +858,22 @@ impl OpenCodeTranslator {
         Ok(Vec::new())
       }
       "session.text.delta" => {
-        self
-          .streamed_parts
-          .insert((required_string(data, "assistantMessageID")?.to_string(), required_i64(data, "ordinal")?));
-        Ok(vec![event_builders::make_text_event(required_string(data, "delta")?)])
+        let message_id = required_string(data, "assistantMessageID")?.to_string();
+        let delta = required_string(data, "delta")?;
+        self.streamed_parts.insert((message_id.clone(), required_i64(data, "ordinal")?));
+        self.message_text.entry(message_id.clone()).or_default().push_str(delta);
+        self.last_message_id = Some(message_id);
+        Ok(vec![event_builders::make_text_event(delta)])
       }
       "session.text.ended" => {
-        let key = (required_string(data, "assistantMessageID")?.to_string(), required_i64(data, "ordinal")?);
+        let message_id = required_string(data, "assistantMessageID")?.to_string();
+        let key = (message_id.clone(), required_i64(data, "ordinal")?);
+        self.last_message_id = Some(message_id.clone());
         if self.streamed_parts.contains(&key) {
           return Ok(Vec::new());
         }
         let text = required_string(data, "text")?;
+        self.message_text.entry(message_id).or_default().push_str(text);
         Ok(if text.is_empty() { Vec::new() } else { vec![event_builders::make_text_event(text)] })
       }
       "session.reasoning.delta" => {
@@ -975,14 +985,17 @@ impl OpenCodeTranslator {
         (SNAPSHOT_LIMIT): model_limit
       })
     });
-    event_builders::make_result_event(
+    let mut result = event_builders::make_result_event(
       self.usage_input,
       self.usage_output,
       self.usage_cache_read,
       self.usage_cache_write,
       json!(self.usage_cost),
       snapshot,
-    )
+    );
+    // The run's final answer is the text of its last assistant message; null when the run had no text.
+    result["result"] = json!(self.last_message_id.as_ref().and_then(|id| self.message_text.get(id)));
+    result
   }
 
   fn terminal_status(&self) -> Option<TurnTerminal> {

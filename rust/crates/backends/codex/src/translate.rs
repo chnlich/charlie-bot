@@ -36,6 +36,8 @@ pub struct CodexTranslator {
   model: String,
   /// The thread id `thread.started` named. Each result of the run names it as its native session.
   thread_id: Option<String>,
+  /// The full text of the run's latest agent message. The result event of the run carries it as the final answer.
+  last_agent_message: String,
   last_agent_text: HashMap<ItemKey, String>,
   last_reasoning_text: HashMap<ItemKey, String>,
   last_todo_text: HashMap<ItemKey, String>,
@@ -56,6 +58,7 @@ impl CodexTranslator {
     Self {
       model: model.to_string(),
       thread_id: None,
+      last_agent_message: String::new(),
       last_agent_text: HashMap::new(),
       last_reasoning_text: HashMap::new(),
       last_todo_text: HashMap::new(),
@@ -106,6 +109,8 @@ impl CodexTranslator {
     // The usage of turn.completed accumulates over the thread's runs, so the usage fold reads the thread's running
     // total from the thread id.
     result[event_types::NATIVE_SESSION_ID] = json!(thread_id);
+    // The run's final answer is its last agent message, which codex does not repeat in turn.completed.
+    result["result"] = json!(self.last_agent_message);
     Ok(vec![result])
   }
 
@@ -137,6 +142,7 @@ impl CodexTranslator {
     if full_text.is_empty() {
       return Ok(Vec::new());
     }
+    self.last_agent_message.clone_from(&full_text);
     let previous_len = self.last_agent_text.get(&item_id).map_or(0, |previous| str_methods::code_point_len(previous));
     let delta = str_methods::slice_from(&full_text, previous_len);
     self.last_agent_text.insert(item_id, full_text);
@@ -434,6 +440,31 @@ mod tests {
       .unwrap();
     assert_eq!(first, [make_text_event("héllo")]);
     assert_eq!(second, [make_text_event(" wörld")]);
+  }
+
+  /// The result event carries the run's last agent message whole, though the stream split that message into parts.
+  #[test]
+  fn the_result_carries_the_last_agent_message_as_the_final_answer() {
+    let mut translator = CodexTranslator::new("gpt-5.5");
+    translator.translate_event(&json!({"type": "thread.started", "thread_id": "thread-1"})).unwrap();
+    translator
+      .translate_event(
+        &json!({"type": "item.completed", "item": {"id": "m1", "type": "agent_message", "text": "first"}}),
+      )
+      .unwrap();
+    translator
+      .translate_event(&json!({"type": "item.updated", "item": {"id": "m2", "type": "agent_message", "text": "The "}}))
+      .unwrap();
+    translator
+      .translate_event(
+        &json!({"type": "item.completed", "item": {"id": "m2", "type": "agent_message", "text": "The answer."}}),
+      )
+      .unwrap();
+    let result = translator
+      .translate_event(&json!({"type": "turn.completed", "usage": {"input_tokens": 10, "output_tokens": 2}}))
+      .unwrap();
+    assert_eq!(result[0]["type"], "result");
+    assert_eq!(result[0]["result"], "The answer.");
   }
 
   #[test]

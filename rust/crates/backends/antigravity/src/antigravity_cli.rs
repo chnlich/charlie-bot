@@ -173,7 +173,11 @@ impl AntigravityBackend {
     }
     events.push(make_text_event(&answer));
     match usage_event(&envelope.fields) {
-      Ok(event) => events.push(event),
+      Ok(mut event) => {
+        // The run's final answer is the envelope's response, which the text event above carries.
+        event["result"] = json!(answer);
+        events.push(event);
+      }
       Err(error) => return finished(events, exit_code, Some(format!("{error:#}"))),
     }
     finished(events, exit_code, None)
@@ -629,7 +633,7 @@ mod tests {
         json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "the answer"}]}}),
         json!({
           "type": "result",
-          "result": "",
+          "result": "the answer",
           "usage": {
             "input_tokens": 10,
             "output_tokens": 23,

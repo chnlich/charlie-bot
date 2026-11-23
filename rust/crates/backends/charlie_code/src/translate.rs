@@ -22,12 +22,14 @@ const COMMAND_NOTE_CHARS: usize = 80;
 /// One charlie-code stream's translator.
 pub struct CharlieCodeTranslator {
   commands_by_id: HashMap<String, String>,
+  /// The text of the stream's latest thought. The result event carries it as the run's final answer.
+  last_thought: String,
 }
 
 impl CharlieCodeTranslator {
   /// A translator for one stream, with no command text recorded yet.
   pub fn new() -> Self {
-    Self { commands_by_id: HashMap::new() }
+    Self { commands_by_id: HashMap::new(), last_thought: String::new() }
   }
 
   pub fn translate_event(&mut self, event: &Value) -> anyhow::Result<Vec<Value>> {
@@ -38,7 +40,11 @@ impl CharlieCodeTranslator {
       Some("session") => {
         Ok(vec![json!({"type": event_types::SESSION_ATTACHED, "session_id": required_str(event, "session_id")?})])
       }
-      Some("thought") => Ok(vec![make_text_event(required_str(event, "text")?)]),
+      Some("thought") => {
+        let text = required_str(event, "text")?;
+        self.last_thought = text.to_string();
+        Ok(vec![make_text_event(text)])
+      }
       Some("command") => self.command(event),
       Some(event_types::COMMAND_PROGRESS) => self.command_progress(event),
       Some("observation") => {
@@ -53,14 +59,17 @@ impl CharlieCodeTranslator {
           Some(Value::Object(usage)) => usage,
           Some(other) => bail!("charlie-code result usage must be a JSON object, got {other}"),
         };
-        Ok(vec![make_result_event(
+        let mut result = make_result_event(
           int_field(usage, event_types::USAGE_INPUT_TOKENS)?,
           int_field(usage, event_types::USAGE_OUTPUT_TOKENS)?,
           0,
           0,
           Value::Null,
           None,
-        )])
+        );
+        // The stream's result carries no text, so the run's final answer is its latest thought.
+        result["result"] = json!(self.last_thought);
+        Ok(vec![result])
       }
       Some("error") => Ok(vec![make_error_event(str_field(event, "message", "")?)]),
       Some("compact") => Ok(vec![make_compact_boundary_event(
@@ -194,6 +203,11 @@ mod tests {
         .unwrap(),
       vec![json!({"type": "tool_result", "tool_name": "Bash", "content": "/tmp\n", "tool_use_id": "s-1"})]
     );
+    let thought = "The working directory is /tmp.";
+    assert_eq!(
+      translator.translate_event(&json!({"type": "thought", "text": thought})).unwrap(),
+      vec![json!({"type": "assistant", "message": {"content": [{"type": "text", "text": thought}]}})]
+    );
     assert_eq!(
       translator
         .translate_event(
@@ -202,7 +216,7 @@ mod tests {
         .unwrap(),
       vec![json!({
         "type": "result",
-        "result": "",
+        "result": "The working directory is /tmp.",
         "usage": {
           "input_tokens": 123,
           "output_tokens": 45,

@@ -10,7 +10,9 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use charliebot_agents::model_pool::POOL_MEMBER_FIELD;
 use charliebot_agents::pool_display::{session_metadata_shown, show_display_member};
-use charliebot_compat::compression::accepts_gzip;
+use charliebot_compat::compression::{
+  CachedEncoding, CompressedEncoding, ResponseEncoding, gzip_memoized_body, zstd_dynamic_body,
+};
 use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_core::event_types::POOL;
 use charliebot_core::headers::ACCEPT_ENCODING;
@@ -49,17 +51,16 @@ struct SessionsListMemoState {
   render_calls: usize,
 }
 
-/// One rendered listing body, its corpus, its inputs, and the gzip form a request asked for.
+/// One rendered listing body, its corpus, its inputs, and the kept compressed form a request asked for.
 ///
-/// The gzip form lives beside the body it compressed. A request that matches the inputs serves both without hashing
+/// The compressed form lives beside the body it encoded. A request that matches the inputs serves both without hashing
 /// or comparing the body, which the memo would otherwise do to find the compressed bytes it already holds. Both are
-/// `Bytes` handles, so a served response shares the stored buffer through a refcount bump. A full listing's
-/// compressed form is hundreds of kilobytes, and copying it per request cost more than the rest of the response.
+/// `Bytes` handles, so a served response shares the stored buffer through a refcount bump.
 struct WholeListingBody {
   source: ListingSource,
   inputs: Vec<RowInputs>,
   body: Bytes,
-  gzip: Option<Bytes>,
+  compressed: Option<CachedEncoding>,
 }
 
 /// The corpus one listing body rendered from, compared before the per-row inputs are rebuilt.
@@ -1240,7 +1241,7 @@ pub fn sessions_list_response(
   memos: &SessionsListMemos,
 ) -> Response {
   let projection = LISTING_PROJECTION;
-  let wants_gzip = accepts_gzip(request.headers());
+  let encoding = ResponseEncoding::for_request(request.headers());
   let mut state = memos.state.lock().expect("sessions list memo mutex is not poisoned");
   // The corpus check answers the common request before it walks every row's inputs. It proves every input the body
   // reads still holds, so the body it returns is the body a rebuild would render.
@@ -1271,28 +1272,27 @@ pub fn sessions_list_response(
         source: ListingSource::of(rows, shared, derived, sequence_fields),
         inputs,
         body,
-        gzip: None,
+        compressed: None,
       });
     }
   }
-  let whole = state.whole_body.as_ref().expect("the body is rendered when the inputs changed");
-  if !wants_gzip {
-    return json_bytes_response(whole.body.clone(), false);
-  }
-  if let Some(compressed) = &whole.gzip {
-    return json_bytes_response(compressed.clone(), true);
-  }
-  let compressed = Bytes::from(charliebot_compat::compression::gzip_memoized_body(&whole.body));
-  state.whole_body.as_mut().expect("the body is rendered when the inputs changed").gzip = Some(compressed.clone());
-  json_bytes_response(compressed, true)
+  let whole = state.whole_body.as_mut().expect("the body is rendered when the inputs changed");
+  let Some(coding) = encoding.compressed() else {
+    return json_bytes_response(whole.body.clone(), None);
+  };
+  let compressed = CachedEncoding::get_or_replace(&mut whole.compressed, coding, |coding| match coding {
+    CompressedEncoding::Gzip => gzip_memoized_body(&whole.body),
+    CompressedEncoding::Zstd => zstd_dynamic_body(&whole.body),
+  });
+  json_bytes_response(compressed, Some(coding))
 }
 
-/// A sidebar listing's column text and its gzip body.
+/// A sidebar listing's column text and its kept compressed form.
 ///
 /// The Workspace filter refetches the listing on every session or task-tree change, and the page already carries the
 /// same rows in the column form [`active_page_json_text`] writes. The compact response serves that text in place of a
 /// row array. The row texts it joins are the page's own fields, so the sidebar decodes it with the same
-/// `expandSessionColumns` the page's inline listing takes. Its gzip memo reuses the previous body while the text
+/// `expandSessionColumns` the page's inline listing takes. Its compression memo reuses the previous body while the text
 /// keeps its allocation, and the row memo re-renders only the rows a corpus change moved.
 ///
 /// One memo serves one form. The session-move picker reads four fields of the same corpus, so it asks for that form
@@ -1309,7 +1309,7 @@ pub struct CompactListingMemo {
 
 struct CompactListingBody {
   text: Arc<String>,
-  gzip: Bytes,
+  compressed: Option<CachedEncoding>,
 }
 
 /// The row schema and projection one compact listing serves.
@@ -1331,7 +1331,7 @@ impl ListingForm {
 }
 
 impl CompactListingMemo {
-  /// The compact listing for this corpus, gzipped when the request accepts gzip.
+  /// The compact listing for this corpus, compressed when the request negotiates gzip or zstd.
   ///
   /// `screen` answers the rows the sidebar paints before the reader expands a group, with each group's whole row
   /// count under `$screen`. The reader who expands one asks for the full form. `active` names the session the page
@@ -1354,19 +1354,19 @@ impl CompactListingMemo {
       Ok(text) => text,
       Err(error) => return charliebot_compat::responses::internal_error("RuntimeError", error.to_string()),
     };
-    let wants_gzip = accepts_gzip(request.headers());
-    if !wants_gzip {
-      return json_bytes_response(Bytes::copy_from_slice(text.as_bytes()), false);
-    }
+    let Some(coding) = ResponseEncoding::for_request(request.headers()).compressed() else {
+      return json_bytes_response(Bytes::copy_from_slice(text.as_bytes()), None);
+    };
     let mut body = body_memo.lock().expect("the compact listing memo mutex is not poisoned");
-    if let Some(cached) = body.as_ref()
-      && Arc::ptr_eq(&cached.text, &text)
-    {
-      return json_bytes_response(cached.gzip.clone(), true);
+    if !body.as_ref().is_some_and(|cached| Arc::ptr_eq(&cached.text, &text)) {
+      *body = Some(CompactListingBody { text: Arc::clone(&text), compressed: None });
     }
-    let gzip = Bytes::from(charliebot_compat::compression::gzip_memoized_body(text.as_bytes()));
-    *body = Some(CompactListingBody { text: Arc::clone(&text), gzip: gzip.clone() });
-    json_bytes_response(gzip, true)
+    let cached = body.as_mut().expect("compact listing body was just populated");
+    let compressed = CachedEncoding::get_or_replace(&mut cached.compressed, coding, |coding| match coding {
+      CompressedEncoding::Gzip => gzip_memoized_body(text.as_bytes()),
+      CompressedEncoding::Zstd => zstd_dynamic_body(text.as_bytes()),
+    });
+    json_bytes_response(compressed, Some(coding))
   }
 }
 
@@ -1654,14 +1654,14 @@ fn insert_waiting_field(object: &mut Map<String, Value>, row: &RowInputs) {
   object.insert(HAS_WAITING_ITEMS.to_string(), waiting);
 }
 
-fn json_bytes_response(body: Bytes, gzip: bool) -> Response {
+fn json_bytes_response(body: Bytes, encoding: Option<CompressedEncoding>) -> Response {
   let mut response = Response::builder()
     .status(StatusCode::OK)
     .header(header::CONTENT_TYPE, APPLICATION_JSON)
     .header(header::CONTENT_LENGTH, body.len());
-  if gzip {
+  if let Some(coding) = encoding {
     response = response
-      .header(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"))
+      .header(header::CONTENT_ENCODING, HeaderValue::from_static(coding.content_encoding()))
       .header(header::VARY, HeaderValue::from_static(ACCEPT_ENCODING));
   }
   response.body(Body::from(body)).expect("a JSON response builds")
@@ -1996,7 +1996,20 @@ backends:
     .await
     .unwrap();
     assert_eq!(first, second, "a repeat request serves the compressed body the memo holds");
-    assert_eq!(memo.body.lock().unwrap().as_ref().unwrap().gzip, first);
+    assert_eq!(memo.body.lock().unwrap().as_ref().unwrap().compressed.as_ref().map(|c| &c.bytes), Some(&first));
+
+    let zstd_request = Request::builder()
+      .uri("/api/sessions/?compact=1")
+      .header(header::ACCEPT_ENCODING, "gzip, zstd")
+      .body(Body::empty())
+      .unwrap();
+    let zstd_response = memo.response(&zstd_request, &features.store, &page, ListingForm::Sidebar, false, None);
+    assert_eq!(zstd_response.headers()[header::CONTENT_ENCODING], "zstd");
+    let zstd_body = axum::body::to_bytes(zstd_response.into_body(), usize::MAX).await.unwrap();
+    let kept = memo.body.lock().unwrap();
+    let kept = kept.as_ref().unwrap().compressed.as_ref().unwrap();
+    assert_eq!(kept.encoding, CompressedEncoding::Zstd);
+    assert_eq!(kept.bytes, zstd_body);
   }
 
   /// The move picker's column form carries the four fields its candidate walk reads, and nothing else.

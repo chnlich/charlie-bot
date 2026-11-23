@@ -16,7 +16,10 @@ use axum::response::Response;
 use charliebot_agents::model_pool::MISSING_BACKEND_OPTION;
 use charliebot_agents::pool_display::session_detail_shown;
 use charliebot_cli_common::fields::LIMIT;
-use charliebot_compat::compression::{accepts_gzip, gzip_level_four, gzip_level_one};
+use charliebot_compat::compression::{
+  CachedEncoding, CompressedEncoding, ResponseEncoding, gzip_level_four, gzip_level_one, zstd_dynamic_body,
+  zstd_fast_body,
+};
 use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_compat::routing::get_only;
 use charliebot_compat::{responses, static_files};
@@ -50,7 +53,7 @@ const FIRST_SCREEN_WIRE_BUDGET_BYTES: usize = 10 * 1024;
 /// realistic switch target's content has to reach. The header also states what the trim saved on
 /// this answer.
 pub const BOOTSTRAP_UNTRIMMED_BYTES_HEADER: &str = "x-bootstrap-untrimmed-bytes";
-const FILE_GZIP_MEMO_LIMIT: usize = 2;
+const FILE_COMPRESSED_MEMO_LIMIT: usize = 2;
 /// The most lines one events window may ask for.
 const EVENTS_WINDOW_MAX_LINES: usize = 2_000;
 /// The bytes one backwards read of an events window examines at a time.
@@ -58,12 +61,15 @@ const EVENTS_WINDOW_CHUNK: u64 = 64 * 1024;
 
 /// The compressed body of an events file, keyed by its path and `(mtime, size)`.
 ///
-/// The value is a [`Bytes`] handle, so a hit shares the one stored buffer through a refcount bump.
-/// The largest production log holds about 18 MB of compressed bytes.
-type FileGzipMemo = Mutex<LruCache<(PathBuf, i64, u64), Bytes>>;
+/// The value holds a [`CachedEncoding`] (`Bytes` handle plus coding), so a repeat hit for the same coding shares the
+/// buffer through a refcount bump while a coding switch replaces it instead of doubling memory. The largest production
+/// log holds about 18 MB of compressed bytes.
+type FileCompressedMemo = Mutex<LruCache<(PathBuf, i64, u64), CachedEncoding>>;
 
-static EVENTS_FILE_GZIP_MEMO: LazyLock<FileGzipMemo> = LazyLock::new(|| {
-  Mutex::new(LruCache::new(NonZeroUsize::new(FILE_GZIP_MEMO_LIMIT).expect("the gzip memo limit is nonzero")))
+static EVENTS_FILE_COMPRESSED_MEMO: LazyLock<FileCompressedMemo> = LazyLock::new(|| {
+  Mutex::new(LruCache::new(
+    NonZeroUsize::new(FILE_COMPRESSED_MEMO_LIMIT).expect("the compressed memo limit is nonzero"),
+  ))
 });
 
 /// The session detail, transcript, usage, events, and task-read routes.
@@ -424,12 +430,17 @@ impl PageBootstrapKey {
   }
 }
 
-/// One body-memo entry: the payload key, the JSON body, its gzip when built, and the wire bytes the
+/// One body-memo entry: the payload key, the JSON body, its kept compressed form when built, and the wire bytes the
 /// untrimmed payload takes.
-type BodyMemoEntry = (PageBootstrapKey, Bytes, Option<Bytes>, usize);
+struct BodyMemoEntry {
+  key: PageBootstrapKey,
+  body: Bytes,
+  compressed: Option<CachedEncoding>,
+  untrimmed: usize,
+}
 
-/// The bootstrap route's JSON body one request built last, with its gzip when a request asked for
-/// one and the wire bytes the untrimmed payload takes.
+/// The bootstrap route's JSON body one request built last, with its kept compressed form when a request asked for one
+/// and the wire bytes the untrimmed payload takes.
 ///
 /// The body carries the session's message tail: the largest session's is about a hundred megabytes, and building and
 /// serializing it takes about two hundred milliseconds. A repeat request whose payload inputs still hold their value
@@ -442,48 +453,52 @@ struct BootstrapBodyMemo {
 
 static BOOTSTRAP_BODY_MEMO: LazyLock<BootstrapBodyMemo> = LazyLock::new(BootstrapBodyMemo::default);
 
-/// The bootstrap payload's JSON body for `meta`, its gzip when `accepts_gzip`, and the untrimmed
-/// wire size, from `memo` when every payload input still holds its value.
+/// The bootstrap payload's response bytes for `meta`, the selected content coding, and the untrimmed wire size, from
+/// `memo` when every payload input still holds its value.
 fn bootstrap_body(
   memo: &BootstrapBodyMemo,
   store: &Store,
   cfg: &Arc<CharlieBotConfig>,
   meta: &SessionMetadata,
-  accepts_gzip: bool,
-) -> StoreResult<(Bytes, Option<Bytes>, usize)> {
+  encoding: ResponseEncoding,
+) -> StoreResult<(Bytes, Option<CompressedEncoding>, usize)> {
   let inputs = page_bootstrap_inputs(store, cfg, meta)?;
   let mut entry = memo.entry.lock().expect("the bootstrap body memo mutex is not poisoned");
-  let cached = match &inputs {
-    Some(inputs) => match entry.as_ref() {
-      Some((cached, body, gzip, untrimmed)) if cached.matches(inputs) => Some((body.clone(), gzip.clone(), *untrimmed)),
-      None | Some(_) => None,
-    },
-    None => None,
+  let matches_cached = match (&inputs, entry.as_ref()) {
+    (Some(inputs), Some(cached)) => cached.key.matches(inputs),
+    _ => false,
   };
-  let (body, mut gzip, untrimmed, held) = match cached {
-    Some(cached) => (cached.0, cached.1, cached.2, true),
-    None => {
-      let payload = build_bootstrap_payload(store, cfg, meta)?;
-      let body = Bytes::from(charliebot_compat::json::fast_json_bytes(&payload.value));
-      let untrimmed = payload.untrimmed_wire_bytes;
-      let held = inputs.is_some();
-      if let Some(inputs) = &inputs {
-        *entry = Some((PageBootstrapKey::from_inputs(inputs), body.clone(), None, untrimmed));
+  let (plain, mut cached_compressed, untrimmed, held) = if matches_cached {
+    let cached = entry.as_ref().expect("matched entry exists");
+    (cached.body.clone(), cached.compressed.clone(), cached.untrimmed, true)
+  } else {
+    let payload = build_bootstrap_payload(store, cfg, meta)?;
+    let body = Bytes::from(charliebot_compat::json::fast_json_bytes(&payload.value));
+    let untrimmed = payload.untrimmed_wire_bytes;
+    let held = inputs.is_some();
+    if let Some(inputs) = &inputs {
+      *entry = Some(BodyMemoEntry {
+        key: PageBootstrapKey::from_inputs(inputs),
+        body: body.clone(),
+        compressed: None,
+        untrimmed,
+      });
+    }
+    (body, None, untrimmed, held)
+  };
+  match encoding.compressed() {
+    None => Ok((plain, None, untrimmed)),
+    Some(coding) => {
+      let bytes = CachedEncoding::get_or_replace(&mut cached_compressed, coding, |coding| match coding {
+        CompressedEncoding::Gzip => gzip_level_one(&plain),
+        CompressedEncoding::Zstd => zstd_dynamic_body(&plain),
+      });
+      if held {
+        entry.as_mut().expect("the memo holds the body it built").compressed = cached_compressed;
       }
-      (body, None, untrimmed, held)
+      Ok((bytes, Some(coding), untrimmed))
     }
-  };
-  if !accepts_gzip {
-    return Ok((body, None, untrimmed));
   }
-  if gzip.is_none() {
-    let compressed = Bytes::from(gzip_level_one(&body));
-    if held {
-      entry.as_mut().expect("the memo holds the body it built").2 = Some(compressed.clone());
-    }
-    gzip = Some(compressed);
-  }
-  Ok((body, gzip, untrimmed))
 }
 
 /// The bootstrap payload of `meta`, with its text taken from `memo` when every payload input still holds its value.
@@ -621,12 +636,13 @@ async fn session_bootstrap(
     Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
   };
   let store = Arc::clone(&features.store);
-  let wants_gzip = accepts_gzip(request.headers());
+  let encoding = ResponseEncoding::for_request(request.headers());
   let result =
-    tokio::task::spawn_blocking(move || bootstrap_body(&BOOTSTRAP_BODY_MEMO, &store, &cfg, &meta, wants_gzip)).await;
+    tokio::task::spawn_blocking(move || bootstrap_body(&BOOTSTRAP_BODY_MEMO, &store, &cfg, &meta, encoding)).await;
   match result {
-    Ok(Ok((_body, Some(gzip), untrimmed))) => bootstrap_response(gzip, Some("gzip"), untrimmed),
-    Ok(Ok((body, None, untrimmed))) => bootstrap_response(body, None, untrimmed),
+    Ok(Ok((body, coding, untrimmed))) => {
+      bootstrap_response(body, coding.map(CompressedEncoding::content_encoding), untrimmed)
+    }
     Ok(Err(error)) => store_error(error),
     Err(error) => store_error(StoreError::new(error.to_string())),
   }
@@ -996,29 +1012,35 @@ async fn events_jsonl(
     },
     None => None,
   };
+  let encoding = ResponseEncoding::for_request(request.headers());
   if let Some(tail) = tail {
     let size = metadata.size();
-    let wants_gzip = accepts_gzip(request.headers());
     let result = tokio::task::spawn_blocking(move || {
       let (body, start) = events_window(&path, size, tail, before)?;
-      // A window is a run of event rows that repeat their keys. Level 1's short hash chain misses those repeats;
-      // level 4 finds them (see `gzip_level_four`).
-      let gzip = wants_gzip.then(|| Bytes::from(gzip_level_four(&body)));
-      Ok::<_, StoreError>((body, gzip, start))
+      let compressed = encoding.compressed().map(|coding| {
+        let encoded = match coding {
+          // A window is a run of event rows that repeat their keys. Level 1's short hash chain misses those repeats;
+          // level 4 finds them (see `gzip_level_four`).
+          CompressedEncoding::Gzip => gzip_level_four(&body),
+          CompressedEncoding::Zstd => zstd_dynamic_body(&body),
+        };
+        CachedEncoding { encoding: coding, bytes: Bytes::from(encoded) }
+      });
+      Ok::<_, StoreError>((body, compressed, start))
     })
     .await;
     return match result {
-      Ok(Ok((body, gzip, start))) => events_window_response(body, gzip, start),
+      Ok(Ok((body, compressed, start))) => events_window_response(body, compressed, start),
       Ok(Err(error)) => store_error(error),
       Err(error) => store_error(StoreError::new(error.to_string())),
     };
   }
-  if !accepts_gzip(request.headers()) {
+  let Some(coding) = encoding.compressed() else {
     return static_files::serve_file(&path, "application/x-ndjson", request.method(), request.headers());
-  }
-  let result = tokio::task::spawn_blocking(move || gzip_file(&path, metadata)).await;
+  };
+  let result = tokio::task::spawn_blocking(move || compress_file(&path, metadata, coding)).await;
   match result {
-    Ok(Ok(body)) => events_gzip_response(body),
+    Ok(Ok(body)) => events_compressed_response(body, coding),
     Ok(Err(error)) => store_error(error),
     Err(error) => store_error(StoreError::new(error.to_string())),
   }
@@ -1302,19 +1324,25 @@ fn events_file_not_found() -> Response {
   responses::json(StatusCode::NOT_FOUND, &json!({"detail": "Events file not found"}))
 }
 
-fn gzip_file(path: &Path, metadata: fs::Metadata) -> StoreResult<Bytes> {
+fn compress_file(path: &Path, metadata: fs::Metadata, coding: CompressedEncoding) -> StoreResult<Bytes> {
   let mtime_ns = timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()) as i64;
   let size = metadata.size();
   let key = (path.to_path_buf(), mtime_ns, size);
-  if let Some(body) =
-    EVENTS_FILE_GZIP_MEMO.lock().expect("events-file gzip memo mutex is not poisoned").get(&key).cloned()
+  if let Some(cached) = EVENTS_FILE_COMPRESSED_MEMO
+    .lock()
+    .expect("events-file compressed memo mutex is not poisoned")
+    .get(&key)
+    .filter(|cached| cached.encoding == coding)
   {
-    return Ok(body);
+    return Ok(cached.bytes.clone());
   }
   let bytes = fs::read(path).map_err(|error| path_error(path, error))?;
-  let compressed = Bytes::from(gzip_level_one(&bytes));
-  let mut memo = EVENTS_FILE_GZIP_MEMO.lock().expect("events-file gzip memo mutex is not poisoned");
-  memo.put(key, compressed.clone());
+  let compressed = Bytes::from(match coding {
+    CompressedEncoding::Gzip => gzip_level_one(&bytes),
+    CompressedEncoding::Zstd => zstd_fast_body(&bytes),
+  });
+  let mut memo = EVENTS_FILE_COMPRESSED_MEMO.lock().expect("events-file compressed memo mutex is not poisoned");
+  memo.put(key, CachedEncoding { encoding: coding, bytes: compressed.clone() });
   Ok(compressed)
 }
 
@@ -1342,11 +1370,11 @@ fn bootstrap_response(body: Bytes, encoding: Option<&'static str>, untrimmed_wir
   response
 }
 
-/// One window of the events file: its bytes, the byte offset where the window starts, and its gzip form when the
-/// request asked for one.
-fn events_window_response(body: Bytes, gzip: Option<Bytes>, start: u64) -> Response {
-  let (served, encoding) = match gzip {
-    Some(compressed) => (compressed, Some("gzip")),
+/// One window of the events file: its bytes, the byte offset where the window starts, and its compressed form when
+/// the request negotiated gzip or zstd.
+fn events_window_response(body: Bytes, compressed: Option<CachedEncoding>, start: u64) -> Response {
+  let (served, encoding) = match compressed {
+    Some(compressed) => (compressed.bytes, Some(compressed.encoding.content_encoding())),
     None => (body, None),
   };
   let mut builder = Response::builder()
@@ -1361,12 +1389,12 @@ fn events_window_response(body: Bytes, gzip: Option<Bytes>, start: u64) -> Respo
   builder.body(Body::from(served)).expect("an events window response builds")
 }
 
-fn events_gzip_response(body: Bytes) -> Response {
+fn events_compressed_response(body: Bytes, coding: CompressedEncoding) -> Response {
   Response::builder()
     .status(StatusCode::OK)
     .header(header::CONTENT_TYPE, "application/x-ndjson")
     .header(header::CONTENT_LENGTH, body.len())
-    .header(header::CONTENT_ENCODING, "gzip")
+    .header(header::CONTENT_ENCODING, coding.content_encoding())
     .header(header::VARY, ACCEPT_ENCODING)
     .body(Body::from(body))
     .expect("a compressed events response builds")
@@ -1701,6 +1729,16 @@ backends:
     let second = bootstrap_body(&features, &meta.id, true).await;
     assert_eq!(charliebot_compat::compression::level_one_bytes_deflated() - before, 0);
     assert_eq!(first, second, "the memo serves the stored gzip bytes");
+
+    let zstd_request = Request::builder()
+      .uri("/bootstrap")
+      .header(header::ACCEPT_ENCODING, "gzip, zstd")
+      .body(Body::empty())
+      .expect("the zstd bootstrap request builds");
+    let zstd_response = session_bootstrap(State(Arc::clone(&features)), AxumPath(meta.id.clone()), zstd_request).await;
+    assert_eq!(zstd_response.headers()[header::CONTENT_ENCODING], "zstd");
+    let zstd_bytes = axum::body::to_bytes(zstd_response.into_body(), usize::MAX).await.expect("zstd body");
+    assert_eq!(zstd_bytes.as_ref(), zstd_dynamic_body(&plain));
 
     features
       .store
@@ -2722,5 +2760,37 @@ backends:
     let (body, start) = events_window(&path, size, 1, Some(5)).unwrap();
     assert_eq!(body.as_ref(), b"b\n");
     assert_eq!(start, 2);
+  }
+
+  #[tokio::test]
+  async fn events_jsonl_serves_zstd_for_both_tail_windows_and_full_files() {
+    let (_home, features) = feature_context();
+    let meta = crate::test_support::create_node(&features.store, "events-zstd", None, TaskProfile::Manager).await;
+    let path = features.store.chat_events_path(&meta.id);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let raw = "{\"type\":\"user\",\"content\":\"hello\"}\n{\"type\":\"assistant\",\"content\":\"world\"}\n";
+    fs::write(&path, raw).unwrap();
+
+    let window_req = Request::builder()
+      .uri("/events.jsonl?tail=1")
+      .header(header::ACCEPT_ENCODING, "gzip, zstd")
+      .body(Body::empty())
+      .unwrap();
+    let window_resp = events_jsonl(State(Arc::clone(&features)), AxumPath(meta.id.clone()), window_req).await;
+    assert_eq!(window_resp.headers()[header::CONTENT_ENCODING], "zstd");
+    assert_eq!(window_resp.headers()[header::VARY], "Accept-Encoding");
+    let window_bytes = axum::body::to_bytes(window_resp.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(zstd::decode_all(&window_bytes[..]).unwrap(), b"{\"type\":\"assistant\",\"content\":\"world\"}\n");
+
+    let full_req = Request::builder()
+      .uri("/events.jsonl")
+      .header(header::ACCEPT_ENCODING, "zstd, gzip")
+      .body(Body::empty())
+      .unwrap();
+    let full_resp = events_jsonl(State(Arc::clone(&features)), AxumPath(meta.id.clone()), full_req).await;
+    assert_eq!(full_resp.headers()[header::CONTENT_ENCODING], "zstd");
+    assert_eq!(full_resp.headers()[header::VARY], "Accept-Encoding");
+    let full_bytes = axum::body::to_bytes(full_resp.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(zstd::decode_all(&full_bytes[..]).unwrap(), raw.as_bytes());
   }
 }

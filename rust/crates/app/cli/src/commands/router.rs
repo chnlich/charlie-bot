@@ -29,6 +29,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use charliebot_agents::backend_pool::{self, RouterAnswer};
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::source_chain;
 use charliebot_cli_common::json_out;
@@ -137,7 +138,7 @@ fn route_in_home(
   let rules = load_home_rules(home, rules_path)?;
   let request = read_request(raw)?;
   let answer = answer(home, &rules, &request, limits, sleep)?;
-  Ok(json!({ "routed": answer.routed, "backends": answer.backends, "reason": answer.reason }))
+  Ok(serde_json::to_value(answer).expect("RouterAnswer serializes"))
 }
 
 /// `<charliebot home>/router.yaml`, the rules file `--config` replaces.
@@ -195,13 +196,6 @@ struct RouteRequest {
   state: String,
   candidate_ids: Vec<String>,
   session_backend: Option<String>,
-}
-
-/// The router's answer for one request.
-struct Answer {
-  routed: bool,
-  backends: Vec<String>,
-  reason: String,
 }
 
 fn yaml_key(name: &str) -> YamlValue {
@@ -361,29 +355,40 @@ fn read_request(raw: &str) -> Result<RouteRequest, String> {
   let Some(document) = document.as_object() else {
     return Err("stdin: the request must be one JSON object".to_string());
   };
-  let role = match document.get("role") {
+  let role = match document.get(backend_pool::ROUTER_ROLE_FIELD) {
     Some(Value::String(role)) if !role.trim().is_empty() => role.clone(),
-    _ => return Err("stdin.role: must be a non-empty string".to_string()),
+    _ => return Err(format!("stdin.{}: must be a non-empty string", backend_pool::ROUTER_ROLE_FIELD)),
   };
-  let text = match document.get("text") {
+  let text = match document.get(backend_pool::ROUTER_TEXT_FIELD) {
     Some(Value::String(text)) => text,
-    _ => return Err("stdin.text: must be a string".to_string()),
+    _ => return Err(format!("stdin.{}: must be a string", backend_pool::ROUTER_TEXT_FIELD)),
   };
-  let Some(Value::Array(candidates)) = document.get("candidates") else {
-    return Err("stdin.candidates: must be a list of {id, cooling_until} objects".to_string());
+  let Some(Value::Array(candidates)) = document.get(backend_pool::ROUTER_CANDIDATES_FIELD) else {
+    return Err(format!(
+      "stdin.{}: must be a list of {{{}, {}}} objects",
+      backend_pool::ROUTER_CANDIDATES_FIELD,
+      backend_pool::ROUTER_CANDIDATE_ID_FIELD,
+      backend_pool::ROUTER_CANDIDATE_COOLING_UNTIL_FIELD,
+    ));
   };
   let mut candidate_ids = Vec::new();
   for (index, candidate) in candidates.iter().enumerate() {
-    let identifier = candidate.as_object().and_then(|candidate| candidate.get("id"));
+    let identifier = candidate.as_object().and_then(|candidate| candidate.get(backend_pool::ROUTER_CANDIDATE_ID_FIELD));
     match identifier {
       Some(Value::String(identifier)) if !identifier.trim().is_empty() => candidate_ids.push(identifier.clone()),
-      _ => return Err(format!("stdin.candidates[{index}].id: must be a non-empty string")),
+      _ => {
+        return Err(format!(
+          "stdin.{}[{index}].{}: must be a non-empty string",
+          backend_pool::ROUTER_CANDIDATES_FIELD,
+          backend_pool::ROUTER_CANDIDATE_ID_FIELD,
+        ));
+      }
     }
   }
-  let session_backend = match document.get("session_backend") {
+  let session_backend = match document.get(backend_pool::ROUTER_SESSION_BACKEND_FIELD) {
     Some(Value::Null) => None,
     Some(Value::String(backend)) if !backend.trim().is_empty() => Some(backend.clone()),
-    _ => return Err("stdin.session_backend: must be a backend id or null".to_string()),
+    _ => return Err(format!("stdin.{}: must be a backend id or null", backend_pool::ROUTER_SESSION_BACKEND_FIELD)),
   };
   Ok(RouteRequest { state: jev_state(&role, text), role, candidate_ids, session_backend })
 }
@@ -419,9 +424,9 @@ fn answer(
   request: &RouteRequest,
   limits: &Limits,
   sleep: &mut dyn FnMut(Duration),
-) -> Result<Answer, String> {
+) -> Result<RouterAnswer, String> {
   let Some(classes) = rules.roles.get(&request.role) else {
-    return Ok(Answer { routed: false, backends: Vec::new(), reason: format!("{} not routed", request.role) });
+    return Ok(RouterAnswer { routed: false, backends: Vec::new(), reason: format!("{} not routed", request.role) });
   };
   let (chosen, probability, retried_timeout) = if let [only] = classes.as_slice() {
     (only.as_str(), 1.0, false)
@@ -436,18 +441,19 @@ fn answer(
     RunOn::Backend(backend_id) if request.candidate_ids.contains(backend_id) => backend_id.clone(),
     RunOn::Backend(backend_id) => {
       let reason = format!("{reason}; backend {backend_id} is not a candidate here; ran on the default path");
-      return Ok(Answer { routed: false, backends: Vec::new(), reason });
+      return Ok(RouterAnswer { routed: false, backends: Vec::new(), reason });
     }
     RunOn::Session => match &request.session_backend {
       Some(session_backend) => session_backend.clone(),
       None => {
         return Err(format!(
-          "classes.{chosen}.run_on: session runs on the delegating session's backend, but the request names no session_backend"
+          "classes.{chosen}.run_on: session runs on the delegating session's backend, but the request names no {}",
+          backend_pool::ROUTER_SESSION_BACKEND_FIELD,
         ));
       }
     },
   };
-  Ok(Answer { routed: true, backends: vec![backend], reason })
+  Ok(RouterAnswer { routed: true, backends: vec![backend], reason })
 }
 
 /// Ask Jev, with at most one retry after a timeout or an HTTP 429, which of one role's classes fits `state`, and the

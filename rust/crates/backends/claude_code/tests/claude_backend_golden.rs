@@ -155,7 +155,7 @@ fn materialize_paths(value: &mut Value) {
     }
     Value::Array(values) => values.iter_mut().for_each(materialize_paths),
     Value::Object(values) => values.values_mut().for_each(materialize_paths),
-    _ => {}
+    Value::Null | Value::Bool(_) | Value::Number(_) => {}
   }
 }
 

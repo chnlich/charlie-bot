@@ -227,7 +227,7 @@ fn usage_count(usage: &Map<String, Value>, key: &str) -> anyhow::Result<i64> {
     Some(value) if is_truthy(value) => {
       value.as_i64().with_context(|| format!("usage {key} is not an integer: {value}"))
     }
-    _ => Ok(0),
+    Some(_) | None => Ok(0),
   }
 }
 

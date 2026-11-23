@@ -495,7 +495,7 @@ fn read_credentials(quota: &QuotaState, path: &Path) -> anyhow::Result<Option<Cr
     Some(value) if is_truthy(value) => {
       value.as_str().with_context(|| format!("{}: accessToken is not a string", path.display()))?.to_string()
     }
-    _ => {
+    Some(_) | None => {
       warn_credentials_once(quota, "ext_usage_no_access_token", path);
       return Ok(None);
     }
@@ -504,7 +504,7 @@ fn read_credentials(quota: &QuotaState, path: &Path) -> anyhow::Result<Option<Cr
     Some(value) if is_truthy(value) => {
       Some(value.as_str().with_context(|| format!("{}: refreshToken is not a string", path.display()))?.to_string())
     }
-    _ => None,
+    Some(_) | None => None,
   };
   // expiresAt is not read here: renewal keys off the server's 401, never a local expiry check. A keyed round's start
   // reads it in claude_accounts, which decides only whether the login may start.
@@ -544,7 +544,10 @@ fn warn_credentials_once(quota: &QuotaState, event: &'static str, path: &Path) {
     "ext_usage_credentials_not_found" => {
       tracing::warn!(target: "charliebot_agents", path = %path.display(), "ext_usage_credentials_not_found");
     }
-    _ => tracing::warn!(target: "charliebot_agents", path = %path.display(), "ext_usage_no_access_token"),
+    "ext_usage_no_access_token" => {
+      tracing::warn!(target: "charliebot_agents", path = %path.display(), "ext_usage_no_access_token");
+    }
+    _ => unreachable!("warn_credentials_once has no warning for the event {event:?}"),
   }
 }
 
@@ -692,7 +695,7 @@ fn plan_window(raw: &Map<String, Value>, camel: &str, snake: &str, window_minute
     Some(value) if is_truthy(value) => {
       value.as_object().with_context(|| format!("the {camel} window is not an object"))?
     }
-    _ => &no_bucket,
+    Some(_) | None => &no_bucket,
   };
   let resets_at = match bucket.get("resetsAt") {
     Some(value) => value.clone(),
@@ -755,7 +758,7 @@ fn scoped_windows(raw: &Map<String, Value>, account: &str, quota: &QuotaState) -
     }
     let resets_at = match entry.get("resets_at") {
       Some(value) if is_truthy(value) => value.clone(),
-      _ => json!(""),
+      Some(_) | None => json!(""),
     };
     let mut scoped = Map::new();
     scoped.insert(PANEL_WINDOW_MINUTES.to_string(), json!(window_minutes));

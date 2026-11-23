@@ -39,7 +39,8 @@
 # one root share no tree. Without it the tree is ${TMPDIR:-/tmp}/charliebot-release-trial-<uid>-<first 12 hex>, so one
 # user's trials of one commit name one path, and a tree path that already exists refuses the run, naming the path and
 # its owner. The temp root that the trial exports as TMPDIR is <tree>/tmp with --tree-root, and without it the short
-# directory ${TMPDIR:-/tmp}/trial-tmp-<uid>-<first 12 hex> beside the tree; the cleanup removes both. --seed-home <dir>
+# directory ${TMPDIR:-/tmp}/t-<first 12 hex> beside the tree; the cleanup removes both. The temp root holds the tmux
+# socket directory too. --seed-home <dir>
 # copies each session directory of <dir> into the trial home before the
 # server starts, with the boot marker <dir>/boot_recovery.json when present (a task-tree mock home), and the trial
 # keeps its own config.yaml and credentials.yaml; --in-caller-scope keeps the server in the caller's cgroup, which must
@@ -246,22 +247,28 @@ if ! CHOSEN_PORT=$("$TRIAL_CLI" release-helper free-port "$PORT_MIN" "$PORT_MAX"
 fi
 readonly CHOSEN_PORT
 
-# Without --tree-root the tree sits in the caller's TMPDIR. The uid in its name keeps users apart, and a round's write
+# Without --tree-root the tree sits in the caller's TMPDIR, and the uid in its name keeps users apart. A round's write
 # boundary allows the round's TMPDIR, so a round's trial needs no --tree-root.
+#
+# The temp root holds every socket the preflight checks, so its name sets the socket budget. A round's TMPDIR is
+# /tmp/improve-<direction>-tmp/scope.<8 characters>: 34 bytes for ux, and 42 for the longest direction name on host3.
+# Chrome's socket adds 45 bytes to the temp root, so the default temp root is a short sibling of the tree named by the
+# commit alone, t-<first 12 hex>. Its name carries no uid, so the budget does not grow with the uid's length (host3's
+# uid has six digits). Two users who trial one commit in one shared TMPDIR collide here, and the second run refuses at
+# the mkdir. The cleanup removes the temp root with the tree.
 if [[ -n $TREE_ROOT ]]; then
   readonly TREE="${TREE_ROOT%/}/trial-${COMMIT:0:12}"
   readonly TMP_ROOT="$TREE/tmp"
 else
   readonly TREE="${TMPDIR:-/tmp}/charliebot-release-trial-$(id -u)-${COMMIT:0:12}"
-  # Inside the tree, Chrome's singleton socket path fits the limit under the round's TMPDIR, /tmp/improve-ux-tmp (the
-  # tree's name adds 39 bytes plus the uid to TMPDIR, and the socket adds 45 under the temp root). So the default temp
-  # root is a short sibling of the tree, and the cleanup removes it with the tree.
-  readonly TMP_ROOT="${TMPDIR:-/tmp}/trial-tmp-$(id -u)-${COMMIT:0:12}"
+  readonly TMP_ROOT="${TMPDIR:-/tmp}/t-${COMMIT:0:12}"
   if [[ $TREE != /* ]]; then
     preflight_fail "the default trial tree needs an absolute TMPDIR, got: $TREE"
   fi
 fi
-readonly TMUX_ROOT="$TREE/tmux"
+# tmux's socket directory sits under the temp root, beside Chrome's, so the temp root owns every socket path
+# checked below.
+readonly TMUX_ROOT="$TMP_ROOT/tmux"
 if [[ -e $TREE ]]; then
   tree_owner=$(stat -c %U -- "$TREE") || preflight_fail "the trial tree path exists and its owner cannot be read: $TREE"
   preflight_fail "the trial tree path already exists: $TREE (owned by $tree_owner)"

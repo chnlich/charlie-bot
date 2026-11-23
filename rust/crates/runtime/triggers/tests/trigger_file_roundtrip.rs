@@ -99,7 +99,7 @@ fn materialize_fixture_values(records: &mut [Value]) {
           materialize(value);
         }
       }
-      _ => {}
+      Value::Null | Value::Bool(_) | Value::Number(_) => {}
     }
   }
   records.iter_mut().for_each(materialize);

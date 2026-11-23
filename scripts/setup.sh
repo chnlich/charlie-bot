@@ -41,6 +41,21 @@ done
 
 cd "$REPO_ROOT"
 
+# Pin the git hooks to this checkout's dev/git-hooks by absolute path, so a task worktree cannot bypass them
+# by shadowing a relative path. The three hook files must exist and be executable for the gate to hold.
+echo "==> Pinning git hooks"
+if (( DRY_RUN )); then
+  echo "git -C $REPO_ROOT config core.hooksPath $REPO_ROOT/dev/git-hooks"
+else
+  git -C "$REPO_ROOT" config core.hooksPath "$REPO_ROOT/dev/git-hooks"
+fi
+for hook in pre-commit commit-msg pre-push; do
+  if [[ ! -x "$REPO_ROOT/dev/git-hooks/$hook" ]]; then
+    echo "setup: missing or non-executable hook: $REPO_ROOT/dev/git-hooks/$hook" >&2
+    exit 1
+  fi
+done
+
 # Sync shared and host-specific skills into backend skill directories.
 echo "==> Syncing skills"
 if (( DRY_RUN )); then

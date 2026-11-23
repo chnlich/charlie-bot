@@ -213,11 +213,15 @@ remote_run_public_url() {
   REMOTE_RUN_PUBLIC_URL=${REMOTE_RUN_CONFIG_VALUE%/}
 }
 
-# The stop text tells the agent to end the run and report the blocker, with the /host-auth page.
+# The stop text tells the agent to end the run and report the blocker without retrying.
 remote_run_stop_text() {
   local reason=$1
   printf 'remote-run: %s\n' "$reason" >&2
   printf 'remote-run: End this run and report the blocker to the user. Do not retry the command.\n' >&2
+}
+
+# The Tailscale approval stop text links the page that lets the user approve the SSH connection.
+remote_run_host_auth_text() {
   if remote_run_public_url; then
     printf 'remote-run: The /host-auth page: %s/host-auth\n' "$REMOTE_RUN_PUBLIC_URL" >&2
   fi
@@ -243,6 +247,7 @@ remote_run_connectivity_check() {
   rm -f -- "$stderr_file"
   if (( status == REMOTE_RUN_TAILSCALE_STATUS )); then
     remote_run_stop_text "Tailscale needs an SSH approval for $REMOTE_RUN_HOST."
+    remote_run_host_auth_text
     exit "$status"
   fi
   remote_run_stop_text "The connectivity check to $REMOTE_RUN_HOST failed (exit $status)."

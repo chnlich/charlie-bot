@@ -52,7 +52,7 @@ that belongs to one machine. The runner reads the CharlieBot `config.yaml` on ea
 | `remote_run.host` | the CharlieBot `config.yaml`; no default | The ssh alias of the build host, as `~/.ssh/config` names it. Until it is set, the runner stops with exit 2 and names the key. |
 | `remote_run.remote_base` | the CharlieBot `config.yaml`; default `scripts/remote-run` | The runner's state directory on the build host, relative to its `$HOME`. A host with runner state installed elsewhere sets this. |
 | `REMOTE_RUN_CONNECT_TIMEOUT` | the environment; default `60` | The connectivity check's time limit in seconds, for tests. |
-| `server.public_url` | the CharlieBot `config.yaml`, read with `charliebot config get server.public_url` | The address a person reaches the CharlieBot server at. The stop text links `<public_url>/host-auth`. It has no default; the host sets it. |
+| `server.public_url` | the CharlieBot `config.yaml`, read with `charliebot config get server.public_url` | The address a person reaches the CharlieBot server at. Exit 86 links its `/host-auth` page. It has no default; the host sets it. |
 
 The build host's state layout, under its `$HOME` and the remote base: `trees/<tree name>` for the
 synced trees, `tree-owners/<tree name>` for `host=<caller hostname>` and `root=<local absolute path>`,
@@ -109,7 +109,7 @@ carry the owning process id and start time, and a later run reclaims the ones no
 | command's own code | The connectivity check passed; the exit code comes back unchanged, 255 included. |
 | 2 | The runner refused the run because an argument, configuration, ownership, process inspection, stop, or removal check failed. |
 | 86 | The connectivity check saw a Tailscale login link. The runner prints a stop text that tells the agent to end the run and report the blocker, with the full `/host-auth` page URL. |
-| 87 | The connectivity check failed any other way, or ran past its 60-second limit. The same stop text is printed. |
+| 87 | The connectivity check failed any other way, or ran past its 60-second limit. The runner tells the agent to end the run and report the blocker without retrying; it prints no `/host-auth` URL. |
 
 ## Refused toolchains
 

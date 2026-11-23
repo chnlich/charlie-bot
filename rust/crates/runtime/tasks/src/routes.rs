@@ -817,13 +817,13 @@ async fn send_message(
     Ok(body) => body,
     Err(response) => return *response,
   };
-  if let Some(refusal) = guard_agent_work(&features, &parts.headers).await {
-    return refusal;
-  }
   match require_session(&features, &session_id).await {
     Ok(true) => {}
     Ok(false) => return responses::json(StatusCode::NOT_FOUND, &json!({ "detail": SESSION_NOT_FOUND_DETAIL })),
     Err(response) => return *response,
+  }
+  if let Some(refusal) = guard_agent_work(&features, &parts.headers).await {
+    return refusal;
   }
   let caller = match caller::resolve_caller(&parts.headers, &features) {
     Ok(caller) => caller,

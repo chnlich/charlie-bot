@@ -115,7 +115,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     // is the prefix plus the recommendation's full option line, so the text the session reads names
     // the recommendation and every step the recommendation line writes out.
     var NOT_A_QUESTION_LABEL = 'This should not be a question';
-    var NOT_A_QUESTION_ANSWER_PREFIX = NOT_A_QUESTION_LABEL + ' → ';
+    var NOT_A_QUESTION_ANSWER_PREFIX = NOT_A_QUESTION_LABEL + ' ' + String.fromCharCode(0x2192) + ' ';
     var NOT_A_QUESTION_REC_LABEL = '推荐：';
     // The tray stage names each step of a send. Editing changes the pending list. Checking confirms the target can
     // take a message before the post. In sending the post is in flight, retried on a network error or 5xx. Entries

@@ -75,8 +75,8 @@ struct PanelReading {
 #[derive(Default)]
 struct Readings {
   event: HashMap<String, RateLimitReading>,
-  /// The reset of each login's rejection, keyed by `(login, model family)`. A family's rejection holds only that family;
-  /// an [`ALL_MODELS`] rejection holds every model of the login.
+  /// The reset of each login's rejection, keyed by `(login, model family)`. A family's rejection holds only
+  /// that family. An [`ALL_MODELS`] rejection holds every model of the login.
   rejections: HashMap<(String, String), UtcDateTime>,
   panel: HashMap<String, PanelReading>,
   auth_failures: HashMap<String, UtcDateTime>,
@@ -101,7 +101,7 @@ pub(super) struct Warned {
   pub(super) limit_shapes: HashSet<(String, String, String)>,
 }
 
-/// One live run's reservation of one login. The reservation table holds a weak reference; the placed run's launch
+/// One live run's reservation of one login. The reservation table holds a weak reference. The placed run's launch
 /// (`PooledLaunch`) or the recovered run's follow holds the strong one, so the reservation ends when the placement
 /// ends, and never counts past `RESERVATION_HOLD`.
 #[derive(Debug)]
@@ -236,7 +236,7 @@ pub fn credentials_present(account: &claude_config::ClaudeAccount) -> bool {
 }
 
 /// Whether a login's access token lives at least `IMPROVE_TOKEN_MIN_SECONDS` past `now`. An error names why the login
-/// cannot be used for a keyed round; it never carries credential contents.
+/// cannot be used for a keyed round. It never carries credential contents.
 fn token_life_suffices(account: &claude_config::ClaudeAccount, now: UtcDateTime) -> Result<(), &'static str> {
   let path = Path::new(&account.config_dir).join(login_dirs::CREDENTIALS_FILE);
   let contents = fs::read_to_string(path).map_err(|_| "credentials_unreadable")?;
@@ -745,7 +745,7 @@ pub fn reserve_on(
 }
 
 /// The login a warning relay can move a run to: one whose reservations leave it more than `1 - WARNING_UTILIZATION`
-/// unreserved headroom. A read-only probe; a move registers through [`reserve_pick`] or [`reserve_on`].
+/// unreserved headroom. It is a read-only probe. A move registers through [`reserve_pick`] or [`reserve_on`].
 pub fn unreserved_cool_destination(
   state: &ClaudeAccountState,
   cfg: &CharlieBotConfig,
@@ -788,7 +788,7 @@ fn process_login(cfg: &CharlieBotConfig, pid: u32) -> anyhow::Result<Option<clau
 }
 
 /// The hold a restart reattach takes: the login that the recovered run's process already uses, reserved for the run.
-/// `None` when the process carries no pool login's directory; the caller logs the unknown login and follows anyway.
+/// `None` when the process carries no pool login's directory. The caller logs the unknown login and follows anyway.
 pub fn reattach_hold(
   state: &ClaudeAccountState,
   cfg: &CharlieBotConfig,
@@ -1584,7 +1584,7 @@ mod tests {
 
     let reading = latest_reading(&state, "a", Some("claude-fable-5-1"), Some(now)).expect("both readings exist");
 
-    // The general window carries the larger utilization; the scoped five-hour window carries the larger five-hour.
+    // The general window carries the larger utilization. The scoped five-hour window carries the larger five-hour.
     assert_eq!(reading.at, now);
     assert_eq!(reading.utilization, 0.90);
     assert_eq!(reading.five_hour, Some(0.50));
@@ -1991,7 +1991,7 @@ mod tests {
       None,
     );
 
-    // Placement 18 leaves unreserved at the 0.10 line, 20 at zero; the rest overflow. None refuses.
+    // Placement 18 leaves unreserved at the 0.10 line, 20 at zero. The rest overflow. None refuses.
     let mut counts = HashMap::new();
     let mut live = Vec::new();
     for index in 0..24 {
@@ -2024,7 +2024,7 @@ mod tests {
       *counts.entry(pick.account.label.clone()).or_insert(0) += 1;
       live.push(pick.handle);
     }
-    // "a" takes the herd until its unreserved headroom sinks under "b" and "c"'s, then the three share it; today's
+    // "a" takes the herd until its unreserved headroom sinks under "b" and "c"'s, then the three share it. Today's
     // rule would put all 24 on "a".
     assert!(counts["a"] >= 14 && counts["a"] <= 15, "the reset login still takes the bulk: {counts:?}");
     assert!(counts["a"] <= 15, "the reservations cap the reset login's herd: {counts:?}");
@@ -2102,7 +2102,7 @@ mod tests {
     // A seven-day-only panel reading: headroom 0.40, no five-hour value.
     observe_usage_panel(&state, "a", &panel_window(60.0, WEEKLY_WINDOW_MINUTES, "2025-01-08T12:00:00Z"));
 
-    // Eight runs reserve the whole 0.40 headroom; the login still takes the run, as the overflow.
+    // Eight runs reserve the whole 0.40 headroom. The login still takes the run, as the overflow.
     let handles =
       (0..8).map(|index| reserve_on(&state, &format!("run-{index}"), "a", "redirect", Some(now))).collect::<Vec<_>>();
     let pick = reserve_pick(&state, &cfg, None, &HashSet::new(), None, Some(now), None, "run-8").unwrap().unwrap();
@@ -2154,7 +2154,7 @@ mod tests {
       .spawn()
       .unwrap();
     // Between fork and exec the child's /proc environ still shows the test runner's environment, so the
-    // variable appears only after exec; poll instead of racing the window.
+    // variable appears only after exec. Poll instead of racing the window.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     let handle = loop {
       match reattach_hold(&state, &cfg, held.id(), "run-1", Some(now)).unwrap() {

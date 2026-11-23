@@ -60,7 +60,7 @@ fn shlex_quote(value: &str) -> String {
 }
 
 /// The SessionStart hook that restores a session's context after compaction. Without `run_id` it restores a manager
-/// session's read skills; with `run_id` it restores that worker run's task spec ahead of its skills.
+/// session's read skills. With `run_id` it restores that worker run's task spec ahead of its skills.
 pub fn compaction_context_hook_settings(session_id: &str, run_id: Option<&str>) -> Map<String, Value> {
   let session = shlex_quote(session_id);
   let run_flag = run_id.map(|run_id| format!(" --run {}", shlex_quote(run_id))).unwrap_or_default();

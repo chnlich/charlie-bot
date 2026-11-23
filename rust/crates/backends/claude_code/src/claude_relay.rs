@@ -689,7 +689,7 @@ mod tests {
     let cfg = pooled_config(&home, &[("spent", &spent), ("fresh", &fresh)]);
     let state = Arc::new(claude_accounts::ClaudeAccountState::new());
     let now = UtcDateTime::parse("2025-01-01T12:00:00Z").unwrap();
-    // "spent" is rejected; "fresh" has 0.40 raw headroom on its weekly reading, and nine runs reserve all of it.
+    // "spent" is rejected. "fresh" has 0.40 raw headroom on its weekly reading, and nine runs reserve all of it.
     let rejected = json!({
       "type":"rate_limit_event",
       "rate_limit_info":{"status":"rejected","resetsAt":4102462800.0,

@@ -6,6 +6,7 @@
 //! file's comments out.
 
 pub mod exemptions;
+pub mod gate;
 pub mod rules;
 pub mod rust_scan;
 pub mod text_scan;

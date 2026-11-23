@@ -29,16 +29,11 @@ pub struct Vocabulary {
 }
 
 impl Vocabulary {
-  /// The vocabulary of the registered packages, the `config.yaml` under `home` when it exists, and the configuration
-  /// example under `repo` when a repository is given.
+  /// The vocabulary the check reads from files: the registered packages, the `config.yaml` under `home` when it exists,
+  /// and the configuration example under `repo` when a repository is given. `charliebot backend check` and CI read it.
   pub fn load(registry: &Registry, home: &Path, repo: Option<&Path>) -> anyhow::Result<Self> {
     let schema = registry.config_schema();
-    let mut vocab = Vocabulary::default();
-    for backend_type in &schema.backend_types {
-      if let Some(source) = registry.usage_source_for(backend_type)? {
-        vocab.id_prefixes.extend(source.id_prefixes.iter().map(|prefix| prefix.to_string()));
-      }
-    }
+    let mut vocab = Vocabulary::registered(registry)?;
     if home.join(config::CONFIG_FILENAME).is_file() {
       vocab.add_config(&config::load_config(home, &schema)?);
     }
@@ -46,6 +41,26 @@ impl Vocabulary {
       let example = repo.join(repo_root::CONFIGS_DIR_NAME).join(CONFIG_EXAMPLE_FILE);
       if example.is_file() {
         vocab.add_config(&config::load_config_file(repo, &example, &schema)?);
+      }
+    }
+    Ok(vocab)
+  }
+
+  /// The vocabulary of a gate that runs on the configuration already loaded: the registered packages and `cfg`. The
+  /// server's gates read the host's configuration this way, and so never load the repository's example.
+  pub fn of_config(registry: &Registry, cfg: &CharlieBotConfig) -> anyhow::Result<Self> {
+    let mut vocab = Vocabulary::registered(registry)?;
+    vocab.add_config(cfg);
+    Ok(vocab)
+  }
+
+  /// The words that every vocabulary holds: the id prefixes of the registered backend types, the Gemini host, and the
+  /// models of the price table.
+  fn registered(registry: &Registry) -> anyhow::Result<Self> {
+    let mut vocab = Vocabulary::default();
+    for backend_type in &registry.config_schema().backend_types {
+      if let Some(source) = registry.usage_source_for(backend_type)? {
+        vocab.id_prefixes.extend(source.id_prefixes.iter().map(|prefix| prefix.to_string()));
       }
     }
     vocab.hosts.insert(GEMINI_HOST.to_string());

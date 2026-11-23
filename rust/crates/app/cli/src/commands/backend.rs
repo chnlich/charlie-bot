@@ -16,7 +16,7 @@ use std::process::Command as ProcessCommand;
 use charliebot_agents::backend_run::{self, RunIdentity, RunStart};
 use charliebot_agents::call_resolve::RESOLVE_PATH;
 use charliebot_agents::cli_host::{CliHost, LazyHost};
-use charliebot_backend_check::{Hit, Roots, Vocabulary};
+use charliebot_backend_check::{Vocabulary, gate};
 use charliebot_cli_common::args as cli_args;
 use charliebot_cli_common::client;
 use charliebot_cli_common::exit::CliExit;
@@ -115,8 +115,8 @@ pub fn main(args: &[OsString], lazy_host: &LazyHost) -> Result<(), CliExit> {
   }
 }
 
-/// `backend check`: print each site that no exemption keeps, one per line, and exit 1 when one is printed. The
-/// vocabulary is the registered packages' plus the profile's `config.yaml` and the repository's configuration example.
+/// `backend check`: print each site that no exemption keeps, one per line, and exit 1 when one is printed. The sites
+/// come from the same scan the gates run (`charliebot_backend_check::gate`).
 fn check_command(args: CheckArgs) -> Result<(), CliExit> {
   let registry = charliebot_packages::registry().map_err(|error| CliExit::error(format!("{error:#}")))?;
   let home = home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
@@ -130,23 +130,14 @@ fn check_command(args: CheckArgs) -> Result<(), CliExit> {
   } else {
     args.paths
   };
+  let roots = gate::roots(repo.as_deref(), &home).map_err(|error| CliExit::error(format!("{error:#}")))?;
   let vocab =
     Vocabulary::load(&registry, &home, repo.as_deref()).map_err(|error| CliExit::error(format!("{error:#}")))?;
-  let roots = Roots { repo, home };
-  let hits =
-    charliebot_backend_check::scan(&vocab, &roots, &paths).map_err(|error| CliExit::error(format!("{error:#}")))?;
-  let open: Vec<&Hit> = hits.iter().filter(|hit| hit.exempt.is_none()).collect();
-  for hit in &open {
-    let place = roots.repo.as_deref().and_then(|repo| hit.path.strip_prefix(repo).ok()).unwrap_or(&hit.path);
-    println!(
-      "{}:{} {} {}  -> backends.calls.<class> via charliebot backend resolve",
-      place.display(),
-      hit.line,
-      hit.class.label(),
-      hit.value
-    );
+  let hits = gate::open_hits(&vocab, &roots, &paths).map_err(|error| CliExit::error(format!("{error:#}")))?;
+  for hit in &hits {
+    println!("{}", gate::describe(hit, roots.repo.as_deref()));
   }
-  if !open.is_empty() {
+  if !hits.is_empty() {
     std::process::exit(1);
   }
   Ok(())

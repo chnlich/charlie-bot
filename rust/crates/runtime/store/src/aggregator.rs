@@ -138,9 +138,9 @@ impl MessageAggregator {
     Ok(deltas)
   }
 
-  /// Process an event at the absolute event index the store stamped on it, which is its position in the
-  /// session's event log. The fed-event counter skips events that are appended without being fed (control
-  /// facts), so a frame that used it could carry an index below the event's place in the log.
+  /// Process an event at the absolute event index the store stamped on it, which is its position in the session's event
+  /// log. The fed-event counter skips events that are appended without being fed, such as control facts. So a frame
+  /// that used it could carry an index below the event's place in the log.
   pub fn feed_at_absolute<E: EventFields>(&mut self, event: &E, index: usize) -> StoreResult<Vec<Value>> {
     self.processed += 1;
     self.feed_at(event, index)
@@ -418,8 +418,8 @@ impl MessageAggregator {
     let ends_run = matches!(event_type, event_types::MASTER_DONE | event_types::RUN_END | event_types::RUN_ERROR);
     let mut deltas = if ends_run { self.tool_rows.end_run() } else { Vec::new() };
     if ends_run {
-      // The stop lands in the open draft's rows right before the commit closes it, and the live commit leaves out
-      // the rows a page holds, so the suffix frame is what tells that page its rows stopped.
+      // The stop lands in the open draft's rows right before the commit closes it. The live commit leaves out the rows
+      // a page holds. So the suffix frame is what tells that page its rows stopped.
       deltas.extend(self.stream_delta());
     }
     deltas.extend(self.flush_to_message_delta());
@@ -448,8 +448,8 @@ impl MessageAggregator {
     vec![json!({"type": "message", "message": self.committed(message)})]
   }
 
-  /// The committed message as the live feed sends it: a page that received the stream frames holds the draft
-  /// text, thinking and tool rows, so the frame carries only what the page needs to commit them.
+  /// The committed message as the live feed sends it assumes a page that received the stream frames. Such a page holds
+  /// the draft text, thinking and tool rows already, so the frame carries only what the page needs to commit them.
   fn committed(&self, mut message: Value) -> Value {
     if !self.omit_streamed_content || !self.emit_stream_deltas {
       return message;
@@ -470,8 +470,9 @@ impl MessageAggregator {
     self.streamed_tools = None;
   }
 
-  /// Whether a tool result has a row to attach to: the row that its tool_use id names, when that row has a
-  /// subagent, or else the newest plain row of the open draft, as results have always attached.
+  /// Whether a tool result has a row to attach to is decided as follows. The row that its tool_use id names attaches it
+  /// when that row has a subagent. Otherwise the newest plain row of the open draft takes it, as results have always
+  /// attached.
   fn result_has_target(&self, tool_use_id: Option<&str>) -> bool {
     tool_use_id.is_some_and(|id| self.tool_rows.holds_subagent(id)) || self.tool_rows.has_plain_row()
   }
@@ -580,8 +581,8 @@ impl MessageAggregator {
       self.thinking_buf.clone()
     };
     let tools = self.tool_rows.draft_json();
-    // The frame carries the rows from the first one that differs from the rows the earlier frames streamed, so a
-    // draft's row bytes grow with its row count instead of with its row count squared.
+    // The frame carries the rows from the first one that differs from the rows the earlier frames streamed. So a
+    // draft's row bytes grow with its row count, instead of with its row count squared.
     let tools_from = first_changed_row(self.streamed_tools.as_ref(), tools.as_ref());
     if append.is_empty() && thinking_append.is_empty() && tools_from.is_none() {
       return Vec::new();

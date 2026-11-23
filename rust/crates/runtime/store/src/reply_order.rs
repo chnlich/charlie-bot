@@ -30,7 +30,7 @@ pub struct Receipt {
   pub at: UtcDateTime,
 }
 
-/// The inputs `run` received, in the order its record claims them: each of its `input_event_ids`, timed by its
+/// The inputs `run` received, in the order its record claims them. Each of its `input_event_ids` is timed by its
 /// `input_delivered` row under this run, or by the run's start time when no row exists.
 ///
 /// The `input_delivered` row of another run never times this run's input.

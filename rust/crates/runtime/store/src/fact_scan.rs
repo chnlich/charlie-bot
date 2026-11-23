@@ -1,12 +1,12 @@
-//! The boot walk's fact scan of a live event log: the node and run facts a full read and fold of the log gives, read
-//! without building the log's chat content.
+//! The boot walk's fact scan of a live event log. It gives the node and run facts that a full read and fold of the log
+//! gives, without building the log's chat content.
 //!
 //! Chat content is nearly all of a long log's bytes, and the facts fold reads none of it. The scan parses each line
 //! with serde_json's own grammar, so it keeps and drops exactly the lines a full read keeps and drops. A line of a
-//! chat-content type ([`CHAT_CONTENT_TYPES`], and a `user` line whose `content` is not a string) becomes a stand-in
-//! event that holds only the line's string `id` and `type`. Every other line is built in full. The fold reads nothing
-//! but `id` and `type` from a chat-content line, so the stand-in list folds to the full list's facts, and each event
-//! keeps its position.
+//! chat-content type becomes a stand-in event. Those types are listed in [`CHAT_CONTENT_TYPES`]. A `user` line whose
+//! `content` is not a string also becomes one. The stand-in holds only the line's string `id` and `type`. Every other
+//! line is built in full. The fold reads nothing but `id` and `type` from a chat-content line. So the stand-in list
+//! folds to the full list's facts, and each event keeps its position.
 //!
 //! [`Store::seal_scanned_facts`] memoizes those facts under the log's file identity, as a recovery eviction seals a
 //! fold, so a node pass reads them without loading the log. A reader that needs the chat content loads the log, as any
@@ -149,8 +149,8 @@ impl ScannedLiveFacts {
   }
 }
 
-/// One cold snapshot outcome: either scanned and sealed under a cold event cache, or the already-warm cached live
-/// events if another reader loaded the cache before the scan took the session lock.
+/// One cold snapshot outcome is either scanned and sealed under a cold event cache, or the already-warm cached live
+/// events. The second applies when another reader loaded the cache before the scan took the session lock.
 pub(crate) enum ColdSnapshot {
   Scanned(ScannedLiveFacts),
   Warm(crate::events::LiveEventSnapshot),
@@ -170,15 +170,15 @@ struct FoldedNodeFacts {
 }
 
 impl Store {
-  /// Scan and fold a session's history outside its session lock: its archived events, then its live log. `None`
-  /// when the archive does not hold `archive_offset` events, the session has no live log, or the log or the archive
-  /// offset changed during the scan. The node's reads then load the log themselves.
+  /// Scan and fold a session's history outside its session lock: its archived events, then its live log. `None` when
+  /// the archive does not hold `archive_offset` events, the session has no live log, or the log or the archive offset
+  /// changed during the scan. The node's reads then load the log themselves.
   ///
   /// A checkpoint that still covers the log's prefix answers the scan from the facts it holds and the bytes past its
-  /// offset, so the scan reads the folded state and the appended tail instead of the history the state covers. A
+  /// offset. The scan then reads the folded state and the appended tail, instead of the history the state covers. A
   /// checkpoint that does not cover this log leaves the full scan to run, as a missing one does. A tail of an eighth of
-  /// the covered offset or more also takes the full scan, which rewrites the checkpoint, so a steady state of small
-  /// appends keeps one checkpoint read per boot and the next full fold amortizes the write.
+  /// the covered offset or more also takes the full scan. That full scan rewrites the checkpoint. So a steady state of
+  /// small appends keeps one checkpoint read per boot, and the next full fold amortizes the write.
   pub fn scan_live_facts(&self, session_id: &str) -> StoreResult<Option<ScannedLiveFacts>> {
     let archived = self.read_archive_offset(session_id)?;
     let path = self.chat_events_path(session_id);
@@ -285,9 +285,10 @@ impl Store {
     }))
   }
 
-  /// The cold node read's fold: the live log and its archive scanned and sealed under the session's event-cache lock,
-  /// which a whole-log load and every append also hold, so no append lands between the scan and its seal. If another
-  /// reader already warmed the cache before the lock was taken, returns the warm snapshot so the caller folds from it.
+  /// The cold node read's fold scans and seals the live log and its archive under the session's event-cache lock. A
+  /// whole-log load and every append hold that lock too, so no append lands between the scan and its seal. If another
+  /// reader already warmed the cache before the lock was taken, it returns the warm snapshot, so the caller folds from
+  /// it.
   pub(crate) fn scan_cold_snapshot(&self, session_id: &str) -> StoreResult<ColdSnapshot> {
     let cache_entry = self.events_cache_entry(session_id);
     let cache = lock(&cache_entry, "session event cache mutex");
@@ -303,8 +304,8 @@ impl Store {
     Ok(ColdSnapshot::Scanned(scanned))
   }
 
-  /// The cold node-facts read of a session with a live log: the log is scanned and sealed as one snapshot, or the
-  /// cache's events fold when another reader loaded them before the scan took the session lock. `None` when
+  /// The cold node-facts read of a session with a live log scans the log and seals it as one snapshot. When another
+  /// reader loaded the cache before the scan took the session lock, the cache's events fold instead. `None` when
   /// `should_stop` fires before the scan starts.
   pub(crate) fn cold_node_facts_until(
     &self,
@@ -322,8 +323,8 @@ impl Store {
     }
   }
 
-  /// The cold node-state read of a session with a live log. A scanned snapshot books its fold, as one node-state fold
-  /// for a full scan and as a suffix extension for a checkpoint's tail, and seals its state under the snapshot's
+  /// The cold node-state read of a session with a live log. A scanned snapshot books its fold. A full scan books one
+  /// node-state fold, and a checkpoint's tail books a suffix extension. It seals its state under the snapshot's
   /// identity. The cache's events answer through the warm state path.
   pub(crate) fn cold_node_state(&self, session_id: &str) -> StoreResult<(u64, Arc<NodeState>)> {
     match self.scan_cold_snapshot(session_id)? {
@@ -342,8 +343,8 @@ impl Store {
     }
   }
 
-  /// Write the checkpoint a scan left, logging a failure rather than failing the scan: the file only makes the next
-  /// boot faster, and its absence costs that boot a full scan and nothing else.
+  /// Write the checkpoint a scan left. A failure is logged rather than failing the scan. The file only makes the next
+  /// boot faster. Its absence costs that boot a full scan and nothing else.
   fn leave_checkpoint(&self, session_id: &str, checkpoint: Option<crate::fact_checkpoint::CheckpointFile>) {
     let Some(checkpoint) = checkpoint else { return };
     let path = self.fact_checkpoint_path(session_id);
@@ -385,8 +386,9 @@ impl Store {
   }
 
   /// Memoize a [`Store::scan_live_facts`] result under its log identity, as a recovery eviction seals a fold. The seal
-  /// happens only while the event cache is cold, the log keeps the scanned identity and the archive keeps the scanned
-  /// `archive_offset`, checked under the session lock that every append holds. Returns whether the scan was sealed.
+  /// happens only while the event cache is cold. It also needs the log to keep the scanned identity, and the archive to
+  /// keep the scanned `archive_offset`. Both are checked under the session lock that every append holds. Returns
+  /// whether the scan was sealed.
   pub fn seal_scanned_facts(&self, session_id: &str, scanned: &ScannedLiveFacts) -> StoreResult<bool> {
     let cache_entry = self.events_cache_entry(session_id);
     let cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
@@ -508,9 +510,9 @@ fn read_log(path: &Path) -> StoreResult<Option<fsutil::FileBytes>> {
   }
 }
 
-/// Fold a checkpoint's facts and the appended tail exactly as a full scan folds the whole history: the covered prefix
-/// the checkpoint's facts already fold, then the tail past its offset. Returns the facts, the run facts and the newest
-/// prompt fact of each scope.
+/// Fold a checkpoint's facts and the appended tail exactly as a full scan folds the whole history. That is the covered
+/// prefix, which the checkpoint's facts already fold, then the tail past its offset. Returns the facts, the run facts
+/// and the newest prompt fact of each scope.
 fn fold_checkpoint_and_tail(
   session_id: &str,
   parsed: ParsedCheckpoint,
@@ -531,8 +533,8 @@ fn fold_checkpoint_and_tail(
 }
 
 /// Logs a fact scan of a log of [`WHOLE_LOG_LOGGED_BYTES`] or more with its file and wall time, so a slow boot names
-/// the log it waited on. `bytes` is what the scan read from the log and `checkpoint_bytes` what it read from the
-/// checkpoint, so a start that resumes reports the appended bytes it folded rather than the log's size.
+/// the log it waited on. `bytes` is what the scan read from the log. `checkpoint_bytes` is what it read from the
+/// checkpoint. A start that resumes reports the appended bytes it folded, not the log's size.
 fn log_large_scan(path: &Path, log_bytes: u64, read_bytes: u64, checkpoint_bytes: u64, started: Instant) {
   if log_bytes >= WHOLE_LOG_LOGGED_BYTES {
     tracing::info!(
@@ -596,9 +598,9 @@ fn stand_in_object(keys: &ParseKeys, id: Option<&str>, event_type: &str) -> Comp
   CompactValue::Object(entries.into_boxed_slice())
 }
 
-/// One checkpoint line as the scan kept it: a stand-in line ([`crate::fact_checkpoint::STAND_IN_TAG`] with the id, a
-/// tab and the type, or [`crate::fact_checkpoint::TYPE_ONLY_TAG`] with the type), or a compact JSON event line, which
-/// the scan's own line rule parses.
+/// One checkpoint line, as the scan kept it, is a stand-in line or a compact JSON event line. A stand-in line is
+/// [`crate::fact_checkpoint::STAND_IN_TAG`] with the id, a tab and the type. A type-only stand-in is
+/// [`crate::fact_checkpoint::TYPE_ONLY_TAG`] with the type. The scan's own line rule parses a compact JSON event line.
 pub(crate) fn checkpoint_line(raw: &[u8], keys: &ParseKeys) -> Option<CompactValue> {
   match raw.first().copied() {
     Some(crate::fact_checkpoint::STAND_IN_TAG) => {
@@ -854,8 +856,9 @@ mod tests {
     assert!(!store.seal_scanned_facts("synthetic", &again).unwrap(), "a warm cache keeps its own fold");
   }
 
-  /// A sealed scan answers every fact a cold read folds, over chat-content lines that carry fact-like fields, a
-  /// stand-in whose id a later fact repeats, and the lines a full read drops, and it reads no log to answer them.
+  /// A sealed scan answers every fact a cold read folds, and it reads no log to answer them. The scan covers
+  /// chat-content lines that carry fact-like fields. It also covers a stand-in whose id a later fact repeats, and the
+  /// lines a full read drops.
   #[test]
   fn a_sealed_scan_answers_the_facts_a_cold_read_folds() {
     let (home, writer) = make_test_store();
@@ -924,8 +927,8 @@ mod tests {
     assert_eq!(scanned.history_work().file_reads, 0, "the sealed facts answer without reading the log");
   }
 
-  /// A session with archived events seals too: its scan folds the archive before the live log, as a cold read does, and
-  /// the sealed facts answer what that cold read folds without reading the log.
+  /// A session with archived events seals too. Its scan folds the archive before the live log, as a cold read does. The
+  /// sealed facts answer what that cold read folds, without reading the log.
   #[tokio::test]
   async fn a_sealed_scan_of_an_archived_session_folds_its_archive_first() {
     let (home, writer) = make_test_store();
@@ -1015,8 +1018,8 @@ mod tests {
     }
   }
 
-  /// A checkpoint line decodes to the event the scan kept: a stand-in with an id, a type-only stand-in, a stand-in whose
-  /// id holds a tab (which keeps its JSON line) and a full event.
+  /// A checkpoint line decodes to the event the scan kept. It is a stand-in with an id, a type-only stand-in, or a full
+  /// event. A stand-in whose id holds a tab keeps its JSON line instead.
   #[test]
   fn checkpoint_lines_decode_to_the_events_the_scan_kept() {
     let lines: Vec<&[u8]> = vec![
@@ -1459,8 +1462,8 @@ mod tests {
   }
 
   /// A cold node-state read folds the fact checkpoint and the bytes past it, and reaches the task state, run facts and
-  /// task facts a whole-log fold reaches. A checkpoint that is absent, torn or stale folds nothing, and the read scans
-  /// the log as one snapshot instead: it loads no history, and it writes the checkpoint back for the next read.
+  /// task facts a whole-log fold reaches. A checkpoint that is absent, torn or stale folds nothing. The read then scans
+  /// the log as one snapshot instead. It loads no history, and it writes the checkpoint back for the next read.
   #[test]
   fn a_cold_node_state_read_folds_the_checkpoint_and_its_mismatches_scan_the_log() {
     let (home, writer) = make_test_store();
@@ -1582,7 +1585,7 @@ mod tests {
     assert_eq!(next.history_work().file_reads, 0, "the next cold read scans the log and loads none of it");
   }
 
-  /// A cold `run_facts` read scans and seals under the session lock without loading whole history, and
+  /// A cold `run_facts` read scans and seals under the session lock, without loading whole history.
   /// `scan_cold_snapshot` yields `ColdSnapshot::Warm` when another reader warms the event cache before it takes the
   /// lock.
   #[test]

@@ -628,11 +628,10 @@ impl Store {
 
   /// Return cached metadata when fresh, reading and populating the cache only on a miss.
   ///
-  /// The cache hands out its own allocation, so a caller that reads many rows in one request shares each row's
-  /// metadata instead of deep-cloning it. The status poll reads every painted row on each rebuild, and cloning a
-  /// session's metadata map per row was a fifth of that route's CPU. The metadata behind the pointer never moves: a
-  /// cache entry is replaced with a new allocation, never written in place, so an `Arc` a caller holds keeps the
-  /// content it read.
+  /// The cache hands out its own allocation, so a caller that reads many rows in one request shares each row's metadata
+  /// instead of deep-cloning it. The status poll reads every painted row on each rebuild, and cloning a session's
+  /// metadata map per row was a fifth of that route's CPU. The metadata behind the pointer never moves. A cache entry
+  /// is replaced with a new allocation, never written in place. So an `Arc` a caller holds keeps the content it read.
   pub fn get_session_cached_or_read_sync(&self, session_id: &str) -> StoreResult<Option<Arc<SessionMetadata>>> {
     if let Some(meta) = self.fresh_cached_meta(session_id)? {
       return Ok(Some(meta));

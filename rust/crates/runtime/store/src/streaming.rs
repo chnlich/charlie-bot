@@ -1,5 +1,6 @@
-//! The live stream: one broadcast channel per session view, the trailing window that merges a burst of stream frames
-//! into one, the field names a stream frame carries, and the shaping of one event's output into the frames a page reads.
+//! The live stream has one broadcast channel per session view. A trailing window merges a burst of stream frames into
+//! one. This module also holds the field names a stream frame carries, and the shaping of one event's output into the
+//! frames a page reads.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
@@ -188,8 +189,8 @@ impl StreamingManager {
     serializer: impl Fn(&Value) -> StoreResult<String>,
   ) -> StoreResult<()> {
     let event_type = frame.get("type").and_then(Value::as_str);
-    // A stream frame that carries a commit merges into no window: the commit must reach the page before the
-    // appends of any later frame, and a second commit could not share the frame's one commit field.
+    // A stream frame that carries a commit merges into no window. The commit must reach the page before the appends of
+    // any later frame. A second commit could not share the frame's one commit field.
     let carries_commit = frame.get(COMMIT).is_some();
 
     if event_type == Some("stream") && !carries_commit {

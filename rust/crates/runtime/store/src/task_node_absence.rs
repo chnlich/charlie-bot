@@ -32,10 +32,10 @@ const TYPE_KEY: &[u8] = b"\"type\"";
 const MAX_EVENT_TYPE_LEN: usize = 16;
 /// The bytes one read of a log brings in while [`file_holds_task_event`] looks for a type value.
 ///
-/// A log is read in pieces of this size rather than mapped whole: the boot walk scans every candidate log of a home,
-/// and a mapped 138 MB log faults that much of itself into the process, which the peak RSS keeps. A piece extends to
-/// the end of the line it ends inside, so the scan holds one event's line at most, never the log. Tests shrink the
-/// piece, so a line that crosses pieces is written in a few bytes.
+/// A log is read in pieces of this size rather than mapped whole. The boot walk scans every candidate log of a home. A
+/// mapped 138 MB log faults that much of itself into the process, which the peak RSS keeps. A piece extends to the end
+/// of the line it ends inside, so the scan holds one event's line at most, never the log. Tests shrink the piece, so a
+/// line that crosses pieces is written in a few bytes.
 #[cfg(not(test))]
 const SCAN_CHUNK_BYTES: usize = 1 << 20;
 #[cfg(test)]
@@ -94,17 +94,18 @@ impl Store {
 
 /// Whether one event log names a task boundary or prompt-change event. A missing file holds none.
 ///
-/// The log holds one JSON object per line, so a piece ends on a line boundary: it extends to the end of the line it
-/// ends inside, and the next piece starts after the piece's last newline. A `"type"` key and its value are therefore
-/// always read in one piece, however much whitespace the writer put between the key, its colon and its value.
+/// The log holds one JSON object per line, so a piece ends on a line boundary. A piece extends to the end of the line
+/// it ends inside, and the next piece starts after the piece's last newline. A `"type"` key and its value are therefore
+/// always read in one piece. That holds however much whitespace the writer put between the key, its colon and its
+/// value.
 fn file_holds_task_event(path: &Path) -> StoreResult<bool> {
   let file = match File::open(path) {
     Ok(file) => file,
     Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
     Err(error) => return Err(StoreError::new(format!("{}: {error}", path.display()))),
   };
-  // A log shorter than a piece has one read, so its buffer is the log's own length: most logs of a home are a few
-  // hundred bytes, and zeroing a piece for each would clear far more than they hold.
+  // A log shorter than a piece has one read, so its buffer is the log's own length. Most logs of a home are a few
+  // hundred bytes. Zeroing a piece for each would clear far more than they hold.
   let length = match file.metadata() {
     Ok(metadata) => usize::try_from(metadata.len()).expect("a log's length fits in usize"),
     Err(error) => return Err(StoreError::new(format!("{}: {error}", path.display()))),

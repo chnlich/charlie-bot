@@ -382,9 +382,9 @@ impl Store {
             .map(|event| event.as_ref().clone())
             .collect(),
           None => {
-            // The tail window answers the newest page without parsing the log's head. A page past that window seeks
-            // to the line index's nearest checkpoint and reads from there, so it costs the lines from that
-            // checkpoint rather than every line before the page.
+            // The tail window answers the newest page without parsing the log's head. A page past that window seeks to
+            // the line index's nearest checkpoint. It reads from there, so it costs the lines from that checkpoint
+            // rather than every line before the page.
             match self.live_tail_lines_newline_split(session_id, rel_start)? {
               Some(lines) => slice_live_lines(&lines, 0, rel_end.saturating_sub(rel_start)),
               None => {
@@ -716,12 +716,12 @@ impl Store {
   /// The live log's physical lines `[first_line, end)` as parsed events, one slot per line, split on `\n` only — the
   /// domain `ndjson.parse_ndjson_range` numbers on the unarchived cold path.
   ///
-  /// The read starts at the line index's nearest checkpoint at or before `first_line`, so a page far inside a long log
-  /// costs the lines from that checkpoint rather than the log's head: on the mock home's 144 MB log, a page 50,000
-  /// lines in reads at most one stride of lines before the page instead of the 50,000 before it. The lines between that
+  /// The read starts at the line index's nearest checkpoint at or before `first_line`. So a page far inside a long log
+  /// costs the lines from that checkpoint, not the log's head. On the mock home's 144 MB log, a page 50,000 lines in
+  /// reads at most one stride of lines before the page, instead of the 50,000 before it. The lines between that
   /// checkpoint and the page are read past without parsing, because the caller discards them. A line's index matches
-  /// the whole-file read's, because the split is the same `\n` one and a final line without a terminator is still a
-  /// line. The returned pair carries the index of the first line returned.
+  /// the whole-file read's, because the split is the same `\n` one. A final line without a terminator is still a line.
+  /// The returned pair carries the index of the first line returned.
   fn live_lines_from_checkpoint(
     &self,
     session_id: &str,
@@ -782,17 +782,17 @@ impl Store {
     self.line_index(path, signature)
   }
 
-  /// The live log's physical lines from `first_line` to its end, parsed with one slot per line, or `None` when the
-  /// tail window does not hold them.
+  /// The live log's physical lines from `first_line` to its end, parsed with one slot per line, or `None` when the tail
+  /// window does not hold them.
   ///
-  /// The page a reader opens first is the one that ends at the log's end, so reading the tail answers it without the
-  /// whole log: on the 144 MB mock-home log that parse is 386 ms of the request, and the tail window is 512 KiB. The
-  /// `\n` split keeps the blank lines the whole-file read keeps, so a line's index is the same either way. A page the
-  /// line index places before the window's first byte cannot be held by it, so that case returns without the read.
+  /// The page a reader opens first is the one that ends at the log's end. Reading the tail therefore answers it without
+  /// the whole log. On the 144 MB mock-home log, that parse is 386 ms of the request, and the tail window is 512 KiB.
+  /// The `\n` split keeps the blank lines the whole-file read keeps, so a line's index is the same either way. A page
+  /// the line index places before the window's first byte cannot be held by it. That case returns without the read.
   ///
-  /// The count names how many lines the tail holds, so an append between the count and the read would shift which
-  /// lines the window returns. The signature the count was taken under is checked again after the read. A log that
-  /// moved falls back to [`Self::live_lines_from_checkpoint`], whose byte names the line the read starts at.
+  /// The count names how many lines the tail holds, so an append between the count and the read would shift which lines
+  /// the window returns. The signature the count was taken under is checked again after the read. A log that moved
+  /// falls back to [`Self::live_lines_from_checkpoint`], whose byte names the line the read starts at.
   fn live_tail_lines_newline_split(
     &self,
     session_id: &str,
@@ -802,8 +802,8 @@ impl Store {
     let Some((metadata, signature)) = file_signature(&path)? else { return Ok(None) };
     let index = self.line_index(&path, signature)?;
     // The window starts inside a line, and the read drops that line. The window therefore holds the page only when the
-    // page's first line starts after the window does. A checkpoint of a later line starts after that line does, so one
-    // at or before the window start proves the page is outside it without the 512 KiB read.
+    // page's first line starts after the window does. A checkpoint of a later line starts after that line does. So one
+    // at or before the window start proves the page is outside it, without the 512 KiB read.
     let window_start = metadata.len().saturating_sub(TAIL_WINDOW_SIZE as u64);
     if let Some((_, byte)) = index.checkpoint_after(first_line)
       && byte <= window_start
@@ -861,11 +861,12 @@ impl Store {
 
   /// The log's line count and checkpoints, through the 64-entry `(mtime_ns, size)` count memo.
   ///
-  /// A page's first open of a session counts the session's whole log, and the mock home's largest log is 144 MB: the
-  /// read is 30 ms of the open, single-threaded. A log over [`PARALLEL_COUNT_MIN_BYTES`] is counted in contiguous
-  /// ranges at once, one range per core up to [`MAX_COUNT_CORES`], because the count is one sum of newline bytes and
-  /// a range boundary never changes it. The scan that counts the newlines also records where every
-  /// [`LINE_INDEX_STRIDE`]-th line starts, so a page far inside the log seeks there instead of reading the head.
+  /// A page's first open of a session counts the session's whole log. The mock home's largest log is 144 MB, and that
+  /// read costs 30 ms of the open, single-threaded. A log over [`PARALLEL_COUNT_MIN_BYTES`] is counted in contiguous
+  /// ranges at once, one range per core up to [`MAX_COUNT_CORES`]. Ranges can be counted independently because the
+  /// count is one sum of newline bytes, and a range boundary never changes it. The scan that counts the newlines also
+  /// records where every [`LINE_INDEX_STRIDE`]-th line starts. So a page far inside the log seeks there instead of
+  /// reading the head.
   fn line_index(&self, path: &Path, signature: FileSignature) -> StoreResult<LineIndex> {
     if let Some(index) =
       lock(&self.event_read_caches, "event read cache mutex").count.fresh(&path.to_path_buf(), signature)
@@ -900,15 +901,15 @@ impl Store {
     Ok(index)
   }
 
-  /// Record the count this append makes, when the count memo holds the count of the file the append grew and the
+  /// Record the count this append makes. Do so when the count memo holds the count of the file the append grew, and the
   /// append's own line is the whole of the file's growth.
   ///
-  /// The page's bootstrap counts a session's log lines to name its event count, and the count memo answers only
-  /// while its `(mtime_ns, size)` signature holds. Without this record every bootstrap that follows an append reads
-  /// the whole log again: on the mock home's largest session that read is the page's whole 15-30 ms. The append
-  /// writes one newline-terminated line, and it adds one physical line unless the file's last line had no newline —
-  /// the append then continues that line, and the count is unchanged. `line_bytes` is what the append wrote, so any
-  /// other growth between the two stats means another writer moved the file as well, and the memo is left alone.
+  /// The page's bootstrap counts a session's log lines to name its event count, and the count memo answers only while
+  /// its `(mtime_ns, size)` signature holds. Without this record, every bootstrap that follows an append reads the
+  /// whole log again. On the mock home's largest session, that read is the page's whole 15-30 ms. The append writes one
+  /// newline-terminated line, and it adds one physical line unless the file's last line had no newline. In that case
+  /// the append continues the last line, and the count is unchanged. `line_bytes` is what the append wrote. Any other
+  /// growth between the two stats means another writer moved the file as well, so the memo is left alone.
   fn record_appended_line_count(
     &self,
     path: &Path,
@@ -1272,9 +1273,9 @@ const COUNT_CHUNK_BYTES: usize = 256 * 1024;
 ///
 /// The sum of newline bytes over the ranges is the file's count, because a range boundary never moves a newline. The
 /// file's last byte decides whether an unterminated final line adds one. Each range names the byte after every
-/// [`LINE_INDEX_STRIDE`]-th newline it reads, counting from its own first newline: the ranges meet at byte boundaries
-/// that need not fall on line starts, so the checkpoints of one range can sit up to a stride apart from its neighbour's,
-/// and every one of them still starts a line.
+/// [`LINE_INDEX_STRIDE`]-th newline it reads, counting from its own first newline. The ranges meet at byte boundaries
+/// that need not fall on line starts. So the checkpoints of one range can sit up to a stride apart from its
+/// neighbour's. Every one of them still starts a line.
 fn count_lines_in_ranges(file: &fs::File, len: u64, ranges: usize, path: &Path) -> StoreResult<(LineIndex, usize)> {
   if ranges < 2 || len == 0 {
     return count_lines_in_one_read(file, len, path);
@@ -2388,9 +2389,9 @@ mod tests {
       assert_eq!(ids(&warm_end), vec!["c"]);
     }
 
-    /// A page that ends at the log's end reads the tail window, and a page far inside the log seeks to its line
-    /// index: each reads only its own lines and serves its slots in the whole-file numbering, where a blank line, a
-    /// malformed line and a final line without a newline each keep their index.
+    /// A page that ends at the log's end reads the tail window. A page far inside the log seeks to its line index. Each
+    /// reads only its own lines and serves its slots in the whole-file numbering. A blank line, a malformed line and a
+    /// final line without a newline each keep their index.
     #[tokio::test]
     async fn an_unarchived_page_reads_only_the_lines_it_serves() {
       let home = tempfile::tempdir().unwrap();
@@ -2437,9 +2438,9 @@ mod tests {
       // A range that ends before the log's end keeps the whole-file numbering.
       let (middle, _) = store.load_chat_events_range(session_id, total - 60, total - 30).unwrap();
       assert_eq!(ids(&middle), want(total - 60, total - 30));
-      // A page far inside the log is outside the tail window, so the read seeks to the nearest checkpoint of its
-      // line index and reads its own lines: one line per slot, in the whole-file numbering, and the read is the page
-      // plus at most one stride.
+      // A page far inside the log is outside the tail window. So the read seeks to the nearest checkpoint of its line
+      // index. It reads its own lines, one line per slot, in the whole-file numbering. The read is the page plus at
+      // most one stride.
       let before = lock(&store.event_read_caches, "event read cache mutex").live_range_bytes_read;
       let tail_before = lock(&store.event_read_caches, "event read cache mutex").tail_window_reads;
       let parsed_before = lock(&store.event_read_caches, "event read cache mutex").live_range_lines_parsed;
@@ -2658,8 +2659,8 @@ mod tests {
       assert_eq!(ids(&events), vec!["appended"]);
     }
 
-    /// A range-built index can leave its last checkpoint short of a multiple of the stride, so an appended line whose
-    /// own number is not a multiple still opens a checkpoint a stride after that one: every page starts less than a
+    /// A range-built index can leave its last checkpoint short of a multiple of the stride. So an appended line whose
+    /// own number is not a multiple still opens a checkpoint a stride after that one. Every page starts less than a
     /// stride from its checkpoint.
     #[test]
     fn an_append_opens_a_checkpoint_a_stride_after_the_last_one() {
@@ -2848,8 +2849,8 @@ mod tests {
       assert!(store.event_read_caches.lock().unwrap().count_bytes_read > bytes);
     }
 
-    /// A count split across ranges is the count the whole file gives, for lines that cross every range boundary and
-    /// for a final line without a newline, and every range split's checkpoints name a real line start.
+    /// A count split across ranges is the count the whole file gives. This holds for lines that cross every range
+    /// boundary, and for a final line without a newline. Every range split's checkpoints name a real line start.
     #[test]
     fn a_line_index_split_across_ranges_matches_the_whole_file() {
       let home = tempfile::tempdir().unwrap();

@@ -262,7 +262,7 @@ impl PromptScope {
 
 /// One page of a parent's child rows, and whether a further matching row follows them.
 ///
-/// The rows are shared: a page the memo serves hands out the same allocation as the pass that rendered it, so the
+/// The rows are shared. A page the memo serves hands out the same allocation as the pass that rendered it. So the
 /// pointer names the page a repeat request reads.
 pub struct TaskTreePage {
   pub rows: Arc<Vec<TaskTreeRow>>,
@@ -774,10 +774,10 @@ impl Store {
   /// [`Store::node_state`] and the version of the memo entry that answered it.
   ///
   /// While the event cache is cold, a state sealed by [`Store::evict_recovery_history`] answers when the log file and
-  /// the archived extent are the ones it covers. The read parses no history. A cold read with no sealed state folds
-  /// the log's fact checkpoint and the bytes past it when one covers the log, which memoizes the same facts and runs
-  /// under the log's identity. Otherwise the log is scanned as one snapshot and sealed, which parses no chat content
-  /// and keeps no history; the cache stays cold.
+  /// the archived extent are the ones it covers. The read parses no history. A cold read with no sealed state folds the
+  /// log's fact checkpoint and the bytes past it when one covers the log. That memoizes the same facts and runs under
+  /// the log's identity. Otherwise the log is scanned as one snapshot and sealed, which parses no chat content and
+  /// keeps no history; the cache stays cold.
   fn node_state_versioned(&self, session_id: &str) -> StoreResult<(u64, Arc<NodeState>)> {
     let (generation, list_identity, live) = match self.live_history(session_id)? {
       LiveHistory::Cached { generation, identity, events } => (generation, identity, events),
@@ -1119,17 +1119,17 @@ impl Store {
 
   /// One page of one parent's children, in the snapshot's order, with an archived row that has running work kept.
   ///
-  /// An archived row stays navigable while running work lives at or below it: dropping it would sever the path to
-  /// that work in a partial client tree. The row's own work state counts, so a running leaf below a retained archived
-  /// parent keeps that parent's child page visible. The row still reports `archived`.
+  /// An archived row stays navigable while running work lives at or below it: dropping it would sever the path to that
+  /// work in a partial client tree. The row's own work state counts, so a running leaf below a retained archived parent
+  /// keeps that parent's child page visible. The row still reports `archived`.
   ///
   /// `after` is the `(created_at, session_id)` of the previous page's last row, and `limit` is the page size. The page
-  /// computes its own rows and the one row that proves `has_more`, never the parent's whole child list. On a home
-  /// whose root holds thousands of sessions, the whole list costs about 5 microseconds per row. A 100-row page of
-  /// 7,160 rows therefore paid for the 7,060 it truncated away.
+  /// computes its own rows and the one row that proves `has_more`, never the parent's whole child list. On a home whose
+  /// root holds thousands of sessions, the whole list costs about 5 microseconds per row. A 100-row page of 7,160 rows
+  /// therefore paid for the 7,060 it truncated away.
   ///
-  /// The rows are computed under `tree_rows_lock`, which serializes page computations. A page whose stored
-  /// identities all still hold is served without that lock: a hit reads the store's history-change count alone, and the
+  /// The rows are computed under `tree_rows_lock`, which serializes page computations. A page whose stored identities
+  /// all still hold is served without that lock. A hit reads the store's history-change count alone. It reads the
   /// identities only when a write moved that count.
   pub fn task_tree_page(
     &self,
@@ -1236,8 +1236,8 @@ impl Store {
 
   /// The stored page for `key`, when every history it read still holds the identity it was read at.
   ///
-  /// The identity read is the cost of a validated hit: the rows, their activity and their lifecycle states were derived
-  /// from exactly these histories, and the key's generations name every metadata and run-record write since. A hit the
+  /// The identity read is the cost of a validated hit. The rows, their activity and their lifecycle states were derived
+  /// from exactly these histories. The key's generations name every metadata and run-record write since. A hit the
   /// store has written no history for since the pass reads no identity at all, because the store writes every live
   /// history in the home.
   fn memoized_tree_page(&self, key: TreePageKey<'_>) -> StoreResult<Option<TaskTreePage>> {
@@ -1339,8 +1339,8 @@ impl Store {
 
   /// The history identities at `paths`, in the argument order, resolved from the open sessions directory.
   ///
-  /// A page validation stats a hundred of these on every repeat request, so it opens the directory once and stats the
-  /// stored paths as they are; a missing sessions directory holds no history.
+  /// A page validation stats a hundred of these on every repeat request. So it opens the directory once and stats the
+  /// stored paths as they are. A missing sessions directory holds no history.
   #[cfg_attr(not(test), allow(unused_variables))]
   fn history_identities_at(&self, ids: &[String], paths: &[CString]) -> StoreResult<Vec<Option<FileIdentity>>> {
     let Some(sessions_dir) = self.sessions_dir_handle()? else { return Ok(vec![None; paths.len()]) };
@@ -2274,9 +2274,9 @@ impl Store {
         _ => None,
       }
     };
-    // The cached snapshot agrees with the generation, so only its age is in question: past the TTL an external edit
-    // may have landed. A store that holds its own handle rebuilds off the reading thread and serves the snapshot,
-    // because the walk over a production-sized home outlasts the page request that finds it stale.
+    // The cached snapshot agrees with the generation, so only its age is in question: past the TTL an external edit may
+    // have landed. A store that holds its own handle rebuilds off the reading thread and serves the snapshot. It does
+    // so because the walk over a production-sized home outlasts the page request that finds it stale.
     if let Some(index) = stale
       && self.refresh_tree_index_in_background()
     {
@@ -2312,17 +2312,16 @@ impl Store {
     let _ = self.tree_index_self.set(Arc::downgrade(self));
   }
 
-  /// Start one background refresh of a stale task-tree index, or report that one already runs or that the store has
-  /// no handle to refresh itself through.
+  /// Start one background refresh of a stale task-tree index, or report that one already runs or that the store has no
+  /// handle to refresh itself through.
   ///
   /// The refresh compares the next slice of the sessions' inputs, and serves the index it holds when the slice still
   /// holds the values the build read. A walk over a production-sized home costs far more than reading one slice of
-  /// those inputs, so a home that nothing moved keeps its index and only its age is renewed, and one sweep of
+  /// those inputs. So a home that nothing moved keeps its index, and only its age is renewed. One sweep of
   /// [`TREE_INDEX_SWEEP_SLICES`] renewals compares every session's inputs.
   ///
-  /// False means the caller must build synchronously: the store has no handle, or its thread could not start. A
-  /// build that started is discarded when the tree generation moved while it ran, exactly as a synchronous build's
-  /// result is.
+  /// False means the caller must build synchronously: the store has no handle, or its thread could not start. A build
+  /// that started is discarded when the tree generation moved while it ran, exactly as a synchronous build's result is.
   fn refresh_tree_index_in_background(&self) -> bool {
     let Some(store) = self.tree_index_self.get().and_then(Weak::upgrade) else { return false };
     if self.tree_index_refresh_running.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
@@ -2355,14 +2354,14 @@ impl Store {
     true
   }
 
-  /// Renew the age of the cached index at `generation` when the home still holds the inputs that build read, and
-  /// report whether it did.
+  /// Renew the age of the cached index at `generation` when the home still holds the inputs that build read, and report
+  /// whether it did.
   ///
-  /// A home whose session directories, metadata files and live histories all hold their values builds the same index,
-  /// so the cached one serves every reader and the walk is skipped. The comparison covers the next slice of the
-  /// home's sessions, so one sweep over [`TREE_INDEX_SWEEP_SLICES`] renewals compares every session's inputs. An input
-  /// that moved, a home that cannot be read and a cached index another build replaced all report false, and the
-  /// caller then builds.
+  /// A home whose session directories, metadata files and live histories all hold their values builds the same index.
+  /// So the cached one serves every reader, and the walk is skipped. The comparison covers the next slice of the home's
+  /// sessions, so one sweep over [`TREE_INDEX_SWEEP_SLICES`] renewals compares every session's inputs. An input that
+  /// moved, a home that cannot be read and a cached index another build replaced all report false, and the caller then
+  /// builds.
   fn renew_stale_tree_index(&self, generation: u64) -> bool {
     let (cached, recorded_dir, cursor) = {
       let cached = self.task_tree_index.lock().expect("task tree index mutex is not poisoned");
@@ -2389,9 +2388,9 @@ impl Store {
     match entry.as_mut() {
       Some(entry) if entry.generation == generation && Arc::ptr_eq(&entry.index, &cached) => {
         entry.built_at = Instant::now();
-        // The renewal proved the names and the slice of inputs it read still match, so the identity it read holds for
-        // them: a later refresh whose stat matches it compares the sessions' inputs alone, even when a rollback moved
-        // it since.
+        // The renewal proved that the names and the slice of inputs it read still match. So the identity it read holds
+        // for them. A later refresh whose stat matches that identity compares the sessions' inputs alone. This holds
+        // even when a rollback has moved the identity since.
         entry.sessions_dir = current_dir;
         entry.sweep_cursor = next_cursor;
         true
@@ -2400,16 +2399,16 @@ impl Store {
     }
   }
 
-  /// Whether the home still holds the inputs the index at `expected` was built from, compared from `cursor` on, and
-  /// the cursor the next renewal starts at.
+  /// Whether the home still holds the inputs the index at `expected` was built from, compared from `cursor` on, and the
+  /// cursor the next renewal starts at.
   ///
-  /// The scan reads the next slice of sessions' two identities and compares them against the recorded ones, stopping
-  /// at the first that moved. A slice of a quiet home therefore renews without building a second input list, and the
+  /// The scan reads the next slice of sessions' two identities and compares them against the recorded ones, stopping at
+  /// the first that moved. A slice of a quiet home therefore renews without building a second input list, and the
   /// cursor it returns resumes the sweep after the slice it read.
   ///
   /// The directory walk that reads the session names runs only when the sessions directory's own identity moved from
-  /// the one the renewal last proved. A session directory that appears or leaves moves that identity, so a match
-  /// proves the recorded names still list the home, and a quiet home compares the sessions' inputs alone.
+  /// the one the renewal last proved. A session directory that appears or leaves moves that identity. So a match proves
+  /// the recorded names still list the home. A quiet home then compares the sessions' inputs alone.
   fn tree_index_inputs_hold(
     &self,
     expected: &[TreeIndexInput],
@@ -2543,16 +2542,16 @@ struct TreeInputValues {
   history: Option<FileIdentity>,
 }
 
-/// The input one session contributes to the tree index: its metadata file's `(mtime_ns, size)` and its live
-/// history's identity.
+/// The input one session contributes to the tree index: its metadata file's `(mtime_ns, size)` and its live history's
+/// identity.
 ///
 /// A missing metadata file is `None`, as is a session without a live history. The index also reads the session's
-/// archive segments, and those move only in the write that replaces the live log and raises the metadata's archive
-/// offset, so both of them are read here: an archive write moves this input too.
+/// archive segments. Those move only in the write that replaces the live log and raises the metadata's archive offset.
+/// So both are read here, and an archive write moves this input too.
 ///
-/// Both reads resolve from the open sessions directory, so a scan over the home walks a session's own components
-/// instead of the home's whole prefix for each file, and `relative` is the one path buffer the scan reuses: each
-/// path is overwritten in place and ends in the NUL byte the stat call reads, so a session costs no path allocation.
+/// Both reads resolve from the open sessions directory. So a scan over the home walks a session's own components, not
+/// the home's whole prefix for each file. `relative` is the one path buffer the scan reuses. Each path is overwritten
+/// in place and ends in the NUL byte the stat call reads, so a session costs no path allocation.
 fn tree_input_values(
   sessions_dir: &fs::File,
   session_id: &str,
@@ -2600,8 +2599,8 @@ fn build_tree_index_until(
     return Ok(None);
   }
   let sessions_dir = store.cfg.sessions_dir();
-  // The directory's identity is read before its names: a session that appears or leaves between the two moves the
-  // identity past the one recorded here, so the next refresh walks the names instead of trusting this build's list.
+  // The directory's identity is read before its names. A session that appears or leaves between the two moves the
+  // identity past the one recorded here. So the next refresh walks the names instead of trusting this build's list.
   let sessions_dir_identity = FileIdentity::read(&sessions_dir)?;
   let entries = match fs::read_dir(&sessions_dir) {
     Ok(entries) => entries,
@@ -2627,8 +2626,8 @@ fn build_tree_index_until(
     Ok(dir) => dir,
     Err(error) => return Err(path_error(&sessions_dir, error)),
   };
-  // The inputs are read before any session's content, never after it: a write that lands between the two then moves an
-  // input past the value recorded here, so the next refresh rebuilds instead of renewing an index of older content.
+  // The inputs are read before any session's content, never after it. A write that lands between the two moves an input
+  // past the value recorded here. So the next refresh rebuilds instead of renewing an index of older content.
   let mut relative = Vec::with_capacity(96);
   let mut inputs = Vec::with_capacity(names.len());
   for name in &names {
@@ -3180,9 +3179,9 @@ fn observe_run_facts(
   Ok(!should_stop())
 }
 
-/// Whether `event` is an input a turn consumes. A turn-end check shows its reason in the session, and the check's own
-/// continuation carries the reason to the agent, so that display is no input: a message carrying `TURN_HOOKS_ID` names
-/// the check result it shows.
+/// Whether `event` is an input a turn consumes. A turn-end check shows its reason in the session. Its continuation
+/// carries the same reason to the agent, so that display is no input. A message carrying `TURN_HOOKS_ID` names the
+/// check result it shows.
 fn admits_input(event: &ChatEvent) -> bool {
   match event.get("type").and_then(CompactValue::as_str) {
     Some("user") => event.get("content").is_some_and(CompactValue::is_string),
@@ -4018,8 +4017,8 @@ pub(crate) mod tests {
     let builds = store.task_tree_index_build_count();
     store.enable_tree_index_background_refresh();
 
-    // A foreign entry the index never lists moves the sessions directory's identity, while the session names and
-    // their inputs stay as the build read them: the next renewal renews the index instead of rebuilding it.
+    // A foreign entry the index never lists moves the sessions directory's identity. The session names and their inputs
+    // stay as the build read them. So the next renewal renews the index instead of rebuilding it.
     let sessions_dir = store.config().sessions_dir();
     let foreign = sessions_dir.join("not-a-session");
     fs::write(&foreign, b"x").unwrap();
@@ -5318,8 +5317,8 @@ pub(crate) mod tests {
     assert!(store.task_tree_activity_call_count() > calls, "a new index build computes the page again");
   }
 
-  /// A repeat page answers from the memo alone until the store writes or removes a history, and the page a validation
-  /// keeps answers the requests after it without another stat.
+  /// A repeat page answers from the memo alone until the store writes or removes a history. The page a validation keeps
+  /// answers the requests after it without another stat.
   #[tokio::test]
   async fn a_repeat_tree_page_reads_no_history_identity_until_the_store_writes_a_history() {
     let home = tempfile::tempdir().unwrap();

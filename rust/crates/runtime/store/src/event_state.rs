@@ -15,19 +15,19 @@ pub(crate) const LIVE_RANGE_MEMO_LIMIT: usize = 4;
 pub(crate) const TAIL_WINDOW_SIZE: usize = 512 * 1024;
 pub(crate) const LIVE_RANGE_WALK_BYTE_BUDGET: usize = 32 * 1024 * 1024;
 
-/// How many physical lines sit between two byte checkpoints of a log's line index. A checkpoint is a line number and
-/// a byte offset, so the index holds about one pair per stride and a seek lands less than a stride before the page: the
+/// How many physical lines sit between two byte checkpoints of a log's line index. A checkpoint is a line number and a
+/// byte offset, so the index holds about one pair per stride. A seek lands less than a stride before the page. The
 /// count scan and [`LineIndex::record_append`] both open a checkpoint within a stride of the last one. On the mock
-/// home's 144 MB log that is about 1,020 checkpoints (16 KB of pairs), and a read of at most a stride of lines before
-/// the page it serves.
+/// home's 144 MB log that is about 1,020 checkpoints (16 KB of pairs). A read then covers at most a stride of lines
+/// before the page it serves.
 pub(crate) const LINE_INDEX_STRIDE: usize = 64;
 
 /// A log's physical-line index: its line count and the byte where every [`LINE_INDEX_STRIDE`]-th line starts.
 ///
-/// A page far inside a long log seeks to the nearest checkpoint at or before its first line and reads from there, so
+/// A page far inside a long log seeks to the nearest checkpoint at or before its first line. It reads from there, so
 /// the read costs the lines from that checkpoint instead of the log's head. A line's number here is the one the `\n`
-/// split numbers — a blank line keeps its slot and a final line without a terminator is still a line — so the reader
-/// can slice the page out of the lines it read.
+/// split numbers. A blank line keeps its slot, and a final line without a terminator is still a line. So the reader can
+/// slice the page out of the lines it read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LineIndex {
   pub(crate) count: usize,
@@ -48,12 +48,12 @@ impl LineIndex {
     self.checkpoints.get(index).copied()
   }
 
-  /// Count the line that `byte` starts, opening its checkpoint when its own number is a multiple of the stride or when
+  /// Count the line that `byte` starts. Open its checkpoint when its own number is a multiple of the stride, or when
   /// the last checkpoint is already a stride behind it.
   ///
-  /// The count scan splits a large log into ranges, and each range numbers its checkpoints from its own first line, so
-  /// the last checkpoint can sit anywhere within a stride of a multiple. A multiple alone would then leave the next
-  /// page almost two strides from its checkpoint. The gap rule keeps every page within one.
+  /// The count scan splits a large log into ranges. Each range numbers its checkpoints from its own first line, so the
+  /// last checkpoint can sit anywhere within a stride of a multiple. A multiple alone would then leave the next page
+  /// almost two strides from its checkpoint. The gap rule keeps every page within one.
   pub(crate) fn record_append(&mut self, byte: u64) {
     let line = self.count;
     let last_checkpoint_line = self.checkpoints.last().map_or(0, |(checkpoint, _)| *checkpoint);

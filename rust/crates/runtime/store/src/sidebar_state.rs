@@ -170,7 +170,7 @@ thread_local! {
 /// Count a sidebar poll and return whether it must probe every active session.
 ///
 /// A poll that [`poll_begins_probe`] already counted and reserved answers from that reservation instead of counting
-/// again, so a reader can count its poll before it knows whether it must build the probe's row set.
+/// again. So a reader can count its poll before it knows whether it must build the probe's row set.
 pub fn register_poll(force: bool) -> bool {
   let reserved = RESERVED_PROBE.with(Cell::take);
   if let Some(reserved) = reserved
@@ -224,8 +224,8 @@ mod tests {
 
   #[test]
   fn a_reserved_poll_takes_its_turn_and_register_poll_answers_it() {
-    // A reader counts its poll with the peek and runs `register_poll` for the same poll afterwards: the register must
-    // answer the peek's poll, never a later one, or a poll that begins no probe could hand the probe an unbuilt set.
+    // A reader counts its poll with the peek, then runs `register_poll` for the same poll. The register must answer the
+    // peek's poll, never a later one. Otherwise a poll that begins no probe could hand the probe an unbuilt set.
     for _ in 0..(FORCE_FULL_EVERY * 2) {
       let peeked = poll_begins_probe();
       let counted = register_poll(false);

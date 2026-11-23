@@ -1,14 +1,13 @@
 //! The reparent rules of an agent caller and the `task_reparented` fact of every move.
 //!
 //! An agent rearranges its own subtree only: the moved task sits below the caller's task, and the new parent is the
-//! caller's task or below it. One exception reaches into the caller's subtree from outside it: a root session that
-//! the current cron configuration binds may move under the caller's task or below it, so an agent can gather a cron
-//! task's session that no agent created. A cron session that already has a parent keeps the plain rule, so no agent
-//! pulls in another line's attached session. The move keeps each moved session's subtree rules word for word,
-//! because the user alone sets the rules that a session reads. Only the chain above the moved task changes, so the
-//! check compares the old chain with the new one below their shared prefix. A rule the new chain adds refuses the
-//! move. One rule the old chain drops moves onto the moved task (the carry) when that task holds no subtree rule of
-//! its own.
+//! caller's task or below it. One exception reaches into the caller's subtree from outside it. A root session that the
+//! current cron configuration binds may move under the caller's task or below it. So an agent can gather a cron task's
+//! session that no agent created. A cron session that already has a parent keeps the plain rule, so no agent pulls in
+//! another line's attached session. The move keeps each moved session's subtree rules word for word, because the user
+//! alone sets the rules that a session reads. Only the chain above the moved task changes, so the check compares the
+//! old chain with the new one below their shared prefix. A rule the new chain adds refuses the move. One rule the old
+//! chain drops moves onto the moved task (the carry) when that task holds no subtree rule of its own.
 
 use std::path::Path;
 

@@ -80,8 +80,8 @@ would alter a page, report that it needs rerouting before editing.
   naming of them and their delivery to the user.
 
 When you review such a change, check each screenshot it names before you land it, wherever the landing keeps the file,
-judging it against the demo the change names — or for an improve round against the same round's before screenshot and
-direction file — and pass it only when it matches that reference and every region outside the change keeps room for its
+judging it against the demo the change names (or for an improve round against the same round's before screenshot and
+direction file) and pass it only when it matches that reference and every region outside the change keeps room for its
 content.
 - Look for overlap with page content, clipping and missing controls in every state the screenshots show.
 - Report the landing as blocked instead of landing it when a screenshot is missing or shows one of these defects.

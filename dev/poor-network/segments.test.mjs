@@ -51,13 +51,11 @@ function segmentsWith(gate, rates, reference = null) {
   return { segments, probes: () => probes };
 }
 
-test('the rate gate passes a rate inside the range and inside the band of the cells, and fails either outside', () => {
-  assert.equal(rateVerdict(3.5, null).ok, true);
-  assert.equal(rateVerdict(4.9, null).ok, true, 'a rate a host reads at moderate load');
-  assert.equal(rateVerdict(RATE_MIN - 0.1, null).ok, false, 'below the range');
-  assert.equal(rateVerdict(RATE_MAX + 0.1, null).ok, false, 'above the range');
-  assert.equal(rateVerdict(3.8, 4.0).ok, true, 'inside the band');
-  assert.equal(rateVerdict(4.0, 3.5).ok, false, 'more than 10 % from the cells rate');
+test('the rate gate passes a rate inside the range and fails one outside it', () => {
+  assert.equal(rateVerdict(3.5).ok, true);
+  assert.equal(rateVerdict(4.9).ok, true, 'a rate a host reads at moderate load');
+  assert.equal(rateVerdict(RATE_MIN - 0.1).ok, false, 'below the range');
+  assert.equal(rateVerdict(RATE_MAX + 0.1).ok, false, 'above the range');
 });
 
 test('a probe that fails the gate is discarded and run once more; the passing probe starts the segment', async () => {
@@ -90,10 +88,24 @@ test('two probes that fail the gate end the run with exit status 5', async () =>
   assert.equal(gate.units.filter((unit) => unit.discarded).length, 2);
 });
 
-test('a probe outside the band of the cells fails even inside the range', async () => {
+test('each segment calibrates on its own: its units carry its own probe rate', async () => {
+  // The first repetition's step gives the lock up, so the second repetition starts a new segment with its own probe.
+  const gate = fakeGate([null, { waiterPids: [42], seenToReleaseMs: 3 }]);
+  const { segments } = segmentsWith(gate, [3.0, 4.6]);
+  await segments.unit('rep', 'background 1', () => 1);
+  await segments.unit('rep', 'background 2', () => 2);
+  const reps = gate.units.filter((unit) => unit.kind === 'rep');
+  assert.deepEqual(reps.map((unit) => unit.probeRate), [3.0, 4.6]);
+  assert.equal(segments.reference, 3.0, 'the first accepted rate is recorded');
+});
+
+test('a probe inside the range is accepted whatever rate the invocation shares', async () => {
   const gate = fakeGate();
-  const { segments } = segmentsWith(gate, [3.0, 3.0], 4.0);
-  await assert.rejects(segments.unit('rep', 'held 1', () => 'never'), RateGateError);
+  const { segments } = segmentsWith(gate, [5.5], 4.0);
+  const value = await segments.unit('rep', 'held 1', () => 'measured');
+  assert.equal(value.status, 'ok');
+  assert.equal(segments.reference, 4.0, 'the shared rate is recorded, not enforced');
+  assert.equal(gate.units.filter((unit) => unit.kind === 'rep')[0].probeRate, 5.5);
 });
 
 test('a probe runs once per segment: a step without a yield does not start a new one', async () => {
@@ -113,7 +125,7 @@ test('a yield makes the next unit start with a new probe; the reference stays th
   await segments.unit('rep', 'background 2', () => 2);
   assert.equal(probes(), 2);
   assert.deepEqual(gate.units.map((unit) => unit.kind), ['probe', 'rep', 'probe', 'rep']);
-  assert.equal(segments.reference, 4.0, 'the first accepted rate is the cells rate');
+  assert.equal(segments.reference, 4.0, 'the first accepted rate is recorded');
   assert.equal(gate.units[3].segment, 2);
 });
 

@@ -7,13 +7,12 @@
 import { cpuRateFrom, hostInterference, referenceTail } from './open.mjs';
 import { LIVE_CPU_TAIL } from './profile.mjs';
 
-// The CPU rate gate. A probe's rate must be inside RATE_MIN..RATE_MAX and within RATE_BAND of the rate the segment's
-// cells run at. The derived rate rises as the host's CPU gets faster or its load falls, so RATE_MAX sits above the
-// rates a host reads at moderate load. It still refuses a broken calibration: a reference document that crosses the
-// link in full reads 21.68 to 30.31 (README "CPU rate").
+// The CPU rate gate. Each segment calibrates on its own: its probe's rate must be inside RATE_MIN..RATE_MAX, and a
+// probe is not compared with another segment's rate. The derived rate rises as the host's CPU gets faster or its load
+// falls, so RATE_MAX sits above the rates a host reads at moderate load. It still refuses a broken calibration: a
+// reference document that crosses the link in full reads 21.68 to 30.31 (README "CPU rate").
 export const RATE_MIN = 3.0;
 export const RATE_MAX = 10.0;
-export const RATE_BAND = 0.1;
 // A segment is re-probed at most this long after its probe, so each measurement stays close to the rate that describes
 // it (design value: about ten minutes).
 export const SEGMENT_MAX_MS = 600000;
@@ -28,16 +27,10 @@ export class RateGateError extends Error {
 // A step that passed its cap on every attempt. The caller decides whether its run goes on without it.
 export class StepCapped extends Error {}
 
-// The verdict on one probe's rate against the rate the segment's cells run at, or null when the rate is not yet fixed.
-export function rateVerdict(rate, reference) {
+// The verdict on one probe's rate: its own segment's calibration, checked against the range alone.
+export function rateVerdict(rate) {
   if (!(rate >= RATE_MIN && rate <= RATE_MAX)) {
     return { ok: false, reason: `CPU rate ${rate} is outside ${RATE_MIN}-${RATE_MAX}` };
-  }
-  if (reference !== null && Math.abs(rate / reference - 1) > RATE_BAND) {
-    return {
-      ok: false,
-      reason: `CPU rate ${rate} is more than ${RATE_BAND * 100} % from the cells' rate ${reference}`,
-    };
   }
   return { ok: true, reason: null };
 }
@@ -46,7 +39,8 @@ export class Segments {
   #gate;
   #probe;
   #side;
-  // The rate the cells run at: the invocation's shared rate, or the first accepted probe's when none is shared.
+  // The invocation's shared rate when it passes one, or else the first accepted probe's rate: the side's JSON records
+  // it. It gates no probe, since each segment's units carry that segment's own probe rate.
   #reference;
   #needProbe = true;
   #count = 0;
@@ -61,7 +55,7 @@ export class Segments {
     this.#reference = reference;
   }
 
-  // The rate the cells run at, once it is fixed.
+  // The rate the side's JSON records as the invocation's reference: the shared rate, or the first accepted probe's.
   get reference() {
     return this.#reference;
   }
@@ -95,7 +89,7 @@ export class Segments {
       const interference = hostInterference(rep);
       const rate = interference === null ? cpuRateFrom(LIVE_CPU_TAIL.medianMs, referenceTail(rep)) : null;
       const verdict = interference === null
-        ? rateVerdict(rate, this.#reference)
+        ? rateVerdict(rate)
         : { ok: false, reason: `host interference: ${interference}` };
       outcome.unit.segment = number;
       outcome.unit.probeRate = rate;

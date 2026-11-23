@@ -719,11 +719,12 @@ export class Tabs {
 
   // Waits until every request that is in flight now has finished. The page's own polls keep starting and finishing
   // while it runs, and over the shaped link some are always in flight; a request that starts after this call does not
-  // hold the settle, so the wait ends with the load that was under way when it began.
-  async waitIdle(timeoutMs) {
+  // hold the settle, so the wait ends with the load that was under way when it began. When `ignore` is passed, requests
+  // matching `ignore(request)` are left out of the wait.
+  async waitIdle(timeoutMs, { ignore = null } = {}) {
     const pending = this.#tabs.flatMap((tab) =>
       [...tab.requests.entries()]
-        .filter(([, request]) => request.finishAt === null && request.failed === null)
+        .filter(([, request]) => request.finishAt === null && request.failed === null && (!ignore || !ignore(request)))
         .map(([requestId]) => ({ tab, requestId })),
     );
     await waitFor(

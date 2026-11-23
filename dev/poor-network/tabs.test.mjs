@@ -171,3 +171,25 @@ test('opening a tab sets the access key cookie on the page origin', async () => 
     params: {cookies: [{name: 'charliebot_access_key', value: 'key-123', url: 'https://front.test'}]},
   }]);
 });
+
+test('waitIdle skips requests matched by ignore while waiting on others', async () => {
+  const browser = {
+    send: async () => ({}),
+    onMessage: () => {},
+    newPage: async () => ({targetId: 'page-1', send: async () => ({})}),
+  };
+  const tabs = new Tabs({browser, assets: new Map(), accessKey: 'k', origin: 'https://front.test', cdn: 'link'});
+  const tab = await tabs.open('shot');
+  const req = (requestId, url) => ({
+    method: 'Network.requestWillBeSent',
+    params: {requestId, request: {url}},
+  });
+  tab.handle(req('poll', 'https://front.test/api/ext-usage'));
+  tab.handle(req('asset', 'https://front.test/static/app.js'));
+  setTimeout(() => {
+    tab.handle({method: 'Network.loadingFinished', params: {requestId: 'asset', encodedDataLength: 10}});
+  }, 40);
+  await tabs.waitIdle(500, {ignore: (request) => request.url.includes('/api/ext-usage')});
+  assert.equal(tab.requests.get('poll').finishAt, null);
+  assert.notEqual(tab.requests.get('asset').finishAt, null);
+});

@@ -23,8 +23,13 @@ export const SHOT_SIZES = Object.freeze([
 
 // The wait after a state's trigger, so the rows the page paints settle before the capture.
 const SHOT_SETTLE_MS = 5000;
+const SHOT_IDLE_TIMEOUT_MS = 300000;
 const SHOT_SHOW_TIMEOUT_MS = 180000;
 const RETRY_STATE_TIMEOUT_MS = 60000;
+
+// Background requests that do not block the For-you screenshot click flow are left out of the pre-click idle wait.
+const SHOT_IDLE_IGNORE_RE = /\/(?:api\/(?:sessions\/status|ext-usage|diag\/client-events)|favicon\.ico)(?:$|\?)/;
+const isBackgroundShotRequest = (request) => SHOT_IDLE_IGNORE_RE.test(request.url);
 
 const SENTINEL_FAILED = `document.getElementById('load-more-sentinel')?.dataset.state === 'failed' ? true : null`;
 // The page's phone breakpoint (platform.js): at or below it the session list is a drawer, closed until its hamburger
@@ -75,7 +80,7 @@ async function switchShot(ctx, size, target, file) {
     await tabs.navigate(tab, `/?session=${ctx.sessions.open.id}`);
     await tab.ready();
     await tabs.show(tab);
-    await tabs.waitIdle(SHOT_SETTLE_MS);
+    await tabs.waitIdle(SHOT_IDLE_TIMEOUT_MS, { ignore: isBackgroundShotRequest });
     await openPhoneDrawer(tab, size);
     await tab.showRow(target);
     await tab.watchChat(name, target.marker);
@@ -97,7 +102,7 @@ async function retryShot(ctx, size, target, file) {
     await tabs.navigate(tab, `/?session=${ctx.sessions.open.id}`);
     await tab.ready();
     await tabs.show(tab);
-    await tabs.waitIdle(SHOT_SETTLE_MS);
+    await tabs.waitIdle(SHOT_IDLE_TIMEOUT_MS, { ignore: isBackgroundShotRequest });
     await openPhoneDrawer(tab, size);
     await tab.showRow(target);
     await tab.watchChat(name, target.marker);

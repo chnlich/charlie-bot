@@ -127,7 +127,7 @@ When more than one is open, take the oldest.
 An adopted pull request is the whole round.
 Switch the clone to its branch.
 When the newest verdict comment (Step 6) names the current head and reports no issues, run Step 7.
-Otherwise run Step 6: a head without a verdict gets its review, and a head whose verdict reports findings starts with its fixes.
+Otherwise run Step 6: a head without a verdict gets the freshness step and its review, and a head whose verdict reports findings starts with its fixes.
 When its newest comment starts `improve-waiting:`, read Step 8 first.
 End the round after it closes, merged or abandoned, and open no new pull request.
 This rule finishes a started topic before a new one.
@@ -218,7 +218,23 @@ When the body names pending measurements, add `--draft` to the pr-create command
 The body carries the direction's evidence under a `## Evidence` heading; the CI contract check rejects a pull request without it.
 One pull request per round is the unit that CI and the reviewer check.
 
-## Step 6: review the diff
+## Step 6: make the head current, then review the diff
+
+The freshness step is the rebase onto the latest `origin/main` and the checks that follow it.
+The round runs the freshness step before every review, so each verdict reads the head that merges.
+
+The freshness step has three parts:
+
+- Rebase the branch onto the latest `origin/main`.
+  When the rebase moves the head, push the rebased head through the posting script with `--force-with-lease`.
+  The rebase proves that the topic still applies to today's `main`.
+  A conflict that the round cannot resolve abandons the pull request, as the abandon rule of Step 7 describes.
+- Wait for the checks of the head.
+  Checks that a push has not registered yet read as empty, so the round reads them again until they appear.
+  A red check takes the fix steps of Step 7, and the fixed head runs the freshness step again.
+- With the checks green, confirm that the pull request still carries a diff against `origin/main`.
+  An empty diff means that the topic already landed: close the pull request as a duplicate through the posting script,
+  with the comment `improve-abandoned: <topic> — duplicate of #<N>`, naming the landed pull request.
 
 The review is an independent check that the topic is complete and correct.
 The review runs on the backend that `backends.calls.improve_review` selects in the host's `config.yaml`.
@@ -243,7 +259,7 @@ A failed review's scratch directory and its `events.ndjson` are named in the rou
 The round posts each verdict as one pull-request comment through `dev/improve/github-post.sh pr-comment`, with `--verdict-head` naming the full head sha that the review read.
 That comment is the verdict comment: it carries the verdict without the event stream, and `pr-merge` reads its head sha.
 A verdict is clean when it reports no issues; otherwise it reports findings.
-A verdict with findings is acted on: the round fixes every finding on the same branch, pushes the fix, and reruns this same review, with the same launch, once on the new head.
+A verdict with findings is acted on: the round fixes every finding on the same branch, pushes the fix, runs the freshness step on the fixed head, and reruns this same review, with the same launch, once on that head.
 A round runs at most two reviews, so that rerun is its last review.
 When the rerun reports findings, the round leaves the pull request open.
 Its verdict comment names the head and the open findings, and Step 2 adopts the pull request in the next round.
@@ -256,54 +272,33 @@ A silent skip breaks the protocol.
 ## Step 7: land the pull request or abandon it
 
 Merge only when the merge head carries a clean verdict and the pull request is ready for review (category rule).
+Every merge head has passed the freshness step and its review, so the checks that the freshness step watched cover it.
 A head change after the verdict makes that verdict stale: a review fix, a rebase, an update from main, a CI fix or any other push.
 A pure update from main with no conflict is a head change too, and it keeps no earlier verdict.
-The merge head then needs a clean verdict from Step 6's review of that head, and the round counts that review against its two reviews.
-When the round has no review left for the merge head, it leaves the pull request open and ends the round; Step 2 adopts it in the next round.
+The new head then goes through Step 6, and the round counts that review against its two reviews.
+When the round has no review left for the new head, it leaves the pull request open and ends the round; Step 2 adopts it in the next round.
 When the pull request is a draft, leave it open for its runner and end the round after its verdict.
 
 Before the merge, the pull request's title and body describe its final commits.
 When the branch gained commits after the description was written, update the title and body through `dev/improve/github-post.sh pr-edit`.
 Keep the body's `## Evidence` section.
 
-Wait for the checks in this round:
+Read GitHub's `mergeable` state of the pull request. When GitHub has not computed it yet, read it again.
 
-    gh pr checks <PR> --watch --fail-fast
-
-Retry the watch a few times, several seconds apart, while it reports no checks.
-The workflow needs a moment to register after the push.
-
-Before the merge, rebase onto the latest `origin/main`:
-
-    git fetch origin main
-    git rebase origin/main
-
-Resolve each conflict, run `git add` and `git rebase --continue`, then push through the posting script:
-
-    dev/improve/github-post.sh push --force-with-lease
-
-Wait for the checks again.
-The rebase proves that the topic still applies to today's `main`.
-
-When a conflict cannot be resolved, run `git rebase --abort` and abandon the pull request.
-Write `improve-abandoned: <topic> — conflict with origin/main` into a comment file and close through the posting script:
-
-    dev/improve/github-post.sh pr-close --comment-file <comment file> <PR>
+- When GitHub reports the pull request mergeable, merge the reviewed head without a rebase.
+  Mergeable means that the topic still applies to today's `main`, which is the proof that the freshness step's rebase
+  gives. GitHub's squash applies the head to the current `main` at merge time.
+- When GitHub reports a conflict with `main`, rebase onto the latest `origin/main`, resolve each conflict, and push the
+  resolved head through the posting script with `--force-with-lease`.
+  The resolved head is a head change: it goes through Step 6, and its review counts against the two reviews.
+- When a conflict cannot be resolved, abort the rebase and abandon the pull request: write
+  `improve-abandoned: <topic> — conflict with origin/main` into a comment file and close it through the posting script's `pr-close`.
+  The abort restores the branch as it was before the rebase, so the clone is left clean for the next round.
 
 Every `improve-abandoned:` and `improve-waiting:` comment goes through the posting script.
-The abort restores the branch as it was before the rebase, so the clone is left clean for the next round.
 The comment records the topic for the next round.
 
-With the checks green, confirm that the pull request still carries a diff against a fresh `main`:
-
-    git diff origin/main...HEAD --stat
-
-An empty diff means that the topic already landed.
-Close the pull request through the posting script with the comment `improve-abandoned: <topic> — duplicate of #<N>`, naming the landed pull request, in a comment file:
-
-    dev/improve/github-post.sh pr-close --comment-file <comment file> <PR>
-
-A non-empty diff merges through the posting script, with the round's evidence directory:
+The round merges through the posting script with the round's evidence directory:
 
     dev/improve/github-post.sh pr-merge --evidence-dir <the round's evidence directory> <PR>
 
@@ -314,7 +309,7 @@ The failure class selects the fix steps below.
 
 A failure inside this diff earns at most two fixes on the same branch.
 Each fix pulls the branch with `git pull --ff-only`, fixes the failure, pushes through the posting script, and watches the checks again.
-The fixed head then needs its clean verdict under the merge rule above.
+The fixed head then goes through Step 6 again.
 When the check stays red after the second fix, abandon the pull request with `improve-abandoned: <topic> — <reason>` in a comment file, through `pr-close` as above.
 
 Name the topic in the comment, because Step 3 reads it to skip the topic on the next round.
@@ -327,7 +322,7 @@ Each step either clears the failure or names the main run that blocks the merge.
    branch and keeps its existing commits in the review scope.
 2. When the endpoint reports that no update is needed, rerun the failed jobs with
    `gh run rerun <run-id> --failed`, and watch again.
-3. When the checks pass, go to the merge above.
+3. When the checks pass, the head goes through Step 6 when it has no clean verdict, and to the merge above when it has one.
 4. When the check is red again, read main's CI state.
 5. When the main run failed, run Step 8.
    When the repair merges, start these steps again at step 1.

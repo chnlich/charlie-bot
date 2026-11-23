@@ -12,6 +12,7 @@ use charliebot_registry::templating::Templating;
 use charliebot_registry::usage::{NativeCacheRead, RecordKind, UsageRecord, UsageSource};
 use charliebot_registry::{FeatureContext, Registry, RegistryError};
 use http::{Method, Request, StatusCode};
+use rusqlite::params;
 use serde_json::{Value, json};
 use time::OffsetDateTime;
 use tower::ServiceExt;
@@ -19,6 +20,7 @@ use tower::ServiceExt;
 use super::*;
 use crate::count::Count;
 use crate::ledger::{LedgerAccount, LedgerRow, UsageLedger, default_ledger_path};
+use crate::sql;
 use crate::test_support::{feature_context, registry};
 
 const CC: &str = "Claude Code";
@@ -186,6 +188,8 @@ fn read_of(
     rows,
     week_rows: Vec::new(),
     previous_week_rows: Vec::new(),
+    to_date: Week::containing(now).expect("the week resolves").to_date(None),
+    to_date_rows: Vec::new(),
     native_starts: native_starts.iter().map(|(source, start)| (source.to_string(), start.to_string())).collect(),
     last_capture,
     elapsed: Duration::ZERO,
@@ -669,6 +673,62 @@ fn last_week_reads_the_same_rows_on_the_table_and_the_aggregate() {
   assert_eq!(table.week_rows, aggregate.week_rows);
   assert_eq!(table.previous_week_rows, aggregate.previous_week_rows);
   assert_eq!(table.rows, aggregate.rows);
+}
+
+/// Stamps this host's last capture at `moment`, so a test fixes where this week to date ends.
+fn stamp_capture(home: &Path, moment: &str) {
+  let ledger = UsageLedger::open(default_ledger_path(home)).expect("the ledger opens");
+  let host = host_name().expect("the host has a name");
+  ledger
+    .connection()
+    .execute(sql::LEDGER_META_UPSERT_SQL, params![format!("last_capture_at:{host}"), moment])
+    .expect("the capture stamps");
+  ledger.close().expect("the ledger closes");
+}
+
+/// The output of `model`'s row, or none when no row names it.
+fn output_of(rows: &[LedgerRow], model: &str) -> Option<Count> {
+  rows.iter().find(|row| row.model == model).map(|row| row.output)
+}
+
+/// This week to date runs from Monday 00:00 Pacific to the last capture. The instants sit on both edges, across the
+/// spring clock change, and a model that only this week uses gets a row here and none in last week's.
+#[test]
+#[ignore = "integration"]
+fn this_week_to_date_runs_from_monday_midnight_to_the_capture() {
+  let home = tempfile::tempdir().expect("a temporary home");
+  let features = page_features(home.path(), registry());
+  add_records(
+    home.path(),
+    "/logs/cc.jsonl",
+    "sig-cc",
+    &[
+      // 23:59:59 PST on Sunday 2026-03-08: the last instant of last week.
+      record("last-end", CC, "claude-sonnet-4", "2026-03-09T06:59:59Z", 1000, "acct-a"),
+      // 00:00 PDT on Monday 2026-03-09: the first instant of this week.
+      record("this-start", CC, "claude-sonnet-4", "2026-03-09T07:00:00Z", 10, "acct-a"),
+      record("this-only", CC, "claude-opus-5", "2026-03-10T10:00:00Z", 30, "acct-a"),
+      // After the capture: the all-time rows count it, this week to date does not.
+      record("after-capture", CC, "claude-sonnet-4", "2026-03-10T18:30:00Z", 500, "acct-a"),
+    ],
+  );
+  stamp_capture(home.path(), "2026-03-10T18:00:00Z");
+  let now = at("2026-03-10T20:00:00Z");
+  // The first read backfills the aggregate, so it takes the table pass. The second takes the aggregate.
+  let table = read_ledger_at(&features, now).expect("the ledger reads");
+  let aggregate = read_ledger_at(&features, now).expect("the ledger reads");
+  assert_eq!(table.to_date.start, at("2026-03-09T07:00:00Z"));
+  assert_eq!(table.to_date.end, at("2026-03-10T18:00:00Z"));
+  assert_eq!(output_of(&table.to_date_rows, "claude-sonnet-4"), Some(Count::Int(10)));
+  assert_eq!(output_of(&table.to_date_rows, "claude-opus-5"), Some(Count::Int(30)));
+  assert_eq!(output_of(&table.week_rows, "claude-sonnet-4"), Some(Count::Int(1000)));
+  assert_eq!(
+    output_of(&table.week_rows, "claude-opus-5"),
+    None,
+    "a model with no usage last week has no last-week row"
+  );
+  assert_eq!(output_of(&table.rows, "claude-sonnet-4"), Some(Count::Int(1510)));
+  assert_eq!(table.to_date_rows, aggregate.to_date_rows);
 }
 
 #[test]

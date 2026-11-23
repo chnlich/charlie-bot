@@ -22,7 +22,7 @@ pub(crate) fn exception(error: anyhow::Error) -> Failure {
 pub struct PageInputs {
   /// The host whose capture stamp the page names.
   pub host: String,
-  /// The Pacific week the window's figures cover.
+  /// The Pacific week the page renders in, as its Monday. The Monday sets the last-week and the to-date windows.
   pub week: String,
   /// The config the rows' accounts attribute against.
   pub config: Arc<CharlieBotConfig>,

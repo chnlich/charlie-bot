@@ -2,6 +2,7 @@
 
 mod api;
 pub mod cli;
+mod colleague;
 mod config;
 mod download;
 mod draft;
@@ -39,6 +40,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.router(api::routes, api::matches)?;
   registry.draft_platform("slack", draft::platform_factory())?;
   registry.config_section(config::section())?;
+  registry.pre_recovery_step("slack_colleague_gate", colleague::gate_step)?;
   registry.metadata_slot_with_validator(
     MetadataSlot {
       owner: "slack",

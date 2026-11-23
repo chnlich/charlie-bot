@@ -1840,6 +1840,13 @@ pub async fn backfill_followed_threads(
       let Some(first) = unread.first() else {
         return Ok(None);
       };
+      if !charliebot_registry::colleague_gate::admits_wake(features, &meta.id, &follow_wake_label(platform, &first.id))
+        .await
+      {
+        let event = format!("{}_follow_backfill_not_admitted", platform.name);
+        tracing::info!(%event, session = %meta.id, thread = %log_fields);
+        return Ok(None);
+      }
       revive_and_arm_follow(platform, features, meta, &first.id, &log_fields).await
     }
     .await;

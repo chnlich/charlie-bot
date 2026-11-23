@@ -1010,6 +1010,10 @@ impl TriggerManager {
       self.cancel_undeliverable(&mut fresh, reason).await?;
       return Ok(());
     }
+    if !charliebot_registry::colleague_gate::admits_wake(&self.features, &fresh.session_id, &fresh.message).await {
+      self.cancel_undeliverable(&mut fresh, "colleague message not admitted".to_string()).await?;
+      return Ok(());
+    }
     // Only a trigger with remote targets gains the end fields. A local or pure-delay trigger keeps its plain line.
     let fire_log = has_remote_target(&fresh.watch_targets)
       .then(|| build_fire_log(&fresh, fired_at, &outcome.remote_ends, recovered));
@@ -4024,6 +4028,54 @@ mod tests {
         .get("content")
         .and_then(CompactValue::as_str)
         .is_some_and(|content| content.contains("synthetic wake"))
+    );
+  }
+
+  /// A colleague gate that refuses every wake, so the fire path's check is the only one the test reaches.
+  struct RefusingWakeGate;
+
+  impl charliebot_registry::colleague_gate::ColleagueGate for RefusingWakeGate {
+    fn refuse_agent_work<'a>(
+      &'a self,
+      _features: &'a FeatureContext,
+      _caller: &'a charliebot_registry::caller::CallerIdentity,
+    ) -> futures_util::future::BoxFuture<'a, Option<&'static str>> {
+      Box::pin(async { None })
+    }
+
+    fn admits_wake<'a>(
+      &'a self,
+      _features: &'a FeatureContext,
+      _session_id: &'a str,
+      _label: &'a str,
+    ) -> futures_util::future::BoxFuture<'a, bool> {
+      Box::pin(async { false })
+    }
+  }
+
+  #[tokio::test]
+  async fn a_wake_the_colleague_gate_refuses_is_cancelled_before_input_is_admitted() {
+    let (_home, features) = feature_context();
+    add_task_node(&features, SESSION_ID).await;
+    install_dispatcher(&features);
+    let gate: Arc<dyn charliebot_registry::colleague_gate::ColleagueGate> = Arc::new(RefusingWakeGate);
+    features.startup.insert(gate).expect("insert the colleague gate");
+    let manager = Arc::new(TriggerManager::new(Arc::clone(&features)));
+    let mut trigger = pending_trigger("synthetic-follow-trigger", SESSION_ID, near_future(-1), Vec::new());
+    trigger.message = "slack-thread-follow floor=1700000000.000100".to_string();
+    manager.save_trigger(&trigger).await.expect("save trigger");
+
+    manager.wait_and_fire(trigger.clone(), false).await.expect("fire trigger");
+
+    let fresh = manager.load_trigger(SESSION_ID, &trigger.id).await.expect("read cancelled trigger");
+    assert_eq!(fresh.status, TriggerStatus::Cancelled);
+    assert_eq!(fresh.fire_reason.as_deref(), Some("colleague message not admitted"));
+    let events = features.store.load_all_facts(SESSION_ID).expect("read task events");
+    assert!(
+      events
+        .iter()
+        .all(|event| event.get("type").and_then(CompactValue::as_str) != Some(event_types::SCHEDULED_TRIGGER)),
+      "a refused wake admits no scheduled input",
     );
   }
 

@@ -8,6 +8,7 @@
 
 pub mod backend;
 pub mod caller;
+pub mod colleague_gate;
 pub mod context;
 pub mod draft;
 pub mod icons;

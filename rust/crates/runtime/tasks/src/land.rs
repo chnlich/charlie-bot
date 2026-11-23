@@ -15,8 +15,9 @@
 //! rules; a repository that never declared the scanner keeps the credential stage alone.
 //!
 //! Before any push, a diff that changes a CharlieBot web page refuses the call unless its PR body names the
-//! approved demo, the changed view's URL path and a screenshot at each window size (`web_screenshots`). The
-//! view paths are written into the head commit's trailer block before the push, so the commit that reaches the
+//! approved demo, a `View: <URL>` line naming the full URL, path and query, that opens the changed state, and a
+//! screenshot at each window size (`web_screenshots`). The View lines are written into the head commit's trailer
+//! block before the push, so the commit that reaches the
 //! base branch carries them for the release switch's live capture.
 //!
 //! Under the gate the call rebases onto `origin/<base>`, pushes the task branch with

@@ -23,9 +23,10 @@
 //! reads the width and height from the PNG's IHDR chunk, so a file's name does not decide its size. Overlap,
 //! clipping and missing controls stay with the reviewer.
 //!
-//! A landing's PR body also names the approved demo (`Demo: <absolute path>`, whose file must exist) and the
-//! changed view's URL path (`View: <URL path>`). A landing carries each View line into the landed commit as
-//! a trailer, which `scripts/switch-server.sh` reads back to capture the live page after the switch.
+//! A landing's PR body also names the approved demo (`Demo: <absolute path>`, whose file must exist) and a
+//! `View: <URL>` line naming the full URL, path and query, that opens the changed state. A landing carries each View
+//! line into the landed commit as a trailer, which `scripts/switch-server.sh` reads back to capture the live page
+//! after the switch.
 //!
 //! A view resolves on the live server when `check_view_resolves` passes it: a `/?session=<id>` view when the server
 //! knows the session, any other view on a 2xx answer. The landing refuses a session view the server does not know.
@@ -58,7 +59,7 @@ const PNG_HEADER_LEN: usize = 24;
 /// The line prefix that names the approved demo in a PR body.
 const DEMO_PREFIX: &str = "Demo:";
 
-/// The line prefix that names the changed view's URL path in a PR body.
+/// The line prefix for a `View: <URL>` line naming the full URL, path and query, that opens the changed state.
 const VIEW_PREFIX: &str = "View:";
 
 /// The punctuation that wraps a path in prose or a Markdown list, which a named path sheds (`PATH_WRAPPERS`).
@@ -90,7 +91,8 @@ pub struct BodyContract {
 }
 
 /// Refuses a web page change's PR body unless it names `Demo: <absolute path>` whose file exists,
-/// `View: <URL path>`, and a PNG at each window size by absolute path, and unless each `/?session=<id>` view it
+/// a `View: <URL>` line naming the full URL, path and query, that opens the changed state, and a PNG at each window
+/// size by absolute path, and unless each `/?session=<id>` view it
 /// names is a session the live server knows. The caller decides that the change alters a web page. A named file
 /// that cannot be read or is not a PNG also refuses (`check_pr_body`).
 pub fn check_pr_body(pr_body: Option<&str>) -> anyhow::Result<BodyContract> {
@@ -104,8 +106,9 @@ pub fn check_pr_body(pr_body: Option<&str>) -> anyhow::Result<BodyContract> {
 fn check_pr_body_with(pr_body: Option<&str>, status_of: &StatusOf) -> anyhow::Result<BodyContract> {
   let body = pr_body.unwrap_or_default();
   let required = format!(
-    "the diff changes a web page, so the PR body must name the approved demo on a `Demo: <absolute path>` line, the \
-     changed view's URL path on a `View: <URL path>` line, and a screenshot at each CSS window size ({}) by absolute \
+    "the diff changes a web page, so the PR body must name the approved demo on a `Demo: <absolute path>` line, a \
+     `View: <URL>` line naming the full URL, path and query, that opens the changed state, and a screenshot at each \
+     CSS window size ({}) by absolute \
      path at device pixel ratio 1",
     window_sizes_text()
   );
@@ -350,7 +353,10 @@ mod tests {
     let named: Vec<String> = shots.iter().map(|path| path.display().to_string()).collect();
     let body = format!("Demo: {}\n{}", demo.display(), named.join(" "));
     let refusal = check_pr_body(Some(&body)).unwrap_err().to_string();
-    assert!(refusal.contains("View"), "{refusal}");
+    assert!(
+      refusal.contains("a `View: <URL>` line naming the full URL, path and query, that opens the changed state"),
+      "{refusal}"
+    );
   }
 
   /// A server that answers every GET with `status`.

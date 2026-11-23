@@ -74,8 +74,9 @@ would alter a page, report that it needs rerouting before editing.
 - Capture each window size that `charliebot land --help` lists at device pixel ratio 1, filling each view with the
   longest real content that the page shows in use and capturing the whole screen with every related change applied.
 - Keep the screenshot files out of the commits.
-- For a landing through `charliebot land`, name the approved demo in the PR body's Demo line, the changed view's URL
-  path in its View line, and each screenshot by absolute path on this host in the commit or PR body.
+- For a landing through `charliebot land`, name the approved demo in the PR body's Demo line, the full URL (path and
+  query) that opens the changed state with real content in its View line, and each screenshot by absolute path on this
+  host in the commit or PR body.
 - For an improve round, follow `dev/improve/landing.md` Steps 5 and 9 for the screenshots' location, the pull request's
   naming of them and their delivery to the user.
 
@@ -87,14 +88,18 @@ content.
 - Report the landing as blocked instead of landing it when a screenshot is missing or shows one of these defects.
 
 `charliebot land` refuses a landing whose diff changes a file that a CharlieBot page serves, or a page template under
-`prompts/`, unless its PR body names the approved demo on a `Demo:` line, the changed view's URL path on a `View:` line,
-and a screenshot at each window size `charliebot land --help` lists by absolute path. The view that a `View:` line names
-exists on the live server. A `/?session=<id>` view names a session the server knows. An improve round merges through
+`prompts/`, unless its PR body names the approved demo on a `Demo:` line, a `View:` line, and a screenshot at each
+window size `charliebot land --help` lists by absolute path. A `View:` line names the full URL, path and query, that
+opens the changed state with real content on the live server, such as
+`/diff?repo=~/workspace/charlie-bot&base=<sha>~1&head=<sha>` or `/?session=<id>`. A `/?session=<id>` view names a
+session the server knows. An improve round merges through
 `dev/improve/github-post.sh pr-merge`, which refuses a web page change whose evidence directory lacks a screenshot at
 each window size or whose PR body lacks its `View:` line.
 
 After the release switch, compare each live screenshot that `scripts/switch-server.sh` prints for a commit with the demo
-before you report the change delivered.
+before you report the change delivered. When the switch exits 7 with `not-visible` on a commit whose change only opens
+through interaction, confirm that change from the screenshots its landing named, and name those screenshots and the
+check's reason in the delivery report; a `broken` verdict or failed check requires a fix instead.
 
 <!-- section: skills_discovery -->
 ## Skills Discovery

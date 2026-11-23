@@ -23,7 +23,9 @@ A credential value never enters any text the round writes, and no write reaches 
 A leak-rule hit is the only hit the round rewrites: the round removes the matched content from the text, rewrites it, and runs the subcommand again.
 The script sends nothing on a hit, so the posted text is always text that passed.
 A credential hit stops the round. The kind that the check names is the round's stop reason, and the round writes no rewrite of the text.
-A merge goes through the posting script's `pr-merge`, which refuses a web page change whose evidence directory fails the screenshot check or whose pull request body names no `View:` line, and carries the `View:` lines into the squash commit message.
+A merge goes through the posting script's `pr-merge`, which refuses a web page change whose evidence directory fails
+the screenshot check or whose pull request body names no `View:` line, and carries the `View:` lines into the squash
+commit message. Each `View:` line follows the View contract of the Web UI Screenshots rule in `prompts/task_base.md`.
 `gh pr update-branch`, `gh run rerun` and the read-only calls stay bare: they carry no text of the round, and the `gh` shim still checks their arguments.
 
 ## The round's login and the launch's exit codes

@@ -15,8 +15,8 @@
 # Calls that carry no round-written text stay bare gh: gh pr update-branch,
 # gh run rerun, and the read-only calls. A merge goes through pr-merge, which
 # refuses a draft pull request, a web page change whose evidence directory fails
-# the screenshot check or whose pull request body names no View line, and carries
-# the View lines into the squash commit message.
+# the screenshot check, whose body lacks a full-URL View line, or whose View value
+# does not start with `/`, and carries the View lines into the squash commit message.
 #
 # pr-edit does not call gh pr edit: on gh 2.45 that fails on the Projects
 # (classic) lookup. It reads the PR's URL with gh pr view, then sends the
@@ -204,7 +204,7 @@ case "$subcommand" in
   pr-merge)
     # The round's merge. A web page change passes the screenshot check of
     # `charliebot screenshots check`, which reads the changed paths on stdin, and
-    # its pull request body must carry a View line. The check prints a
+    # its pull request body must carry a full-URL View line starting with `/`. The check prints a
     # `web page change:` line exactly when the change alters a web page, so this
     # script keeps no second copy of the rule. The View lines go into the squash
     # commit message as trailers, which the release switch reads back to capture
@@ -297,9 +297,17 @@ case "$subcommand" in
       }
       sed -n 's/^View:[[:space:]]*//p' "$tmp_dir/pr-body" > "$tmp_dir/views"
       if [[ ! -s "$tmp_dir/views" ]]; then
-        printf 'PR %s changes a web page, so its body must carry a View: line; nothing was merged.\n' "$pr_selector" >&2
+        printf 'PR %s changes a web page, so its body must carry a `View: <URL>` line naming the full URL, path and query, that opens the changed state; nothing was merged.\n' \
+          "$pr_selector" >&2
         exit 2
       fi
+      while IFS= read -r view; do
+        if [[ "$view" != /* ]]; then
+          printf 'PR %s changes a web page, so each `View: <URL>` line naming the full URL, path and query, that opens the changed state must start with `/`; nothing was merged.\n' \
+            "$pr_selector" >&2
+          exit 2
+        fi
+      done < "$tmp_dir/views"
       # The View lines move to the message's end, so the squash commit carries each exactly once, as a trailer
       # block; a duplicate line would capture the live page twice at the release switch.
       { sed '/^View:/d' "$tmp_dir/pr-body"; printf '\n'; sed 's/^/View: /' "$tmp_dir/views"; } > "$tmp_dir/merge-body"

@@ -32,10 +32,10 @@ Source code: the server and the `charliebot` CLI are `rust/crates/`.
    gate does not apply, the landing does not wait for CI and reports `landed-no-ci`. `landed` and `landed-no-ci` exit
    0 and leave the task branch's PR merged or closed. Every other state leaves the change unlanded and names what
    holds it. Before any push, a diff that changes a web page (a file that a CharlieBot page serves, or a page template
-   directly under `prompts/`) is refused unless its PR body names the approved demo on a `Demo:` line, the changed view's URL path on
-   a `View:` line, and a screenshot at each CSS window size `charliebot land --help` lists by absolute path. Each
-   `View:` line is written into the landed commit as a trailer, which the release switch reads back to capture the live
-   page.
+   directly under `prompts/`) is refused unless its PR body names the approved demo on a `Demo:` line, a `View:` line
+   with the full URL that opens the changed state, and a screenshot at each CSS window size `charliebot land --help`
+   lists by absolute path. Each `View:` line is written into the landed commit as a trailer, which the release switch
+   reads back to capture the live page and to check that the capture shows the change.
 5. On landing → master agent gets summary
 
 ### Merge-back failover

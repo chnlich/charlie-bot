@@ -848,8 +848,27 @@ fn a_pr_merge_refuses_a_web_page_change_without_a_view_line() {
   let run = world.merge(&["--evidence-dir", world.evidence.to_str().unwrap(), "5046"]);
 
   assert_eq!(run.code, 2, "{}", run.describe());
-  assert!(run.stderr.contains("View:"), "{}", run.stderr);
+  assert!(
+    run.stderr.contains("a `View: <URL>` line naming the full URL, path and query, that opens the changed state"),
+    "{}",
+    run.stderr
+  );
   assert!(world.merge_calls().is_empty(), "nothing may merge: {}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_refuses_a_view_without_a_leading_slash() {
+  let world = MergeWorld::new("web/static/ui.js\n", "## Evidence\nbefore and after.\n\nView: diff\n");
+  world.write_screenshots(2);
+
+  let run = world.merge(&["--evidence-dir", world.evidence.to_str().unwrap(), "5046"]);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("PR 5046"), "{}", run.stderr);
+  assert!(run.stderr.contains("must start with `/`"), "{}", run.stderr);
+  assert!(world.merge_calls().is_empty(), "nothing may merge: {}", run.describe());
+  assert!(!world.merge_body.exists(), "no squash message was written");
 }
 
 #[test]

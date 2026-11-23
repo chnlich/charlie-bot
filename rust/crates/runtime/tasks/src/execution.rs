@@ -2192,16 +2192,13 @@ impl TaskExecutionAdapter {
           .filter(|value| !value.is_null())
           .map(|value| serde_json::from_value::<backend_pool::BackendRoute>(value.clone()))
           .transpose()?;
-        if let Some(route_pool) = route
-          .as_ref()
-          .and_then(|route| {
-            route.backends.iter().find(|backend| {
-              cfg.backends
-                .pool(backend)
-                .is_some_and(|pool| pool.members.iter().any(|member| member.backend.as_str() == failed_backend))
-            })
+        if let Some(route_pool) = route.as_ref().and_then(|route| {
+          route.backends.iter().find(|backend| {
+            cfg.backends
+              .pool(backend)
+              .is_some_and(|pool| pool.members.iter().any(|member| member.backend.as_str() == failed_backend))
           })
-        {
+        }) {
           return Ok(Some(route_pool.clone()));
         }
         if let Some(pool) = cfg.backends.pool(&meta.backend) {

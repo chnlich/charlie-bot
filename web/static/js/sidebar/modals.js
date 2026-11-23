@@ -26,9 +26,25 @@ function startRename(e, id) {
   // The field takes the name line's height, so the row's second line — the time and the backend — stays visible
   // below it.
   input.style.top = valueRect.top + 'px';
-  input.style.left = rect.left + 'px';
-  input.style.width = rect.width + 'px';
   input.style.height = valueRect.height + 'px';
+  if (linkUsable) {
+    // The field's text starts at the name's left edge, so the field's own left padding is taken off its box.
+    // The field ends 4 px short of the row's first shown button (the star or the Settings gear), so it covers neither.
+    // A hidden button has no box, so only the buttons with a width count.
+    const padLeft = parseFloat(getComputedStyle(input).paddingLeft);
+    const buttonBoxes = [...link.querySelectorAll(':scope > button')]
+      .map((button) => button.getBoundingClientRect())
+      .filter((box) => box.width > 0);
+    const buttonsLeft = buttonBoxes.length > 0
+      ? Math.min(...buttonBoxes.map((box) => box.left))
+      : rect.right;
+    const boxLeft = valueRect.left - padLeft;
+    input.style.left = boxLeft + 'px';
+    input.style.width = buttonsLeft - 4 - boxLeft + 'px';
+  } else {
+    input.style.left = rect.left + 'px';
+    input.style.width = rect.width + 'px';
+  }
   input.style.paddingTop = '0px';
   input.style.paddingBottom = '0px';
   // The field prefills the session's full name, not the row's rendered title:

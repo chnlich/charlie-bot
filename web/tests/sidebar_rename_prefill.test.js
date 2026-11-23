@@ -17,7 +17,8 @@ const MODALS_JS = readStatic('sidebar/modals.js');
 
 // modals.js wires startRename as a bare global through Sidebar.wire; the fake
 // DOM below covers exactly what startRename touches: getElementById,
-// getBoundingClientRect, querySelector, classList, style, focus, select.
+// getBoundingClientRect, querySelector, querySelectorAll, classList, style,
+// focus, select, and the field's computed left padding (px-3, 12px).
 function loadModals(dom, fetchImpl) {
   const Sidebar = {};
   const context = {
@@ -25,6 +26,7 @@ function loadModals(dom, fetchImpl) {
     Chat: {registerSeparatorButton: () => {}},
     globalThis: null,
     document: dom.document,
+    getComputedStyle: () => ({paddingLeft: '12px'}),
     console: {error: () => {}},
     setTimeout: () => 0,
     fetch: fetchImpl || (() => Promise.resolve({ok: true})),
@@ -64,6 +66,7 @@ function makeDom({rowWidth = 220, rowName = 'demo session', fullName = rowName, 
   const rowEl = withRow ? {
     getBoundingClientRect: () => fakeRect(rowWidth),
     querySelector: (sel) => (sel === '.session-name' ? nameSpan : null),
+    querySelectorAll: () => [],
   } : null;
   const headerEl = {textContent: headerName, getBoundingClientRect: () => ({...fakeRect(400), height: headerHeight})};
   const elements = {'rename-input': input, 'header-session-name': headerEl};

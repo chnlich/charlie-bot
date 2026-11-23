@@ -2101,7 +2101,7 @@ async fn continued_review_quota_failure_fails_over_to_next_pool_member() -> anyh
       visible: true,
     },
   ]);
-  cfg.backends.calls.insert(CallClass::Review, CallTarget::Session);
+  cfg.backends.calls = [(CallClass::Review, CallTarget::Session)].into_iter().collect();
   stack.replace_config(cfg)?;
   set_access_key(&stack)?;
   let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;

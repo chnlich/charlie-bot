@@ -39,14 +39,13 @@
 # one root share no tree. Without it the tree is ${TMPDIR:-/tmp}/charliebot-release-trial-<uid>-<first 12 hex>, so one
 # user's trials of one commit name one path, and a tree path that already exists refuses the run, naming the path and
 # its owner. The temp root that the trial exports as TMPDIR is <tree>/tmp with --tree-root, and without it the short
-# directory ${TMPDIR:-/tmp}/t-<first 12 hex> beside the tree; the cleanup removes both. The temp root holds the tmux
-# socket directory too. --seed-home <dir>
-# copies each session directory of <dir> into the trial home before the
-# server starts, with the boot marker <dir>/boot_recovery.json when present (a task-tree mock home), and the trial
-# keeps its own config.yaml and credentials.yaml; --in-caller-scope keeps the server in the caller's cgroup, which must
-# already cap memory, and skips the scope probe and the scope start and stop. Every read of the release under test goes
-# through the charliebot beside <server binary>: its `charliebot release-helper` verbs parse the responses, the logs
-# and the sessions this script gathers.
+# directory ${TMPDIR:-/tmp}/t-<first 12 hex of the SHA-256 of "<uid> <commit>"> beside the tree; the cleanup removes
+# both. The temp root holds the tmux socket directory too. --seed-home <dir> copies each session directory of <dir>
+# into the trial home before the server starts, with the boot marker <dir>/boot_recovery.json when present (a task-tree
+# mock home), and the trial keeps its own config.yaml and credentials.yaml; --in-caller-scope keeps the server in the
+# caller's cgroup, which must already cap memory, and skips the scope probe and the scope start and stop. Every read of
+# the release under test goes through the charliebot beside <server binary>: its `charliebot release-helper` verbs parse
+# the responses, the logs and the sessions this script gathers.
 #
 # Exit: the command's exit code; 1 a foreign cgroup removal, a remaining child process, a cleanup failure, a server
 # that did not become ready on its own port, a server that stopped before the wait for its runs ended, or a server that
@@ -252,16 +251,18 @@ readonly CHOSEN_PORT
 #
 # The temp root holds every socket the preflight checks, so its name sets the socket budget. A round's TMPDIR is
 # /tmp/improve-<direction>-tmp/scope.<8 characters>: 34 bytes for ux, and 42 for the longest direction name on host3.
-# Chrome's socket adds 45 bytes to the temp root, so the default temp root is a short sibling of the tree named by the
-# commit alone, t-<first 12 hex>. Its name carries no uid, so the budget does not grow with the uid's length (host3's
-# uid has six digits). Two users who trial one commit in one shared TMPDIR collide here, and the second run refuses at
-# the mkdir. The cleanup removes the temp root with the tree.
+# Chrome's socket adds 45 bytes to the temp root, so the default temp root is a short sibling of the tree, named
+# t-<first 12 hex of the SHA-256 of "<uid> <full commit>">. The digest keeps the uid's digits out of the name, so the
+# budget does not grow with the uid's length (host3's uid has six digits), and it separates users and commits that
+# share one TMPDIR. The cleanup removes the temp root with the tree.
 if [[ -n $TREE_ROOT ]]; then
   readonly TREE="${TREE_ROOT%/}/trial-${COMMIT:0:12}"
   readonly TMP_ROOT="$TREE/tmp"
 else
   readonly TREE="${TMPDIR:-/tmp}/charliebot-release-trial-$(id -u)-${COMMIT:0:12}"
-  readonly TMP_ROOT="${TMPDIR:-/tmp}/t-${COMMIT:0:12}"
+  TMP_KEY=$(printf '%s %s\n' "$(id -u)" "$COMMIT" | sha256sum) \
+    || preflight_fail "the default trial temp root needs sha256sum to name it, for commit $COMMIT"
+  readonly TMP_ROOT="${TMPDIR:-/tmp}/t-${TMP_KEY:0:12}"
   if [[ $TREE != /* ]]; then
     preflight_fail "the default trial tree needs an absolute TMPDIR, got: $TREE"
   fi

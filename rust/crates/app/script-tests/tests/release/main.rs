@@ -8,6 +8,7 @@
 mod release_lock;
 mod world;
 
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs;
 use std::io::{Read, Write};
@@ -972,11 +973,10 @@ impl PreflightWorld {
     harness::copy_file(Path::new("/bin/true"), &release.join("charliebot-server"));
     harness::write_executable(&release.join("charliebot"), CLI_STUB);
     sandbox.stub("charlie-code", "exit 0\n");
+    // The id stub answers the uid that each trial sets in PREFLIGHT_UID, so one world can play two users.
     sandbox.stub(
       "id",
-      &format!(
-        "[[ $* == -u ]] || {{ echo \"id stub: unexpected arguments: $*\" >&2; exit 1; }}\necho {PREFLIGHT_UID}\n"
-      ),
+      "[[ $* == -u ]] || { echo \"id stub: unexpected arguments: $*\" >&2; exit 1; }\necho \"$PREFLIGHT_UID\"\n",
     );
     env.insert("CHARLIEBOT_HOME".to_string(), sandbox.dir("live-home").display().to_string());
     env.insert("CHARLIEBOT_RELEASE_RUN_DIR".to_string(), sandbox.dir("evidence").display().to_string());
@@ -984,16 +984,29 @@ impl PreflightWorld {
     Self { sandbox, repo, env, commit, server }
   }
 
-  /// One trial of the world's commit with `tmpdir` as its TMPDIR, and `options` between --serve and the commit.
+  /// Commits an empty change on the world's HEAD and returns its sha: a second commit that origin/main does not name.
+  fn commit_again(&self) -> String {
+    git(&self.env, &self.repo, &["commit", "-q", "--allow-empty", "-m", "the second preflight commit"]);
+    git(&self.env, &self.repo, &["rev-parse", "HEAD"])
+  }
+
+  /// One trial of the world's commit by the preflight's uid, with `tmpdir` as its TMPDIR and `options` between --serve
+  /// and the commit.
   fn trial(&self, tmpdir: &Path, options: &[&str]) -> Run {
+    self.trial_of(&self.commit, PREFLIGHT_UID, tmpdir, options)
+  }
+
+  /// One trial of `commit` by the user `uid`, with `tmpdir` as its TMPDIR and `options` between --serve and the commit.
+  fn trial_of(&self, commit: &str, uid: &str, tmpdir: &Path, options: &[&str]) -> Run {
     let mut env = self.env.clone();
     env.insert("TMPDIR".to_string(), tmpdir.display().to_string());
+    env.insert("PREFLIGHT_UID".to_string(), uid.to_string());
     let mut command = harness::command("bash", &env);
     command
       .arg(self.repo.join("scripts/release/trial.sh"))
       .arg("--serve")
       .args(options)
-      .arg(&self.commit)
+      .arg(commit)
       .arg(&self.server)
       .args(["--", "true"]);
     harness::run(&mut command)
@@ -1004,6 +1017,35 @@ impl PreflightWorld {
 fn assert_socket_passes(run: &Run, socket: &str) {
   let line = format!("PREFLIGHT PASS socket: {socket} ({} bytes)", socket.len());
   assert!(run.stdout.contains(&line), "the preflight did not pass {socket}: {}", run.describe());
+}
+
+/// The suffix of a Chrome singleton socket under a temp root: the mkdtemp directory that the preflight measures.
+const CHROME_SOCKET_SUFFIX: &str = "/org.chromium.Chromium.XXXXXX/SingletonSocket";
+
+/// The temp root that a Chrome socket path names under `parent`: `<parent>/t-` and 12 hex digits, the name that
+/// trial.sh gives the default temp root.
+fn temp_root_of(socket: &str, parent: &Path) -> String {
+  let root = socket.strip_suffix(CHROME_SOCKET_SUFFIX).unwrap_or_else(|| panic!("not a Chrome socket path: {socket}"));
+  let key = root
+    .strip_prefix(&format!("{}/t-", parent.display()))
+    .unwrap_or_else(|| panic!("the temp root is not t-<key> under {}: {socket}", parent.display()));
+  assert!(
+    key.len() == 12 && key.bytes().all(|byte| byte.is_ascii_hexdigit()),
+    "the temp root key is not 12 hex digits: {socket}"
+  );
+  root.to_string()
+}
+
+/// The Chrome socket path that a trial's preflight passed.
+fn passed_chrome_socket(run: &Run) -> String {
+  run
+    .stdout
+    .lines()
+    .find_map(|line| {
+      let (path, _) = line.strip_prefix("PREFLIGHT PASS socket: ")?.rsplit_once(" (")?;
+      path.ends_with(CHROME_SOCKET_SUFFIX).then(|| path.to_string())
+    })
+    .unwrap_or_else(|| panic!("the preflight passed no Chrome socket: {}", run.describe()))
 }
 
 /// One round's scope TMPDIR shape: `scope.<8 characters>` under `/tmp/improve-<direction>-tmp`. A random direction
@@ -1046,21 +1088,47 @@ fn test_trial_preflight_passes_under_each_round_scope_tmpdir() {
   let hex = &world.commit[..12];
   for direction in ["ux", "decoupling"] {
     let scope = RoundScope::new(direction);
-    let temp = scope.path().join(format!("t-{hex}"));
-    let tree = scope.path().join(format!("charliebot-release-trial-{PREFLIGHT_UID}-{hex}"));
     let run = world.trial(scope.path(), &["--in-caller-scope"]);
 
     assert_eq!(run.code, 1, "{direction}: {}", run.describe());
-    assert_socket_passes(&run, &format!("{}/tmux/tmux-{PREFLIGHT_UID}/charliebot", temp.display()));
-    assert_socket_passes(&run, &format!("{}/org.chromium.Chromium.XXXXXX/SingletonSocket", temp.display()));
+    let temp = temp_root_of(&passed_chrome_socket(&run), scope.path());
+    assert_socket_passes(&run, &format!("{temp}/tmux/tmux-{PREFLIGHT_UID}/charliebot"));
+    assert_socket_passes(&run, &format!("{temp}{CHROME_SOCKET_SUFFIX}"));
     assert!(
       run.stdout.contains("FAIL serve Startup"),
       "{direction}: the trial did not reach its server start: {}",
       run.describe()
     );
     assert!(!run.stderr.contains("preflight failed"), "{direction}: {}", run.describe());
-    assert!(!temp.exists() && !tree.exists(), "{direction}: the trial left its tree or temp root: {}", run.describe());
+    let tree = scope.path().join(format!("charliebot-release-trial-{PREFLIGHT_UID}-{hex}"));
+    assert!(!Path::new(&temp).exists() && !tree.exists(), "{direction}: the trial left its tree or temp root");
   }
+}
+
+/// Two users, and two commits of one user, each get their own default temp root under one shared TMPDIR. Each trial
+/// passes the preflight and reaches its server start, so each names its root by its own uid and commit. Three full
+/// trials take seconds, so the test is an integration test.
+#[test]
+#[ignore = "integration"]
+fn test_trial_default_temp_root_separates_users_and_commits() {
+  let world = PreflightWorld::new();
+  let second_commit = world.commit_again();
+  let scope = RoundScope::new("ux");
+  let trials =
+    [(world.commit.as_str(), "999999"), (world.commit.as_str(), "888888"), (second_commit.as_str(), "999999")];
+
+  let roots: Vec<String> = trials
+    .iter()
+    .map(|(commit, uid)| {
+      let run = world.trial_of(commit, uid, scope.path(), &["--in-caller-scope"]);
+      assert_eq!(run.code, 1, "uid {uid} at {commit}: {}", run.describe());
+      assert!(run.stdout.contains("FAIL serve Startup"), "uid {uid} at {commit}: {}", run.describe());
+      temp_root_of(&passed_chrome_socket(&run), scope.path())
+    })
+    .collect();
+
+  let distinct: HashSet<&String> = roots.iter().collect();
+  assert_eq!(distinct.len(), roots.len(), "two trials share a default temp root: {roots:?}");
 }
 
 /// A temp root whose Chrome socket path is past the limit refuses the run with exit 2, names the socket and its byte
@@ -1069,13 +1137,23 @@ fn test_trial_preflight_passes_under_each_round_scope_tmpdir() {
 fn test_trial_preflight_refuses_a_long_tmpdir_and_names_the_chrome_socket() {
   let world = PreflightWorld::new();
   let base = world.sandbox.dir(&format!("long-{}", "directory-".repeat(8)));
-  let socket = format!("{}/t-{}/org.chromium.Chromium.XXXXXX/SingletonSocket", base.display(), &world.commit[..12]);
 
   let run = world.trial(&base, &["--in-caller-scope"]);
 
   assert_eq!(run.code, 2, "{}", run.describe());
   assert!(run.stderr.contains("socket path must stay under 108 bytes"), "{}", run.describe());
-  assert!(run.stderr.contains(&format!("{socket} ({} bytes)", socket.len())), "{}", run.describe());
+  let refused = run
+    .stderr
+    .lines()
+    .find(|line| line.contains(CHROME_SOCKET_SUFFIX))
+    .unwrap_or_else(|| panic!("the refusal names no Chrome socket: {}", run.describe()));
+  let (socket, count) = refused
+    .rsplit_once(": ")
+    .and_then(|(_, rest)| rest.rsplit_once(" ("))
+    .unwrap_or_else(|| panic!("the refusal gives no socket and byte count: {refused}"));
+  // The socket is the default temp root's Chrome socket under the base: `<base>/t-<12 hex>` and the suffix.
+  temp_root_of(socket, &base);
+  assert_eq!(count, format!("{} bytes)", socket.len()), "{}", run.describe());
   assert_eq!(fs::read_dir(&base).expect("the base").count(), 0, "the refused run wrote into {}", base.display());
 }
 

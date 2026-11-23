@@ -33,7 +33,9 @@ impl Count {
       (Count::Int(left), Count::Int(right)) => {
         left.checked_add(right).map(Count::Int).ok_or_else(|| anyhow!("{label} exceed the signed 64-bit range"))
       }
-      _ => Ok(Count::Real(self.as_f64() + other.as_f64())),
+      (Count::Int(_), Count::Real(_)) | (Count::Real(_), Count::Int(_) | Count::Real(_)) => {
+        Ok(Count::Real(self.as_f64() + other.as_f64()))
+      }
     }
   }
 
@@ -43,7 +45,9 @@ impl Count {
       (Count::Int(left), Count::Int(right)) => {
         left.checked_sub(right).map(Count::Int).ok_or_else(|| anyhow!("{label} exceed the signed 64-bit range"))
       }
-      _ => Ok(Count::Real(self.as_f64() - other.as_f64())),
+      (Count::Int(_), Count::Real(_)) | (Count::Real(_), Count::Int(_) | Count::Real(_)) => {
+        Ok(Count::Real(self.as_f64() - other.as_f64()))
+      }
     }
   }
 
@@ -51,7 +55,9 @@ impl Count {
   pub fn compare(self, other: Count) -> Ordering {
     match (self, other) {
       (Count::Int(left), Count::Int(right)) => left.cmp(&right),
-      _ => self.as_f64().total_cmp(&other.as_f64()),
+      (Count::Int(_), Count::Real(_)) | (Count::Real(_), Count::Int(_) | Count::Real(_)) => {
+        self.as_f64().total_cmp(&other.as_f64())
+      }
     }
   }
 

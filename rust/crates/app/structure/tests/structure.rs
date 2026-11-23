@@ -1482,6 +1482,81 @@ const EXACT_LITERAL_OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_core::config::OPTION_BILLING_KEY`; the option record's writer and reader and `charliebot \
            config get backends` name the key from it.",
   },
+  OwnerRow {
+    name: "charliebot_home",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::config::CHARLIEBOT_HOME_KEY`; `CharlieBotConfig` owns its top-level keys.",
+  },
+  OwnerRow {
+    name: "headless_chrome_bin",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::config::HEADLESS_CHROME_BIN_KEY`; `CharlieBotConfig` owns its top-level keys.",
+  },
+  OwnerRow {
+    name: "remote_run",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::config::REMOTE_RUN_KEY` or serialize `RemoteRunConfig`; `infra/core` owns its schema.",
+  },
+  OwnerRow {
+    name: "subprocess_buffer_limit_mb",
+    owner: "infra/core",
+    hint: "Render `ServerConfig` through `ServerConfig::dump_json` in `infra/core`.",
+  },
+  OwnerRow {
+    name: "session_memory_max_mb",
+    owner: "infra/core",
+    hint: "Render `ServerConfig` through `ServerConfig::dump_json` in `infra/core`.",
+  },
+  OwnerRow {
+    name: "session_swap_max_mb",
+    owner: "infra/core",
+    hint: "Render `ServerConfig` through `ServerConfig::dump_json` in `infra/core`.",
+  },
+  OwnerRow {
+    name: "session_tasks_max",
+    owner: "infra/core",
+    hint: "Render `ServerConfig` through `ServerConfig::dump_json` in `infra/core`.",
+  },
+  OwnerRow {
+    name: "min_free_disk_gib",
+    owner: "infra/core",
+    hint: "Render `ServerConfig` through `ServerConfig::dump_json` in `infra/core`.",
+  },
+  OwnerRow {
+    name: "workspace_dirs",
+    owner: "infra/core",
+    hint: "Serialize `PathsConfig` from `infra/core` instead of spelling its fields.",
+  },
+  OwnerRow {
+    name: "worktree_dir",
+    owner: "infra/core",
+    hint: "Serialize `PathsConfig` from `infra/core` instead of spelling its fields.",
+  },
+  OwnerRow {
+    name: "scratch_dir",
+    owner: "infra/core",
+    hint: "Serialize `PathsConfig` from `infra/core` instead of spelling its fields.",
+  },
+  OwnerRow {
+    name: "remote_base",
+    owner: "infra/core",
+    hint: "Serialize `RemoteRunConfig` from `infra/core` instead of spelling its fields.",
+  },
+  OwnerRow {
+    name: "home_services",
+    owner: "infra/core",
+    hint: "Serialize `UiConfig` from `infra/core` instead of spelling its fields.",
+  },
+  OwnerRow {
+    name: "user_token_command",
+    owner: "infra/core",
+    hint: "Serialize `GithubConfig` from `infra/core` instead of spelling its fields.",
+  },
+  OwnerRow {
+    name: "app_token_command",
+    owner: "infra/core",
+    hint: "Serialize `GithubConfig` from `infra/core` instead of spelling its fields.",
+  },
 ];
 
 /// The phrases that one crate owns: the response detail sentences that a route answers with, and the log event

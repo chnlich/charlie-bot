@@ -76,16 +76,24 @@ side_record_check_one() {
 # side_record_check_body <evidence dir> <body file> <draft>: check the side records that one pull request body cites.
 # Each `Side record:` line names one record file in the evidence directory, and each named record must pass
 # side_record_check_one. The body must name a record when the pull request is ready (draft 0) and the evidence
-# directory holds side records. draft is 1 for a draft pull request, 0 for a ready one.
+# directory holds side records. draft is 1 for a draft pull request, 0 for a ready one. An empty evidence directory
+# means the caller gave none: the body passes only when it cites no record, since no record can be checked without one.
 side_record_check_body() {
   local dir=$1 body=$2 draft=$3 line name status=0
   local -a cited=()
-  [[ -d $dir ]] || { printf 'side record check: the evidence directory is missing: %s\n' "$dir" >&2; return 1; }
   while IFS= read -r line; do
     if [[ $line =~ ^Side\ record:[[:space:]]+(.+)$ ]]; then
       cited+=("${BASH_REMATCH[1]}")
     fi
   done <"$body"
+  if [[ -z $dir ]]; then
+    if (( ${#cited[@]} > 0 )); then
+      printf 'side record check: the body cites a side record, which needs --evidence-dir.\n' >&2
+      return 1
+    fi
+    return 0
+  fi
+  [[ -d $dir ]] || { printf 'side record check: the evidence directory is missing: %s\n' "$dir" >&2; return 1; }
   if (( ${#cited[@]} == 0 )) && (( draft == 0 )) && compgen -G "$dir/side-record-*" >/dev/null; then
     printf 'side record check: the body names no side record, but %s holds side records.\n' "$dir" >&2
     printf 'side record check: cite each record on its own line that starts "Side record:".\n' >&2

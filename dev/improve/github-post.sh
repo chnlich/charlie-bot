@@ -27,15 +27,16 @@
 # checked title and body with gh api -X PATCH on the REST pull endpoint.
 #
 # pr-create and pr-merge check the side records that the body cites against the round's evidence directory
-# (dev/improve/side-record.sh). pr-create catches a bad citation before the pull request exists. pr-merge runs
-# the check on the body as it will merge, so an edit made after creation is checked too; pr-edit does not check.
+# (dev/improve/side-record.sh) when they receive --evidence-dir, and refuse a body that cites a record without it.
+# pr-create catches a bad citation before the pull request exists. pr-merge runs the check on the body as it will
+# merge, so an edit made after creation is checked too; pr-edit does not check.
 #
 # usage:
-#   github-post.sh pr-create --title <title> --body-file <file> --evidence-dir <dir> [--draft] [gh pr create args...]
+#   github-post.sh pr-create --title <title> --body-file <file> [--evidence-dir <dir>] [--draft] [gh pr create args...]
 #   github-post.sh pr-comment --body-file <file> [--verdict-head <sha>] [gh pr comment args...]
 #   github-post.sh pr-close --comment-file <file> [--delete-branch] [gh pr close args...]
 #   github-post.sh pr-edit [--title <title>] [--body-file <file>] [--repo <owner/repo>] [<PR>]
-#   github-post.sh pr-merge --evidence-dir <dir> <PR> [--repo <owner/repo>]
+#   github-post.sh pr-merge [--evidence-dir <dir>] <PR> [--repo <owner/repo>]
 #   github-post.sh push [git push args...]
 #
 # Exit codes: 0 sent, 1 leak hit (nothing sent), 2 setup refusal (nothing sent),
@@ -138,8 +139,16 @@ while [[ $# -gt 0 ]]; do
     --body-file|-F) body_file=$2; shift 2 ;;
     --comment-file) comment_file=$2; shift 2 ;;
     --verdict-head) verdict_head=$2; shift 2 ;;
-    --evidence-dir) evidence_dir=$2; shift 2 ;;
-    --evidence-dir=*) evidence_dir=${1#--evidence-dir=}; shift ;;
+    --evidence-dir)
+      [[ $# -ge 2 && -n "$2" ]] || { printf 'Refused --evidence-dir without a directory.\n' >&2; exit 2; }
+      evidence_dir=$2
+      shift 2
+      ;;
+    --evidence-dir=*)
+      evidence_dir=${1#--evidence-dir=}
+      [[ -n "$evidence_dir" ]] || { printf 'Refused --evidence-dir without a directory.\n' >&2; exit 2; }
+      shift
+      ;;
     --body|-b|--comment|-c|--title=*|--body=*|--body-file=*|--comment-file=*|--comment=*|-[btcF]?*)
       printf 'Refused an inline text argument; pass text with --title, --body-file or --comment-file.\n' >&2
       exit 2
@@ -150,7 +159,7 @@ done
 
 case "$subcommand" in
   pr-create)
-    [[ -n "$title" && -n "$body_file" && -n "$evidence_dir" ]] || { usage; exit 2; }
+    [[ -n "$title" && -n "$body_file" ]] || { usage; exit 2; }
     require_readable "$body_file" body
     check_string title "$title"
     check_text body "$body_file"
@@ -309,10 +318,6 @@ case "$subcommand" in
     [[ -n "$pr_selector" ]] || { usage; exit 2; }
     repo_args=()
     [[ -z "$pr_repo" ]] || repo_args=(--repo "$pr_repo")
-    [[ -n "$evidence_dir" ]] || {
-      printf 'pr-merge needs --evidence-dir naming the round evidence directory; nothing was merged.\n' >&2
-      exit 2
-    }
     # A draft waits for its measurements, so this check stays ahead of every read and merge of the pull request.
     draft_state=$(gh pr view "$pr_selector" "${repo_args[@]}" --json isDraft --jq .isDraft) || {
       printf 'Cannot read the draft state of PR %s; nothing was merged.\n' "$pr_selector" >&2
@@ -364,7 +369,7 @@ case "$subcommand" in
       exit 2
     }
     side_record_check_body "$evidence_dir" "$tmp_dir/pr-body" 0 || {
-      printf 'PR %s cites a side record that does not pass the check; nothing was merged.\n' "$pr_selector" >&2
+      printf 'PR %s does not pass the side record check; nothing was merged.\n' "$pr_selector" >&2
       exit 2
     }
     changed=$(gh pr diff --name-only "$pr_selector" "${repo_args[@]}") || {
@@ -373,13 +378,19 @@ case "$subcommand" in
     }
     # `charliebot` is the round's own build (dev/improve/remote-runner.sh builds it), so it carries
     # the window sizes this check reads.
-    check_args=(screenshots check --dir "$evidence_dir")
+    check_args=(screenshots check)
+    [[ -z "$evidence_dir" ]] || check_args+=(--dir "$evidence_dir")
     set +e
     web_change=$(printf '%s\n' "$changed" | charliebot "${check_args[@]}")
     check_status=$?
     set -e
     if [[ "$check_status" -ne 0 ]]; then
-      printf 'PR %s did not pass the screenshot check; nothing was merged.\n' "$pr_selector" >&2
+      if [[ -z "$evidence_dir" ]]; then
+        printf 'PR %s changes a web page, so pr-merge needs --evidence-dir naming the round evidence directory; nothing was merged.\n' \
+          "$pr_selector" >&2
+      else
+        printf 'PR %s did not pass the screenshot check; nothing was merged.\n' "$pr_selector" >&2
+      fi
       exit 2
     fi
     merge_args=(pr merge --squash "$pr_selector" "${repo_args[@]}")

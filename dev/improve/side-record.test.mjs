@@ -17,6 +17,7 @@ const TRIAL_SIDE = path.join(IMPROVE_DIR, 'trial-side.sh');
 const SIDE_RECORD = path.join(IMPROVE_DIR, 'side-record.sh');
 const POSTING = path.join(IMPROVE_DIR, 'github-post.sh');
 const COMMIT = '0123456789abcdef0123456789abcdef01234567';
+const HEAD_SHA = 'f'.repeat(40);
 const DIRECTION = `side_record_test_${process.pid}`;
 const MARKER_ROOT = `/tmp/improve-${DIRECTION}`;
 const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'side-record-'));
@@ -36,7 +37,8 @@ after(() => {
 // The stub trial stands in for scripts/release/trial.sh: it runs the command after its -- and exits with its status.
 fs.writeFileSync(
   STUB_TRIAL,
-  '#!/usr/bin/env bash\nwhile [[ $1 != -- ]]; do\n  shift\ndone\nprintf \'trial output\\n\' >"$CHARLIEBOT_RELEASE_RUN_DIR/trial-raw.txt"\nshift\nexec "$@"\n',
+  '#!/usr/bin/env bash\nwhile [[ $1 != -- ]]; do\n  shift\ndone\n' +
+    'printf \'trial output\\n\' >"$CHARLIEBOT_RELEASE_RUN_DIR/trial-raw.txt"\nshift\nexec "$@"\n',
   {
     mode: 0o755,
   },
@@ -45,7 +47,8 @@ fs.writeFileSync(
 fs.writeFileSync(MEASURE, '#!/usr/bin/env bash\nprintf \'%s\\n\' "$1" >"$IMPROVE_SIDE_OUTPUT/raw.txt"\nexit "$2"\n', {
   mode: 0o755,
 });
-// The stub gh logs each call, and it answers the draft-state and body reads of pr-merge from STUB_BODY_FILE.
+// The stub gh logs each call. It answers the draft-state and body reads of pr-merge from STUB_BODY_FILE, and it answers
+// the head and the verdict reads with a clean verdict on HEAD_SHA, so a merge reaches the side record check.
 fs.mkdirSync(STUB_BIN);
 fs.writeFileSync(
   path.join(STUB_BIN, 'gh'),
@@ -56,6 +59,10 @@ fs.writeFileSync(
     "  printf 'false\\n'",
     'elif [[ "$*" == *"--json body"* ]]; then',
     '  cat -- "$STUB_BODY_FILE"',
+    'elif [[ "$*" == *"--json headRefOid"* ]]; then',
+    `  printf '%s\\n' '${HEAD_SHA}'`,
+    'elif [[ "$*" == *"--json comments"* ]]; then',
+    `  printf 'Review verdict on %s\\n\\nCode review: no issues found.\\n' '${HEAD_SHA}'`,
     'fi',
     '',
   ].join('\n'),
@@ -435,6 +442,7 @@ test('pr-merge refuses a ready body that names no record while the round directo
   assert.equal(runSide({ run, binary, label: 'merged', status: 0 }).status, 0);
   const result = post(['pr-merge', '--evidence-dir', run, '7'], '## Evidence\n\nNo record named.\n');
   assert.equal(result.status, 2);
+  assert.match(result.stderr, /names no side record/);
   assert.equal(result.calls.filter((call) => call.startsWith('pr merge')).length, 0);
 });
 
@@ -443,10 +451,29 @@ test('pr-merge refuses a body that cites a missing record', () => {
   const body = '## Evidence\n\nSide record: side-record-19700101T000000Z-zzzzzz\n';
   const result = post(['pr-merge', '--evidence-dir', run, '7'], body);
   assert.equal(result.status, 2);
+  assert.match(result.stderr, /the cited side record is missing/);
   assert.equal(result.calls.filter((call) => call.startsWith('pr merge')).length, 0);
 });
 
-test('pr-merge without --evidence-dir exits 2', () => {
-  const result = post(['pr-merge', '7'], '## Evidence\n');
+test('pr-merge without --evidence-dir refuses a body that cites a side record, and merges nothing', () => {
+  const body = '## Evidence\n\nSide record: side-record-19700101T000000Z-zzzzzz\n';
+  const result = post(['pr-merge', '7'], body);
   assert.equal(result.status, 2);
+  assert.match(result.stderr, /needs --evidence-dir/);
+  assert.equal(result.calls.filter((call) => call.startsWith('pr merge')).length, 0);
+});
+
+test('pr-create without --evidence-dir sends a body that cites no record', () => {
+  const body = writeFile('pr-body-nodir.md', '## Evidence\n\nNo timing figure.\n');
+  const result = post(['pr-create', '--title', 'change', '--body-file', body, '--base', 'main', '--head', 'b']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.calls.filter((call) => call.startsWith('pr create --title change ')).length, 1);
+});
+
+test('pr-create without --evidence-dir refuses a body that cites a side record, and gh is not called', () => {
+  const body = writeFile('pr-body-nodir-cite.md', '## Evidence\n\nSide record: side-record-19700101T000000Z-zzzzzz\n');
+  const result = post(['pr-create', '--title', 'change', '--body-file', body, '--base', 'main', '--head', 'b']);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /needs --evidence-dir/);
+  assert.deepEqual(result.calls, []);
 });

@@ -312,8 +312,9 @@ A lead keeps only coordination state and small material in its context: each lat
   - a full diff;
   - broad search results;
   - another session's whole record.
-- In each delegation spec, list under Source Files only known absolute local paths, or `- (none)`; leave each path
-  that you cannot name to the worker.
+- In each delegation spec, list under Source Files only the current task's active input files as known absolute
+  local paths, or `- (none)`. Carry facts and supersession from earlier rounds in the spec body. Leave each path that
+  you cannot name to the worker.
 - Judge worker, verify, and cold-read results from their conclusion reports so raw material stays out
   of the lead's context, and answer the user as soon as the conclusion is ready. Read other files of
   the worker only as small material.
@@ -323,6 +324,9 @@ explicit approval. Direct work and delegation divide by where the change lands. 
 its size, goes through `charliebot delegate` to a worker. Make small edits outside repositories (a value, a line, or
 a paragraph in an existing host file, script, or config) directly under Action Boundaries. Send larger work outside
 repositories (such as a multi-file script set or a test or job run) to a repo-less worker via `charliebot delegate`.
+When you already hold the needed conclusions within small material, write a single session HTML page
+(`artifacts/<name>.html`) directly. Keep its independent verification (a cold read, a source check, or a plan verify)
+in separate workers. Send a page that needs large material, and pages written in parallel, to a repo-less worker.
 Use `quick-edit` for unreviewed work, and use `implement` when a reviewer checks the result against acceptance tests.
 Delegate any change to rule text in `prompts/`, `skills/`, or host rules with `--task-type implement`, so the Reviewer
 Checklist's three prompt-admission checks gate it.

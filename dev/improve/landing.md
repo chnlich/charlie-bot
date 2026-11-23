@@ -206,7 +206,7 @@ The round's runner sets `CHARLIEBOT_TRIAL_PROBE_ANSWER` to the launch's probe an
 
 Each serve trial side leaves one side record in the round directory, and the record names the side's raw output location.
 The round keeps every side record, including the records of sides it discards.
-A timing side writes its raw measurements to its side output location, `IMPROVE_SIDE_OUTPUT`, so no later side overwrites them.
+A timing side writes all of its raw output, the trial's own output included, to its side output location, `IMPROVE_SIDE_OUTPUT`, so no later side overwrites it.
 The record's four lines are listed in the header of `dev/improve/trial-side.sh`.
 
 The pull request names each screenshot by its file name and width, at the widths and states that the Web UI Screenshots rule in `prompts/task_base.md` sets.

@@ -21,7 +21,8 @@ USER_ID=$(id -u)
 COMMIT=$(git -C "$REPO" rev-parse --verify --quiet 'origin/main^{commit}') \
   || { printf 'the test needs origin/main in %s\n' "$REPO" >&2; exit 2; }
 HEX=${COMMIT:0:12}
-SANDBOX=$(mktemp -d "${TMPDIR:-/tmp}/trial-sockets.XXXXXX") || exit 2
+# The --tree-root case appends this path to a socket path. Use a short base even when remote-run sets TMPDIR.
+SANDBOX=$(mktemp -d "/tmp/trial-sockets.XXXXXX") || exit 2
 created_round_tmpdir=0
 cleanup() {
   rm -rf -- "$SANDBOX"
@@ -45,6 +46,7 @@ case "$*" in
   'backend resolve --call probe') echo '{"option":{"id":"stub-probe","model":"stub-model","api_base":"http://127.0.0.1:9/v1"}}' ;;
   'release-helper stand-in-options '*) printf -- '- id: stub-stand-in\n  type: cc-claude\n  model: stub-model\n' ;;
   'release-helper session-weights '*) printf 'true\ntrue\n' ;;
+  'release-helper disable-cron-tasks '*) printf 'memory-curator\nstub-stand-in\n' ;;
   'release-helper free-port '*) echo 18650 ;;
   'release-helper redact-stdin') cat ;;
   *) echo "charliebot stub: unexpected arguments: $*" >&2; exit 1 ;;

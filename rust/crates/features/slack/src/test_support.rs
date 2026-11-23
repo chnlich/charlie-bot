@@ -204,6 +204,7 @@ pub(crate) struct FakeState {
   thread_messages: Mutex<Vec<Value>>,
   member_pages: Mutex<Vec<Vec<String>>>,
   members_unreadable: AtomicBool,
+  replies_unreadable: AtomicBool,
   posts: Mutex<Vec<Value>>,
   plans: Mutex<VecDeque<SocketPlan>>,
   open_failures: AtomicUsize,
@@ -283,6 +284,10 @@ impl FakeApi {
   /// Makes every `conversations.members` call fail as a channel the bot cannot read does (`channel_not_found`).
   pub(crate) fn set_members_unreadable(&self) {
     self.state.members_unreadable.store(true, Ordering::SeqCst);
+  }
+
+  pub(crate) fn set_replies_unreadable(&self) {
+    self.state.replies_unreadable.store(true, Ordering::SeqCst);
   }
 
   pub(crate) fn calls(&self) -> Vec<(String, String, Value)> {
@@ -386,6 +391,9 @@ async fn thread_replies(
   Query(query): Query<std::collections::HashMap<String, String>>,
 ) -> Json<Value> {
   state.record("GET", "/api/conversations.replies", json!(query));
+  if state.replies_unreadable.load(Ordering::SeqCst) {
+    return Json(json!({"ok": false, "error": "internal_error"}));
+  }
   let messages = state.thread_messages.lock().expect("the fake thread is never poisoned").clone();
   Json(json!({"ok": true, "messages": messages, "has_more": false}))
 }

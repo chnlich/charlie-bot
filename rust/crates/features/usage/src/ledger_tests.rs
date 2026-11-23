@@ -1054,7 +1054,7 @@ fn group_counts(rows: Vec<GroupRow>) -> Vec<(GroupKey, i64, [i64; 5])> {
   counts
 }
 
-/// The last Pacific week before 2026-11-03 is [2026-10-26T07:00Z, 2026-11-02T08:00Z), 169 hours across the fall change.
+/// The last Pacific week before a Tuesday that follows the fall clock change runs Monday to Monday, 169 hours long.
 /// The fixture puts stamps on both edges, a counted fallback, and a fallback that a native record retires after the
 /// aggregate is backfilled. The trigger path is then covered as well as the backfill.
 #[test]

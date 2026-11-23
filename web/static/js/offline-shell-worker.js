@@ -111,10 +111,12 @@ function isFirstScreenPath(pathname) {
   return /^\/api\/sessions\/[^/]+\/bootstrap$/.test(pathname);
 }
 
-// The sidebar's full listing, which carries no `ids`: rows fetched by id are a refresh of rows already on
-// the page and go to the network.
+// The sidebar's listing, excluding row refreshes (`ids`) and the move picker's `compact=move` column form. Row
+// refreshes update existing rows, and the move picker always reads the live task tree from the network.
 function isSidebarListRequest(url) {
-  return url.pathname === '/api/sessions/' && !url.searchParams.has('ids');
+  return url.pathname === '/api/sessions/' &&
+    !url.searchParams.has('ids') &&
+    url.searchParams.get('compact') !== 'move';
 }
 
 // A page of this release's shell found a newer release on the server (its socket closed 4409). The flag names this

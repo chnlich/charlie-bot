@@ -661,6 +661,7 @@ test('the worker answers only the listed GETs; writes, socket paths and the othe
     request(ORIGIN + '/api/sessions/' + SESSION + '/read', {method: 'POST'}),
     request(ORIGIN + '/api/sessions/' + SESSION + '/events'),
     request(ORIGIN + '/api/sessions/?ids=a,b'),
+    request(ORIGIN + '/api/sessions/?compact=move'),
     request(ORIGIN + '/'),
     request('https://other.example/api/sessions/' + SESSION + '/bootstrap'),
     request(ORIGIN + '/api/sessions/' + SESSION + '/bootstrap', {method: 'POST'}),

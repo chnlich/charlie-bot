@@ -95,6 +95,18 @@ async fn create_task(
   {
     return response;
   }
+  if !matches!(caller, CallerIdentity::Agent { .. })
+    && let Some(session_id) = requested_session
+  {
+    match features.store.get_session(session_id).await {
+      Ok(Some(_)) => {}
+      Ok(None) => {
+        let message = format!("session \"{session_id}\" does not exist");
+        return responses::http_exception_with_detail(StatusCode::BAD_REQUEST, &message);
+      }
+      Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
+    }
+  }
   let path = loader::cron_path(&cfg, &name);
   if path.exists() {
     return responses::http_exception_with_detail(StatusCode::CONFLICT, &format!("Task \"{name}\" already exists"));
@@ -111,7 +123,7 @@ async fn create_task(
     &crate::config::browser_login_hosts(&cfg),
   ) {
     Ok(task) => task,
-    Err(error) => return responses::http_exception_with_detail(StatusCode::CONFLICT, &error),
+    Err(error) => return responses::http_exception_with_detail(StatusCode::BAD_REQUEST, &error),
   };
   if let CallerIdentity::Agent { claims } = &caller
     && requested_session.is_none()
@@ -207,7 +219,7 @@ async fn update_task(
     &crate::config::browser_login_hosts(&cfg),
   ) {
     Ok(task) => task,
-    Err(error) => return responses::http_exception_with_detail(StatusCode::CONFLICT, &error),
+    Err(error) => return responses::http_exception_with_detail(StatusCode::BAD_REQUEST, &error),
   };
   if values.get("enabled") == Some(&Value::Bool(true))
     && let Some(session_id) = candidate_task.session_id.as_deref()
@@ -914,5 +926,121 @@ mod tests {
       send(&router, "PUT", "/api/cron/tasks/operator-bound-task", json!({"session_id": null})).await;
     assert_eq!(status, StatusCode::OK);
     assert!(cleared.get("session_id").is_none());
+  }
+
+  /// The names of the task files in the home's cron directory, sorted.
+  fn cron_file_names(home: &Path) -> Vec<String> {
+    let mut names = match std::fs::read_dir(home.join("config.d/cron.d")) {
+      Ok(entries) => entries.map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect(),
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+      Err(error) => panic!("reading the cron directory failed: {error}"),
+    };
+    names.sort();
+    names
+  }
+
+  #[tokio::test]
+  async fn a_create_with_an_invalid_schedule_is_refused_with_400_and_writes_nothing() {
+    let (home, features) = feature_context();
+    let prompt = home.path().join("synthetic-prompt.md");
+    std::fs::write(&prompt, "Synthetic scheduled prompt\n").unwrap();
+    let router = routes(&features);
+    let cases = [
+      ("99 * * * *", "America/Los_Angeles"),
+      ("@daily", "America/Los_Angeles"),
+      ("*/0 * * * *", "America/Los_Angeles"),
+      ("0 0 30 2 *", "America/Los_Angeles"),
+      ("0 8 * * *", "Mars/Olympus"),
+      ("0 8 * * *", ""),
+    ];
+    for (index, (cron, timezone)) in cases.into_iter().enumerate() {
+      let name = format!("refused-{index}");
+      let body = json!({"name": name, "cron": cron, "timezone": timezone, "prompt_file": prompt});
+      let (status, response) = send(&router, "POST", "/api/cron/tasks", body).await;
+      assert_eq!(status, StatusCode::BAD_REQUEST, "cron {cron:?} timezone {timezone:?}: {response}");
+      assert!(response["detail"].as_str().is_some_and(|detail| !detail.is_empty()));
+    }
+    assert!(cron_file_names(home.path()).is_empty(), "a refused create leaves the cron directory empty");
+  }
+
+  #[tokio::test]
+  async fn a_create_naming_a_session_that_does_not_exist_is_refused_with_400_and_writes_nothing() {
+    let (home, features) = feature_context();
+    let prompt = home.path().join("synthetic-prompt.md");
+    std::fs::write(&prompt, "Synthetic scheduled prompt\n").unwrap();
+
+    let (status, response) =
+      send(&routes(&features), "POST", "/api/cron/tasks", create_body("stale-binding", &prompt, Some("ghost-session")))
+        .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(response["detail"], "session \"ghost-session\" does not exist");
+    assert!(cron_file_names(home.path()).is_empty());
+  }
+
+  #[tokio::test]
+  async fn a_schedule_update_that_fails_validation_is_refused_with_400_and_keeps_the_file() {
+    let (home, features) = feature_context();
+    let path = write_prompted_task(home.path(), "held", &json!({"cron": "0 8 * * *"}));
+    let before = std::fs::read_to_string(&path).unwrap();
+    let router = routes(&features);
+
+    for body in [
+      json!({"cron": "99 * * * *"}),
+      json!({"timezone": "Mars/Olympus"}),
+      json!({"cron": "0 0 30 2 *", "timezone": "America/Los_Angeles"}),
+    ] {
+      let (status, response) = send(&router, "PUT", "/api/cron/tasks/held", body.clone()).await;
+      assert_eq!(status, StatusCode::BAD_REQUEST, "{body}: {response}");
+      assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+    }
+  }
+
+  #[tokio::test]
+  async fn a_schedule_only_put_keeps_every_other_key_of_a_prompt_steps_or_handler_task() {
+    let (home, features) = feature_context();
+    let router = routes(&features);
+    let prompt_path = write_prompted_task(home.path(), "prompted", &json!({"cron": "0 8 * * *", "mode": "worker"}));
+    let first = home.path().join("selector.md");
+    let second = home.path().join("reviewer.md");
+    std::fs::write(&first, "Select\n").unwrap();
+    std::fs::write(&second, "Review\n").unwrap();
+    let steps_path = home.path().join("config.d/cron.d/steps.yaml");
+    std::fs::write(
+      &steps_path,
+      crate::yaml::dump(&json!({
+        "cron": "27 6 * * *",
+        "timezone": "America/Los_Angeles",
+        "allow_failure": true,
+        "steps": [
+          {"name": "selector", "prompt_file": first, "backend": "synthetic"},
+          {"name": "reviewer", "prompt_file": second, "backend": "synthetic", "distinct_backend_from": "selector"}
+        ],
+      }))
+      .unwrap(),
+    )
+    .unwrap();
+    let handler_path = home.path().join("config.d/cron.d/handled.yaml");
+    std::fs::write(
+      &handler_path,
+      crate::yaml::dump(&json!({"cron": "30 4 * * *", "handler": "synthetic_handler", "allow_failure": true})).unwrap(),
+    )
+    .unwrap();
+
+    for (name, path) in [("prompted", &prompt_path), ("steps", &steps_path), ("handled", &handler_path)] {
+      let before = super::read_yaml_mapping(path).unwrap();
+      let body = json!({"cron": "35 * * * *", "timezone": "America/New_York", "enabled": false});
+      let (status, updated) = send(&router, "PUT", &format!("/api/cron/tasks/{name}"), body).await;
+
+      assert_eq!(status, StatusCode::OK, "{name}: {updated}");
+      let after = super::read_yaml_mapping(path).unwrap();
+      assert_eq!(Value::Object(after.clone()), updated, "the response is the file as written");
+      assert_eq!(after["cron"], "35 * * * *");
+      assert_eq!(after["timezone"], "America/New_York");
+      assert_eq!(after["enabled"], false);
+      for key in before.keys().filter(|key| !["cron", "timezone", "enabled"].contains(&key.as_str())) {
+        assert_eq!(after[key], before[key], "{name}: {key} is kept");
+      }
+    }
   }
 }

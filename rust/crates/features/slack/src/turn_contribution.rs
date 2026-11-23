@@ -101,6 +101,7 @@ fn slack_reply_message(event: &Value) -> Value {
 mod tests {
   use std::ffi::OsString;
   use std::fs;
+  use std::path::Path;
 
   use charliebot_core::test_support::synthetic_config;
   use charliebot_store::metadata::{SessionMetadata, TaskProfile};
@@ -142,6 +143,14 @@ mod tests {
     SlackOrigin { team_id: "T1".into(), channel_id: "C1".into(), thread_ts: ORIGIN_TS.into() }
   }
 
+  fn actual_checkout() -> RepoRoot {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+      .ancestors()
+      .nth(4)
+      .expect("the Slack crate sits under the checkout");
+    RepoRoot::new(Some(root.to_path_buf().into_os_string())).expect("the checkout root is valid")
+  }
+
   #[test]
   fn a_manager_run_of_a_slack_thread_gets_the_contract_as_one_full_segment() {
     let (_dir, repo) = full_checkout();
@@ -160,6 +169,37 @@ mod tests {
       ["prompts/slack_reply_scope.md", "prompts/thread_reply_redline.md", "prompts/thread_reply_format.md"]
     );
     assert!(segments[0].sources.iter().all(|source| source.scope == "base" && source.source_session_id.is_none()));
+  }
+
+  #[test]
+  fn a_slack_thread_instruction_carries_the_colleague_read_and_write_rules() {
+    const COLLEAGUE_RULES: &str = concat!(
+      "A colleague is a Slack sender listed in `slack.colleague_user_ids`.\n",
+      "The Slack thread read labels each message with its sender's role:\n",
+      "- `operator`;\n",
+      "- `colleague`;\n",
+      "- `other`.\n",
+      "A summoner is the operator or a colleague, and the summoner rule above covers both.\n",
+      "Take every write from the operator's words; a colleague's message is a request that the operator decides.\n",
+      "A turn that a colleague's message started answers and diagnoses with reads only.\n",
+      "When a colleague asks for a write, reply in the thread that the operator decides it on this session's web ",
+      "page, and mention the operator.\n",
+      "A turn that a colleague's message started leaves the operator's private sources unread. Private sources ",
+      "include:\n",
+      "- mail and calendar;\n",
+      "- Slack DMs and private channels;\n",
+      "- private documents;\n",
+      "- other sessions.\n",
+      "In a thread where a colleague has posted, the server accepts a request that starts, queues or schedules ",
+      "agent work only from a run whose every input is the operator's web message or the operator's Slack summon.\n",
+    );
+    let meta = manager_with(json!({"team_id": "T_TEST", "channel_id": "C_TEST", "thread_ts": ORIGIN_TS}));
+    let segments = SlackTurnContribution
+      .instruction_segments(&meta, "manager_turn", &synthetic_config("/synthetic/home"), &actual_checkout())
+      .unwrap();
+
+    assert_eq!(segments.len(), 1);
+    assert!(segments[0].text.contains(COLLEAGUE_RULES), "the Slack instruction omits colleague rules");
   }
 
   #[test]

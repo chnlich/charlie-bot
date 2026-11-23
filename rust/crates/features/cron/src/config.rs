@@ -4,6 +4,8 @@ use charliebot_compat::request_body::{BodyModel, Field, FieldType};
 use charliebot_core::config::{CharlieBotConfig, HOST_AUTH_SECTION_KEY, HostAuthConfig};
 use serde::{Deserialize, Serialize};
 
+use crate::scheduler;
+
 /// The default time zone of a scheduled task and of a create request: `charliebot_core::pacific::ZONE`, the house zone.
 pub const DEFAULT_TIMEZONE: &str = charliebot_core::pacific::ZONE;
 
@@ -120,7 +122,8 @@ pub struct ScheduledTaskError {
   pub enabled: Option<bool>,
 }
 
-/// The source, mode and sequence rules shared with the YAML loader, each returning its message when broken.
+/// The source, mode, sequence and schedule rules shared by the YAML loader and the write routes, each returning its
+/// message when broken.
 pub fn validate_task(task: &ScheduledTaskConfig) -> Result<(), String> {
   let source_count = usize::from(task.prompt.as_ref().is_some_and(|value| !value.is_empty()))
     + usize::from(task.steps.as_ref().is_some_and(|value| !value.is_empty()))
@@ -178,6 +181,7 @@ pub fn validate_task(task: &ScheduledTaskConfig) -> Result<(), String> {
       }
     }
   }
+  scheduler::validate_schedule(&task.cron, &task.timezone)?;
   Ok(())
 }
 

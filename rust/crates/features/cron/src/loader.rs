@@ -447,7 +447,8 @@ pub fn validate_body(
     }
   }
   if body.get("timezone").and_then(Value::as_str) == Some("local") {
-    body["timezone"] = Value::String(detect_local_timezone());
+    let zone = detect_local_timezone().map_err(|error| format!("timezone \"local\" does not resolve: {error}"))?;
+    body["timezone"] = Value::String(zone);
   }
   if let Some(repo) = body.get("repo").and_then(Value::as_str) {
     body["repo"] = Value::String(expand_home(repo)?);
@@ -502,21 +503,21 @@ fn expand_home(path: &str) -> Result<String, String> {
   Ok(path.to_string())
 }
 
-fn detect_local_timezone() -> String {
-  let result = (|| {
-    let target = std::fs::canonicalize("/etc/localtime").map_err(|error| error.to_string())?;
-    let text = target.display().to_string();
-    let name = text
-      .rsplit_once("/zoneinfo/")
-      .map(|(_, name)| name)
-      .ok_or_else(|| format!("no '/zoneinfo/' segment in {text:?}"))?;
-    name.parse::<chrono_tz::Tz>().map_err(|error| error.to_string())?;
-    Ok::<String, String>(name.to_string())
-  })();
-  result.unwrap_or_else(|error| {
-    tracing::warn!(error, fallback = "UTC", "local_timezone_resolve_failed");
-    "UTC".to_string()
-  })
+/// The timezone the `local` alias names: the zone the host's `/etc/localtime` link points at. A link that names no
+/// IANA zone is an error, so the alias never resolves to a zone the host did not name.
+fn detect_local_timezone() -> Result<String, String> {
+  zone_of_localtime(Path::new("/etc/localtime"))
+}
+
+fn zone_of_localtime(localtime: &Path) -> Result<String, String> {
+  let target = std::fs::canonicalize(localtime).map_err(|error| format!("{}: {error}", localtime.display()))?;
+  let text = target.display().to_string();
+  let name = text
+    .rsplit_once("/zoneinfo/")
+    .map(|(_, name)| name)
+    .ok_or_else(|| format!("no '/zoneinfo/' segment in {text:?}"))?;
+  name.parse::<chrono_tz::Tz>().map_err(|error| format!("{name:?}: {error}"))?;
+  Ok(name.to_string())
 }
 
 fn read_enabled(path: &Path) -> Option<bool> {
@@ -780,6 +781,54 @@ mod tests {
     assert_eq!(super::cron_file_read_count(&directory), reads_after_first + 1);
     assert_eq!(super::prompt_file_read_count(&prompt), prompt_reads_after_first + 1);
     drop(home);
+  }
+
+  #[test]
+  fn the_local_alias_resolves_only_to_the_zone_its_localtime_link_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let link_to = |target: &str| {
+      let zone = dir.path().join(target);
+      std::fs::create_dir_all(zone.parent().unwrap()).unwrap();
+      std::fs::write(&zone, b"TZif").unwrap();
+      let link = dir.path().join(format!("localtime-{}", target.replace('/', "-")));
+      std::os::unix::fs::symlink(&zone, &link).unwrap();
+      link
+    };
+
+    assert_eq!(super::zone_of_localtime(&link_to("zoneinfo/America/Los_Angeles")).unwrap(), "America/Los_Angeles");
+    let unknown = super::zone_of_localtime(&link_to("zoneinfo/Mars/Olympus")).unwrap_err();
+    assert!(unknown.contains("Mars/Olympus"), "{unknown}");
+    let plain = dir.path().join("plain-file");
+    std::fs::write(&plain, b"not a zone").unwrap();
+    let outside = dir.path().join("localtime-outside");
+    std::os::unix::fs::symlink(&plain, &outside).unwrap();
+    assert!(super::zone_of_localtime(&outside).unwrap_err().contains("no '/zoneinfo/' segment"));
+    let absent = super::zone_of_localtime(&dir.path().join("absent")).unwrap_err();
+    assert!(absent.contains("absent"), "{absent}");
+  }
+
+  #[test]
+  fn a_file_with_an_invalid_cron_or_an_unknown_timezone_is_isolated_and_refused_at_startup() {
+    let (home, features) = feature_context();
+    let cfg = features.config.get().unwrap();
+    let prompt = write_prompt(home.path(), "prompt.md", "Synthetic body\n");
+    write_task(&cfg, "valid", &json!({"cron":"0 8 * * *", "prompt_file":prompt}));
+    write_task(&cfg, "bad-cron", &json!({"cron":"99 * * * *", "prompt_file":prompt}));
+    write_task(&cfg, "bad-zone", &json!({"cron":"0 8 * * *", "timezone":"Mars/Olympus", "prompt_file":prompt}));
+    write_task(&cfg, "unreachable", &json!({"cron":"0 0 30 2 *", "prompt_file":prompt}));
+
+    let snapshot = load_snapshot(&features, &cfg).unwrap();
+
+    assert_eq!(snapshot.tasks.iter().map(|task| task.name.as_str()).collect::<Vec<_>>(), ["valid"]);
+    assert_eq!(
+      snapshot.errors.iter().map(|error| error.name.as_str()).collect::<Vec<_>>(),
+      ["bad-cron", "bad-zone", "unreachable"]
+    );
+    let problems = cron_files_problems(&cfg, home.path()).unwrap_err();
+    for name in ["bad-cron", "bad-zone", "unreachable"] {
+      assert!(problems.contains(&format!("{name}.yaml")), "{problems}");
+    }
+    assert!(!problems.contains("valid.yaml"), "{problems}");
   }
 
   #[test]

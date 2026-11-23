@@ -847,6 +847,13 @@ pub(super) fn next_fire_iso(expression: &str, timezone: &str, now_utc: UtcDateTi
   isoformat_text(&CronExpression::parse(expression)?.next_after(now.with_timezone(&timezone))?)
 }
 
+/// The one schedule check: a five-field cron expression that has a fire inside the eight-year horizon, in an IANA
+/// timezone. Every task file load and every write route runs it through `config::validate_task`. Returns the next
+/// fire after now.
+pub(crate) fn validate_schedule(cron: &str, timezone: &str) -> Result<String, String> {
+  next_fire_iso(cron, timezone, UtcDateTime::now()).map_err(|error| format!("{error:#}"))
+}
+
 /// The open sessions that an enabled task binds and that hold a next fire at `now`. The task files load once per call,
 /// and a file that fails to load is logged as the tick logs it. A task whose bound session is archived holds no fire,
 /// since the tick skips every such fire; a task whose binding or cron fails is logged and holds none.

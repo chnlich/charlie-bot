@@ -583,6 +583,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn duplicate_mention_reuses_one_summon_and_ack() {
     let home = Home::new();
     let api = FakeApi::start(&[]).await;

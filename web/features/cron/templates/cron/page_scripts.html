@@ -1,5 +1,6 @@
-  {#- The cron module draws a session row's schedule badge and line, the Scheduled task section of a bound session's
-      Task & context dialog, and the error view of a task that failed to load.
+  {#- The cron module registers Edit schedule… and Add schedule… in session-row Settings menus, draws schedule badges
+      and lines, shows bound task details read-only in Task & context, and opens the read-only error view for broken
+      tasks. Its standalone dialog edits Schedule, Timezone and Enabled, or deletes a task while keeping its session.
       Nothing here is needed for the first screen: the page fetches the module after its document. The module
       repaints the rows already painted when it lands. -#}
   <script>

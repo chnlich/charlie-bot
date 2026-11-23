@@ -656,6 +656,10 @@ video {
   bottom: 6rem;
 }
 
+.bottom-28 {
+  bottom: 7rem;
+}
+
 .bottom-6 {
   bottom: 1.5rem;
 }
@@ -791,10 +795,6 @@ video {
 
 .mt-2 {
   margin-top: 0.5rem;
-}
-
-.mt-3 {
-  margin-top: 0.75rem;
 }
 
 .block {
@@ -2043,6 +2043,10 @@ video {
 
 .hover\:bg-red-600\/20:hover {
   background-color: rgb(220 38 38 / 0.2);
+}
+
+.hover\:bg-red-900\/40:hover {
+  background-color: rgb(127 29 29 / 0.4);
 }
 
 .hover\:bg-slate-500:hover {

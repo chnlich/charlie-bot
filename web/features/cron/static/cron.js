@@ -1,10 +1,12 @@
 // ---------------------------------------------------------------------------
-// Scheduled tasks (cron): the Scheduled task section of a bound session's
-// Task & context dialog, the error view of a task that failed to load, the
-// Workspace error badge, and a bound node's clock badge and schedule lines.
-// Every task setting is changed by the session's agent through /api/cron or
-// the task file; no control here writes one. The sidebar reaches this file
-// through the entries it registers with.
+// Scheduled tasks (cron): the schedule dialog that Edit schedule… and Add
+// schedule… open, the Scheduled task section of a bound session's Task & context
+// dialog (read-only), the error view of a task that failed to load, the Workspace
+// error badge, and a bound row's clock badge and schedule lines. The dialog
+// changes a task's Schedule, Timezone and Enabled, and removes its binding. The
+// prompt file, the repo and the other task fields stay with the session's agent,
+// which edits the task file. The sidebar reaches this file through the entries
+// it registers with.
 // ---------------------------------------------------------------------------
 (function() {
   const Sidebar = globalThis.Sidebar;
@@ -194,36 +196,220 @@ async function loadScheduledTaskSection(sessionId) {
 }
 
 // ---------------------------------------------------------------------------
-// Task error view
+// Schedule dialog
 // ---------------------------------------------------------------------------
-// The modal shows one task that failed to load: the load error and the file
-// path. It has no form and no control; the agent deletes the file.
-function showCronErrorView(task) {
-  document.getElementById('cron-error-box').textContent = `Load failed: ${task.error}\nFile: ${task.path}`;
+// One dialog, three views. 'edit' (Edit schedule…) changes one bound task's
+// Schedule, Timezone and Enabled, switches between the session's tasks, and
+// deletes the binding. 'add' (Add schedule…) binds a new prompt-file task to an
+// unbound manager session. 'error' shows a task that failed to load: the load
+// error and the file path, with no form and no Save or Delete. A save or delete
+// the server refuses shows its detail in #cron-form-error and keeps the inputs.
+const CRON_DEFAULT_TIMEZONE = 'America/Los_Angeles';
+const CRON_DIALOG_TITLES = {edit: 'Edit schedule', add: 'Add schedule', error: 'Scheduled task failed to load'};
+let cronView = null;          // the view the open dialog shows, or null while it is closed
+let cronEditTasks = [];       // the tasks the session binds, as the edit view's switcher lists them
+let cronEditName = null;      // the task the edit view's fields hold
+let cronAddSessionId = null;  // the session the add view binds
+
+async function fetchCronTasks() {
+  const res = await fetch('/api/cron/tasks');
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+function showCronDialog(view) {
+  cronView = view;
+  const isEdit = view === 'edit';
+  const isAdd = view === 'add';
+  const isError = view === 'error';
+  document.getElementById('cron-modal-title').textContent = CRON_DIALOG_TITLES[view];
+  document.getElementById('cron-form').classList.toggle('hidden', isError);
+  document.getElementById('cron-error-box').classList.toggle('hidden', !isError);
+  document.getElementById('cron-task-row').classList.toggle('hidden', !(isEdit && cronEditTasks.length > 1));
+  document.getElementById('cron-name-row').classList.toggle('hidden', !isAdd);
+  document.getElementById('cron-prompt-row').classList.toggle('hidden', !isAdd);
+  document.getElementById('cron-delete-btn').classList.toggle('hidden', !isEdit);
+  document.getElementById('cron-save-btn').classList.toggle('hidden', isError);
+  clearCronFormError();
   document.getElementById('cron-modal').classList.remove('hidden');
 }
 
-async function openCronErrorView(taskName) {
-  let task;
+function closeCronModal() {
+  cronView = null;
+  document.getElementById('cron-modal').classList.add('hidden');
+}
+
+function showCronFormError(message) {
+  const box = document.getElementById('cron-form-error');
+  box.textContent = message;
+  box.classList.remove('hidden');
+}
+
+function clearCronFormError() {
+  const box = document.getElementById('cron-form-error');
+  box.textContent = '';
+  box.classList.add('hidden');
+}
+
+// The fields of one task: its Schedule, Timezone and Enabled. The name and prompt file belong to the add view.
+function fillCronFields(task) {
+  document.getElementById('cron-name').value = task.name;
+  document.getElementById('cron-expr').value = task.cron || '';
+  document.getElementById('cron-timezone').value = task.timezone || CRON_DEFAULT_TIMEZONE;
+  document.getElementById('cron-enabled').checked = task.enabled !== false;
+}
+
+function renderCronTaskSwitcher() {
+  const select = document.getElementById('cron-task-select');
+  select.innerHTML = cronEditTasks
+    .map((task) => `<option value="${escapeHtmlAttr(task.name)}">${escapeHtml(task.name)}</option>`).join('');
+  select.value = cronEditName;
+}
+
+// Edit schedule…: the bound task the row names opens; a session that binds more tasks switches among them.
+async function openCronEditor(taskName, sessionId) {
+  let bound;
   try {
-    const res = await fetch('/api/cron/tasks');
-    if (!res.ok) throw new Error(await res.text());
-    const tasks = await res.json();
-    task = tasks.find(t => t.name === taskName);
+    bound = (await fetchCronTasks()).filter((task) => !task.broken && task.session_id === sessionId);
   } catch (err) {
     console.error('Failed to load cron tasks:', err);
-    alert('Failed to load task: ' + err);
+    showToast('Failed to load schedule: ' + err, true);
     return;
   }
+  const task = bound.find((candidate) => candidate.name === taskName);
   if (!task) {
-    alert('Task "' + taskName + '" not found');
+    showToast(`Schedule "${taskName}" not found`, true);
+    return;
+  }
+  cronEditTasks = bound;
+  cronEditName = taskName;
+  cronAddSessionId = null;
+  fillCronFields(task);
+  renderCronTaskSwitcher();
+  showCronDialog('edit');
+}
+
+// Add schedule…: the unbound manager session the menu opened on is the one the new task binds.
+function openCronAdder(sessionId) {
+  cronEditTasks = [];
+  cronEditName = null;
+  cronAddSessionId = sessionId;
+  document.getElementById('cron-name').value = '';
+  document.getElementById('cron-expr').value = '';
+  document.getElementById('cron-timezone').value = CRON_DEFAULT_TIMEZONE;
+  document.getElementById('cron-prompt-file').value = '';
+  document.getElementById('cron-enabled').checked = true;
+  showCronDialog('add');
+}
+
+function switchCronTask(taskName) {
+  const task = cronEditTasks.find((candidate) => candidate.name === taskName);
+  cronEditName = taskName;
+  fillCronFields(task);
+  clearCronFormError();
+}
+
+// Every dialog request shares one failure surface: a transport error or a refusal shows its text in the dialog and
+// returns null, and the inputs stay as the user left them.
+async function sendCronRequest(url, options) {
+  let res;
+  try {
+    res = await fetch(url, options);
+  } catch (err) {
+    showCronFormError(String(err));
+    return null;
+  }
+  if (!res.ok) {
+    showCronFormError(await cronRefusalDetail(res));
+    return null;
+  }
+  return res;
+}
+
+// A refused request answers {"detail": ...}. A body that is not JSON, such as a proxy's page, shows as the text it is.
+async function cronRefusalDetail(res) {
+  const text = await res.text();
+  try {
+    return JSON.parse(text).detail ?? text;
+  } catch (parseError) {
+    return text;
+  }
+}
+
+// Save: Edit sends only Schedule, Timezone and Enabled; Add sends the whole new task bound to its session.
+async function saveCronTask() {
+  const adding = cronView === 'add';
+  const cron = document.getElementById('cron-expr').value.trim();
+  const timezone = document.getElementById('cron-timezone').value.trim();
+  const enabled = document.getElementById('cron-enabled').checked;
+  const res = adding
+    ? await sendCronRequest('/api/cron/tasks', {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        name: document.getElementById('cron-name').value.trim(),
+        cron,
+        timezone,
+        prompt_file: document.getElementById('cron-prompt-file').value.trim(),
+        enabled,
+        session_id: cronAddSessionId,
+      }),
+    })
+    : await sendCronRequest(`/api/cron/tasks/${encodeURIComponent(cronEditName)}`, {
+      method: 'PUT',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({cron, timezone, enabled}),
+    });
+  if (res === null) return;
+  closeCronModal();
+  if (platform.isMobile) closeMobileSidebar();
+  showToast(adding ? 'Schedule added' : 'Schedule saved', false,
+    {aboveComposer: true, reserveMessageSpace: platform.isMobile});
+  Sidebar.invalidateWorkspaceMemory();
+  Sidebar.refreshCurrentList();
+}
+
+// Delete: the confirmation says the schedule goes and the session stays; the binding's YAML is what is removed.
+function deleteCronTask() {
+  const name = cronEditName;
+  Sidebar.openConfirmDialog({
+    iconKey: 'delete',
+    iconClass: 'text-red-400',
+    heading: 'Delete schedule?',
+    detail: `The schedule "${name}" is deleted. Its session and conversation history are kept.`,
+    confirmLabel: 'Delete',
+    confirmClass: 'bg-red-600 hover:bg-red-500',
+    onConfirm: async () => {
+      const res = await sendCronRequest(`/api/cron/tasks/${encodeURIComponent(name)}`, {method: 'DELETE'});
+      if (res === null) return;
+      closeCronModal();
+      Sidebar.invalidateWorkspaceMemory();
+      Sidebar.refreshCurrentList();
+    },
+  });
+}
+
+// The error view: one task that failed to load, read-only. The agent deletes the file.
+function showCronErrorView(task) {
+  document.getElementById('cron-error-box').textContent = `Load failed: ${task.error}\nFile: ${task.path}`;
+  showCronDialog('error');
+}
+
+async function openCronErrorView(taskName) {
+  let tasks;
+  try {
+    tasks = await fetchCronTasks();
+  } catch (err) {
+    console.error('Failed to load cron tasks:', err);
+    showToast('Failed to load task: ' + err, true);
+    return;
+  }
+  const task = tasks.find(t => t.name === taskName);
+  if (!task) {
+    showToast(`Task "${taskName}" not found`, true);
     return;
   }
   showCronErrorView(task);
-}
-
-function closeCronModal() {
-  document.getElementById('cron-modal').classList.add('hidden');
 }
 
 // ---------------------------------------------------------------------------
@@ -338,10 +524,26 @@ registerSessionRowBadge((s) => (s.schedule_task ? renderScheduledBadge(s) : ''))
 registerSessionRowLine((s) => (s.schedule_task ? renderSessionScheduleLine(s) : null));
 // A bound session's Task & context dialog shows the Scheduled task section.
 registerTaskContextSection(loadScheduledTaskSection);
+// The row's Settings menu: a bound row edits its schedule, and an unbound manager row adds one bound to the row.
+registerSessionMenuItems({
+  rowAttrs: (s) => ({scheduleTask: s.schedule_task || ''}),
+  items: (attrs, sessionId) => {
+    if (attrs.scheduleTask) {
+      return [{label: 'Edit schedule…', onSelect: () => openCronEditor(attrs.scheduleTask, sessionId)}];
+    }
+    if (attrs.profile === 'manager') {
+      return [{label: 'Add schedule…', onSelect: () => openCronAdder(sessionId)}];
+    }
+    return [];
+  },
+});
 
 const GLOBALS = {
   openCronErrorView,
   closeCronModal,
+  saveCronTask,
+  deleteCronTask,
+  switchCronTask,
 };
 Sidebar.wire(GLOBALS, {showCronErrorView});
 

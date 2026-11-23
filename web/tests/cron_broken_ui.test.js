@@ -72,7 +72,7 @@ const proseStub = (text) => `<md>${escapeHtmlText(text)}</md>`;
 // cron.js is an IIFE over the sidebar's registration entries and the page's
 // active session; the sandbox records what it registers and which session is
 // active, so each test drives a part the way the page does.
-function loadCron(fetch, {readyState = 'complete', sessionId = 'other-session'} = {}) {
+function loadCron(fetch, {readyState = 'complete', sessionId = 'other-session', isMobile = false} = {}) {
   const elements = {};
   const registered = {
     workspaceBadges: [], rowBadges: [], rowLines: [], menuItems: [], groupMenuItems: [], previewLimitExemptions: [],
@@ -80,15 +80,25 @@ function loadCron(fetch, {readyState = 'complete', sessionId = 'other-session'} 
   };
   const repaints = [];
   const listeners = {};
+  // What the page shows or asks of the sidebar: toasts, refusals of alert(), the sidebar refreshes, and the confirmations.
+  const toasts = [];
+  const alerts = [];
+  const sidebarCalls = [];
+  const confirms = [];
   const context = {
     Sidebar: {
       wire(globals, sidebarOnly) { Object.assign(this, globals, sidebarOnly || {}); },
       repaintRenderedRows() { repaints.push('rows'); },
       refreshWorkspaceBadges() { repaints.push('badges'); },
+      invalidateWorkspaceMemory() { sidebarCalls.push('invalidate'); },
+      refreshCurrentList() { sidebarCalls.push('refresh'); },
+      openConfirmDialog(options) { confirms.push(options); },
       // modals.js is not loaded here; these stand in for its dialog helpers with the same shape.
       taskContextField: (label, valueHtml) => `<field label="${escapeHtmlText(label)}">${valueHtml}</field>`,
       taskContextProseHtml: (text) => `<prose>${proseStub(text)}</prose>`,
     },
+    platform: {isMobile},
+    closeMobileSidebar() { sidebarCalls.push('close-mobile-sidebar'); },
     renderProseMarkdown: proseStub,
     console: {error: () => {}},
     document: {
@@ -100,7 +110,9 @@ function loadCron(fetch, {readyState = 'complete', sessionId = 'other-session'} 
     escapeHtmlAttr: (value) => escapeHtml(value == null ? '' : String(value)),
     SESSION_ID: sessionId,
     currentFilter: 'all',
-    switchSidebarFilter: () => {},
+    JSON_HEADERS: {'Content-Type': 'application/json'},
+    showToast: (msg, isError, options) => toasts.push({msg, isError: !!isError, ...(options || {})}),
+    alert: (msg) => alerts.push(msg),
     fetch,
     registerWorkspaceBadge: (load) => registered.workspaceBadges.push(load),
     registerSessionRowBadge: (render) => registered.rowBadges.push(render),
@@ -114,7 +126,7 @@ function loadCron(fetch, {readyState = 'complete', sessionId = 'other-session'} 
   vm.createContext(context);
   runIconModule(context);
   vm.runInContext(CRON_JS, context, {filename: 'cron.js'});
-  return {context, elements, registered, repaints, listeners};
+  return {context, elements, registered, repaints, listeners, toasts, alerts, sidebarCalls, confirms};
 }
 
 // A fetch that answers every request with *tasks* and records each request.
@@ -184,7 +196,7 @@ test('no badge when nothing is broken', () => {
   assert.ok(!elements['session-list'].innerHTML.includes('scheduled tasks failed to load'), elements['session-list'].innerHTML);
 });
 
-test('the error view shows the load error and the file path of a failed task, and no form', async () => {
+test('the error view shows the load error and the file path of a failed task, and no form or Save or Delete', async () => {
   const {context, elements} = loadCron(tasksFetch([
     {name: 'x', error: 'yaml exploded', broken: true, path: '/home/u/.charliebot/config.d/cron.d/x.yaml', enabled: false},
   ]));
@@ -194,13 +206,10 @@ test('the error view shows the load error and the file path of a failed task, an
   assert.ok(box.includes('yaml exploded'), box);
   assert.ok(box.includes('/home/u/.charliebot/config.d/cron.d/x.yaml'), box);
   assert.ok(!elements['cron-modal'].classList.contains('hidden'));
-});
-
-test('the cron module registers no schedule menu item, so no row or group menu offers an editor', () => {
-  const {registered} = loadCron();
-
-  assert.equal(registered.menuItems.length, 0);
-  assert.equal(registered.groupMenuItems.length, 0);
+  assert.ok(!elements['cron-error-box'].classList.contains('hidden'), 'the error box shows');
+  assert.ok(elements['cron-form'].classList.contains('hidden'), 'the form is hidden');
+  assert.ok(elements['cron-save-btn'].classList.contains('hidden'), 'Save is hidden');
+  assert.ok(elements['cron-delete-btn'].classList.contains('hidden'), 'Delete is hidden');
 });
 
 // The page fetches cron.js after its document, so the sidebar's rows are painted before the schedule badge and line
@@ -369,4 +378,163 @@ test('a task that fails to load stays out of the sections and shows in the Works
 
   assert.equal(await registered.taskContextSections[0]('s1'), '');
   assert.notEqual(await registered.workspaceBadges[0](), '');
+});
+
+// A fetch that answers the task list on GET and every other request through `answer`, and records each request with
+// its parsed body.
+function apiFetch(tasks, answer, requests = []) {
+  return async (url, opts = {}) => {
+    const method = opts.method || 'GET';
+    requests.push({url, method, body: opts.body === undefined ? undefined : JSON.parse(opts.body)});
+    const reply = method === 'GET' && url === '/api/cron/tasks' ? {status: 200, body: tasks} : answer(url, method);
+    const text = JSON.stringify(reply.body);
+    return {ok: reply.status < 400, status: reply.status, json: async () => JSON.parse(text), text: async () => text};
+  };
+}
+
+const accept = () => ({status: 200, body: {ok: true}});
+
+test('a bound row offers Edit schedule…, an unbound manager row offers Add schedule…, and no other row offers either', () => {
+  const {registered} = loadCron();
+  const [menu] = registered.menuItems;
+
+  assert.equal(registered.menuItems.length, 1);
+  assert.equal(menu.rowAttrs({schedule_task: 'weekly'}).scheduleTask, 'weekly');
+  assert.equal(menu.rowAttrs({schedule_task: null}).scheduleTask, '');
+  assert.deepEqual(Array.from(menu.items({scheduleTask: 'weekly', profile: 'manager'}, 's1'), (item) => item.label), ['Edit schedule…']);
+  assert.deepEqual(Array.from(menu.items({scheduleTask: '', profile: 'manager'}, 'm1'), (item) => item.label), ['Add schedule…']);
+  assert.equal(menu.items({scheduleTask: '', profile: 'worker'}, 'w1').length, 0);
+  assert.equal(registered.groupMenuItems.length, 0, 'a group header offers no New scheduled task');
+});
+
+test('Edit schedule… saves only Schedule, Timezone and Enabled, for a prompt, steps or handler task alike', async () => {
+  for (const task of [PROMPT_TASK, STEPS_TASK, HANDLER_TASK]) {
+    const requests = [];
+    const {context, elements, registered, toasts, sidebarCalls} = loadCron(apiFetch([task], accept, requests));
+    await registered.menuItems[0].items({scheduleTask: task.name}, 's1')[0].onSelect();
+
+    assert.equal(elements['cron-expr'].value, task.cron);
+    assert.equal(elements['cron-timezone'].value, task.timezone);
+    assert.equal(elements['cron-enabled'].checked, task.enabled !== false);
+    assert.ok(elements['cron-task-row'].classList.contains('hidden'), 'one task shows no switcher');
+    assert.ok(elements['cron-name-row'].classList.contains('hidden'), 'the name is not edited');
+    assert.ok(elements['cron-prompt-row'].classList.contains('hidden'), 'the prompt file is not edited');
+    elements['cron-expr'].value = '35 * * * *';
+    elements['cron-timezone'].value = 'America/New_York';
+    elements['cron-enabled'].checked = false;
+
+    await context.Sidebar.saveCronTask();
+
+    const put = requests.filter((request) => request.method === 'PUT');
+    assert.equal(put.length, 1, `${task.name}: one request`);
+    assert.equal(put[0].url, `/api/cron/tasks/${task.name}`);
+    assert.deepEqual(put[0].body, {cron: '35 * * * *', timezone: 'America/New_York', enabled: false});
+    assert.deepEqual(toasts, [{msg: 'Schedule saved', isError: false, aboveComposer: true, reserveMessageSpace: false}]);
+    assert.deepEqual(sidebarCalls, ['invalidate', 'refresh'], 'the sidebar refreshes from the network');
+    assert.ok(elements['cron-modal'].classList.contains('hidden'));
+  }
+});
+
+test('a session with two tasks switches the edit dialog between them, and each save and delete stays with its own task', async () => {
+  const requests = [];
+  const {context, elements, registered, confirms} = loadCron(apiFetch([PROMPT_TASK, HANDLER_TASK], accept, requests));
+  await registered.menuItems[0].items({scheduleTask: 'weekly'}, 's1')[0].onSelect();
+
+  assert.ok(!elements['cron-task-row'].classList.contains('hidden'), 'two tasks show the switcher');
+  assert.ok(elements['cron-task-select'].innerHTML.includes('value="storage-cool"'), elements['cron-task-select'].innerHTML);
+  assert.equal(elements['cron-task-select'].value, 'weekly');
+  context.Sidebar.switchCronTask('storage-cool');
+  assert.equal(elements['cron-expr'].value, HANDLER_TASK.cron);
+  assert.equal(elements['cron-enabled'].checked, false);
+  elements['cron-expr'].value = '5 6 * * *';
+  await context.Sidebar.saveCronTask();
+  assert.deepEqual(requests.filter((request) => request.method === 'PUT').map((request) => request.url),
+    ['/api/cron/tasks/storage-cool']);
+
+  await registered.menuItems[0].items({scheduleTask: 'weekly'}, 's1')[0].onSelect();
+  context.Sidebar.switchCronTask('storage-cool');
+  context.Sidebar.deleteCronTask();
+  await confirms.at(-1).onConfirm();
+  assert.deepEqual(requests.filter((request) => request.method === 'DELETE').map((request) => request.url),
+    ['/api/cron/tasks/storage-cool'], 'only the selected task is deleted');
+});
+
+test('Add schedule… binds a new prompt-file task to the manager session, with exactly the six create keys and no mode', async () => {
+  const requests = [];
+  const {context, elements, registered, toasts, sidebarCalls} = loadCron(apiFetch([ELSEWHERE_TASK], accept, requests));
+  const [item] = registered.menuItems[0].items({profile: 'manager', scheduleTask: ''}, 'manager-s');
+  assert.equal(item.label, 'Add schedule…');
+  await item.onSelect();
+
+  assert.ok(!elements['cron-name-row'].classList.contains('hidden'), 'the add view names the task');
+  assert.ok(!elements['cron-prompt-row'].classList.contains('hidden'), 'the add view takes the prompt file');
+  assert.ok(elements['cron-task-row'].classList.contains('hidden'));
+  assert.ok(elements['cron-delete-btn'].classList.contains('hidden'));
+  assert.equal(elements['cron-timezone'].value, 'America/Los_Angeles');
+  assert.equal(elements['cron-enabled'].checked, true);
+  elements['cron-name'].value = 'weekly-digest';
+  elements['cron-expr'].value = '0 9 * * 1';
+  elements['cron-prompt-file'].value = 'prompts/digest.md';
+
+  await context.Sidebar.saveCronTask();
+
+  const post = requests.filter((request) => request.method === 'POST');
+  assert.equal(post.length, 1);
+  assert.equal(post[0].url, '/api/cron/tasks');
+  assert.deepEqual(post[0].body, {
+    name: 'weekly-digest', cron: '0 9 * * 1', timezone: 'America/Los_Angeles', prompt_file: 'prompts/digest.md',
+    enabled: true, session_id: 'manager-s',
+  });
+  assert.deepEqual(toasts, [{msg: 'Schedule added', isError: false, aboveComposer: true, reserveMessageSpace: false}]);
+  assert.deepEqual(sidebarCalls, ['invalidate', 'refresh']);
+});
+
+test('a mobile schedule save closes the drawer before showing its toast above the composer', async () => {
+  const requests = [];
+  const {context, elements, registered, toasts, sidebarCalls} =
+    loadCron(apiFetch([PROMPT_TASK], accept, requests), {isMobile: true});
+  await registered.menuItems[0].items({scheduleTask: PROMPT_TASK.name}, 's1')[0].onSelect();
+
+  await context.Sidebar.saveCronTask();
+
+  assert.deepEqual(toasts, [{msg: 'Schedule saved', isError: false, aboveComposer: true, reserveMessageSpace: true}]);
+  assert.deepEqual(sidebarCalls, ['close-mobile-sidebar', 'invalidate', 'refresh']);
+  assert.ok(elements['cron-modal'].classList.contains('hidden'));
+});
+
+test('a schedule the server refuses shows its detail in the dialog, keeps the inputs, and never alerts', async () => {
+  const refuse = () => ({status: 400, body: {detail: 'cron expression must have five fields: "@daily"'}});
+  const {context, elements, registered, toasts, alerts, sidebarCalls} = loadCron(apiFetch([PROMPT_TASK], refuse));
+  await registered.menuItems[0].items({scheduleTask: 'weekly'}, 's1')[0].onSelect();
+  elements['cron-expr'].value = '@daily';
+
+  await context.Sidebar.saveCronTask();
+
+  const box = elements['cron-form-error'];
+  assert.equal(box.textContent, 'cron expression must have five fields: "@daily"');
+  assert.ok(!box.classList.contains('hidden'), 'the error box shows');
+  assert.equal(elements['cron-expr'].value, '@daily', 'the input keeps what the user typed');
+  assert.ok(!elements['cron-modal'].classList.contains('hidden'), 'the dialog stays open');
+  assert.deepEqual(alerts, []);
+  assert.deepEqual(toasts, []);
+  assert.deepEqual(sidebarCalls, []);
+});
+
+test('Delete asks through Sidebar.openConfirmDialog, names the kept session, and removes the binding only once confirmed', async () => {
+  const requests = [];
+  const {context, elements, registered, confirms, sidebarCalls} = loadCron(apiFetch([PROMPT_TASK], accept, requests));
+  await registered.menuItems[0].items({scheduleTask: 'weekly'}, 's1')[0].onSelect();
+
+  context.Sidebar.deleteCronTask();
+  assert.equal(requests.filter((request) => request.method === 'DELETE').length, 0, 'nothing is deleted before the answer');
+  const [confirm] = confirms;
+  assert.equal(confirm.heading, 'Delete schedule?');
+  assert.ok(confirm.detail.includes('weekly') && confirm.detail.includes('kept'), confirm.detail);
+
+  await confirm.onConfirm();
+
+  assert.deepEqual(requests.filter((request) => request.method === 'DELETE').map((request) => request.url),
+    ['/api/cron/tasks/weekly']);
+  assert.ok(elements['cron-modal'].classList.contains('hidden'));
+  assert.deepEqual(sidebarCalls, ['invalidate', 'refresh']);
 });

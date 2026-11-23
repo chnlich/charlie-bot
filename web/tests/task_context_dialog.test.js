@@ -347,6 +347,7 @@ function loadCronModule(context) {
     registerGroupPreviewLimitExemption() {},
     registerSessionRowBadge() {},
     registerSessionRowLine() {},
+    registerSessionMenuItems() {},
   });
   context.document.readyState = 'loading';
   vm.runInContext(CRON_JS, context, {filename: 'cron.js'});

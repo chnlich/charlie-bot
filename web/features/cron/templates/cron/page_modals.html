@@ -1,15 +1,50 @@
 {% from 'partials/close_button.html' import close_button %}
-{#- The task error view: the one modal the Workspace error badge opens. It shows a task that failed to load, its
-    error and file path, and it holds no form or control. The agent deletes a failed file. -#}
-<div id="cron-modal" class="diff-modal-overlay hidden">
-  <div class="diff-modal" style="width: 90vw; max-width: 900px; height: 85vh;">
-    <div class="diff-modal-header">
-      <span class="text-sm font-semibold text-slate-200">Scheduled task failed to load</span>
-      {{ close_button('closeCronModal()', '', close_btn_class) }}
+{#- The scheduled-task dialog: Edit schedule… changes a bound task's Schedule, Timezone and Enabled, or deletes its
+    binding; Add schedule… binds a new prompt-file task to an unbound manager session; the Workspace error badge opens
+    the read-only error view of a task that failed to load. It is sized like the session action dialog. -#}
+{% set cron_label_class = 'block text-xs text-slate-400 mb-1.5' %}
+{% set cron_field_class = 'w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500' %}
+<div id="cron-modal" class="diff-modal-overlay hidden p-4">
+  <div class="w-full max-w-md rounded-xl border border-slate-700 bg-slate-800 shadow-xl">
+    <div class="flex items-center justify-between px-5 py-4 border-b border-slate-700">
+      <h3 id="cron-modal-title" class="text-sm font-semibold text-slate-100">Edit schedule</h3>
+      {{ close_button('closeCronModal()', 'Close', close_btn_class) }}
     </div>
-    <div class="diff-modal-body" style="padding: 1rem; overflow-y: auto; flex: 1;">
-      <div id="cron-error-box" class="whitespace-pre-wrap break-words rounded-lg bg-red-900/40 border border-red-700/50 text-red-300 text-xs px-3 py-2"></div>
-      <p class="mt-3 text-xs text-slate-400">To delete this task, ask this session's agent.</p>
+    <div class="px-5 py-4 space-y-4">
+      <div id="cron-error-box" class="hidden whitespace-pre-wrap break-words rounded-lg bg-red-900/40 border border-red-700/50 text-red-300 text-xs px-3 py-2"></div>
+      <form id="cron-form" class="space-y-4">
+        <div id="cron-task-row" class="hidden">
+          <label for="cron-task-select" class="{{ cron_label_class }}">Task</label>
+          <select id="cron-task-select" class="{{ cron_field_class }} font-mono" onchange="switchCronTask(this.value)"></select>
+        </div>
+        <div id="cron-name-row">
+          <label for="cron-name" class="{{ cron_label_class }}">Name</label>
+          <input id="cron-name" type="text" class="{{ cron_field_class }} font-mono" placeholder="weekly-summary" />
+        </div>
+        <div>
+          <label for="cron-expr" class="{{ cron_label_class }}">Schedule</label>
+          <input id="cron-expr" type="text" class="{{ cron_field_class }} font-mono" placeholder="0 9 * * 1" />
+        </div>
+        <div>
+          <label for="cron-timezone" class="{{ cron_label_class }}">Timezone</label>
+          <input id="cron-timezone" type="text" class="{{ cron_field_class }}" placeholder="America/Los_Angeles" />
+        </div>
+        <div id="cron-prompt-row">
+          <label for="cron-prompt-file" class="{{ cron_label_class }}">Prompt file</label>
+          <input id="cron-prompt-file" type="text" class="{{ cron_field_class }} font-mono" placeholder="prompts/weekly.md" />
+        </div>
+        <div class="flex items-center gap-2">
+          <input id="cron-enabled" type="checkbox" class="h-4 w-4 rounded bg-slate-900 border-slate-600" />
+          <label for="cron-enabled" class="text-xs text-slate-300">Enabled</label>
+        </div>
+        <div id="cron-form-error" class="hidden whitespace-pre-wrap break-words rounded-lg bg-red-900/40 border border-red-700/50 text-red-300 text-xs px-3 py-2"></div>
+      </form>
+    </div>
+    <div class="flex items-center gap-2 px-5 py-4 border-t border-slate-700">
+      <button id="cron-delete-btn" onclick="deleteCronTask()" class="px-3 py-2 rounded-lg text-sm text-red-300 hover:bg-red-900/40 transition-colors">Delete</button>
+      <div class="flex-1"></div>
+      <button id="cron-cancel-btn" onclick="closeCronModal()" class="px-3 py-2 rounded-lg border border-slate-600 text-sm text-slate-300 hover:bg-slate-700 transition-colors">Cancel</button>
+      <button id="cron-save-btn" onclick="saveCronTask()" class="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-sm text-white transition-colors">Save</button>
     </div>
   </div>
 </div>

@@ -299,3 +299,9 @@ publish:
 telegram:
   chat_id:
 
+
+# disk_sweep:
+#   # A shell command that prints a JSON array of active records. The disk sweep keeps every candidate path that
+#   # any string value in a record names. A failing command or non-array output fails the whole sweep before it
+#   # removes anything.
+#   reference_command: "my-active-jobs ls --json"

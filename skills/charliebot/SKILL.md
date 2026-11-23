@@ -160,6 +160,7 @@ delegations to those backends, attach the verified patch file so the worker can 
 - Cancelled and failed delegation worktrees keep their environments.
 - At server start, failed worktrees move to `worktrees/.trash` after seven days.
 - Run `charliebot gc-trash --yes` to purge that directory.
+- Run `charliebot disk-sweep list` to see each disk-sweep candidate with its action and reason. The command removes nothing.
 - `refs/stash` is shared by worktrees of one repository. Restore pre-fix code with `git show <base>:<path>` or a scratch worktree.
 - Recover displaced work with its stash hash. Do not use a bare `git stash pop`.
 

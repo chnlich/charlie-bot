@@ -80,7 +80,7 @@ flowchart TB
 ### Operations
 
 - Scheduled home backup to the configured restic repository, with tiered retention
-- Disk sweep: finished task worktrees and scratch directories are archived and removed
+- Disk sweep: finished task worktrees and old scratch directories are removed only after checks for unsaved commits, non-rebuildable ignored files, process use, open sessions, and the optional `disk_sweep.reference_command`
 - Run-log compaction: run logs past an age are stored compressed in place
 
 ## Screenshots
@@ -166,6 +166,7 @@ release. By workflow:
 
 - `charliebot triage` — scan a window of failed runs and error logs for grouped failure signatures
 - `charliebot gc-trash` — inspect and purge quarantined worktree trash
+- `charliebot disk-sweep list` — print every disk-sweep candidate with its action and reason; removes nothing
 - `charliebot backup restore` — restore one snapshot of the profile home into an empty directory
 
 `charliebot --help` lists every subcommand the binary carries, including the internal hooks and

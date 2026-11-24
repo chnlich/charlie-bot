@@ -212,7 +212,9 @@ The record fields are listed in the header of `dev/improve/trial-side.sh`.
 
 The pull request names each screenshot by its file name and width, at the widths and states that the Web UI Screenshots rule in `prompts/task_base.md` sets.
 The pull request names no link to an evidence file and no host path; the evidence text stands on its own.
-A pull request that cites a timing or memory figure names each side record that produced the figure, with one `Side record:` line per record that carries the record's file name only.
+A pull request that cites a timing or memory figure names each side record that produced the figure.
+Each cited record has its own line, which starts with `Side record:` and ends with the record's file name.
+The sentence that states a figure names the side that produced it.
 Each cited record is complete, and its raw output location holds the side's output.
 A ready pull request names at least one side record when the round's evidence directory holds side records.
 Step 9 carries the evidence files to the user.

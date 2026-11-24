@@ -38,6 +38,10 @@
 # pr-create catches a bad citation before the pull request exists. pr-merge runs the check on the body as it will
 # merge, so an edit made after creation is checked too; pr-edit does not check.
 #
+# pr-create of the code-style direction (IMPROVE_DIRECTION=code_style) refuses a body whose rule lines do not quote the
+# cited lines of writing-style/genres/code.md under $IMPROVE_SKILLS_DIR, and a body with no rule line
+# (dev/improve/code-style-rules.sh). Other directions' pr-create takes no such check.
+#
 # pr-create and pr-merge also refuse a diff that changes a path another branch claims in the round's in-flight list,
 # $IMPROVE_LAUNCH_DIR/inflight-files.txt, the list Step 3 reads. The pull request's own head branch claims nothing for
 # itself. A refusal names each claimed path with its claimant and sends nothing.
@@ -62,6 +66,7 @@ repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 scanner="$repo_root/dev/check-skills-host-leak.sh"
 source "$repo_root/dev/push-text-lists.sh"
 source "$repo_root/dev/improve/side-record.sh"
+source "$repo_root/dev/improve/code-style-rules.sh"
 
 tmp_dir=$(mktemp -d)
 trap 'rm -rf "$tmp_dir"' EXIT
@@ -205,6 +210,10 @@ case "$subcommand" in
     require_readable "$body_file" body
     check_string title "$title"
     check_text body "$body_file"
+    # The code-style direction names each rule it applies from the round's copy of the rule file.
+    if [[ ${IMPROVE_DIRECTION-} == code_style ]]; then
+      code_style_check_body "${IMPROVE_SKILLS_DIR-}" "$body_file" || exit 2
+    fi
     # A draft waits for its measurements, so it may cite no record yet; its cited records still pass the check.
     # The head is the branch the call names. Without --head, gh takes the current branch, and so does this check.
     draft=0

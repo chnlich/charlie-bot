@@ -74,6 +74,9 @@ printf '%s\n' "$*" >> "$GH_CALL_LOG"
   let launch = sandbox.dir("round-launch");
   std::fs::write(launch.join("inflight-files.txt"), "").unwrap();
   env.insert("IMPROVE_LAUNCH_DIR".to_string(), launch.display().to_string());
+  // The round's direction selects pr-create's code-style rule check. A test that runs inside a round must not inherit
+  // it; a test that needs a direction sets it.
+  env.remove("IMPROVE_DIRECTION");
   without_credential_env(env)
 }
 
@@ -293,6 +296,127 @@ fn a_pr_create_refuses_a_claimed_path_and_allows_a_path_only_its_own_branch_clai
   let run = create(&env);
   assert_eq!(run.code, 0, "{}", run.describe());
   assert!(gh_log_lines(&gh_log)[0].contains("pr create"), "{}", gh_log_lines(&gh_log)[0]);
+}
+
+// -- github-post.sh pr-create of the code-style direction --
+
+/// The lines of a code-style round's rule file: a heading, a blank line, an indented continuation line, and a line
+/// whose quote holds double quotes.
+const RULE_LINES: [&str; 4] = [
+  "# Code",
+  "",
+  "  Keep one idea per sentence and prefer ordinary words to metaphor.",
+  "- Skip layers for \"might need later.\" Less code is better.",
+];
+
+/// The skills directory of a code-style round, with its rule file at `writing-style/genres/code.md`.
+fn rule_skills(sandbox: &Sandbox) -> PathBuf {
+  let skills = sandbox.dir("skills");
+  let genres = sandbox.dir("skills/writing-style/genres");
+  std::fs::write(genres.join("code.md"), format!("{}\n", RULE_LINES.join("\n"))).unwrap();
+  skills
+}
+
+/// The environment of a code-style round: its direction and the skills directory that holds the rule file.
+fn code_style_env(env: &Env, skills: &Path) -> Env {
+  let mut env = env.clone();
+  env.insert("IMPROVE_DIRECTION".to_string(), "code_style".to_string());
+  env.insert("IMPROVE_SKILLS_DIR".to_string(), skills.display().to_string());
+  env
+}
+
+/// One rule line that cites `line` of the rule file and quotes `quote`.
+fn rule_citation(line: usize, quote: &str) -> String {
+  format!("Rule: writing-style/genres/code.md:{line} \"{quote}\"")
+}
+
+/// Runs pr-create of the clone's current branch with `body` as its body.
+fn pr_create(env: &Env, clone: &Path, body: &Path) -> Run {
+  let mut command = harness::command("bash", env);
+  command.arg(github_post()).args(["pr-create", "--title", "clean topic", "--body-file"]).arg(body);
+  command.args(["--base", "main"]);
+  run_in(&mut command, clone)
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_code_style_pr_create_sends_a_body_whose_rule_lines_quote_their_cited_lines() {
+  let sandbox = Sandbox::new();
+  let (env, gh_log, _home) = post(&sandbox);
+  let env = code_style_env(&env, &rule_skills(&sandbox));
+  let clone = push_repo(&sandbox, &env);
+  let body = body_file(
+    &sandbox,
+    "body.md",
+    &format!(
+      "{CLEAN_BODY}{}\n{}\n",
+      rule_citation(3, "Keep one idea per sentence and prefer ordinary words to metaphor."),
+      rule_citation(4, "- Skip layers for \"might need later.\" Less code is better."),
+    ),
+  );
+  let run = pr_create(&env, &clone, &body);
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(gh_log_lines(&gh_log)[0].contains("pr create"), "{}", gh_log_lines(&gh_log)[0]);
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_code_style_pr_create_refuses_a_body_without_a_rule_line() {
+  let sandbox = Sandbox::new();
+  let (env, gh_log, _home) = post(&sandbox);
+  let env = code_style_env(&env, &rule_skills(&sandbox));
+  let clone = push_repo(&sandbox, &env);
+  let body = body_file(&sandbox, "body.md", CLEAN_BODY);
+  let run = pr_create(&env, &clone, &body);
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("names no rule"), "{}", run.stderr);
+  assert!(gh_log_lines(&gh_log).is_empty(), "no pull request was created");
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_code_style_pr_create_refuses_each_rule_line_that_does_not_quote_its_cited_line() {
+  let sandbox = Sandbox::new();
+  let (env, gh_log, _home) = post(&sandbox);
+  let env = code_style_env(&env, &rule_skills(&sandbox));
+  let clone = push_repo(&sandbox, &env);
+  // A rule that the rule file lacks, a citation past its last line, and a citation without the file's directory.
+  let refusals = [
+    (rule_citation(3, "Keep each comment sentence under thirty words."), "writing-style/genres/code.md:3"),
+    (rule_citation(9, "Keep one idea per sentence."), "writing-style/genres/code.md:9"),
+    (
+      r#"Rule: code.md:3 "Keep one idea per sentence and prefer ordinary words to metaphor.""#.to_string(),
+      "is not the rule line form",
+    ),
+  ];
+  for (index, (line, named)) in refusals.iter().enumerate() {
+    let body = body_file(&sandbox, &format!("refused-{index}.md"), &format!("{CLEAN_BODY}{line}\n"));
+    let run = pr_create(&env, &clone, &body);
+    assert_eq!(run.code, 2, "{}", run.describe());
+    assert!(run.stderr.contains(named), "the refusal does not name {named}:\n{}", run.stderr);
+  }
+  assert!(gh_log_lines(&gh_log).is_empty(), "no refused body created a pull request");
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_create_of_another_direction_takes_no_rule_check() {
+  let sandbox = Sandbox::new();
+  let (mut env, gh_log, _home) = post(&sandbox);
+  env.insert("IMPROVE_DIRECTION".to_string(), "ux".to_string());
+  let clone = push_repo(&sandbox, &env);
+  // A body with no rule line, and one whose quote the code-style rule file lacks: both pass, as before the check.
+  let plain = body_file(&sandbox, "plain.md", CLEAN_BODY);
+  let miscited = body_file(
+    &sandbox,
+    "miscited.md",
+    &format!("{CLEAN_BODY}{}\n", rule_citation(3, "Keep each comment sentence under thirty words.")),
+  );
+  for body in [&plain, &miscited] {
+    let run = pr_create(&env, &clone, body);
+    assert_eq!(run.code, 0, "{}", run.describe());
+  }
+  assert_eq!(gh_log_lines(&gh_log).len(), 2, "both bodies created a pull request");
 }
 
 #[test]

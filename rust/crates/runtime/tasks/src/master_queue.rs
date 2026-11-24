@@ -511,7 +511,15 @@ impl MasterQueue {
       let checkpoint = if turn_hooks::skips_checkpoint(&result.finish_extras) {
         turn_hooks::Checkpoint::Finish
       } else {
-        turn_hooks::checkpoint(&features, session_id, &meta, i64::from(result.exit_code), has_conversation).await?
+        turn_hooks::checkpoint(
+          &features,
+          session_id,
+          &item.task_run.run_id,
+          &meta,
+          i64::from(result.exit_code),
+          has_conversation,
+        )
+        .await?
       };
       match checkpoint {
         turn_hooks::Checkpoint::Finish => break (result, ran_backend),
@@ -565,16 +573,17 @@ impl MasterQueue {
     }
     if turn_hooks::skips_checkpoint(&result.finish_extras) {
       let metadata = item.session_metadata();
-      if let Some((_, contribution)) = item.callbacks.features.registry.turn_owner(&metadata)
-        && let Err(error) =
+      for contribution in item.callbacks.features.registry.turn_contributions_for(&metadata) {
+        if let Err(error) =
           contribution.after_failed_turn(&item.callbacks.features, session_id, &failed_turn_event).await
-      {
-        tracing::error!(
-          target: "charliebot_tasks",
-          session = %session_id,
-          error = %error,
-          "failed-turn contribution failed"
-        );
+        {
+          tracing::error!(
+            target: "charliebot_tasks",
+            session = %session_id,
+            error = %error,
+            "failed-turn contribution failed"
+          );
+        }
       }
     }
     if let Some(completion) = item.completion.take() {

@@ -1,8 +1,5 @@
-//! The web reply record and the web-session test: the refusals, the language check, the For-you layer and the
+//! The web reply record and the manager-session gate: the refusals, the language check, the For-you layer and the
 //! readback. The `web-reply` turn-end check and its notice delivery are in `audit.rs`.
-//!
-//! The web session test is chat_threads' `thread_sessions::is_thread_session`, restated over the same fields: this
-//! package does not depend on chat_threads.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -120,12 +117,10 @@ impl From<anyhow::Error> for WebReplyError {
   }
 }
 
-/// True for a manager session that no chat thread owns: Slack, Discord, Feishu or another thread platform.
-pub fn is_web_session(meta: &SessionMetadata) -> bool {
-  charliebot_tasks::midturn_delivery::is_web_session(meta)
-}
+/// True for a manager session, whether or not a chat thread is bound to it.
+pub use charliebot_registry::midturn_delivery::is_manager_session;
 
-/// The manager session named by `session_id`, web or thread: 404 for an unknown session, 409 for a worker.
+/// The manager session named by `session_id`: 404 for an unknown session, 409 for a worker.
 pub async fn require_manager_session(
   features: &FeatureContext,
   session_id: &str,
@@ -137,26 +132,6 @@ pub async fn require_manager_session(
     .ok_or_else(|| WebReplyError::refused(StatusCode::NOT_FOUND, SESSION_NOT_FOUND_DETAIL))?;
   if meta.profile != TaskProfile::Manager {
     return Err(WebReplyError::refused(StatusCode::CONFLICT, "Session is not a manager: it is a worker"));
-  }
-  Ok(meta)
-}
-
-/// The web session named by `session_id`: 404 for an unknown session, 409 for a thread
-/// session or a worker.
-pub async fn require_web_session(
-  features: &FeatureContext,
-  session_id: &str,
-) -> Result<SessionMetadata, WebReplyError> {
-  let meta = features
-    .store
-    .get_session(session_id)
-    .await?
-    .ok_or_else(|| WebReplyError::refused(StatusCode::NOT_FOUND, SESSION_NOT_FOUND_DETAIL))?;
-  if !is_web_session(&meta) {
-    return Err(WebReplyError::refused(
-      StatusCode::CONFLICT,
-      "Session is not a web session: it is a thread session or a worker",
-    ));
   }
   Ok(meta)
 }
@@ -359,7 +334,7 @@ pub async fn unread_reply(
   run_id: Option<&str>,
   request_id: Option<&str>,
 ) -> Result<Value, WebReplyError> {
-  require_web_session(features, session_id).await?;
+  require_manager_session(features, session_id).await?;
   if str_methods::strip(text).is_empty() {
     return Err(WebReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, "Reply text is empty"));
   }
@@ -411,7 +386,7 @@ pub async fn record_reply_check(
   answer: Option<&str>,
   run_id: Option<&str>,
 ) -> Result<Value, WebReplyError> {
-  require_web_session(features, session_id).await?;
+  require_manager_session(features, session_id).await?;
   let digest = reply_sha256(text);
   let reply_index = if let Some(run_id) = run_id {
     let events = load_events(features, session_id).await?;
@@ -467,7 +442,7 @@ pub async fn post_web_reply_with_identity(
   request_id: Option<&str>,
   run_id: Option<&str>,
 ) -> Result<Value, WebReplyError> {
-  require_web_session(features, session_id).await?;
+  require_manager_session(features, session_id).await?;
   if str_methods::strip(text).is_empty() {
     return Err(WebReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, "Reply text is empty"));
   }
@@ -766,11 +741,9 @@ mod tests {
 
   #[tokio::test]
   async fn a_refused_web_reply_records_nothing_and_marks_nothing() {
-    for (case, status) in [("unknown", 404), ("thread", 409), ("worker", 409), ("blank", 422)] {
+    for (case, status) in [("unknown", 404), ("worker", 409), ("blank", 422)] {
       let home = Home::new();
-      let origin = (case == "thread")
-        .then(|| ("slack_origin", json!({"team_id": "T1", "channel_id": "C1", "thread_ts": "1700000000.000100"})));
-      let root = home.manager("session", origin).await;
+      let root = home.manager("session", None).await;
       let sid = if case == "worker" { home.worker(&root, "worker").await } else { root };
       let target = if case == "unknown" { "no-such-session" } else { sid.as_str() };
       let text = if case == "blank" { " \n\t" } else { "the answer" };
@@ -994,23 +967,17 @@ mod tests {
   }
 
   #[test]
-  fn a_web_session_is_a_manager_that_no_chat_thread_owns() {
-    charliebot_registry::thread_origin::register_origin_field("slack_origin");
-    charliebot_registry::thread_origin::register_origin_field("discord_origin");
-    charliebot_registry::thread_origin::register_origin_field("feishu_origin");
-    let origin = json!({"team_id": "T1", "channel_id": "C1", "thread_ts": "1700000000.000100"});
+  fn a_manager_session_is_a_manager_whether_or_not_a_thread_is_bound() {
+    charliebot_registry::thread_origin::register_origin_field("slack", "slack_origin");
     let mut slack = SessionMetadata::new("s", "s", TaskProfile::Manager);
-    slack.extra.insert("slack_origin".to_string(), origin);
-    let mut discord = SessionMetadata::new("s", "s", TaskProfile::Manager);
-    discord.extra.insert("discord_origin".to_string(), json!({"guild_id": "G1"}));
-    let mut feishu = SessionMetadata::new("s", "s", TaskProfile::Manager);
-    feishu.extra.insert("feishu_origin".to_string(), json!({"tenant_key": "T1", "chat_id": "oc_1", "root_id": "om_1"}));
+    slack.extra.insert(
+      "slack_origin".to_string(),
+      json!({"team_id": "T1", "channel_id": "C1", "thread_ts": "1700000000.000100"}),
+    );
 
-    assert!(is_web_session(&SessionMetadata::new("s", "s", TaskProfile::Manager)));
-    assert!(!is_web_session(&slack));
-    assert!(!is_web_session(&discord));
-    assert!(!is_web_session(&feishu));
-    assert!(!is_web_session(&SessionMetadata::new("s", "s", TaskProfile::Worker)));
+    assert!(is_manager_session(&SessionMetadata::new("s", "s", TaskProfile::Manager)));
+    assert!(is_manager_session(&slack));
+    assert!(!is_manager_session(&SessionMetadata::new("s", "s", TaskProfile::Worker)));
   }
 
   #[test]

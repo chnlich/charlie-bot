@@ -436,7 +436,7 @@ pub async fn record_ask_check(
   backend: &str,
   answer: &str,
 ) -> Result<Value, WebReplyError> {
-  reply::require_web_session(features, session_id).await?;
+  reply::require_manager_session(features, session_id).await?;
   let item = parse_item(raw_item)?;
   let digest = item_sha256(&item)?;
   if answer.trim().is_empty() {
@@ -461,7 +461,7 @@ pub async fn record_ask_check(
 
 /// Return the waiting items in `text` whose current digest has no matching ask-check event.
 pub async fn unread_waiting(features: &FeatureContext, session_id: &str, text: &str) -> Result<Value, WebReplyError> {
-  let meta = reply::require_web_session(features, session_id).await?;
+  let meta = reply::require_manager_session(features, session_id).await?;
   let patch = parse_patch(text)?;
   let scan_context = reply::file_link_scan_context(features, session_id)?;
   reply::refuse_dead_links(scanned_texts(&patch), &scan_context)?;
@@ -603,14 +603,14 @@ fn scanned_texts(patch: &StatusPatch) -> Vec<&str> {
   texts
 }
 
-/// Whether a status command echoes `remaining_missing: true`: a web session with a Goal and an empty Remaining, with no
-/// close request pending and not archived. Each call computes it; no status stores it.
+/// Whether a status command echoes `remaining_missing: true`: a manager session with a Goal and an empty Remaining, with
+/// no close request pending and not archived. Each call computes it; no status stores it.
 async fn remaining_missing(
   features: &FeatureContext,
   meta: &SessionMetadata,
   status: &WebStatus,
 ) -> Result<bool, WebReplyError> {
-  if !reply::is_web_session(meta)
+  if !reply::is_manager_session(meta)
     || status.goal.is_none()
     || !status.remaining.is_empty()
     || meta.status == SessionStatus::Archived
@@ -621,19 +621,12 @@ async fn remaining_missing(
 }
 
 /// Store the items the JSON `text` names, record one `web_status` event and notify the ancestors. Waiting items need
-/// a non-blank context and a matching cold-read digest. A stale plan link refuses the set before the cold read. A
-/// thread session's set names the goal alone; one that names Now or Waiting on you is refused. The return adds the Now
-/// length and `remaining_missing`; a refusal stores and records nothing.
+/// a non-blank context and a matching cold-read digest. A stale plan link refuses the set before the cold read. The
+/// return adds the Now length and `remaining_missing`; a refusal stores and records nothing.
 pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str) -> Result<Value, WebReplyError> {
   let scan_context = reply::file_link_scan_context(features, session_id)?;
   let meta = reply::require_manager_session(features, session_id).await?;
   let patch = parse_patch(text)?;
-  if !reply::is_web_session(&meta) && patch.named() != ["goal"] {
-    return Err(WebReplyError::refused(
-      StatusCode::CONFLICT,
-      "Session is a thread session: only its goal can be set; now and waiting on you stay in the thread status block",
-    ));
-  }
   reply::refuse_dead_links(scanned_texts(&patch), &scan_context)?;
   require_waiting_context(patch.waiting.as_deref().unwrap_or_default())?;
   let stored = stored_status(&meta)?;
@@ -748,7 +741,7 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
 /// A stale plan link in a stored item refuses the confirmation with 409 and names the newest file. A confirmation
 /// records one web_status_confirmed event and cold reads nothing.
 pub async fn confirm_status(features: &FeatureContext, session_id: &str) -> Result<Value, WebReplyError> {
-  let meta = reply::require_web_session(features, session_id).await?;
+  let meta = reply::require_manager_session(features, session_id).await?;
   let status = stored_status(&meta)?.unwrap_or(WebStatus {
     goal: None,
     now: None,
@@ -849,7 +842,7 @@ fn derived_payload(item: &OpenWaitingItem) -> Value {
 /// first. A descendant needs waiting items; a child needs a Now value. The derived items the session holds ride
 /// beside the stored ones, under `derived_waiting`. The session's own task state rides under `own_task_state`.
 pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<Value, WebReplyError> {
-  let meta = reply::require_web_session(features, session_id).await?;
+  let meta = reply::require_manager_session(features, session_id).await?;
   let stored = stored_status(&meta)?;
   let (tree, own_task_state, own_clicked) = tree_read_reply(&features.store, {
     let session_id = session_id.to_string();
@@ -1237,32 +1230,54 @@ mod tests {
     let archived = home.manager("archived", None).await;
     home.features.store.archive_session(&archived).await.expect("the session archives");
     assert!(!set_echo(&home, &archived, r#"{"goal": "Ship"}"#).await, "an archived session");
+  }
 
+  #[tokio::test]
+  async fn an_operator_thread_stores_all_four_status_fields_without_a_refusal() {
+    let home = Home::new();
     let thread = home
       .manager(
         "thread",
         Some(("slack_origin", json!({"team_id": "T1", "channel_id": "C1", "thread_ts": "1700000000.000100"}))),
       )
       .await;
-    assert!(!set_echo(&home, &thread, r#"{"goal": "Ship"}"#).await, "a thread session echoes false");
+    check_waiting_item(&home, &thread, "Pick a layout").await;
+    let text = json!({
+      "goal": "Ship",
+      "remaining": ["Build"],
+      "now": "Running",
+      "waiting": [waiting_item("Pick a layout")],
+    })
+    .to_string();
+
+    assert!(!set_echo(&home, &thread, &text).await, "a Goal with Remaining holds no reminder");
+    let stored = stored_status(&home.meta(&thread).await).expect("the status reads").expect("a status is stored");
+    assert_eq!(stored.goal.as_deref(), Some("Ship"));
+    assert_eq!(stored.remaining, ["Build"]);
+    assert_eq!(stored.now.as_deref(), Some("Running"));
+    assert_eq!(stored.waiting.len(), 1);
+  }
+
+  #[tokio::test]
+  async fn a_thread_with_a_goal_and_no_remaining_echoes_the_reminder() {
+    let home = Home::new();
+    let thread = home
+      .manager(
+        "thread",
+        Some(("slack_origin", json!({"team_id": "T1", "channel_id": "C1", "thread_ts": "1700000000.000100"}))),
+      )
+      .await;
+    assert!(set_echo(&home, &thread, r#"{"goal": "Ship"}"#).await, "a thread manager is a manager");
   }
 
   #[tokio::test]
   async fn a_refused_status_set_stores_nothing_and_records_no_event() {
     let home = Home::new();
     let own = home.manager("own", None).await;
-    let thread = home
-      .manager(
-        "thread",
-        Some(("slack_origin", json!({"team_id": "T1", "channel_id": "C1", "thread_ts": "1700000000.000100"}))),
-      )
-      .await;
     let worker = home.worker(&own, "worker").await;
-    let cases =
-      [("unknown", VALID_SET, 404), ("thread", VALID_SET, 409), ("worker", VALID_SET, 409), ("own", "not json", 422)];
+    let cases = [("unknown", VALID_SET, 404), ("worker", VALID_SET, 409), ("own", "not json", 422)];
     for (case, text, status) in cases {
       let sid = match case {
-        "thread" => thread.as_str(),
         "worker" => worker.as_str(),
         _ => own.as_str(),
       };
@@ -1958,11 +1973,9 @@ mod tests {
       assert!(matches!(error, WebReplyError::Refused { status, .. } if status.as_u16() == expected), "{case}");
       assert_eq!(home.events(&sid), before, "{case}");
     }
-    for case in ["unknown", "thread", "worker"] {
+    for case in ["unknown", "worker"] {
       let home = Home::new();
-      let origin = (case == "thread")
-        .then(|| ("slack_origin", json!({"team_id": "T1", "channel_id": "C1", "thread_ts": "1700000000.000100"})));
-      let root = home.manager("session", origin).await;
+      let root = home.manager("session", None).await;
       let sid = if case == "worker" { home.worker(&root, "worker").await } else { root };
       let target = if case == "unknown" { "no-such-session" } else { sid.as_str() };
       let before = home.events(&sid);
@@ -2240,38 +2253,11 @@ mod tests {
     assert_eq!(home.events(&sid).iter().filter(|event| event["type"] == WEB_ASK_CHECK).count(), 1);
   }
 
-  /// A thread manager stores its Goal alone, and the stored Goal is the one the Goal hook reads. A set that names Now
-  /// or Waiting on you is refused, and stores nothing.
   #[tokio::test]
-  async fn a_thread_manager_sets_its_goal_alone() {
-    let home = Home::new();
-    let thread = home
-      .manager(
-        "thread",
-        Some(("slack_origin", json!({"team_id": "T1", "channel_id": "C1", "thread_ts": "1700000000.000100"}))),
-      )
-      .await;
-
-    set_status(&home.features, &thread, r#"{"goal": "Ship the thread reply"}"#)
-      .await
-      .expect("the goal-only set stores");
-    let meta = home.meta(&thread).await;
-    assert_eq!(stored_goal(&meta).unwrap().as_deref(), Some("Ship the thread reply"));
-
-    for text in [r#"{"now": "Running"}"#, r#"{"goal": "Renamed", "now": "Running"}"#] {
-      let error = set_status(&home.features, &thread, text).await.expect_err("the set is refused");
-      assert!(matches!(error, WebReplyError::Refused { status: StatusCode::CONFLICT, .. }), "{text}");
-    }
-    assert_eq!(stored_goal(&home.meta(&thread).await).unwrap().as_deref(), Some("Ship the thread reply"));
-  }
-
-  #[tokio::test]
-  async fn the_status_read_refuses_an_unknown_thread_or_worker_session() {
-    for (case, status) in [("unknown", 404), ("thread", 409), ("worker", 409)] {
+  async fn the_status_read_refuses_an_unknown_or_worker_session() {
+    for (case, status) in [("unknown", 404), ("worker", 409)] {
       let home = Home::new();
-      let origin = (case == "thread")
-        .then(|| ("slack_origin", json!({"team_id": "T1", "channel_id": "C1", "thread_ts": "1700000000.000100"})));
-      let root = home.manager("session", origin).await;
+      let root = home.manager("session", None).await;
       let sid = if case == "worker" { home.worker(&root, "worker").await } else { root };
       let target = if case == "unknown" { "no-such-session" } else { sid.as_str() };
 
@@ -2282,6 +2268,19 @@ mod tests {
         other => panic!("case {case}: expected a refusal, got {other:?}"),
       }
     }
+  }
+
+  #[tokio::test]
+  async fn the_status_read_serves_a_thread_manager() {
+    let home = Home::new();
+    let thread = home
+      .manager(
+        "thread",
+        Some(("slack_origin", json!({"team_id": "T1", "channel_id": "C1", "thread_ts": "1700000000.000100"}))),
+      )
+      .await;
+
+    read_status(&home.features, &thread).await.expect("a thread manager reads its status");
   }
 
   #[tokio::test]

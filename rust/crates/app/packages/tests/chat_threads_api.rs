@@ -107,9 +107,9 @@ fn write_session(store: &Store, slots: &[MetadataSlot], meta: &SessionMetadata) 
 
 /// Writes the corpus through the registered slots, so every file carries the origin fields as the store writes them.
 fn seed(features: &FeatureContext) -> Corpus {
-  charliebot_registry::thread_origin::register_origin_field("discord_origin");
-  charliebot_registry::thread_origin::register_origin_field("feishu_origin");
-  charliebot_registry::thread_origin::register_origin_field("slack_origin");
+  charliebot_registry::thread_origin::register_origin_field("discord", "discord_origin");
+  charliebot_registry::thread_origin::register_origin_field("feishu", "feishu_origin");
+  charliebot_registry::thread_origin::register_origin_field("slack", "slack_origin");
   let slots = features.registry.metadata_slots();
   let store = &features.store;
   let mut thread = session("thread", TaskProfile::Manager, None);

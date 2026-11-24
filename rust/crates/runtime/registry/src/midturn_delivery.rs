@@ -103,14 +103,14 @@ fn state_of(run_id: &str) -> Option<Arc<DeliveryState>> {
   runs().lock().expect("mid-turn delivery registry is not poisoned").get(run_id).cloned()
 }
 
-/// True for a manager session that no chat thread owns (`reply.is_web_session`).
-pub fn is_web_session(meta: &SessionMetadata) -> bool {
-  meta.profile == TaskProfile::Manager && !crate::thread_origin::is_thread_session(meta)
+/// True for a manager session, web or bound to a chat thread: the session that takes live user input and the status.
+pub fn is_manager_session(meta: &SessionMetadata) -> bool {
+  meta.profile == TaskProfile::Manager
 }
 
-/// Whether this is a web manager turn eligible for live user input.
+/// Whether this is a manager turn eligible for live user input.
 pub fn is_gated_turn(meta: &SessionMetadata, turn: bool, run_kind: RunKind) -> bool {
-  turn && run_kind == RunKind::ManagerTurn && is_web_session(meta)
+  turn && run_kind == RunKind::ManagerTurn && is_manager_session(meta)
 }
 
 /// The Run id that enables the stream-json input path, or `None` for the plain-text stdin path.

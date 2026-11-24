@@ -427,10 +427,10 @@ impl Registry {
     self.metadata_slots.clone()
   }
 
-  /// The registration of the field that a chat platform's metadata slot holds as its thread origin. The field must name
-  /// a field of
-  /// a metadata slot already registered, so a platform cannot name an origin it does not store.
-  pub fn thread_origin_field(&mut self, field: &'static str) -> Result<(), RegistryError> {
+  /// The registration of the field that a chat platform's metadata slot holds as its thread origin, with the platform's
+  /// name (`slack`, `discord`, `feishu`). The field must name a field of a metadata slot already registered, so a
+  /// platform cannot name an origin it does not store.
+  pub fn thread_origin_field(&mut self, platform: &'static str, field: &'static str) -> Result<(), RegistryError> {
     let package = self.owner()?;
     let stored = self.metadata_slots.iter().any(|slot| slot.fields.iter().any(|slot_field| slot_field.name == field));
     if !stored {
@@ -439,7 +439,7 @@ impl Registry {
         message: format!("thread origin field {field:?} is not a field of a registered metadata slot"),
       });
     }
-    crate::thread_origin::register_origin_field(field);
+    crate::thread_origin::register_origin_field(platform, field);
     Ok(())
   }
 
@@ -1954,10 +1954,11 @@ pub trait TurnContribution: Send + Sync {
     Box::pin(async { Ok(()) })
   }
 
-  /// The session kind whose turn-end checks this contribution owns, when `meta` is one of its sessions. At most one
-  /// contribution owns a session: the registry's turn owner is the first that claims it.
-  fn turn_kind(&self, _meta: &SessionMetadata) -> Option<&'static str> {
-    None
+  /// Whether this contribution's turn-end checks and failed-turn handling apply to a turn of `meta`'s session. Several
+  /// contributions can apply to one session (a Manager bound to a thread gets the web checks and the thread's reply
+  /// check); each check runs on the applicable contribution that names it. The answer reads only the stored metadata.
+  fn applies_to_turn(&self, _meta: &SessionMetadata) -> bool {
+    false
   }
 
   /// Attaches a turn-end check's notice, which the check passed with, to a message of the turn `turn` in the session
@@ -2005,8 +2006,8 @@ pub trait TurnContribution: Send + Sync {
     false
   }
 
-  /// The names of the turn-end checks this contribution answers. A session's turn runs the checks of its turn owner
-  /// by name, and a name in the hook list that no contribution answers fails the checkpoint.
+  /// The names of the turn-end checks this contribution answers. Each name in the hook list runs on the applicable
+  /// contribution that names it; a name that no registered contribution answers fails the checkpoint.
   fn turn_end_check_names(&self) -> &'static [&'static str] {
     &[]
   }
@@ -2023,12 +2024,9 @@ pub trait TurnContribution: Send + Sync {
 }
 
 impl Registry {
-  /// The contribution that owns the turn-end checks of `meta`'s session, with the session kind it claims.
-  pub fn turn_owner(&self, meta: &SessionMetadata) -> Option<(&'static str, Arc<dyn TurnContribution>)> {
-    self
-      .turn_contributions
-      .values()
-      .find_map(|contribution| contribution.turn_kind(meta).map(|kind| (kind, Arc::clone(contribution))))
+  /// The contributions whose turn-end checks apply to a turn of `meta`'s session, in registration order.
+  pub fn turn_contributions_for(&self, meta: &SessionMetadata) -> Vec<Arc<dyn TurnContribution>> {
+    self.turn_contributions.values().filter(|contribution| contribution.applies_to_turn(meta)).map(Arc::clone).collect()
   }
 
   /// Whether some registered contribution answers the turn-end check `name`.

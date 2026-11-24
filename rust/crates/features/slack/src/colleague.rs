@@ -101,7 +101,7 @@ fn thread_of(origin: &Value) -> Result<(&str, &str)> {
 
 /// Whether the request of run `run_id` must be refused: its inputs are not all the operator's, its session is a Slack
 /// thread, and a colleague has posted in that thread.
-async fn colleague_thread_refuses(
+pub(crate) async fn colleague_thread_refuses(
   features: &FeatureContext,
   client: Option<&SlackClient>,
   session_id: &str,
@@ -194,6 +194,28 @@ pub(crate) async fn refuse_work_with(
   }
 }
 
+/// Whether run `run_id` of `session_id` is colleague-started, read by the predicate that refuses its requests. A failed
+/// read answers true, as a refused request does, so a turn-end check and a request decide one run the same way.
+pub(crate) async fn run_read_only_with(
+  features: &FeatureContext,
+  client: Option<&SlackClient>,
+  session_id: &str,
+  run_id: &str,
+) -> bool {
+  match colleague_thread_refuses(features, client, session_id, run_id).await {
+    Ok(read_only) => read_only,
+    Err(error) => {
+      tracing::error!(
+        event = "slack_colleague_run_check_failed",
+        session = session_id,
+        run = run_id,
+        error = %format!("{error:#}"),
+      );
+      true
+    }
+  }
+}
+
 /// Whether a follow wake of `session_id` may start a run. A failed read drops the wake and logs an error.
 pub(crate) async fn admit_follow_wake_with(features: &FeatureContext, client: &SlackClient, session_id: &str) -> bool {
   match follow_wake_admitted(features, client, session_id).await {
@@ -220,6 +242,15 @@ impl ColleagueGate for SlackColleagueGate {
     caller: &'a CallerIdentity,
   ) -> BoxFuture<'a, Option<&'static str>> {
     Box::pin(async move { refuse_work_with(features, None, caller).await })
+  }
+
+  fn run_read_only<'a>(
+    &'a self,
+    features: &'a FeatureContext,
+    session_id: &'a str,
+    run_id: &'a str,
+  ) -> BoxFuture<'a, bool> {
+    Box::pin(async move { run_read_only_with(features, None, session_id, run_id).await })
   }
 
   fn admits_wake<'a>(
@@ -531,5 +562,34 @@ mod tests {
     let refusal = SlackColleagueGate.refuse_agent_work(&home.features, &caller).await;
 
     assert_eq!(refusal, None);
+  }
+
+  /// The run-level predicate that turn-end checks read and the refusal of a request both answer through
+  /// `colleague_thread_refuses`: one answer per run shape, a colleague-fed run, a mixed run and an operator-only run.
+  #[tokio::test]
+  async fn the_run_predicate_and_the_refusal_answer_alike_for_each_run_shape() {
+    let api = FakeApi::start(&[]).await;
+    let (home, session_id) = thread_home(
+      &api,
+      vec![message(THREAD, "U_ALLOWED", "status?"), message("1700000000.000200", "U_COLLEAGUE", "help")],
+    )
+    .await;
+    append(&home, &session_id, summon("evt-colleague-summon", "U_COLLEAGUE")).await;
+    append(&home, &session_id, operator_web_message()).await;
+    let shapes: [(&[&str], bool); 3] = [
+      (&["evt-colleague-summon"], true),
+      (&["evt-operator-web", "evt-colleague-summon"], true),
+      (&["evt-operator-web"], false),
+    ];
+    for (input_ids, read_only) in shapes {
+      let caller = run_caller(&home, &session_id, input_ids);
+      let CallerIdentity::Agent { claims } = &caller else { unreachable!("a run caller is an agent") };
+      let predicate = colleague_thread_refuses(&home.features, Some(&api.client), &session_id, &claims.run_id)
+        .await
+        .expect("the predicate answers");
+      let refused = refuse_work_with(&home.features, Some(&api.client), &caller).await.is_some();
+      assert_eq!(predicate, read_only, "{input_ids:?}");
+      assert_eq!(refused, read_only, "{input_ids:?}");
+    }
   }
 }

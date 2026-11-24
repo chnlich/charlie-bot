@@ -2337,11 +2337,11 @@ fn evidence_from_close_request(request: &Value) -> StoreResult<CompletionEvidenc
 /// The archive answer's `pending` text for a session that waits for the user's view.
 pub const PENDING_UNTIL_USER_VIEW: &str = "closes when the user opens this session";
 
-/// Whether the session's close waits for the user's view now. Its approver is the user, and it is not a chat thread
-/// session (whose replies the user reads in the thread, never on the web). Its last reply is unread.
+/// Whether the session's close waits for the user's view now. Its approver is the user and it holds unread activity:
+/// a turn that left only external thread replies marks nothing unread, so its close does not wait.
 fn waits_for_user_view(meta: &SessionMetadata) -> bool {
   let approver = meta.task.as_ref().map_or(TaskApprover::User, |task| task.approver);
-  approver == TaskApprover::User && !charliebot_registry::thread_origin::is_thread_session(meta) && meta.has_unread
+  approver == TaskApprover::User && meta.has_unread
 }
 
 /// The archive answer while a close request waits. `meta` is `None` when the session has no metadata file. The CLI's

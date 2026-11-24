@@ -352,6 +352,7 @@ pub async fn handle_message_create(
     "thread_id": thread_id,
     (MENTION_ID): message_id,
   });
+  let content = thread_entry::summon_content(&DISCORD, message.get("content").and_then(Value::as_str));
   Ok(Some(
     thread_entry::accept_summon(
       &adapter,
@@ -361,7 +362,7 @@ pub async fn handle_message_create(
         label: &format!("Discord #{parent_name}"),
         origin: &origin,
         block: &block,
-        content: DISCORD.summon_line,
+        content: &content,
         user: author_id,
       },
     )

@@ -333,7 +333,7 @@ impl Harness {
             after: None,
             fields: vec![charliebot_core::metadata_slot::SlotField { name: field, default: serde_json::Value::Null }],
           })?;
-          registry.thread_origin_field(field)?;
+          registry.thread_origin_field(owner, field)?;
         }
         Ok(())
       })

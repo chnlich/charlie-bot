@@ -264,6 +264,7 @@ mod tests {
       create_time: "1700000000000".to_string(),
       sender_open_id: sender.to_string(),
       mentions: Vec::new(),
+      text: None,
     }
   }
 

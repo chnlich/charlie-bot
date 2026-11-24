@@ -37,6 +37,15 @@ use crate::slack_client::SlackClient;
 pub(crate) struct FixedClientGate(pub(crate) Arc<SlackClient>);
 
 impl ColleagueGate for FixedClientGate {
+  fn run_read_only<'a>(
+    &'a self,
+    features: &'a FeatureContext,
+    session_id: &'a str,
+    run_id: &'a str,
+  ) -> BoxFuture<'a, bool> {
+    Box::pin(async move { crate::colleague::run_read_only_with(features, Some(&self.0), session_id, run_id).await })
+  }
+
   fn refuse_agent_work<'a>(
     &'a self,
     features: &'a FeatureContext,

@@ -85,14 +85,14 @@ fn register_origins(registry: &mut Registry) -> Result<(), RegistryError> {
     after: None,
     fields: vec![SlotField { name: "slack_origin", default: Value::Null }],
   })?;
-  registry.thread_origin_field("slack_origin")?;
+  registry.thread_origin_field("slack", "slack_origin")?;
   registry.metadata_slot(MetadataSlot {
     owner: "discord",
     on: MetadataFile::Session,
     after: None,
     fields: vec![SlotField { name: "discord_origin", default: Value::Null }],
   })?;
-  registry.thread_origin_field("discord_origin")
+  registry.thread_origin_field("discord", "discord_origin")
 }
 
 /// A store over a temporary home. Each constructor registers the packages and startup services its test path needs.

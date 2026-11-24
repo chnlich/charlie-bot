@@ -1178,10 +1178,7 @@ pub async fn audit_failed_turn(
     .find(|receipt| receipt.input_event_id == input_event_id)
     .expect("the newest thread input is one of the turn's receipts");
   let summon_id = summon_of(&target, &input_event_id);
-  let content = event_by_id(&chat_events, &summon_id)
-    .and_then(|summon| summon.get("content").and_then(Value::as_str).map(str::to_string))
-    .unwrap_or_default();
-  if content != platform.summon_line && !content.contains(platform.reply_command) {
+  if !event_by_id(&chat_events, &summon_id).is_some_and(|summon| summon_carries_mention(platform, &summon)) {
     return Ok(false);
   }
   if replied(platform, &receipt, &chat_events)? {
@@ -1258,9 +1255,24 @@ pub async fn audit_failed_turn(
   ack_clear(adapter, &target, session_id);
   Ok(true)
 }
-/// The turn-end kind of a session bound to `platform`'s thread: the platform's name, or none for another session.
-pub fn thread_turn_kind(meta: &SessionMetadata, platform: &ThreadPlatform) -> Option<&'static str> {
-  origin_of(meta, platform).map(|_| platform.name)
+/// Whether a turn of `meta`'s session is a thread turn of `platform`: the session is bound to the platform's thread.
+pub fn thread_applies_to_turn(meta: &SessionMetadata, platform: &ThreadPlatform) -> bool {
+  origin_of(meta, platform).is_some()
+}
+
+/// The content a summon event stores: the inbound message's text, or the platform's summon line when the message carries
+/// no text (an attachment alone). The text is what a delegation quotes, so it is the message as the thread wrote it.
+pub fn summon_content(platform: &ThreadPlatform, text: Option<&str>) -> String {
+  match text {
+    Some(text) if !text.trim().is_empty() => text.to_string(),
+    _ => platform.summon_line.to_string(),
+  }
+}
+
+/// Whether a summon event carries the platform's mention block, which every thread summon writes with its message id.
+/// The thread checks read a summon's identity through this one test, so a summon's text never decides it.
+pub fn summon_carries_mention(platform: &ThreadPlatform, summon: &Value) -> bool {
+  summon.get(platform.name).and_then(|block| block.get(platform.mention_key)).is_some_and(|mention| !mention.is_null())
 }
 
 /// The entry that checks each summon of the turn got a thread reply, on every thread platform.
@@ -1301,9 +1313,7 @@ pub fn check_thread_reply(platform: &ThreadPlatform, input: &TurnInput) -> anyho
   // checking that summon's format, and the summon itself may sit before this turn, so a nudge input skips the check.
   if block.get(event_types::NUDGE_OF).and_then(Value::as_str).is_none() {
     let summon = event_by_id(&input.turn, &receipt.input_event_id).context("the summon is in the turn")?;
-    let content = summon.get("content").and_then(Value::as_str).unwrap_or_default();
-    // A summon from the earlier marker contract names neither the one-line input nor the reply command.
-    if content != platform.summon_line && !content.contains(platform.reply_command) {
+    if !summon_carries_mention(platform, &summon) {
       return Ok(CheckResult::Pass);
     }
   }

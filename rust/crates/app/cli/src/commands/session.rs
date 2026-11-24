@@ -526,7 +526,6 @@ fn send(args: &SendArgs) -> Result<(), CliExit> {
 /// deferral. A deferral answers as the server's archive answer does, which names the approver from
 /// the session's metadata; metadata that does not decode fails loud rather than choosing an approver.
 fn find_local_task_close(home: &Path, task_id: &str, request_id: &str) -> Result<Option<Value>, CliExit> {
-  register_thread_origin_fields();
   let session_dir = config::sessions_dir_in(home).join(task_id);
   match scan_task_close(&layout::chat_events_path(&session_dir), task_id, request_id) {
     Some(LocalClose::Closed(closed)) => Ok(Some(closed)),
@@ -545,21 +544,6 @@ fn find_local_task_close(home: &Path, task_id: &str, request_id: &str) -> Result
 enum LocalClose {
   Closed(Value),
   Requested,
-}
-
-/// Register each chat platform's thread-origin field, read off the platform's own `ThreadPlatform` value.
-///
-/// The CLI process runs no platform package, and the pending close answer judges thread sessions through the
-/// registered origin fields (`pending_archive_answer`). Registering here keeps this readback's answer the answer the
-/// server would give.
-fn register_thread_origin_fields() {
-  for platform in [
-    charliebot_slack::thread_contract::SLACK,
-    charliebot_discord::thread_contract::DISCORD,
-    charliebot_feishu::thread_contract::FEISHU,
-  ] {
-    charliebot_registry::thread_origin::register_origin_field(platform.origin_field);
-  }
 }
 
 /// Scan the events in file order. A closed fact returns at once, so it outranks a deferral written
@@ -972,17 +956,14 @@ mod tests {
   }
 
   #[test]
-  fn a_lost_archive_of_a_thread_session_keeps_pending_run_finish() {
+  fn a_lost_archive_of_a_thread_session_reads_the_user_view_pending_answer() {
     let mut meta = metadata("user");
     meta["slack_origin"] = json!({"team_id": "T1", "channel_id": "C1", "thread_ts": "1700000000.000100"});
     let home = home_with_session(&meta, &[close_requested()]);
 
     let readback = find_local_task_close(home.path(), TASK_ID, REQUEST_ID);
 
-    assert_eq!(
-      readback,
-      Ok(Some(json!({"session_id": TASK_ID, "request_id": REQUEST_ID, "status": "pending_run_finish"})))
-    );
+    assert_eq!(readback, Ok(Some(json!({"archived": [], "pending": PENDING_UNTIL_USER_VIEW}))));
   }
 
   #[test]

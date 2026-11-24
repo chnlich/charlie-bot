@@ -447,6 +447,7 @@ pub async fn accept_summon(
     (MENTION_ID): composite_id(&message.create_time, &message.message_id),
   });
   let label = format!("{SESSION_LABEL}{}", message.chat_id);
+  let content = thread_entry::summon_content(&FEISHU, message.text.as_deref());
   let accepted = thread_entry::accept_summon(
     adapter,
     features,
@@ -455,7 +456,7 @@ pub async fn accept_summon(
       label: &label,
       origin: &origin,
       block: &block,
-      content: FEISHU.summon_line,
+      content: &content,
       user: Some(message.sender_open_id.as_str()),
     },
   )

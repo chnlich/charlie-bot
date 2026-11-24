@@ -16,6 +16,7 @@ use charliebot_compat::responses;
 use charliebot_compat::validation::{self, FieldError, Source};
 use charliebot_registry::FeatureContext;
 use charliebot_registry::caller;
+use charliebot_registry::colleague_gate::{guard_agent_work, refuse_colleague_work};
 use http::StatusCode;
 use serde_json::{Value, json};
 
@@ -37,6 +38,9 @@ pub async fn post_reply(State(features): State<Arc<FeatureContext>>, request: Re
     Ok(identity) => identity,
     Err(response) => return response,
   };
+  if let Some(refusal) = refuse_colleague_work(&features, &identity).await {
+    return refusal;
+  }
   let claims = identity.claims();
   let request_id = claims.map(|claims| {
     charliebot_store::control_events::derived_agent_send_request_id(
@@ -83,6 +87,9 @@ pub async fn post_status(State(features): State<Arc<FeatureContext>>, request: R
     Ok(model) => model,
     Err(response) => return *response,
   };
+  if let Some(refusal) = guard_agent_work(&features, &parts.headers).await {
+    return refusal;
+  }
   answer(status::set_status(&features, &model.session_id, &model.text).await)
 }
 
@@ -98,6 +105,9 @@ pub async fn post_status_confirm(State(features): State<Arc<FeatureContext>>, re
     Ok(model) => model,
     Err(response) => return *response,
   };
+  if let Some(refusal) = guard_agent_work(&features, &parts.headers).await {
+    return refusal;
+  }
   answer(status::confirm_status(&features, &model.session_id).await)
 }
 
@@ -166,6 +176,9 @@ pub async fn post_reply_check(State(features): State<Arc<FeatureContext>>, reque
     Ok(identity) => identity,
     Err(response) => return response,
   };
+  if let Some(refusal) = refuse_colleague_work(&features, &identity).await {
+    return refusal;
+  }
   answer(
     reply::record_reply_check(
       &features,
@@ -191,6 +204,9 @@ pub async fn post_ask_check(State(features): State<Arc<FeatureContext>>, request
     Ok(model) => model,
     Err(response) => return *response,
   };
+  if let Some(refusal) = guard_agent_work(&features, &parts.headers).await {
+    return refusal;
+  }
   answer(status::record_ask_check(&features, &model.session_id, &model.item, &model.backend, &model.answer).await)
 }
 
@@ -208,7 +224,7 @@ pub async fn get_status(
 
 /// The For-you layer's answer: `{session_id, entries}`, after the session check every web route makes.
 async fn dialog(features: &FeatureContext, session_id: &str) -> Result<Value, WebReplyError> {
-  reply::require_web_session(features, session_id).await?;
+  reply::require_manager_session(features, session_id).await?;
   let events = reply::load_events(features, session_id).await?;
   let entries = reply::for_you_entries_shared(&features.store, &events)?;
   Ok(json!({"session_id": session_id, "entries": entries}))
@@ -376,8 +392,11 @@ mod tests {
   use axum::http::Method;
   use axum::http::Request;
   use charliebot_core::run_token::{self, RunTokenClaims};
+  use charliebot_registry::caller::CallerIdentity;
+  use charliebot_registry::colleague_gate::ColleagueGate;
   use charliebot_store::metadata::UtcDateTime;
   use charliebot_store::{RunKind, RunRecord};
+  use futures_util::future::BoxFuture;
   use serde_json::Value;
   use tower::ServiceExt;
 
@@ -516,5 +535,156 @@ mod tests {
         "same response"
       )
     );
+  }
+
+  /// The run a colleague started in this test. Every other run is the operator's.
+  const COLLEAGUE_RUN: &str = "synthetic-colleague-run";
+  /// The refusal the colleague gate answers the colleague's requests with.
+  const COLLEAGUE_DETAIL: &str = "refused: synthetic colleague thread";
+
+  /// A colleague gate that refuses the agent work and the writes of `COLLEAGUE_RUN`, and reads that run as colleague
+  /// started. It answers both questions from the run's claims, as the platform gate answers them.
+  struct ColleagueRun;
+
+  impl ColleagueGate for ColleagueRun {
+    fn refuse_agent_work<'a>(
+      &'a self,
+      _features: &'a FeatureContext,
+      caller: &'a CallerIdentity,
+    ) -> BoxFuture<'a, Option<&'static str>> {
+      Box::pin(async move {
+        (caller.claims().map(|claims| claims.run_id.as_str()) == Some(COLLEAGUE_RUN)).then_some(COLLEAGUE_DETAIL)
+      })
+    }
+
+    fn admits_wake<'a>(
+      &'a self,
+      _features: &'a FeatureContext,
+      _session_id: &'a str,
+      _label: &'a str,
+    ) -> BoxFuture<'a, bool> {
+      Box::pin(async { true })
+    }
+
+    fn run_read_only<'a>(
+      &'a self,
+      _features: &'a FeatureContext,
+      _session_id: &'a str,
+      run_id: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + 'a>> {
+      Box::pin(async move { run_id == COLLEAGUE_RUN })
+    }
+  }
+
+  /// A request to `path` that carries the bearer token `bearer` when one is given.
+  fn request(method: Method, path: &str, bearer: Option<&str>, body: Option<&Value>) -> Request<Body> {
+    let mut builder = Request::builder().method(method).uri(path);
+    if let Some(bearer) = bearer {
+      builder = builder.header(http::header::AUTHORIZATION, format!("Bearer {bearer}"));
+    }
+    let body = match body {
+      Some(body) => {
+        builder = builder.header(http::header::CONTENT_TYPE, "application/json");
+        Body::from(body.to_string())
+      }
+      None => Body::empty(),
+    };
+    builder.body(body).unwrap()
+  }
+
+  #[tokio::test]
+  async fn a_colleague_run_is_refused_on_every_write_route_and_the_reads_stay_open() {
+    let home = Home::new();
+    home.features.startup.insert(Arc::new(ColleagueRun) as Arc<dyn ColleagueGate>).unwrap();
+    let session_id = home
+      .manager(
+        "colleague thread",
+        Some(("slack_origin", json!({"team_id": "T1", "channel_id": "C1", "thread_ts": "1700000000.000100"}))),
+      )
+      .await;
+    let claims =
+      RunTokenClaims { session_id: session_id.clone(), run_id: COLLEAGUE_RUN.to_string(), agent: "manager".into() };
+    let token = run_token::sign_run_token(&claims, "synthetic-access-key").unwrap();
+    let run = RunRecord {
+      id: COLLEAGUE_RUN.to_string(),
+      session_id: session_id.clone(),
+      kind: RunKind::ManagerTurn,
+      input_event_ids: Vec::new(),
+      task_spec_hash: None,
+      task_spec_ref: None,
+      prompt_snapshot_ref: None,
+      retry_of_run_id: None,
+      review_of_run_id: None,
+      backend: None,
+      model: None,
+      native_session_id: None,
+      pid: None,
+      pid_start: None,
+      started_at: Some(UtcDateTime::now()),
+      ended_at: None,
+      exit_code: None,
+      repo_path: None,
+      base_branch: None,
+      branch_name: None,
+      worktree_path: None,
+      sequence_ref: None,
+      raw_log_ref: None,
+      events_ref: None,
+      result_ref: None,
+    };
+    let guard = home.features.store.control_lock().await;
+    home.features.store.register_run_locked(&guard, &session_id, run, Some("synthetic colleague run")).await.unwrap();
+    drop(guard);
+    home.features.store.record_launch(&session_id, COLLEAGUE_RUN, 424242, "12345").await.unwrap();
+
+    let router = crate::routes(&home.features);
+    let writes = [
+      ("/api/internal/web/status", json!({"session_id": session_id, "text": "{\"goal\": \"g\"}"})),
+      ("/api/internal/web/status/confirm", json!({"session_id": session_id})),
+      (
+        "/api/internal/web/ask-check",
+        json!({"session_id": session_id, "item": {"text": "t", "context": "c"}, "backend": "b", "answer": "a"}),
+      ),
+      ("/api/internal/web/reply", json!({"session_id": session_id, "text": "hi"})),
+      (
+        "/api/internal/web/reply-check",
+        json!({"session_id": session_id, "text": "hi", "backend": "b", "findings": []}),
+      ),
+    ];
+    for (path, body) in &writes {
+      let response = router.clone().oneshot(request(Method::POST, path, Some(&token), Some(body))).await.unwrap();
+      assert_eq!(response.status(), StatusCode::FORBIDDEN, "{path}");
+      let detail: Value = serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+      assert_eq!(detail["detail"], COLLEAGUE_DETAIL, "{path}");
+    }
+
+    let read = router
+      .clone()
+      .oneshot(request(Method::GET, &format!("/api/internal/web/status?session_id={session_id}"), Some(&token), None))
+      .await
+      .unwrap();
+    assert_eq!(read.status(), StatusCode::OK);
+    let unread = router
+      .clone()
+      .oneshot(request(
+        Method::POST,
+        "/api/internal/web/status/unread",
+        Some(&token),
+        Some(&json!({"session_id": session_id, "text": "{}"})),
+      ))
+      .await
+      .unwrap();
+    assert_ne!(unread.status(), StatusCode::FORBIDDEN);
+
+    let operator = router
+      .oneshot(request(
+        Method::POST,
+        "/api/internal/web/status/confirm",
+        None,
+        Some(&json!({"session_id": session_id})),
+      ))
+      .await
+      .unwrap();
+    assert_ne!(operator.status(), StatusCode::FORBIDDEN);
   }
 }

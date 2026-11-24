@@ -54,11 +54,12 @@ const FAILED_CONTINUATION_STATUS_NOTICE: &str = concat!(
   "The panel shows the state the last turn read back."
 );
 
-/// Whether a web session's turn-end checks judge this turn: the session is a web session, the turn exited cleanly or as
-/// a failed continuation, and it left no close request. The `web-reply` and `web-status` entries read their scope here,
-/// as does the `pending-wake` check.
+/// Whether the web checks judge this turn: the run is not colleague-started, since its requests to write are refused,
+/// the turn exited cleanly or as a failed continuation, and it left no close request. The `web-reply` and `web-status`
+/// entries read their scope here, as does the `pending-wake` check. The contribution runs these checks only on manager
+/// sessions, so each check that reads this scope passes on every other session.
 pub fn web_turn_checks_apply(input: &TurnInput) -> bool {
-  input.kind.as_deref() == Some("web")
+  !input.colleague_read_only
     && input.exit_is_judged()
     && !input.turn.iter().any(|event| event["type"] == TASK_CLOSE_REQUESTED)
 }
@@ -261,10 +262,10 @@ mod tests {
   use super::*;
   use crate::test_support::Home;
 
-  fn input(kind: Option<&str>, exit_code: i64, turn: Vec<Value>) -> TurnInput {
+  fn input(colleague_read_only: bool, exit_code: i64, turn: Vec<Value>) -> TurnInput {
     TurnInput {
       session_id: "web-session".to_string(),
-      kind: kind.map(str::to_string),
+      colleague_read_only,
       exit_code,
       continuation_failed: false,
       status: Value::Null,
@@ -275,7 +276,7 @@ mod tests {
 
   /// The input of a turn that is the failed continuation of a block.
   fn failed_continuation(turn: Vec<Value>) -> TurnInput {
-    TurnInput { continuation_failed: true, ..input(Some("web"), 1, turn) }
+    TurnInput { continuation_failed: true, ..input(false, 1, turn) }
   }
 
   /// A user message received at `received_at`.
@@ -301,44 +302,44 @@ mod tests {
   #[test]
   fn an_unanswered_user_message_blocks_once_then_passes_with_the_notice() {
     let turn = vec![user("u1", "the question", "2026-01-01T00:00:01Z")];
-    let first = check_web_reply(&input(Some("web"), 0, turn.clone())).unwrap();
+    let first = check_web_reply(&input(false, 0, turn.clone())).unwrap();
     assert!(matches!(first, CheckResult::Block(_)), "{first:?}");
     assert!(text_of(&first).contains("The unanswered message begins: \"the question\"."));
 
     let mut second_turn = turn;
     second_turn.push(block_record(WEB_REPLY_ENTRY));
-    let second = check_web_reply(&input(Some("web"), 0, second_turn)).unwrap();
+    let second = check_web_reply(&input(false, 0, second_turn)).unwrap();
     assert_eq!(second, CheckResult::Notice(reply::NOTICE_TEXT.to_string()));
   }
 
   #[test]
   fn a_web_reply_after_the_receipt_answers_the_message() {
     let turn = vec![user("u1", "the question", "2026-01-01T00:00:01Z"), reply_at("r1", "2026-01-01T00:00:05Z")];
-    assert_eq!(check_web_reply(&input(Some("web"), 0, turn)).unwrap(), CheckResult::Pass);
+    assert_eq!(check_web_reply(&input(false, 0, turn)).unwrap(), CheckResult::Pass);
   }
 
   #[test]
   fn a_reply_at_the_receipt_instant_does_not_answer_it() {
     let turn = vec![user("u1", "the question", "2026-01-01T00:00:01Z"), reply_at("r1", "2026-01-01T00:00:01Z")];
-    assert!(matches!(check_web_reply(&input(Some("web"), 0, turn)).unwrap(), CheckResult::Block(_)));
+    assert!(matches!(check_web_reply(&input(false, 0, turn)).unwrap(), CheckResult::Block(_)));
   }
 
   #[test]
   fn a_status_set_or_confirm_passes_the_status_check_and_a_missing_one_blocks_once() {
     let bare = vec![user("u1", "q", "2026-01-01T00:00:01Z")];
-    assert!(matches!(check_web_status(&input(Some("web"), 0, bare.clone())), CheckResult::Block(_)));
+    assert!(matches!(check_web_status(&input(false, 0, bare.clone())), CheckResult::Block(_)));
 
     let mut with_status = bare.clone();
     with_status.push(json!({"type": WEB_STATUS, "id": "s1"}));
-    assert_eq!(check_web_status(&input(Some("web"), 0, with_status)), CheckResult::Pass);
+    assert_eq!(check_web_status(&input(false, 0, with_status)), CheckResult::Pass);
 
     let mut with_confirm = bare.clone();
     with_confirm.push(json!({"type": WEB_STATUS_CONFIRMED, "id": "c1"}));
-    assert_eq!(check_web_status(&input(Some("web"), 0, with_confirm)), CheckResult::Pass);
+    assert_eq!(check_web_status(&input(false, 0, with_confirm)), CheckResult::Pass);
 
     let mut second = bare;
     second.push(block_record(WEB_STATUS_ENTRY));
-    assert_eq!(check_web_status(&input(Some("web"), 0, second)), CheckResult::Pass);
+    assert_eq!(check_web_status(&input(false, 0, second)), CheckResult::Pass);
   }
 
   #[test]
@@ -359,16 +360,47 @@ mod tests {
   }
 
   #[test]
-  fn the_checks_pass_outside_a_clean_web_turn_and_with_a_close_request() {
+  fn the_checks_pass_for_a_colleague_started_turn_a_failed_turn_and_a_close_request() {
     let unanswered = vec![user("u1", "q", "2026-01-01T00:00:01Z")];
-    assert_eq!(check_web_reply(&input(Some("slack"), 0, unanswered.clone())).unwrap(), CheckResult::Pass);
-    assert_eq!(check_web_reply(&input(Some("web"), 1, unanswered.clone())).unwrap(), CheckResult::Pass);
-    assert_eq!(check_web_status(&input(None, 0, unanswered.clone())), CheckResult::Pass);
+    assert_eq!(check_web_reply(&input(true, 0, unanswered.clone())).unwrap(), CheckResult::Pass);
+    assert_eq!(check_web_status(&input(true, 0, unanswered.clone())), CheckResult::Pass);
+    assert_eq!(check_web_reply(&input(false, 1, unanswered.clone())).unwrap(), CheckResult::Pass);
 
     let mut closing = unanswered;
     closing.push(json!({"type": TASK_CLOSE_REQUESTED, "id": "close-1"}));
-    assert_eq!(check_web_reply(&input(Some("web"), 0, closing.clone())).unwrap(), CheckResult::Pass);
-    assert_eq!(check_web_status(&input(Some("web"), 0, closing)), CheckResult::Pass);
+    assert_eq!(check_web_reply(&input(false, 0, closing.clone())).unwrap(), CheckResult::Pass);
+    assert_eq!(check_web_status(&input(false, 0, closing)), CheckResult::Pass);
+  }
+
+  /// A colleague-started turn passes every web write-side check, which the same turn fails as the operator's.
+  #[test]
+  fn a_colleague_started_turn_passes_every_web_write_check() {
+    let turn = vec![user("u1", "q", "2026-01-01T00:00:01Z")];
+    let status = json!({"goal": "g", "waiting": [{"text": "an answer", "context": "c"}]});
+    let mut colleague = input(true, 0, turn.clone());
+    colleague.status = status.clone();
+    assert_eq!(check_web_reply(&colleague).unwrap(), CheckResult::Pass);
+    assert_eq!(check_web_status(&colleague), CheckResult::Pass);
+    assert_eq!(check_status_reread(&colleague), CheckResult::Pass);
+
+    let mut operator = input(false, 0, turn);
+    operator.status = status;
+    assert!(matches!(check_web_reply(&operator).unwrap(), CheckResult::Block(_)));
+    assert!(matches!(check_web_status(&operator), CheckResult::Block(_)));
+    assert!(matches!(check_status_reread(&operator), CheckResult::Block(_)));
+  }
+
+  /// A thread summon alone is no unanswered web message, so it never blocks the web-reply check.
+  #[test]
+  fn a_thread_summon_alone_never_blocks_the_web_reply_check() {
+    let summon = json!({
+      "type": "agent_message",
+      "id": "s1",
+      "content": "a question from the thread",
+      "slack": {"channel_id": "C1", "thread_ts": "1.0", "mention_ts": "1.1"},
+      "received_at": "2026-01-01T00:00:01Z",
+    });
+    assert_eq!(check_web_reply(&input(false, 0, vec![summon])).unwrap(), CheckResult::Pass);
   }
 
   /// The report that task `child_id` delivers to its parent, received at `received_at`.
@@ -391,7 +423,7 @@ mod tests {
         status: json!({"waiting": [{"text": "Review the draft"}]}),
         last_input_provenance: provenance.map(str::to_string),
         turn: vec![report.clone()],
-        ..input(Some("web"), 0, Vec::new())
+        ..input(false, 0, Vec::new())
       };
       let opening = reply::message_opening(&child_report_text(&report, provenance));
       let CheckResult::Block(reason) = check_status_reread(&turn) else { panic!("the reminder blocks") };
@@ -410,7 +442,7 @@ mod tests {
       let turn = TurnInput {
         status: json!({"waiting": [{"text": "Review the draft"}]}),
         turn: vec![event],
-        ..input(Some("web"), 0, Vec::new())
+        ..input(false, 0, Vec::new())
       };
       let CheckResult::Block(reason) = check_status_reread(&turn) else { panic!("the reminder blocks") };
       assert!(reason.contains(&format!("begins \"{content}\"")), "{reason}");

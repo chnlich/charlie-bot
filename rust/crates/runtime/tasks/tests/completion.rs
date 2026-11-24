@@ -2243,9 +2243,33 @@ async fn a_child_report_before_the_view_keeps_the_session_open() {
   assert_eq!(h.base.store.task_state(&manager.id).unwrap(), "open");
 }
 
+/// A Slack thread session under `root_id`, with the origin field a thread session carries.
+async fn create_slack_thread(h: &CompletionHarness, root_id: &str, request_id: &str) -> String {
+  let node = h
+    .base
+    .store
+    .create_task(
+      CreateTask {
+        request_id: request_id.to_string(),
+        task_parent_id: Some(root_id.to_string()),
+        profile: TaskProfile::Manager,
+        task: Some(TaskSpec::default()),
+        name: Some("Slack thread".to_string()),
+        backend: Some("synthetic".to_string()),
+        group: None,
+        session_id: None,
+      },
+      TaskCaller::Operator,
+      Map::from_iter([("slack_origin".to_string(), json!({"team_id": "T", "channel_id": "C", "thread_ts": "1.0"}))]),
+    )
+    .await
+    .expect("thread task node is created");
+  node.id
+}
+
 #[tokio::test]
-async fn parent_approved_and_thread_sessions_close_at_run_end_without_a_view() {
-  charliebot_registry::thread_origin::register_origin_field("slack_origin");
+async fn parent_approved_and_clean_thread_sessions_close_at_run_end_without_a_view() {
+  charliebot_registry::thread_origin::register_origin_field("slack", "slack_origin");
   let h = CompletionHarness::new();
   let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
   let parent_approved = h
@@ -2266,34 +2290,37 @@ async fn parent_approved_and_thread_sessions_close_at_run_end_without_a_view() {
       },
     )
     .await;
-  let slack_thread = h
-    .base
-    .store
-    .create_task(
-      CreateTask {
-        request_id: "slack-thread".to_string(),
-        task_parent_id: Some(root.id.clone()),
-        profile: TaskProfile::Manager,
-        task: Some(TaskSpec::default()),
-        name: Some("Slack thread".to_string()),
-        backend: Some("synthetic".to_string()),
-        group: None,
-        session_id: None,
-      },
-      TaskCaller::Operator,
-      Map::from_iter([("slack_origin".to_string(), json!({"team_id": "T", "channel_id": "C", "thread_ts": "1.0"}))]),
-    )
-    .await
-    .expect("thread task node is created");
-  for session_id in [&parent_approved.id, &slack_thread.id] {
+  // A clean external-only turn marks nothing unread, so its thread closes at the run's end.
+  let clean_thread = create_slack_thread(&h, &root.id, "slack-thread-clean").await;
+  h.base.store.mark_unread(&parent_approved.id).await.unwrap();
+  for session_id in [&parent_approved.id, &clean_thread] {
     h.register_record(live_run(session_id, "owner-run", RunKind::ManagerTurn)).await;
-    h.base.store.mark_unread(session_id).await.unwrap();
     let (status, body) = archive_from_run(&h, session_id, "owner-run", "run-end").await;
     assert_eq!(status, 202);
     assert_eq!(body["status"], "pending_run_finish");
     h.finish(session_id, "owner-run", RunOutcomeKind::Success).await;
     assert_eq!(h.base.store.task_state(session_id).unwrap(), "archived", "{session_id}");
   }
+}
+
+#[tokio::test]
+async fn an_unread_thread_session_waits_for_the_user_view() {
+  charliebot_registry::thread_origin::register_origin_field("slack", "slack_origin");
+  let h = CompletionHarness::new();
+  let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
+  let thread = create_slack_thread(&h, &root.id, "slack-thread-unread").await;
+  h.register_record(live_run(&thread, "owner-run", RunKind::ManagerTurn)).await;
+  h.base.store.mark_unread(&thread).await.unwrap();
+
+  let (status, body) = archive_from_run(&h, &thread, "owner-run", "run-end").await;
+  assert_eq!(status, 202);
+  assert_eq!(body, json!({"archived": [], "pending": "closes when the user opens this session"}));
+  h.finish(&thread, "owner-run", RunOutcomeKind::Success).await;
+  assert_eq!(h.base.store.task_state(&thread).unwrap(), "open", "unread activity holds the archive");
+
+  h.base.store.mark_read(&thread).await.unwrap();
+  h.completion.recheck_after_user_view(&thread).await.unwrap();
+  assert_eq!(h.base.store.task_state(&thread).unwrap(), "archived");
 }
 
 #[tokio::test]

@@ -41,7 +41,7 @@ mod tests {
     assert_eq!(registry.routers().len(), 1);
     assert_eq!(registry.sidebar_contributions().count(), 1);
 
-    charliebot_registry::thread_origin::register_origin_field("slack_origin");
+    charliebot_registry::thread_origin::register_origin_field("slack", "slack_origin");
     let mut thread = SessionMetadata::new("synthetic", "Synthetic", TaskProfile::Manager);
     thread.set_extra("slack_origin", json!({"channel_id": "C0SYNTHETIC"}));
     assert_eq!(registry.workflow_rules_file(&thread).expect("one contribution names a file"), "thread_session.md");

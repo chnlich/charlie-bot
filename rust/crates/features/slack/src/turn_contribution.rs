@@ -42,8 +42,8 @@ impl TurnContribution for SlackTurnContribution {
     vec![(SLACK_REPLY, slack_reply_message)]
   }
 
-  fn turn_kind(&self, meta: &SessionMetadata) -> Option<&'static str> {
-    thread_entry::thread_turn_kind(meta, &SLACK)
+  fn applies_to_turn(&self, meta: &SessionMetadata) -> bool {
+    thread_entry::thread_applies_to_turn(meta, &SLACK)
   }
 
   fn show_turn_notice<'a>(
@@ -259,13 +259,16 @@ mod tests {
   #[test]
   fn slack_reply_renders_its_content() {
     let event = json!({"content": "Done"});
-    assert_eq!(slack_reply_message(&event).to_string(), r#"{"role":"system","content":"Posted to Slack: Done"}"#);
+    assert_eq!(
+      slack_reply_message(&event).to_string(),
+      r#"{"role":"thread_reply","platform":"slack","content":"Done"}"#
+    );
   }
 
   #[test]
   fn slack_reply_without_content_renders_an_empty_content() {
     let event = json!({});
-    assert_eq!(slack_reply_message(&event).to_string(), r#"{"role":"system","content":"Posted to Slack: "}"#);
+    assert_eq!(slack_reply_message(&event).to_string(), r#"{"role":"thread_reply","platform":"slack","content":""}"#);
   }
 
   #[test]
@@ -273,7 +276,7 @@ mod tests {
     let event = json!({"content": {"message": "Done", "sent": true}});
     assert_eq!(
       slack_reply_message(&event).to_string(),
-      r#"{"role":"system","content":"Posted to Slack: {'message': 'Done', 'sent': True}"}"#
+      r#"{"role":"thread_reply","platform":"slack","content":"{'message': 'Done', 'sent': True}"}"#
     );
   }
 }

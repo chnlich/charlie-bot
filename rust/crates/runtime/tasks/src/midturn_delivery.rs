@@ -25,8 +25,8 @@ use serde_json::{Map, Value};
 
 use crate::task_input_prompt::compose_input_prompt;
 
-/// True for a manager session that no chat thread owns (`reply.is_web_session`).
-pub use charliebot_registry::midturn_delivery::is_web_session;
+/// True for a manager session (`charliebot_registry::midturn_delivery::is_manager_session`).
+pub use charliebot_registry::midturn_delivery::is_manager_session;
 
 /// One fresh whole-file translator: the mutable event projection of one raw-log scan.
 pub type FreshTranslate = Box<dyn FnMut(Value) -> anyhow::Result<Vec<Value>> + Send>;
@@ -205,10 +205,10 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn midturn_offer_writes_only_web_user_messages_and_stops_at_result() {
-    charliebot_registry::thread_origin::register_origin_field("slack_origin");
-    charliebot_registry::thread_origin::register_origin_field("discord_origin");
-    charliebot_registry::thread_origin::register_origin_field("feishu_origin");
+  async fn midturn_offer_writes_manager_user_messages_and_stops_at_result() {
+    charliebot_registry::thread_origin::register_origin_field("slack", "slack_origin");
+    charliebot_registry::thread_origin::register_origin_field("discord", "discord_origin");
+    charliebot_registry::thread_origin::register_origin_field("feishu", "feishu_origin");
     let home = tempfile::tempdir().unwrap();
     let features = test_fixtures::features_with_packages(
       &home.path().join("home"),
@@ -259,28 +259,38 @@ mod tests {
     assert_eq!(lines[0]["message"]["content"], json!("Initial prompt"));
     assert_eq!(lines[1]["message"]["content"], json!("[User message]\nPlease change the answer."));
 
-    let mut thread_meta = SessionMetadata::new("thread", "Slack", TaskProfile::Manager);
-    thread_meta.extra.insert("slack_origin".to_string(), json!({"team_id":"T","channel_id":"C","thread_ts":"1.0"}));
-    assert_eq!(
-      offer(&features, &thread_meta, &run, &[user_event_ref(message_id)]).await.unwrap(),
-      Vec::<String>::new()
-    );
-    let mut discord_meta = SessionMetadata::new("discord-thread", "Discord", TaskProfile::Manager);
-    discord_meta
-      .extra
-      .insert("discord_origin".to_string(), json!({"guild_id":"G","parent_channel_id":"C","thread_id":"1"}));
-    assert_eq!(
-      offer(&features, &discord_meta, &run, &[user_event_ref(message_id)]).await.unwrap(),
-      Vec::<String>::new()
-    );
-    let mut feishu_meta = SessionMetadata::new("feishu-thread", "Feishu", TaskProfile::Manager);
-    feishu_meta
-      .extra
-      .insert("feishu_origin".to_string(), json!({"tenant_key":"T","chat_id":"oc_synthetic","root_id":"om_synthetic"}));
-    assert_eq!(
-      offer(&features, &feishu_meta, &run, &[user_event_ref(message_id)]).await.unwrap(),
-      Vec::<String>::new()
-    );
+    // A manager bound to a chat thread takes live input as a web manager does, each platform's thread alike.
+    let thread_metas = [
+      (
+        "thread",
+        "slack_origin",
+        json!({"team_id":"T","channel_id":"C","thread_ts":"1.0"}),
+        "33333333-2222-3333-4444-555555555552",
+      ),
+      (
+        "discord-thread",
+        "discord_origin",
+        json!({"guild_id":"G","parent_channel_id":"C","thread_id":"1"}),
+        "33333333-2222-3333-4444-555555555553",
+      ),
+      (
+        "feishu-thread",
+        "feishu_origin",
+        json!({"tenant_key":"T","chat_id":"oc_synthetic","root_id":"om_synthetic"}),
+        "33333333-2222-3333-4444-555555555554",
+      ),
+    ];
+    // The initial prompt, the web message and one message per thread manager are each one stdin line.
+    let written_lines = 2 + thread_metas.len();
+    for (session_id, origin_field, origin, thread_message_id) in thread_metas {
+      let mut thread_meta = SessionMetadata::new(session_id, "Thread", TaskProfile::Manager);
+      thread_meta.extra.insert(origin_field.to_string(), origin);
+      assert_eq!(
+        offer(&features, &thread_meta, &run, &[user_event_ref(thread_message_id)]).await.unwrap(),
+        [thread_message_id.to_string()],
+        "{origin_field}"
+      );
+    }
     let worker_run = test_fixtures::run_record(&meta.id, run_id, RunKind::Work);
     assert_eq!(
       offer(&features, &meta, &worker_run, &[user_event_ref(message_id)]).await.unwrap(),
@@ -292,7 +302,7 @@ mod tests {
     assert_eq!(offer(&features, &meta, &run, &[late]).await.unwrap(), Vec::<String>::new());
     assert_eq!(
       recorded.lock().expect("recording stdin mutex is not poisoned").iter().filter(|byte| **byte == b'\n').count(),
-      2,
+      written_lines,
       "the late message stays queued"
     );
     claude_midturn::release_run(run_id);

@@ -30,6 +30,24 @@ pub trait ColleagueGate: Send + Sync {
     session_id: &'a str,
     label: &'a str,
   ) -> BoxFuture<'a, bool>;
+
+  /// Whether run `run_id` of `session_id` is colleague-started: the run's requests to start agent work and to write are
+  /// refused. This is the predicate `refuse_agent_work` applies to the run's own claims, read for the run as a whole, so
+  /// a turn-end check and a refused request decide the same run the same way.
+  fn run_read_only<'a>(
+    &'a self,
+    features: &'a FeatureContext,
+    session_id: &'a str,
+    run_id: &'a str,
+  ) -> BoxFuture<'a, bool>;
+}
+
+/// Whether run `run_id` of `session_id` is colleague-started. Without a registered gate no run is.
+pub async fn run_read_only(features: &FeatureContext, session_id: &str, run_id: &str) -> bool {
+  match features.startup.get::<Arc<dyn ColleagueGate>>() {
+    Some(gate) => gate.run_read_only(features, session_id, run_id).await,
+    None => false,
+  }
 }
 
 /// The 403 response for an agent-work request that the gate refuses, or None when the request may proceed.

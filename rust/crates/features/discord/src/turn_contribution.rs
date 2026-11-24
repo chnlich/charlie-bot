@@ -40,8 +40,8 @@ impl TurnContribution for DiscordTurnContribution {
     vec![(DISCORD_REPLY, discord_reply_message)]
   }
 
-  fn turn_kind(&self, meta: &SessionMetadata) -> Option<&'static str> {
-    thread_entry::thread_turn_kind(meta, &DISCORD)
+  fn applies_to_turn(&self, meta: &SessionMetadata) -> bool {
+    thread_entry::thread_applies_to_turn(meta, &DISCORD)
   }
 
   fn show_turn_notice<'a>(
@@ -207,13 +207,19 @@ mod tests {
   #[test]
   fn discord_reply_renders_its_content() {
     let event = json!({"content": "Done"});
-    assert_eq!(discord_reply_message(&event).to_string(), r#"{"role":"system","content":"Posted to Discord: Done"}"#);
+    assert_eq!(
+      discord_reply_message(&event).to_string(),
+      r#"{"role":"thread_reply","platform":"discord","content":"Done"}"#
+    );
   }
 
   #[test]
   fn discord_reply_without_content_renders_an_empty_content() {
     let event = json!({});
-    assert_eq!(discord_reply_message(&event).to_string(), r#"{"role":"system","content":"Posted to Discord: "}"#);
+    assert_eq!(
+      discord_reply_message(&event).to_string(),
+      r#"{"role":"thread_reply","platform":"discord","content":""}"#
+    );
   }
 
   #[test]
@@ -221,7 +227,7 @@ mod tests {
     let event = json!({"content": {"message": "Done", "sent": true}});
     assert_eq!(
       discord_reply_message(&event).to_string(),
-      r#"{"role":"system","content":"Posted to Discord: {'message': 'Done', 'sent': True}"}"#
+      r#"{"role":"thread_reply","platform":"discord","content":"{'message': 'Done', 'sent': True}"}"#
     );
   }
 }

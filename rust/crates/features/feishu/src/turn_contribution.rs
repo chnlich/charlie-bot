@@ -40,8 +40,8 @@ impl TurnContribution for FeishuTurnContribution {
     vec![(FEISHU_REPLY, feishu_reply_message)]
   }
 
-  fn turn_kind(&self, meta: &SessionMetadata) -> Option<&'static str> {
-    thread_entry::thread_turn_kind(meta, &FEISHU)
+  fn applies_to_turn(&self, meta: &SessionMetadata) -> bool {
+    thread_entry::thread_applies_to_turn(meta, &FEISHU)
   }
 
   fn show_turn_notice<'a>(

@@ -1,9 +1,10 @@
 //! The turn-end checks: the mechanical checks a turn passes before its `master_done` is written.
 //!
-//! The list is `hooks/turn_end.json` in the served repo: an array of check names. The turn owner's contribution answers
-//! each name in process (`TurnContribution::run_turn_end_check`) from the shared `TurnInput`. A check passes, passes with
-//! a notice, or blocks with a reason. A check that returns an error, or runs past `ENTRY_TIMEOUT`, is an `error`: it is
-//! shown, and the turn ends without continuing. A name that no contribution answers fails the checkpoint.
+//! The list is `hooks/turn_end.json` in the served repo: an array of check names. Each name runs in process on the
+//! applicable contribution that answers it (`TurnContribution::run_turn_end_check`), from the shared `TurnInput`. A
+//! session can have several applicable contributions, and each answers only the names it lists. A check passes, passes
+//! with a notice, or blocks with a reason. A check that returns an error, or runs past `ENTRY_TIMEOUT`, is an `error`:
+//! it is shown, and the turn ends without continuing. A name that no contribution answers fails the checkpoint.
 //!
 //! A checkpoint runs every name in list order and writes one `turn_hooks` event with all the results. Each block's
 //! reason is shown in the session, and the same conversation continues with the reasons, at most `MAX_CONTINUATIONS`
@@ -20,6 +21,7 @@ use charliebot_core::event_types::{
 };
 use charliebot_core::text_repr::field_text;
 use charliebot_registry::FeatureContext;
+use charliebot_registry::colleague_gate;
 use charliebot_registry::turn::{CheckResult, TurnContribution, TurnInput};
 use charliebot_store::MessageProvenance;
 use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
@@ -50,22 +52,25 @@ pub struct Ran {
   pub outcome: Outcome,
 }
 
-/// Runs every name of the list in order against `input`. The turn owner answers the names it lists, in process, each
-/// within `timeout`. A name the owner does not list passes: no check of this turn's owner answers it.
+/// The applicable contribution that answers the turn-end check `name`, or `None` when none of them does.
+fn answerer<'a>(contributions: &'a [Arc<dyn TurnContribution>], name: &str) -> Option<&'a Arc<dyn TurnContribution>> {
+  contributions.iter().find(|contribution| contribution.turn_end_check_names().contains(&name))
+}
+
+/// Runs every name of the list in order against `input`. Each name runs, in process and within `timeout`, on the
+/// applicable contribution that answers it. A name no applicable contribution answers passes.
 pub async fn run_checks(
   names: &[String],
-  owner: Option<&Arc<dyn TurnContribution>>,
+  contributions: &[Arc<dyn TurnContribution>],
   features: &Arc<FeatureContext>,
   input: &TurnInput,
   timeout: Duration,
 ) -> Vec<Ran> {
   let mut ran = Vec::with_capacity(names.len());
   for name in names {
-    let outcome = match owner {
-      Some(contribution) if contribution.turn_end_check_names().contains(&name.as_str()) => {
-        run_check(contribution.as_ref(), name, features, input, timeout).await
-      }
-      _ => Outcome::Pass { notice: None },
+    let outcome = match answerer(contributions, name) {
+      Some(contribution) => run_check(contribution.as_ref(), name, features, input, timeout).await,
+      None => Outcome::Pass { notice: None },
     };
     ran.push(Ran { name: name.clone(), outcome });
   }
@@ -224,20 +229,21 @@ async fn show_message(
   Ok(persisted.to_value())
 }
 
-/// Delivers a passed check's notice. The session's turn contribution attaches it to an unanswered user message of the
-/// turn when there is one. Otherwise the runner records it as a `web_reply_notice` event of the session: that event
-/// admits no input, so the notice starts no turn. A session with a parent also sends the notice to the parent, which
-/// reads it in its own turn. A turn that already holds the runner's notice records no second one, and the parent's
-/// input is keyed by the recorded notice's id, so a replayed checkpoint adds nothing.
+/// Delivers a passed check's notice to the contribution that produced it, which attaches it to an unanswered user message
+/// of the turn when there is one. Otherwise the runner records it as a `web_reply_notice` event of the session: that
+/// event admits no input, so the notice starts no turn. A session with a parent also sends the notice to the parent,
+/// which reads it in its own turn. A turn that already holds the runner's notice records no second one, and the parent's
+/// input is keyed by the recorded notice's id, so a replayed checkpoint adds nothing. Routing by producer keeps a web
+/// notice in the session: no other contribution's adapter sees it.
 async fn deliver_notice(
   features: &Arc<FeatureContext>,
   session_id: &str,
-  owner: Option<&Arc<dyn TurnContribution>>,
+  producer: Option<&Arc<dyn TurnContribution>>,
   turn: &[Value],
   name: &str,
   message: &str,
 ) -> anyhow::Result<()> {
-  if let Some(contribution) = owner
+  if let Some(contribution) = producer
     && contribution.show_turn_notice(features, session_id, turn, message).await?
   {
     return Ok(());
@@ -269,17 +275,18 @@ fn recorded_notice_id<'a>(turn: &'a [Value], message: &str) -> Option<&'a str> {
     .and_then(|event| event["id"].as_str())
 }
 
-/// The turn-end checkpoint of the running turn of `session_id`. `has_conversation` says whether the turn's conversation
-/// id is known: a continuation resumes it, and without one the turn ends with an error.
+/// The turn-end checkpoint of the running turn of run `run_id` in `session_id`. `has_conversation` says whether the
+/// turn's conversation id is known: a continuation resumes it, and without one the turn ends with an error.
 pub(crate) async fn checkpoint(
   features: &Arc<FeatureContext>,
   session_id: &str,
+  run_id: &str,
   meta: &SessionMetadata,
   exit_code: i64,
   has_conversation: bool,
 ) -> anyhow::Result<Checkpoint> {
   let log = read_log(features, session_id)?;
-  let owner = features.registry.turn_owner(meta);
+  let contributions = features.registry.turn_contributions_for(meta);
   if let Some(index) = pending_block(&log.turn) {
     return resume_block(features, session_id, &log, index, has_conversation).await;
   }
@@ -291,7 +298,7 @@ pub(crate) async fn checkpoint(
   }
   let input = TurnInput {
     session_id: session_id.to_string(),
-    kind: owner.as_ref().map(|(kind, _)| (*kind).to_string()),
+    colleague_read_only: colleague_gate::run_read_only(features, session_id, run_id).await,
     exit_code,
     // Past the pending check, a block in this turn has run its continuation, and this checkpoint judges that run.
     continuation_failed: exit_code != 0 && log.turn.iter().any(is_block_record),
@@ -299,11 +306,11 @@ pub(crate) async fn checkpoint(
     last_input_provenance: last_input_provenance(features, &log.turn).await?,
     turn: log.turn.clone(),
   };
-  let contribution = owner.as_ref().map(|(_, contribution)| contribution);
-  let mut ran = run_checks(&names, contribution, features, &input, ENTRY_TIMEOUT).await;
+  let mut ran = run_checks(&names, &contributions, features, &input, ENTRY_TIMEOUT).await;
   for run in &mut ran {
     let Outcome::Pass { notice: Some(message) } = &run.outcome else { continue };
-    let delivered = deliver_notice(features, session_id, contribution, &log.turn, &run.name, message).await;
+    let producer = answerer(&contributions, &run.name);
+    let delivered = deliver_notice(features, session_id, producer, &log.turn, &run.name, message).await;
     if let Err(error) = delivered {
       run.outcome = Outcome::Error { message: format!("notice delivery failed: {error:#}") };
     }
@@ -415,7 +422,7 @@ mod tests {
   fn input(turn: Vec<Value>) -> TurnInput {
     TurnInput {
       session_id: "synthetic-session".to_string(),
-      kind: Some("web".to_string()),
+      colleague_read_only: false,
       exit_code: 0,
       continuation_failed: false,
       status: Value::Null,
@@ -483,8 +490,8 @@ mod tests {
   struct AttachingTurns;
 
   impl TurnContribution for AttachingTurns {
-    fn turn_kind(&self, _meta: &SessionMetadata) -> Option<&'static str> {
-      Some("web")
+    fn applies_to_turn(&self, _meta: &SessionMetadata) -> bool {
+      true
     }
 
     fn turn_end_check_names(&self) -> &'static [&'static str] {
@@ -595,10 +602,10 @@ mod tests {
   async fn a_check_past_its_time_limit_is_an_error() {
     let home = tempfile::tempdir().unwrap();
     let (features, _meta) = checkpoint_session(home.path(), &hooks(&["hangs"]), "turn-hooks-timeout").await;
-    let owner: Arc<dyn TurnContribution> = Arc::new(AttachingTurns);
+    let contributions: Vec<Arc<dyn TurnContribution>> = vec![Arc::new(AttachingTurns)];
 
     let ran =
-      run_checks(&["hangs".to_string()], Some(&owner), &features, &input(vec![]), Duration::from_millis(20)).await;
+      run_checks(&["hangs".to_string()], &contributions, &features, &input(vec![]), Duration::from_millis(20)).await;
 
     assert!(matches!(&ran[0].outcome, Outcome::Error { message } if message.starts_with("timed out")), "{:?}", ran[0]);
   }
@@ -608,7 +615,7 @@ mod tests {
     let home = tempfile::tempdir().unwrap();
     let (features, meta) = checkpoint_session(home.path(), &hooks(&["no-such-check"]), "turn-hooks-unknown").await;
 
-    let error = checkpoint(&features, &meta.id, &meta, 0, true).await.unwrap_err();
+    let error = checkpoint(&features, &meta.id, "synthetic-run", &meta, 0, true).await.unwrap_err();
     assert!(format!("{error:#}").contains("no-such-check"), "{error:#}");
   }
 
@@ -663,18 +670,18 @@ mod tests {
       checkpoint_session(home.path(), &hooks(&["pass-after-continuation"]), "turn-hooks-pass").await;
     let session_id = &meta.id;
 
-    let first = checkpoint(&features, session_id, &meta, 0, true).await.unwrap();
+    let first = checkpoint(&features, session_id, "synthetic-run", &meta, 0, true).await.unwrap();
     assert_eq!(first, Checkpoint::Continue("pass-after-continuation: needs work".to_string()));
 
     // A restart before the continuation ran replays the same block: no second record and no second reason.
-    let replayed = checkpoint(&features, session_id, &meta, 0, true).await.unwrap();
+    let replayed = checkpoint(&features, session_id, "synthetic-run", &meta, 0, true).await.unwrap();
     assert_eq!(replayed, first);
     let turn = turn_events(&features, session_id);
     assert_eq!(count_of(&turn, TURN_HOOKS), 1);
     assert_eq!(count_of(&turn, AGENT_MESSAGE), 1);
 
     append(&features, session_id, json!({"type": "continuation_ran", "id": "c1"})).await;
-    assert_eq!(checkpoint(&features, session_id, &meta, 0, true).await.unwrap(), Checkpoint::Finish);
+    assert_eq!(checkpoint(&features, session_id, "synthetic-run", &meta, 0, true).await.unwrap(), Checkpoint::Finish);
     let turn = turn_events(&features, session_id);
     assert_eq!(count_of(&turn, TURN_HOOKS), 2);
     assert_eq!(count_of(&turn, AGENT_MESSAGE), 1);
@@ -689,12 +696,12 @@ mod tests {
       checkpoint_session(home.path(), &hooks(&["notice-after-failed-continuation"]), "turn-hooks-failed").await;
     let session_id = &meta.id;
 
-    let first = checkpoint(&features, session_id, &meta, 0, true).await.unwrap();
+    let first = checkpoint(&features, session_id, "synthetic-run", &meta, 0, true).await.unwrap();
     assert_eq!(first, Checkpoint::Continue("notice-after-failed-continuation: needs work".to_string()));
     append(&features, session_id, json!({"type": "assistant_error", "id": "e1", "content": "Agent error"})).await;
 
     // The continuation exited with an error: its checkpoint judges that block's second miss, passing with the notice.
-    assert_eq!(checkpoint(&features, session_id, &meta, 1, true).await.unwrap(), Checkpoint::Finish);
+    assert_eq!(checkpoint(&features, session_id, "synthetic-run", &meta, 1, true).await.unwrap(), Checkpoint::Finish);
     let turn = turn_events(&features, session_id);
     let last_record = turn.iter().rev().find(|event| event["type"] == TURN_HOOKS).unwrap();
     assert_eq!(last_record["results"][0]["result"], "pass");
@@ -708,11 +715,11 @@ mod tests {
     let session_id = &meta.id;
 
     for continuation in 1..=MAX_CONTINUATIONS {
-      let answer = checkpoint(&features, session_id, &meta, 0, true).await.unwrap();
+      let answer = checkpoint(&features, session_id, "synthetic-run", &meta, 0, true).await.unwrap();
       assert_eq!(answer, Checkpoint::Continue("always-blocks: needs work".to_string()), "continuation {continuation}");
       append(&features, session_id, json!({"type": "continuation_ran", "id": format!("c{continuation}")})).await;
     }
-    assert_eq!(checkpoint(&features, session_id, &meta, 0, true).await.unwrap(), Checkpoint::Finish);
+    assert_eq!(checkpoint(&features, session_id, "synthetic-run", &meta, 0, true).await.unwrap(), Checkpoint::Finish);
     let turn = turn_events(&features, session_id);
     assert_eq!(count_of(&turn, TURN_HOOKS), MAX_CONTINUATIONS + 1);
     assert_eq!(count_of(&turn, AGENT_MESSAGE), MAX_CONTINUATIONS + 1);
@@ -724,7 +731,7 @@ mod tests {
     let (features, meta) = checkpoint_session(home.path(), &hooks(&["fails"]), "turn-hooks-error").await;
     let session_id = &meta.id;
 
-    assert_eq!(checkpoint(&features, session_id, &meta, 0, true).await.unwrap(), Checkpoint::Finish);
+    assert_eq!(checkpoint(&features, session_id, "synthetic-run", &meta, 0, true).await.unwrap(), Checkpoint::Finish);
     let turn = turn_events(&features, session_id);
     let record = turn.iter().find(|event| event["type"] == TURN_HOOKS).unwrap();
     assert_eq!(record["results"][0]["result"], "error");
@@ -740,7 +747,7 @@ mod tests {
       checkpoint_session(home.path(), &hooks(&["always-blocks", "fails"]), "turn-hooks-block-then-error").await;
     let session_id = &meta.id;
 
-    assert_eq!(checkpoint(&features, session_id, &meta, 0, true).await.unwrap(), Checkpoint::Finish);
+    assert_eq!(checkpoint(&features, session_id, "synthetic-run", &meta, 0, true).await.unwrap(), Checkpoint::Finish);
     let turn = turn_events(&features, session_id);
     let reason = turn
       .iter()
@@ -761,7 +768,7 @@ mod tests {
     let (features, meta) = checkpoint_session(home.path(), &hooks(&["always-blocks"]), "turn-hooks-no-chat").await;
     let session_id = &meta.id;
 
-    assert_eq!(checkpoint(&features, session_id, &meta, 0, false).await.unwrap(), Checkpoint::Finish);
+    assert_eq!(checkpoint(&features, session_id, "synthetic-run", &meta, 0, false).await.unwrap(), Checkpoint::Finish);
     let turn = turn_events(&features, session_id);
     assert_eq!(count_of(&turn, TURN_HOOKS), 1);
     assert_eq!(count_of(&turn, AGENT_MESSAGE), 1);
@@ -779,7 +786,10 @@ mod tests {
     .await;
     let session_id = &meta.id;
 
-    assert!(matches!(checkpoint(&features, session_id, &meta, 0, true).await.unwrap(), Checkpoint::Continue(_)));
+    assert!(matches!(
+      checkpoint(&features, session_id, "synthetic-run", &meta, 0, true).await.unwrap(),
+      Checkpoint::Continue(_)
+    ));
     let turn = turn_events(&features, session_id);
     let senders: Vec<&str> = turn
       .iter()
@@ -798,11 +808,14 @@ mod tests {
     append(&features, session_id, json!({"type": SCHEDULED_TRIGGER, "id": "t1", "content": "wake"})).await;
     let pending_before = pending_ids(&features, session_id);
 
-    assert!(matches!(checkpoint(&features, session_id, &meta, 0, true).await.unwrap(), Checkpoint::Continue(_)));
+    assert!(matches!(
+      checkpoint(&features, session_id, "synthetic-run", &meta, 0, true).await.unwrap(),
+      Checkpoint::Continue(_)
+    ));
     append(&features, session_id, json!({"type": "continuation_ran", "id": "c1"})).await;
-    assert_eq!(checkpoint(&features, session_id, &meta, 0, true).await.unwrap(), Checkpoint::Finish);
+    assert_eq!(checkpoint(&features, session_id, "synthetic-run", &meta, 0, true).await.unwrap(), Checkpoint::Finish);
     // A restart before the turn ends replays the check: the turn already holds its notice, so none is recorded again.
-    assert_eq!(checkpoint(&features, session_id, &meta, 0, true).await.unwrap(), Checkpoint::Finish);
+    assert_eq!(checkpoint(&features, session_id, "synthetic-run", &meta, 0, true).await.unwrap(), Checkpoint::Finish);
 
     let turn = turn_events(&features, session_id);
     assert_eq!(count_of(&turn, ATTACHED_NOTICE), 0);
@@ -828,11 +841,14 @@ mod tests {
     append(&features, session_id, json!({"type": SCHEDULED_TRIGGER, "id": "t1", "content": "wake"})).await;
     let child_pending = pending_ids(&features, session_id);
 
-    assert!(matches!(checkpoint(&features, session_id, &child, 0, true).await.unwrap(), Checkpoint::Continue(_)));
+    assert!(matches!(
+      checkpoint(&features, session_id, "synthetic-run", &child, 0, true).await.unwrap(),
+      Checkpoint::Continue(_)
+    ));
     append(&features, session_id, json!({"type": "continuation_ran", "id": "c1"})).await;
-    assert_eq!(checkpoint(&features, session_id, &child, 0, true).await.unwrap(), Checkpoint::Finish);
+    assert_eq!(checkpoint(&features, session_id, "synthetic-run", &child, 0, true).await.unwrap(), Checkpoint::Finish);
     // A restart before the turn ends replays the check: the child keeps one notice and the parent one input.
-    assert_eq!(checkpoint(&features, session_id, &child, 0, true).await.unwrap(), Checkpoint::Finish);
+    assert_eq!(checkpoint(&features, session_id, "synthetic-run", &child, 0, true).await.unwrap(), Checkpoint::Finish);
 
     assert_eq!(pending_ids(&features, session_id), child_pending, "the child's notice starts no child turn");
     let from_child: Vec<Value> = pending_events(&features, &parent.id)
@@ -844,10 +860,13 @@ mod tests {
 
     // Run the parent's checkpoint against the child's input; its own second miss sends one notice to its parent.
     let parent_pending = pending_ids(&features, &parent.id);
-    assert!(matches!(checkpoint(&features, &parent.id, &parent, 0, true).await.unwrap(), Checkpoint::Continue(_)));
+    assert!(matches!(
+      checkpoint(&features, &parent.id, "synthetic-run", &parent, 0, true).await.unwrap(),
+      Checkpoint::Continue(_)
+    ));
     append(&features, &parent.id, json!({"type": "continuation_ran", "id": "parent-c1"})).await;
-    assert_eq!(checkpoint(&features, &parent.id, &parent, 0, true).await.unwrap(), Checkpoint::Finish);
-    assert_eq!(checkpoint(&features, &parent.id, &parent, 0, true).await.unwrap(), Checkpoint::Finish);
+    assert_eq!(checkpoint(&features, &parent.id, "synthetic-run", &parent, 0, true).await.unwrap(), Checkpoint::Finish);
+    assert_eq!(checkpoint(&features, &parent.id, "synthetic-run", &parent, 0, true).await.unwrap(), Checkpoint::Finish);
 
     let parent_turn = turn_events(&features, &parent.id);
     let parent_notices: Vec<&Value> = parent_turn
@@ -875,14 +894,96 @@ mod tests {
     let session_id = &meta.id;
     append(&features, session_id, json!({"type": USER, "id": "u1", "content": "the question"})).await;
 
-    assert!(matches!(checkpoint(&features, session_id, &meta, 0, true).await.unwrap(), Checkpoint::Continue(_)));
+    assert!(matches!(
+      checkpoint(&features, session_id, "synthetic-run", &meta, 0, true).await.unwrap(),
+      Checkpoint::Continue(_)
+    ));
     append(&features, session_id, json!({"type": "continuation_ran", "id": "c1"})).await;
-    assert_eq!(checkpoint(&features, session_id, &meta, 0, true).await.unwrap(), Checkpoint::Finish);
+    assert_eq!(checkpoint(&features, session_id, "synthetic-run", &meta, 0, true).await.unwrap(), Checkpoint::Finish);
 
     let turn = turn_events(&features, session_id);
     assert_eq!(count_of(&turn, ATTACHED_NOTICE), 1);
     let attached = turn.iter().find(|event| event["type"] == ATTACHED_NOTICE).unwrap();
     assert_eq!(attached["content"], "needs a look");
     assert!(turn.iter().all(|event| event["content"] != "needs a look" || event["type"] == ATTACHED_NOTICE));
+  }
+
+  /// A contribution that answers `web-status` on every manager session, as the web contribution does.
+  struct ManagerChecks;
+
+  impl TurnContribution for ManagerChecks {
+    fn applies_to_turn(&self, meta: &SessionMetadata) -> bool {
+      meta.profile == charliebot_store::metadata::TaskProfile::Manager
+    }
+
+    fn turn_end_check_names(&self) -> &'static [&'static str] {
+      &["web-status"]
+    }
+
+    fn run_turn_end_check<'a>(
+      &'a self,
+      _name: &'a str,
+      _features: &'a Arc<FeatureContext>,
+      _input: &'a TurnInput,
+    ) -> BoxFuture<'a, anyhow::Result<CheckResult>> {
+      Box::pin(async { Ok(CheckResult::Block("web".to_string())) })
+    }
+  }
+
+  /// A contribution that answers `thread-reply` on the sessions bound to a thread, as the Slack contribution does.
+  struct ThreadChecks;
+
+  impl TurnContribution for ThreadChecks {
+    fn applies_to_turn(&self, meta: &SessionMetadata) -> bool {
+      meta.extra("slack_origin").is_some_and(|origin| !origin.is_null())
+    }
+
+    fn turn_end_check_names(&self) -> &'static [&'static str] {
+      &["thread-reply"]
+    }
+
+    fn run_turn_end_check<'a>(
+      &'a self,
+      _name: &'a str,
+      _features: &'a Arc<FeatureContext>,
+      _input: &'a TurnInput,
+    ) -> BoxFuture<'a, anyhow::Result<CheckResult>> {
+      Box::pin(async { Ok(CheckResult::Notice("thread".to_string())) })
+    }
+  }
+
+  /// Each name runs once, on the applicable contribution that names it. A bound manager has both contributions, a plain
+  /// manager only the web one, and a name no applicable contribution names passes.
+  #[tokio::test]
+  async fn each_check_runs_on_the_applicable_contribution_that_names_it() {
+    let home = tempfile::tempdir().unwrap();
+    let (features, _meta) =
+      checkpoint_session(home.path(), &hooks(&["web-status", "thread-reply", "unlisted"]), "turn-hooks-composable")
+        .await;
+    let web: Arc<dyn TurnContribution> = Arc::new(ManagerChecks);
+    let slack: Arc<dyn TurnContribution> = Arc::new(ThreadChecks);
+    let names = ["web-status", "thread-reply", "unlisted"].map(str::to_string);
+
+    let bound = vec![Arc::clone(&web), Arc::clone(&slack)];
+    let ran = run_checks(&names, &bound, &features, &input(vec![]), ENTRY_TIMEOUT).await;
+    assert_eq!(ran[0].outcome, Outcome::Block { reason: "web".to_string() });
+    assert_eq!(ran[1].outcome, Outcome::Pass { notice: Some("thread".to_string()) });
+    assert_eq!(ran[2].outcome, Outcome::Pass { notice: None });
+
+    let plain = vec![Arc::clone(&web)];
+    let ran = run_checks(&names, &plain, &features, &input(vec![]), ENTRY_TIMEOUT).await;
+    assert_eq!(ran[1].outcome, Outcome::Pass { notice: None });
+  }
+
+  /// A notice goes to the contribution that produced its check, never to another applicable one.
+  #[test]
+  fn a_notice_routes_to_the_contribution_that_names_its_check() {
+    let web: Arc<dyn TurnContribution> = Arc::new(ManagerChecks);
+    let slack: Arc<dyn TurnContribution> = Arc::new(ThreadChecks);
+    let bound = vec![Arc::clone(&web), Arc::clone(&slack)];
+
+    assert!(Arc::ptr_eq(answerer(&bound, "web-status").unwrap(), &web));
+    assert!(Arc::ptr_eq(answerer(&bound, "thread-reply").unwrap(), &slack));
+    assert!(answerer(&bound, "unlisted").is_none());
   }
 }

@@ -891,7 +891,7 @@ fn summon_received(id: &str, content: &str, received_at: &str) -> Value {
 fn fakechat_turn(turn: Vec<Value>, exit_code: i64) -> TurnInput {
   TurnInput {
     session_id: "s1".to_string(),
-    kind: Some("fakechat".to_string()),
+    colleague_read_only: false,
     exit_code,
     continuation_failed: false,
     status: Value::Null,
@@ -928,9 +928,27 @@ fn a_reply_after_the_summon_passes_and_an_errored_round_is_still_checked() {
 }
 
 #[test]
-fn a_summon_of_the_marker_contract_is_left_alone() {
-  let summon = summon_received("s1", "fakechat marker summon", "2026-01-01T00:00:01Z");
+fn a_summon_without_the_mention_block_is_left_alone() {
+  let mut summon = summon_received("s1", "fakechat marker summon", "2026-01-01T00:00:01Z");
+  summon["fakechat"].as_object_mut().expect("the block is an object").remove("mention_id");
   assert_eq!(check_thread_reply(&FAKECHAT, &fakechat_turn(vec![summon], 0)).unwrap(), CheckResult::Pass);
+}
+
+#[test]
+fn a_summon_with_real_message_text_is_checked_by_its_mention_block() {
+  let summon = summon_received("s1", "a real thread question", "2026-01-01T00:00:01Z");
+  let checked = check_thread_reply(&FAKECHAT, &fakechat_turn(vec![summon], 0)).unwrap();
+  assert!(matches!(checked, CheckResult::Block(_)), "{checked:?}");
+}
+
+#[test]
+fn an_attachment_only_summon_stores_the_summon_line_and_is_checked() {
+  assert_eq!(summon_content(&FAKECHAT, None), FAKECHAT.summon_line);
+  assert_eq!(summon_content(&FAKECHAT, Some("   ")), FAKECHAT.summon_line);
+  assert_eq!(summon_content(&FAKECHAT, Some("a real thread question")), "a real thread question");
+  let summon = summon_received("s1", &summon_content(&FAKECHAT, None), "2026-01-01T00:00:01Z");
+  let checked = check_thread_reply(&FAKECHAT, &fakechat_turn(vec![summon], 0)).unwrap();
+  assert!(matches!(checked, CheckResult::Block(_)), "{checked:?}");
 }
 
 /// The nudge that a failed round leaves for an earlier summon: it copies the summon's block and names it in `nudge_of`.
@@ -1018,6 +1036,37 @@ async fn a_refused_notice_post_records_nothing_and_fails_the_delivery() {
 
   assert!(result.is_err());
   assert!(home.events("s1").iter().all(|event| event.get("fakechat_notice").is_none()));
+}
+
+#[tokio::test]
+async fn a_failed_summon_with_real_text_still_leaves_its_nudge() {
+  let home = Home::new();
+  home.thread_session("s1", origin()).await;
+  let adapter = FakeAdapter::with_thread(&[]);
+  let dyn_adapter: Arc<dyn ThreadAdapter> = adapter.clone();
+  let summon = home
+    .append(
+      "s1",
+      json!({"type": event_types::AGENT_MESSAGE, "content": "a real thread question",
+             "fakechat": {"channel_id": "c1", "thread_ts": "t1", "mention_id": "m1"}}),
+    )
+    .await;
+  let summon_id = summon["id"].as_str().expect("the summon has an id").to_string();
+  let started_at = summon["timestamp"].as_str().expect("the summon has a timestamp");
+  home.launch_run("s1", "failed-run", &[summon_id.as_str()], started_at);
+  let failed_summon_run = json!({
+    "type": event_types::MASTER_DONE,
+    "run_id": "failed-run",
+    "input_event_ids": [summon_id],
+    "exit_code": 1,
+  });
+
+  assert!(audit_failed_turn(&dyn_adapter, &home.features, "s1", &failed_summon_run).await.unwrap());
+  settle(|| home.launches().len() == 1).await;
+  assert!(
+    home.events("s1").iter().any(|event| event["fakechat"]["nudge_of"] == summon["id"]),
+    "the failed real-text summon run leaves a nudge"
+  );
 }
 
 #[tokio::test]

@@ -1,7 +1,6 @@
 //! The web-reply package's turn contribution. It carries the reply
-//! rules in a web session's manager runs, owns the web turn-end checks and notice delivery, renders the
-//! `web_reply`, `web_reply_notice` and `web_status` events as chat lines, and claims turn-end unread state for web
-//! sessions.
+//! rules in a manager's runs, owns the web turn-end checks and notice delivery, renders the `web_reply`,
+//! `web_reply_notice` and `web_status` events as chat lines, and claims turn-end unread state for manager sessions.
 
 use std::fs;
 use std::path::Path;
@@ -14,6 +13,7 @@ use charliebot_core::event_types::{WEB_ASK_CHECK, WEB_REPLY, WEB_REPLY_CHECK, WE
 use charliebot_core::run_kind::RunKind;
 use charliebot_core::str_methods;
 use charliebot_registry::FeatureContext;
+use charliebot_registry::thread_origin::is_thread_session;
 use charliebot_registry::turn::{
   CheckResult, DELIVERY_FULL, EventRenderer, PromptSource, RuleSegment, SCOPE_BASE, TurnContribution, TurnInput,
 };
@@ -34,7 +34,9 @@ impl TurnContribution for WebReplyTurnContribution {
     _cfg: &CharlieBotConfig,
     repo: &RepoRoot,
   ) -> anyhow::Result<Vec<RuleSegment>> {
-    if kind != RunKind::ManagerTurn.as_str() || !reply::is_web_session(meta) {
+    // The web rules reach a thread session only through its thread contract until Stage 2 replaces that contract's
+    // workflow file, so a thread-bound manager keeps its current rules here.
+    if kind != RunKind::ManagerTurn.as_str() || !reply::is_manager_session(meta) || is_thread_session(meta) {
       return Ok(Vec::new());
     }
     let text = rules_text(&repo.path().join("prompts").join(reply::RULES_FILE))?;
@@ -46,8 +48,8 @@ impl TurnContribution for WebReplyTurnContribution {
     Ok(vec![RuleSegment { text, sources: vec![source], delivery: DELIVERY_FULL.to_string() }])
   }
 
-  fn turn_kind(&self, meta: &SessionMetadata) -> Option<&'static str> {
-    reply::is_web_session(meta).then_some("web")
+  fn applies_to_turn(&self, meta: &SessionMetadata) -> bool {
+    meta.profile == TaskProfile::Manager
   }
 
   fn show_turn_notice<'a>(
@@ -60,10 +62,10 @@ impl TurnContribution for WebReplyTurnContribution {
     Box::pin(audit::show_notice(features, session_id, turn, message))
   }
 
-  /// The line that opens each user message of a web session in the turn prompt. The turn prompt joins a turn's inputs
+  /// The line that opens each user message of a manager session in the turn prompt. The turn prompt joins a turn's inputs
   /// with blank lines, so this line alone marks where one user message ends and the next begins.
   fn input_preamble(&self, meta: &SessionMetadata, _input_event: &Value) -> Option<String> {
-    reply::is_web_session(meta).then(|| "[User message]".to_string())
+    reply::is_manager_session(meta).then(|| "[User message]".to_string())
   }
 
   /// The status Goal of a manager session, web or thread. A worker stores no status.
@@ -84,8 +86,10 @@ impl TurnContribution for WebReplyTurnContribution {
     ]
   }
 
+  /// A clean turn of a manager session leaves it unread only when its web checks or notices wrote something a user must
+  /// read. A turn that only replied in a thread leaves nothing unread.
   fn claims_turn_end_unread(&self, meta: &SessionMetadata) -> bool {
-    reply::is_web_session(meta)
+    meta.profile == TaskProfile::Manager
   }
 
   fn turn_end_check_names(&self) -> &'static [&'static str] {
@@ -196,10 +200,10 @@ mod tests {
   }
 
   #[test]
-  fn only_a_manager_run_of_a_web_session_gets_the_rules() {
-    charliebot_registry::thread_origin::register_origin_field("slack_origin");
-    charliebot_registry::thread_origin::register_origin_field("discord_origin");
-    charliebot_registry::thread_origin::register_origin_field("feishu_origin");
+  fn a_manager_run_outside_a_thread_gets_the_rules() {
+    charliebot_registry::thread_origin::register_origin_field("slack", "slack_origin");
+    charliebot_registry::thread_origin::register_origin_field("discord", "discord_origin");
+    charliebot_registry::thread_origin::register_origin_field("feishu", "feishu_origin");
     let (_dir, repo) = checkout("rules");
     let web = manager(json!({}));
     let worker = SessionMetadata::new("synthetic-worker", "Worker", TaskProfile::Worker);
@@ -246,7 +250,7 @@ mod tests {
   /// without a stored Goal, has none to give.
   #[test]
   fn the_status_goal_is_the_stored_goal_of_any_manager_session() {
-    charliebot_registry::thread_origin::register_origin_field("slack_origin");
+    charliebot_registry::thread_origin::register_origin_field("slack", "slack_origin");
     let contribution = WebReplyTurnContribution;
     let with_goal = manager(json!({"web_status": {"goal": "ship the release", "waiting": []}}));
     let without_goal = manager(json!({"web_status": {"now": "building", "waiting": []}}));
@@ -275,8 +279,8 @@ mod tests {
   }
 
   #[test]
-  fn only_plain_manager_sessions_claim_the_turn_end_unread_mark() {
-    charliebot_registry::thread_origin::register_origin_field("slack_origin");
+  fn every_manager_session_claims_the_turn_end_unread_mark_and_applies_its_checks() {
+    charliebot_registry::thread_origin::register_origin_field("slack", "slack_origin");
     let contribution = WebReplyTurnContribution;
     let manager = SessionMetadata::new("synthetic-session", "Session 1", TaskProfile::Manager);
     let worker = SessionMetadata::new("synthetic-worker", "Worker", TaskProfile::Worker);
@@ -284,8 +288,11 @@ mod tests {
     thread.extra.insert("slack_origin".to_string(), json!({"channel_id":"synthetic-channel"}));
 
     assert!(contribution.claims_turn_end_unread(&manager));
+    assert!(contribution.claims_turn_end_unread(&thread));
     assert!(!contribution.claims_turn_end_unread(&worker));
-    assert!(!contribution.claims_turn_end_unread(&thread));
+    assert!(contribution.applies_to_turn(&manager));
+    assert!(contribution.applies_to_turn(&thread));
+    assert!(!contribution.applies_to_turn(&worker));
   }
 
   #[test]

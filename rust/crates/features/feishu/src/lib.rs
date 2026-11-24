@@ -49,7 +49,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
     },
     validate_session_fields,
   )?;
-  registry.thread_origin_field(metadata::FEISHU_ORIGIN)?;
+  registry.thread_origin_field(NAME, metadata::FEISHU_ORIGIN)?;
   registry.turn_contribution(NAME, Arc::new(FeishuTurnContribution))
 }
 

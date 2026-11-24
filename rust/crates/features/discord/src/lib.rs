@@ -49,6 +49,6 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
     },
     |values| validate_thread_slot(values, &THREAD_SLOT),
   )?;
-  registry.thread_origin_field(THREAD_SLOT.origin_field)?;
+  registry.thread_origin_field("discord", THREAD_SLOT.origin_field)?;
   registry.turn_contribution("discord", Arc::new(DiscordTurnContribution))
 }

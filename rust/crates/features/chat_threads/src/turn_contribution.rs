@@ -36,21 +36,21 @@ mod tests {
 
   #[test]
   fn a_slack_thread_session_names_the_thread_brief() {
-    register_origin_field("slack_origin");
+    register_origin_field("slack", "slack_origin");
     let meta = session(&[("slack_origin", json!({"channel_id": "C0SYNTHETIC"}))]);
     assert_eq!(ChatThreadsTurn.workflow_rules_file(&meta), Some("thread_session.md"));
   }
 
   #[test]
   fn a_discord_thread_session_names_the_thread_brief() {
-    register_origin_field("discord_origin");
+    register_origin_field("discord", "discord_origin");
     let meta = session(&[("discord_origin", json!({"thread_id": "900000000000000030"}))]);
     assert_eq!(ChatThreadsTurn.workflow_rules_file(&meta), Some("thread_session.md"));
   }
 
   #[test]
   fn a_feishu_thread_session_names_the_thread_brief() {
-    register_origin_field("feishu_origin");
+    register_origin_field("feishu", "feishu_origin");
     let meta = session(&[(
       "feishu_origin",
       json!({"tenant_key": "T0SYNTHETIC", "chat_id": "oc_0synthetic", "root_id": "om_0"}),
@@ -60,9 +60,9 @@ mod tests {
 
   #[test]
   fn a_null_origin_names_no_file() {
-    register_origin_field("slack_origin");
-    register_origin_field("discord_origin");
-    register_origin_field("feishu_origin");
+    register_origin_field("slack", "slack_origin");
+    register_origin_field("discord", "discord_origin");
+    register_origin_field("feishu", "feishu_origin");
     let meta =
       session(&[("slack_origin", Value::Null), ("discord_origin", Value::Null), ("feishu_origin", Value::Null)]);
     assert_eq!(ChatThreadsTurn.workflow_rules_file(&meta), None);

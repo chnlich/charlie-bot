@@ -127,7 +127,7 @@ impl Home {
 fn web_turn(session_id: &str) -> TurnInput {
   TurnInput {
     session_id: session_id.to_string(),
-    kind: Some("web".to_string()),
+    colleague_read_only: false,
     exit_code: 0,
     continuation_failed: false,
     status: json!({"goal": "a goal", "waiting": []}),

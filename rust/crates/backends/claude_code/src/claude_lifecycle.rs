@@ -1433,11 +1433,12 @@ mod tests {
     assert_eq!(relay.backend_kwargs["midturn_run_id"], json!(run_id));
   }
 
+  /// A thread turn takes the stream-json input path a web turn takes, so a message sent during the turn reaches it.
   #[tokio::test]
-  async fn thread_turn_keeps_plain_text_stdin_and_queues_later_messages() {
-    charliebot_registry::thread_origin::register_origin_field("slack_origin");
-    charliebot_registry::thread_origin::register_origin_field("discord_origin");
-    charliebot_registry::thread_origin::register_origin_field("feishu_origin");
+  async fn thread_turn_takes_the_stream_json_input_path_like_a_web_turn() {
+    charliebot_registry::thread_origin::register_origin_field("slack", "slack_origin");
+    charliebot_registry::thread_origin::register_origin_field("discord", "discord_origin");
+    charliebot_registry::thread_origin::register_origin_field("feishu", "feishu_origin");
     for (field, origin) in [
       ("slack_origin", json!({"team_id": "T", "channel_id": "C", "thread_ts": "1.0"})),
       ("discord_origin", json!({"guild_id": "G", "parent_channel_id": "C", "thread_id": "1"})),
@@ -1452,7 +1453,8 @@ mod tests {
       let lifecycle = ClaudeCodeLifecycle::new();
 
       let launch = lifecycle.place(&ctx).await.unwrap();
-      assert_eq!(launch.backend_kwargs.get("midturn_delivery"), None, "{field}: the thread turn is not gated");
+      assert_eq!(launch.backend_kwargs["midturn_delivery"], json!(true), "{field}: the thread turn is gated");
+      assert_eq!(launch.backend_kwargs["midturn_run_id"], json!(ctx.run_id.clone().unwrap()), "{field}");
       let backend = ClaudeCodeBackend::from_launch(
         None,
         None,
@@ -1475,8 +1477,8 @@ mod tests {
       )
       .unwrap();
       let command = backend.build_command("prompt").unwrap();
-      assert!(!command.iter().any(|value| value == "--input-format"), "{field}: {command:?}");
-      assert!(!command.iter().any(|value| value == "--replay-user-messages"), "{field}: {command:?}");
+      assert!(command.iter().any(|value| value == "--input-format"), "{field}: {command:?}");
+      assert!(command.iter().any(|value| value == "--replay-user-messages"), "{field}: {command:?}");
     }
   }
 

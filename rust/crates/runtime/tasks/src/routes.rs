@@ -1636,6 +1636,15 @@ mod tests {
   struct RefuseAgentWork;
 
   impl charliebot_registry::colleague_gate::ColleagueGate for RefuseAgentWork {
+    fn run_read_only<'a>(
+      &'a self,
+      _features: &'a charliebot_registry::FeatureContext,
+      _session_id: &'a str,
+      _run_id: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + 'a>> {
+      Box::pin(async { false })
+    }
+
     fn refuse_agent_work<'a>(
       &'a self,
       _features: &'a FeatureContext,

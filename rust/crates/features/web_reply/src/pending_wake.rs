@@ -201,10 +201,10 @@ mod tests {
   use super::*;
   use crate::test_support::Home;
 
-  fn turn(session_id: &str, kind: Option<&str>, exit_code: i64, status: Value, turn: Vec<Value>) -> TurnInput {
+  fn turn(session_id: &str, colleague_read_only: bool, exit_code: i64, status: Value, turn: Vec<Value>) -> TurnInput {
     TurnInput {
       session_id: session_id.to_string(),
-      kind: kind.map(str::to_string),
+      colleague_read_only,
       exit_code,
       continuation_failed: false,
       status,
@@ -220,7 +220,7 @@ mod tests {
 
   /// A web turn with no Waiting on you item: the input every wake case starts from.
   fn web_turn(session_id: &str) -> TurnInput {
-    turn(session_id, Some("web"), 0, json!({"goal": "a goal", "waiting": []}), user_turn())
+    turn(session_id, false, 0, json!({"goal": "a goal", "waiting": []}), user_turn())
   }
 
   /// The first miss of the check, as the turn-end runner records it.
@@ -299,7 +299,7 @@ mod tests {
     let root = home.manager("root", None).await;
     let mut events = user_turn();
     events.push(block_record());
-    let input = turn(&root, Some("web"), 0, json!({"goal": "a goal", "waiting": []}), events);
+    let input = turn(&root, false, 0, json!({"goal": "a goal", "waiting": []}), events);
     assert_eq!(answer(&home, &input).await, CheckResult::Notice(NOTICE.to_string()));
   }
 
@@ -355,7 +355,7 @@ mod tests {
   async fn a_waiting_on_you_item_of_the_turn_passes() {
     let home = new_home();
     let root = home.manager("root", None).await;
-    let input = turn(&root, Some("web"), 0, json!({"goal": "a goal", "waiting": [{"text": "an answer"}]}), user_turn());
+    let input = turn(&root, false, 0, json!({"goal": "a goal", "waiting": [{"text": "an answer"}]}), user_turn());
     assert_eq!(answer(&home, &input).await, CheckResult::Pass);
   }
 
@@ -366,9 +366,9 @@ mod tests {
     let mut close = user_turn();
     close.push(json!({"type": TASK_CLOSE_REQUESTED, "id": "c1"}));
     let cases = [
-      ("a close request in this turn", turn(&root, Some("web"), 0, json!({"waiting": []}), close)),
-      ("a Slack thread", turn(&root, Some("slack"), 0, json!({"waiting": []}), user_turn())),
-      ("a turn that exited 1", turn(&root, Some("web"), 1, json!({"waiting": []}), user_turn())),
+      ("a close request in this turn", turn(&root, false, 0, json!({"waiting": []}), close)),
+      ("a colleague-started thread", turn(&root, true, 0, json!({"waiting": []}), user_turn())),
+      ("a turn that exited 1", turn(&root, false, 1, json!({"waiting": []}), user_turn())),
     ];
     for (label, input) in cases {
       assert_eq!(answer(&home, &input).await, CheckResult::Pass, "{label}");
@@ -385,7 +385,7 @@ mod tests {
       "id": "record-1",
       "results": [{"name": PENDING_WAKE_ENTRY, "result": "block", "reason": "pending-wake check: blocked"}],
     }));
-    let mut input = turn(&root, Some("web"), 1, json!({"goal": "a goal", "waiting": []}), events);
+    let mut input = turn(&root, false, 1, json!({"goal": "a goal", "waiting": []}), events);
     input.continuation_failed = true;
     assert_eq!(answer(&home, &input).await, CheckResult::Notice(NOTICE.to_string()));
   }

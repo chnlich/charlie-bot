@@ -28,6 +28,8 @@ pub struct Message {
   /// The sender's open_id.
   pub sender_open_id: String,
   pub mentions: Vec<Mention>,
+  /// The text the message shows, with its mentions named. None for a message that carries no text, such as an attachment.
+  pub text: Option<String>,
 }
 
 /// One `@` mention in a message: the placeholder key the content uses, the mentioned open_id and its name.
@@ -82,6 +84,9 @@ pub fn classify(event: &Value, bot_open_id: &str) -> anyhow::Result<Inbound> {
   }
   let mentions = mentions_of(raw)?;
   let mentioned = mentions.iter().any(|mention| mention.open_id == bot_open_id);
+  let message_type = text_at(raw, &["message_type"])?;
+  let text =
+    (message_type == "text").then(|| render_text(message_type, text_at(raw, &["content"])?, &mentions)).transpose()?;
   let message = Message {
     tenant_key: text_at(event, &["header", TENANT_KEY])?.to_string(),
     chat_id: text_at(raw, &[CHAT_ID])?.to_string(),
@@ -91,6 +96,7 @@ pub fn classify(event: &Value, bot_open_id: &str) -> anyhow::Result<Inbound> {
     create_time: text_at(raw, &[CREATE_TIME])?.to_string(),
     sender_open_id: sender_open_id.to_string(),
     mentions,
+    text,
   };
   if mentioned {
     return Ok(Inbound::Summon(message));

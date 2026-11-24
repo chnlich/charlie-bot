@@ -173,8 +173,8 @@ fn checkout_fixture(checkout_name: &str) -> &'static [u8] {
 }
 
 fn registered_package(package: &'static str, register: RegisterFn) -> Registry {
-  for field in ["slack_origin", "discord_origin", "feishu_origin"] {
-    charliebot_registry::thread_origin::register_origin_field(field);
+  for (platform, field) in [("slack", "slack_origin"), ("discord", "discord_origin"), ("feishu", "feishu_origin")] {
+    charliebot_registry::thread_origin::register_origin_field(platform, field);
   }
   let mut registry = Registry::new();
   registry.register_package(package, register).unwrap();

@@ -53,7 +53,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
     },
     |values| validate_thread_slot(values, &THREAD_SLOT),
   )?;
-  registry.thread_origin_field(THREAD_SLOT.origin_field)?;
+  registry.thread_origin_field("slack", THREAD_SLOT.origin_field)?;
   registry.turn_contribution("slack", Arc::new(SlackTurnContribution))?;
   registry.user_dm(post_user_dm)?;
   registry.owner_dm(post_owner_dm)

@@ -15,7 +15,7 @@ use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_core::event_types::POOL;
 use charliebot_core::headers::ACCEPT_ENCODING;
 use charliebot_registry::Registry;
-use charliebot_registry::thread_origin::is_thread_session;
+use charliebot_registry::thread_origin::{is_thread_session, platform_of};
 use charliebot_store::metadata::{
   CREATED_AT_FIELD, HAS_PENDING_TRIGGER, HAS_RUNNING_TASKS, HAS_UNREAD, NATIVE_MODEL, NEXT_TRIGGER_AT,
   PENDING_TRIGGER_COUNT, ROUND_RATINGS, RUN_BACKEND, SCHEDULE_ALLOW_FAILURE, SCHEDULE_CRON, SCHEDULE_ENABLED,
@@ -1488,9 +1488,13 @@ pub(crate) fn search_columns_text(
 
 /// The response key of the chat-thread flag: true for a session whose metadata names a chat thread.
 pub const THREAD_SESSION: &str = "thread_session";
+/// The response key of the chat platform a session is bound to (`slack`, `discord`, `feishu`). It is absent for a session
+/// bound to no chat thread.
+pub const CHANNEL_PLATFORM: &str = "channel_platform";
 
 /// The metadata rendered as the response model does, excluding `task.goal`. The `thread_session` flag names a chat
-/// thread session, so the web client never reads the platform origin fields itself.
+/// thread session, and `channel_platform` names its platform, so the web client never reads the platform origin fields
+/// itself.
 pub(crate) fn metadata_value(store: &Store, meta: &SessionMetadata) -> StoreResult<Value> {
   let mut value = store.session_metadata_value(meta);
   let object = value.as_object_mut().expect("session metadata serializes to an object");
@@ -1498,6 +1502,9 @@ pub(crate) fn metadata_value(store: &Store, meta: &SessionMetadata) -> StoreResu
     task.remove("goal");
   }
   object.insert(THREAD_SESSION.to_string(), Value::Bool(is_thread_session(meta)));
+  if let Some(platform) = platform_of(meta) {
+    object.insert(CHANNEL_PLATFORM.to_string(), Value::String(platform.to_string()));
+  }
   show_display_member(&store.config().backends, object);
   Ok(value)
 }

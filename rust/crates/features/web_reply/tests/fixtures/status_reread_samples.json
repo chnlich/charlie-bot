@@ -3,7 +3,7 @@
     "name": "source_126954b2_now_only_set_blocks",
     "note": "PII-free replay shape of the 126954b2 case: an input, its web reply, then a stored set that changed Now and left Waiting on you as it was.",
     "input": {
-      "session_id": "sample-session", "kind": "web", "exit_code": 0, "continuation_failed": false,
+      "session_id": "sample-session", "colleague_read_only": false, "exit_code": 0, "continuation_failed": false,
       "status": {"now": "Writing the summary", "waiting": [{"text": "Choose the title"}]},
       "turn": [
         {"type": "user", "id": "u1", "content": "Sample question about the title", "received_at": "2026-10-26T09:55:27Z"},
@@ -18,7 +18,7 @@
     "name": "source_4abdf0fe_hotel_now_set_then_confirm_blocks",
     "note": "PII-free replay shape of the hotel turn: the stored Now set and later confirm leave Waiting on you unread.",
     "input": {
-      "session_id": "sample-session", "kind": "web", "exit_code": 0, "continuation_failed": false,
+      "session_id": "sample-session", "colleague_read_only": false, "exit_code": 0, "continuation_failed": false,
       "status": {"now": "Writing the summary", "waiting": [{"text": "Review the draft"}]},
       "turn": [
         {"type": "user", "id": "u1", "content": "Sample question about the plan", "received_at": "2026-01-01T00:00:00Z"},
@@ -34,7 +34,7 @@
     "name": "source_4abdf0fe_train_now_only_set_blocks",
     "note": "PII-free replay shape of the train turn: the stored set changes Now but not Waiting on you.",
     "input": {
-      "session_id": "sample-session", "kind": "web", "exit_code": 0, "continuation_failed": false,
+      "session_id": "sample-session", "colleague_read_only": false, "exit_code": 0, "continuation_failed": false,
       "status": {"now": "Writing the summary", "waiting": [{"text": "Review the draft"}]},
       "turn": [
         {"type": "user", "id": "u1", "content": "Sample question about the next step", "received_at": "2026-01-01T00:01:00Z"},
@@ -49,7 +49,7 @@
     "name": "source_87da0479_stored_waiting_set_passes",
     "note": "PII-free replay shape of the stored set in the 87da0479 case.",
     "input": {
-      "session_id": "sample-session", "kind": "web", "exit_code": 0, "continuation_failed": false,
+      "session_id": "sample-session", "colleague_read_only": false, "exit_code": 0, "continuation_failed": false,
       "status": {"waiting": [{"text": "Review the draft"}]},
       "turn": [
         {"type": "user", "id": "u1", "content": "Sample question", "received_at": "2026-01-01T00:02:00Z"},
@@ -63,7 +63,7 @@
     "name": "source_d2eef930_0813_waiting_set_passes",
     "note": "PII-free replay shape of the first Waiting set in the d2eef930 case.",
     "input": {
-      "session_id": "sample-session", "kind": "web", "exit_code": 0, "continuation_failed": false,
+      "session_id": "sample-session", "colleague_read_only": false, "exit_code": 0, "continuation_failed": false,
       "status": {"waiting": [{"text": "Review the draft"}]},
       "turn": [
         {"type": "user", "id": "u1", "content": "Sample question", "received_at": "2026-01-01T00:03:00Z"},
@@ -77,7 +77,7 @@
     "name": "source_d2eef930_0817_waiting_set_passes",
     "note": "PII-free replay shape of the second Waiting set in the d2eef930 case.",
     "input": {
-      "session_id": "sample-session", "kind": "web", "exit_code": 0, "continuation_failed": false,
+      "session_id": "sample-session", "colleague_read_only": false, "exit_code": 0, "continuation_failed": false,
       "status": {"waiting": [{"text": "Review the draft"}]},
       "turn": [
         {"type": "user", "id": "u1", "content": "Sample question", "received_at": "2026-01-01T00:04:00Z"},
@@ -91,7 +91,7 @@
     "name": "source_d2eef930_0925_now_only_set_blocks",
     "note": "PII-free replay shape of the later d2eef930 turn: the stored set changes Now but not Waiting on you.",
     "input": {
-      "session_id": "sample-session", "kind": "web", "exit_code": 0, "continuation_failed": false,
+      "session_id": "sample-session", "colleague_read_only": false, "exit_code": 0, "continuation_failed": false,
       "status": {"now": "Writing the summary", "waiting": [{"text": "Review the draft"}]},
       "turn": [
         {"type": "user", "id": "u1", "content": "Sample question about the next step", "received_at": "2026-01-01T00:05:00Z"},
@@ -105,7 +105,7 @@
   {
     "name": "input_then_a_set_that_names_waiting_passes",
     "input": {
-      "session_id": "sample-session", "kind": "web", "exit_code": 0, "continuation_failed": false,
+      "session_id": "sample-session", "colleague_read_only": false, "exit_code": 0, "continuation_failed": false,
       "status": {"now": "Writing the summary", "waiting": [{"text": "Choose the title"}]},
       "turn": [
         {"type": "user", "id": "u1", "content": "Sample question", "received_at": "2026-10-26T09:55:27Z"},
@@ -118,7 +118,7 @@
   {
     "name": "a_set_that_rewrites_the_same_list_unchanged_passes",
     "input": {
-      "session_id": "sample-session", "kind": "web", "exit_code": 0, "continuation_failed": false,
+      "session_id": "sample-session", "colleague_read_only": false, "exit_code": 0, "continuation_failed": false,
       "status": {"waiting": [{"text": "Choose the title"}, {"text": "Approve the page"}]},
       "turn": [
         {"type": "user", "id": "u1", "content": "Sample question", "received_at": "2026-10-26T09:55:27Z"},
@@ -131,7 +131,7 @@
     "name": "exit_three_set_writes_no_event_so_the_input_still_blocks",
     "note": "A set that prints the cold-read answers and stores nothing leaves no web_status event in the turn.",
     "input": {
-      "session_id": "sample-session", "kind": "web", "exit_code": 0, "continuation_failed": false,
+      "session_id": "sample-session", "colleague_read_only": false, "exit_code": 0, "continuation_failed": false,
       "status": {"waiting": [{"text": "Choose the title"}]},
       "turn": [
         {"type": "user", "id": "u1", "content": "Sample question", "received_at": "2026-10-26T09:55:27Z"}
@@ -144,7 +144,7 @@
     "name": "exit_three_set_then_a_stored_set_passes",
     "note": "The stored set after the exit-3 set is the one event the check counts.",
     "input": {
-      "session_id": "sample-session", "kind": "web", "exit_code": 0, "continuation_failed": false,
+      "session_id": "sample-session", "colleague_read_only": false, "exit_code": 0, "continuation_failed": false,
       "status": {"waiting": [{"text": "Choose the title"}]},
       "turn": [
         {"type": "user", "id": "u1", "content": "Sample question", "received_at": "2026-10-26T09:55:27Z"},
@@ -156,7 +156,7 @@
   {
     "name": "a_set_stored_before_the_last_input_does_not_count",
     "input": {
-      "session_id": "sample-session", "kind": "web", "exit_code": 0, "continuation_failed": false,
+      "session_id": "sample-session", "colleague_read_only": false, "exit_code": 0, "continuation_failed": false,
       "status": {"waiting": [{"text": "Choose the title"}]},
       "turn": [
         {"type": "web_status", "id": "s0", "content": "Status updated: Waiting on you", "web_status_changed": ["waiting"]},
@@ -169,7 +169,7 @@
   {
     "name": "a_confirm_does_not_count",
     "input": {
-      "session_id": "sample-session", "kind": "web", "exit_code": 0, "continuation_failed": false,
+      "session_id": "sample-session", "colleague_read_only": false, "exit_code": 0, "continuation_failed": false,
       "status": {"waiting": [{"text": "Choose the title"}]},
       "turn": [
         {"type": "user", "id": "u1", "content": "Sample question", "received_at": "2026-10-26T09:55:27Z"},
@@ -182,7 +182,7 @@
   {
     "name": "a_turn_without_an_input_passes",
     "input": {
-      "session_id": "sample-session", "kind": "web", "exit_code": 0, "continuation_failed": false,
+      "session_id": "sample-session", "colleague_read_only": false, "exit_code": 0, "continuation_failed": false,
       "status": {"waiting": [{"text": "Choose the title"}]},
       "turn": [
         {"type": "web_status", "id": "s1", "content": "Status updated: Now", "web_status_changed": ["now"]}
@@ -193,7 +193,7 @@
   {
     "name": "an_empty_waiting_list_passes",
     "input": {
-      "session_id": "sample-session", "kind": "web", "exit_code": 0, "continuation_failed": false,
+      "session_id": "sample-session", "colleague_read_only": false, "exit_code": 0, "continuation_failed": false,
       "status": {"waiting": []},
       "turn": [
         {"type": "user", "id": "u1", "content": "Sample question", "received_at": "2026-10-26T09:55:27Z"}
@@ -205,7 +205,7 @@
     "name": "a_second_miss_notices_the_items_left",
     "note": "The first miss is the turn_hooks record that blocked; its continuation ran with no set.",
     "input": {
-      "session_id": "sample-session", "kind": "web", "exit_code": 0, "continuation_failed": false,
+      "session_id": "sample-session", "colleague_read_only": false, "exit_code": 0, "continuation_failed": false,
       "status": {"waiting": [{"text": "Choose the title"}, {"text": "Approve the page"}]},
       "turn": [
         {"type": "user", "id": "u1", "content": "Sample question", "received_at": "2026-10-26T09:55:27Z"},
@@ -219,7 +219,7 @@
   {
     "name": "a_failed_continuation_second_miss_notices_the_items_left",
     "input": {
-      "session_id": "sample-session", "kind": "web", "exit_code": 1, "continuation_failed": true,
+      "session_id": "sample-session", "colleague_read_only": false, "exit_code": 1, "continuation_failed": true,
       "status": {"waiting": [{"text": "Choose the title"}]},
       "turn": [
         {"type": "user", "id": "u1", "content": "Sample question", "received_at": "2026-10-26T09:55:27Z"},
@@ -233,7 +233,7 @@
   {
     "name": "a_close_request_passes",
     "input": {
-      "session_id": "sample-session", "kind": "web", "exit_code": 0, "continuation_failed": false,
+      "session_id": "sample-session", "colleague_read_only": false, "exit_code": 0, "continuation_failed": false,
       "status": {"waiting": [{"text": "Choose the title"}]},
       "turn": [
         {"type": "user", "id": "u1", "content": "Sample question", "received_at": "2026-10-26T09:55:27Z"},
@@ -243,9 +243,9 @@
     "expect": "pass"
   },
   {
-    "name": "a_thread_turn_passes",
+    "name": "a_colleague_started_thread_turn_passes",
     "input": {
-      "session_id": "sample-session", "kind": "slack", "exit_code": 0, "continuation_failed": false,
+      "session_id": "sample-session", "colleague_read_only": true, "exit_code": 0, "continuation_failed": false,
       "status": {"waiting": [{"text": "Choose the title"}]},
       "turn": [
         {"type": "user", "id": "u1", "content": "Sample question", "received_at": "2026-10-26T09:55:27Z"}
@@ -256,7 +256,7 @@
   {
     "name": "an_error_exit_that_is_not_a_failed_continuation_passes",
     "input": {
-      "session_id": "sample-session", "kind": "web", "exit_code": 1, "continuation_failed": false,
+      "session_id": "sample-session", "colleague_read_only": false, "exit_code": 1, "continuation_failed": false,
       "status": {"waiting": [{"text": "Choose the title"}]},
       "turn": [
         {"type": "user", "id": "u1", "content": "Sample question", "received_at": "2026-10-26T09:55:27Z"}

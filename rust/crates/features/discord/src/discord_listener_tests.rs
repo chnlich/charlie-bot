@@ -614,7 +614,7 @@ async fn test_text_channel_summon_starts_thread_and_session() {
     .map(charliebot_store::ChatEvent::to_value)
     .collect::<Vec<_>>();
   let summon = events.iter().find(|event| event["type"] == event_types::AGENT_MESSAGE).unwrap();
-  assert_eq!(summon["content"], DISCORD.summon_line);
+  assert_eq!(summon["content"], format!("<@{BOT_USER}> plan the release"));
   assert_eq!(
     summon["discord"],
     json!({"guild_id": GUILD, "channel_id": PARENT, "thread_id": "900000000000000003", "mention_id": MENTION})
@@ -926,7 +926,7 @@ fn test_thread_check_blocks_a_summon_round_without_a_reply_then_notices_the_seco
     "content": DISCORD.summon_line, "discord": block, "received_at": "2026-01-01T00:00:01Z"});
   let mut input = TurnInput {
     session_id: "discord-session".to_string(),
-    kind: Some("discord".to_string()),
+    colleague_read_only: false,
     exit_code: 0,
     continuation_failed: false,
     status: Value::Null,
@@ -942,15 +942,15 @@ fn test_thread_check_blocks_a_summon_round_without_a_reply_then_notices_the_seco
 }
 
 #[tokio::test]
-async fn test_turn_kind_claims_only_a_discord_thread_session() {
+async fn test_applies_to_turn_claims_only_a_discord_thread_session() {
   let home = Home::new(true).await;
   let sid = discord_session(&home).await;
   let meta = home.features.store.get_session(&sid).await.unwrap().unwrap();
-  assert_eq!(crate::turn_contribution::DiscordTurnContribution.turn_kind(&meta), Some("discord"));
+  assert!(crate::turn_contribution::DiscordTurnContribution.applies_to_turn(&meta));
 
   let plain = home.plain_session("plain-session").await;
   let plain_meta = home.features.store.get_session(&plain).await.unwrap().unwrap();
-  assert_eq!(crate::turn_contribution::DiscordTurnContribution.turn_kind(&plain_meta), None);
+  assert!(!crate::turn_contribution::DiscordTurnContribution.applies_to_turn(&plain_meta));
 }
 
 #[test]

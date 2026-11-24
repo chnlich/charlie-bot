@@ -282,8 +282,8 @@ fn registry() -> Arc<Registry> {
 struct GateCheck;
 
 impl TurnContribution for GateCheck {
-  fn turn_kind(&self, meta: &SessionMetadata) -> Option<&'static str> {
-    meta.extra("gate_check").is_some().then_some("gate")
+  fn applies_to_turn(&self, meta: &SessionMetadata) -> bool {
+    meta.extra("gate_check").is_some()
   }
 
   fn turn_end_check_names(&self) -> &'static [&'static str] {
@@ -604,7 +604,7 @@ fn config_with_features_from_config_and_agent_path(
 }
 
 fn session_meta(session_id: &str, session_kind: &str, mode: &str) -> SessionMetadata {
-  charliebot_registry::thread_origin::register_origin_field("slack_origin");
+  charliebot_registry::thread_origin::register_origin_field("slack", "slack_origin");
   let mut meta = SessionMetadata::new(session_id, "Session 1", TaskProfile::Manager);
   if mode == "unknown_id" {
     meta.backend = "deleted-id".to_string();

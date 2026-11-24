@@ -73,6 +73,7 @@ pub async fn handle_app_mention(
     "mention_ts": mention_ts,
     (SENDER_USER_ID): user,
   });
+  let content = thread_entry::summon_content(&SLACK, event.get("text").and_then(Value::as_str));
   let adapter: Arc<dyn ThreadAdapter> = Arc::new(SlackThreadAdapter::with_client(Arc::clone(features), client));
   let result = thread_entry::accept_summon(
     &adapter,
@@ -82,7 +83,7 @@ pub async fn handle_app_mention(
       label: &label,
       origin: &origin,
       block: &block,
-      content: SLACK.summon_line,
+      content: &content,
       user: Some(user),
     },
   )

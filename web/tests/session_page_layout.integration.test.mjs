@@ -68,6 +68,8 @@ const MEASURE = `(() => {
   const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
   const strip = document.getElementById('ext-usage-strip');
   const wrapper = strip.parentElement.getBoundingClientRect();
+  const summaryRow = strip.querySelector('[data-field="summary"]');
+  const detailRow = strip.querySelector('[data-key]');
   return {
     viewportHeight: window.innerHeight,
     composerHidden: document.getElementById('input-area').classList.contains('hidden'),
@@ -77,10 +79,15 @@ const MEASURE = `(() => {
     chatLogHeight: document.getElementById('messages').getBoundingClientRect().height,
     headerBottom: document.querySelector('main > header').getBoundingClientRect().bottom,
     stripShown: !strip.classList.contains('hidden'),
+    stripCollapsed: strip.classList.contains('collapsed'),
+    summaryVisible: !!summaryRow && getComputedStyle(summaryRow).display !== 'none',
+    detailVisible: !!detailRow && getComputedStyle(detailRow).display !== 'none',
     stripRows: strip.children.length,
     stripHeight: strip.getBoundingClientRect().height,
     wrapperTop: wrapper.top,
     wrapperBottom: wrapper.bottom,
+    toggleTop: document.getElementById('ext-usage-toggle').getBoundingClientRect().top,
+    toggleBottom: document.getElementById('ext-usage-toggle').getBoundingClientRect().bottom,
     conversationTop: document.getElementById('tab-chat').getBoundingClientRect().top,
     panelRendered: !!document.getElementById('cron-session-panel'),
   };
@@ -166,6 +173,28 @@ for (const {width, height} of VIEWPORTS) {
         `the strip starts at ${m.wrapperTop} px, under a header that ends at ${m.headerBottom} px`);
       assert.ok(Math.abs(m.conversationTop - m.wrapperBottom) < 1,
         `the conversation starts at ${m.conversationTop} px, under a strip that ends at ${m.wrapperBottom} px`);
+      assert.equal(m.stripCollapsed, true, 'the usage strip starts collapsed');
+      assert.ok(m.toggleTop >= m.wrapperTop && m.toggleBottom <= m.wrapperBottom,
+        `the toggle (${m.toggleTop}–${m.toggleBottom} px) stays inside the strip `
+        + `(${m.wrapperTop}–${m.wrapperBottom} px)`);
+      assertComposerInView(m);
+    });
+
+  test(`the expanded single-account usage strip holds its toggle inside its bounds at ${width} px`,
+    {timeout: 120000}, async () => {
+      const m = await withSessionPage({width, height, usage: USAGE, bound: false}, async (page) => {
+        await page.evaluate("document.getElementById('ext-usage-toggle').click()");
+        return page.evaluate(MEASURE);
+      });
+      assert.equal(m.stripShown, true, 'the usage strip stays shown when expanded');
+      assert.equal(m.stripCollapsed, false, 'the usage strip expanded on toggle click');
+      assert.equal(m.summaryVisible, false, 'the collapsed summary row is hidden when expanded');
+      assert.equal(m.detailVisible, true, 'the account detail row is visible when expanded');
+      assert.ok(m.toggleTop >= m.wrapperTop && m.toggleBottom <= m.wrapperBottom,
+        `the toggle (${m.toggleTop}–${m.toggleBottom} px) stays inside the expanded strip `
+        + `(${m.wrapperTop}–${m.wrapperBottom} px)`);
+      assert.ok(Math.abs(m.conversationTop - m.wrapperBottom) < 1,
+        `the conversation starts at ${m.conversationTop} px, under the expanded strip (${m.wrapperBottom} px)`);
       assertComposerInView(m);
     });
 

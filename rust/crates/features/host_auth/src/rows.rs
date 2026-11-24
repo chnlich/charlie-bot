@@ -301,6 +301,26 @@ async fn probe_waiting_login(state_path: &Path, login: &BrowserLoginConfig) -> a
   Ok(())
 }
 
+/// A row's busy state: the live work that its controls wait on.
+/// `web/features/host_auth/templates/host_auth.html` reads the `busy` text, so keep `as_str` in step with it.
+#[derive(Clone, Copy)]
+enum RowBusy {
+  Login,
+  Check,
+  Idle,
+}
+
+impl RowBusy {
+  /// The `busy` text of the row's JSON: `login`, `check`, or an empty string when the row is idle.
+  fn as_str(self) -> &'static str {
+    match self {
+      RowBusy::Login => "login",
+      RowBusy::Check => "check",
+      RowBusy::Idle => "",
+    }
+  }
+}
+
 /// The row's JSON. The page renders its first paint from these fields, and the row route answers them on each refresh.
 /// Every text field is ready to show. A field the row lacks is an empty string, a null, or `false`.
 fn row_json(row: &Row, now: OffsetDateTime) -> anyhow::Result<Value> {
@@ -308,9 +328,9 @@ fn row_json(row: &Row, now: OffsetDateTime) -> anyhow::Result<Value> {
   let (expiry, expiry_soon) = expiry_text(lifetime, row.approved_at.as_deref(), row.state, now)?;
   let checking = CHECKING.lock().expect("the checking set is never poisoned").contains(&row.id);
   let busy = match (&row.live, checking) {
-    (Some(_), _) => "login",
-    (None, true) => "check",
-    (None, false) => "",
+    (Some(_), _) => RowBusy::Login,
+    (None, true) => RowBusy::Check,
+    (None, false) => RowBusy::Idle,
   };
   let checked_text = match &row.checked_at {
     Some(checked) => format!("Checked {}", local_text(checked)?),
@@ -335,8 +355,8 @@ fn row_json(row: &Row, now: OffsetDateTime) -> anyhow::Result<Value> {
   });
   // A check shows on its row's button, so the busy line names only a login.
   let busy_text = match busy {
-    "login" => "A login is in progress.",
-    _ => "",
+    RowBusy::Login => "A login is in progress.",
+    RowBusy::Check | RowBusy::Idle => "",
   };
   let kind = if row.login.is_some() { "login" } else { "host" };
   let login = row.login;
@@ -362,7 +382,7 @@ fn row_json(row: &Row, now: OffsetDateTime) -> anyhow::Result<Value> {
     "last": attempt.is_some(),
     "last_text": last_text,
     "last_output": last_output,
-    "busy": busy,
+    "busy": busy.as_str(),
     "busy_text": busy_text,
     "check_url": format!("/api/host-auth/rows/{}/check", row.id),
     "row_url": format!("/api/host-auth/rows/{}", row.id),

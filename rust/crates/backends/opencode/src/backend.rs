@@ -24,7 +24,7 @@ use charliebot_registry::usage::{
 use futures_util::future::BoxFuture;
 use nix::sys::signal::Signal;
 use serde_json::{Map, Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
 use tokio::sync::watch;
 use uuid::Uuid;
 
@@ -38,7 +38,7 @@ use charliebot_agents::runner::EventFn;
 use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_agents::transport::follow::{self, SilenceCallback};
 use charliebot_agents::transport::kill::kill_process_group;
-use charliebot_agents::transport::spawn::{AgentPipeReader, SpawnSpec, spawn_one_shot};
+use charliebot_agents::transport::spawn::{SpawnSpec, spawn_one_shot};
 use charliebot_core::cgroup::SESSION_CGROUP_OOM_SCORE_ADJ;
 
 const RUN_PLAN_MARKER: &str = "__charliebot_opencode_run__=";
@@ -1074,7 +1074,7 @@ async fn run_one_shot(request: OpenCodeOneShotRequest) -> anyhow::Result<String>
   args.push("--file".into());
   args.push(prompt_file.to_string_lossy().into_owned().into());
   args.push("-m".into());
-  args.push(model.into());
+  args.push(model.as_str().into());
   args.push("--".into());
   args.push("Follow the task prompt in the attached file.".into());
   let spec = SpawnSpec::new(
@@ -1104,7 +1104,7 @@ async fn run_one_shot(request: OpenCodeOneShotRequest) -> anyhow::Result<String>
     let mut bytes = Vec::new();
     stderr.read_to_end(&mut bytes).await.map(|_| bytes)
   });
-  let collect = collect_one_shot(stdout);
+  let collect = collect_one_shot(stdout, &model);
   let collect_result = match timeout {
     Some(limit) => match tokio::time::timeout(limit, collect).await {
       Ok(result) => result,
@@ -1127,7 +1127,7 @@ async fn run_one_shot(request: OpenCodeOneShotRequest) -> anyhow::Result<String>
   Ok(text)
 }
 
-async fn collect_one_shot(stdout: AgentPipeReader) -> anyhow::Result<String> {
+pub(super) async fn collect_one_shot(stdout: impl AsyncRead + Unpin, model: &str) -> anyhow::Result<String> {
   let mut reader = BufReader::new(stdout);
   let mut line = Vec::new();
   let mut parts = Vec::new();
@@ -1149,7 +1149,19 @@ async fn collect_one_shot(stdout: AgentPipeReader) -> anyhow::Result<String> {
           .context("opencode text event has no part.text")?
           .to_string(),
       ),
-      _ => {}
+      // A step boundary carries no answer text, and the one-shot reads no token usage from it.
+      Some("step_start") => {}
+      Some("step_finish") => {}
+      // The one-shot denies every tool in its config, so no tool output joins the answer.
+      Some("tool_use") => {}
+      Some("tool") => {}
+      // A type that no arm names is reported and skipped, so a writer change never stops the run.
+      other => tracing::warn!(
+        target: "charliebot_agents",
+        event_type = other.unwrap_or("<missing>"),
+        model,
+        "opencode_run_event_unhandled"
+      ),
     }
     if error.is_some() {
       break;

@@ -33,3 +33,4 @@ reqwest = { workspace = true, features = ["json", "query", "stream"] }
 charliebot-agents = { workspace = true, features = ["test-support"] }
 charliebot-anthropic-compatible.workspace = true
 charliebot-claude-code.workspace = true
+charliebot-core = { workspace = true, features = ["test-support"] }

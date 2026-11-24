@@ -1870,7 +1870,8 @@ fn test_trial_serve_reads_its_scope_memory_peak() {
 
 /// A serve trial whose server ignores SIGTERM. The trial waits its bounded time, sends SIGKILL and fails the side,
 /// naming the server's pid. The trial runs under a lock held on fd 9 the way dev/poor-network/lock.sh's bench_lock_hold
-/// holds it, so every process the trial starts inherits the lock: a process that survives the trial keeps it held.
+/// holds it, so every process the trial starts inherits the lock: a process that survives the trial keeps it held. The
+/// next side of the round then serves on the same port, which the killed server has left free.
 #[test]
 #[ignore = "integration"]
 fn test_trial_serve_names_a_server_that_ignores_sigterm_and_releases_the_bench_lock() {
@@ -1909,6 +1910,109 @@ fn test_trial_serve_names_a_server_that_ignores_sigterm_and_releases_the_bench_l
   // SAFETY: flock takes a descriptor this test owns and two flag values, and reads no memory.
   let locked = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
   assert_eq!(locked, 0, "a process of the trial still holds the bench lock: {}", run.describe());
+  assert_eq!(fs::read_dir(tree_root).expect("the tree root").count(), 0, "{}", run.describe());
+
+  // The next side of the round serves on the port the killed server held, and its server is ready and stopped.
+  let next = world
+    .spawn_serve_on_port(tree_root, port, &world.release.join("charliebot-server"), &["true"])
+    .wait_with_output()
+    .expect("the next trial ends");
+  let next = Run {
+    code: next.status.code().unwrap_or(-1),
+    stdout: String::from_utf8_lossy(&next.stdout).into_owned(),
+    stderr: String::from_utf8_lossy(&next.stderr).into_owned(),
+  };
+  assert_eq!(next.code, 0, "{}", next.describe());
+  assert!(next.stdout.contains("SERVE PASS Startup"), "{}", next.describe());
+  assert!(next.stdout.contains("SERVE command exit=0"), "{}", next.describe());
+}
+
+/// One serve trial whose chosen port a server takes after the trial picks it. The holder is the stand-in server that
+/// ignores SIGTERM, started with `holder_trial` as its CHARLIEBOT_RELEASE_TRIAL_PID, the way a trial starts its own
+/// server. The trial's stand-in server logs `server_ready` and never binds, so the holder takes the port once that line
+/// is in the trial's log. Returns the trial's run, the holder's pid, the port and the marker a command would leave.
+fn serve_trial_against_trial_holder(world: &ServeWorld, holder_trial: u32) -> (Run, u32, u16, PathBuf) {
+  let tree_root = world.tree_root();
+  let stub_release = world.sandbox.dir("stub-release");
+  symlink(harness::built_binary("serve-stub"), stub_release.join("charliebot-server")).expect("the stub link");
+  symlink(world.release.join("charliebot"), stub_release.join("charliebot")).expect("the CLI link");
+  let port = free_port();
+  let marker = world.sandbox.root().join("command-ran");
+  let touch = format!("touch '{}'", marker.display());
+  let trial =
+    world.spawn_serve_on_port(tree_root, port, &stub_release.join("charliebot-server"), &["sh", "-c", touch.as_str()]);
+
+  let server_log = tree_root.join(format!("trial-{}", &world.commit[..12])).join("server-1.log");
+  wait_for_server_ready(&server_log);
+  let mut holder = harness::spawn(
+    harness::command(harness::built_binary("term-ignoring-server"), &world.env)
+      .env("TRIAL_PORT_MIN", port.to_string())
+      .env("CHARLIEBOT_RELEASE_TRIAL_PID", holder_trial.to_string()),
+  );
+
+  let output = trial.wait_with_output().expect("the trial ends");
+  let holder_pid = holder.id();
+  holder.kill().expect("the holder stops");
+  holder.wait().expect("the holder ends");
+  let run = Run {
+    code: output.status.code().unwrap_or(-1),
+    stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+    stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+  };
+  (run, holder_pid, port, marker)
+}
+
+/// A serve trial whose port a server holds after the trial that started it has ended. A trial stops its server before
+/// it ends, so that server is a teardown defect: the side fails at start, names it as one with the holder's pid, binary
+/// and scope, and no command runs.
+#[test]
+#[ignore = "integration"]
+fn test_trial_serve_names_a_port_holder_of_an_ended_trial_as_a_teardown_defect() {
+  let _serial = TRIAL_RUNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+  let world = ServeWorld::new();
+  let tree_root = world.tree_root();
+  let ended = {
+    let mut child = Command::new("true").spawn().expect("a process that ends");
+    child.wait().expect("the process ends");
+    child.id()
+  };
+
+  let (run, holder, port, marker) = serve_trial_against_trial_holder(&world, ended);
+
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(run.stdout.contains("FAIL serve Startup"), "{}", run.describe());
+  assert!(
+    run.stdout.contains(&format!("CAUSE serve: teardown defect: port {port} is held by pid {holder}, binary ")),
+    "{}",
+    run.describe()
+  );
+  assert!(run.stdout.contains(&format!("the server of trial pid {ended}, which has ended")), "{}", run.describe());
+  assert!(!run.stdout.contains("another process"), "{}", run.describe());
+  assert!(!marker.exists(), "a command ran on a side whose port a teardown defect holds: {}", run.describe());
+  assert_eq!(fs::read_dir(tree_root).expect("the tree root").count(), 0, "{}", run.describe());
+}
+
+/// A serve trial whose port a server holds while the trial that started it still runs. That holder is a side serving at
+/// the same time, so the side fails at start and names the running trial, not a teardown defect.
+#[test]
+#[ignore = "integration"]
+fn test_trial_serve_names_a_port_holder_of_a_running_trial_as_a_concurrent_side() {
+  let _serial = TRIAL_RUNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+  let world = ServeWorld::new();
+  let tree_root = world.tree_root();
+
+  let (run, holder, port, marker) = serve_trial_against_trial_holder(&world, std::process::id());
+
+  assert_eq!(run.code, 1, "{}", run.describe());
+  let cause = format!("CAUSE serve: port {port} is held by another process, so this trial's server cannot bind it:");
+  assert!(run.stdout.contains(&format!("{cause} pid {holder}, binary ")), "{}", run.describe());
+  assert!(
+    run.stdout.contains(&format!("the server of trial pid {}, which still runs", std::process::id())),
+    "{}",
+    run.describe()
+  );
+  assert!(!run.stdout.contains("teardown defect"), "{}", run.describe());
+  assert!(!marker.exists(), "a command ran on a side whose port a running side holds: {}", run.describe());
   assert_eq!(fs::read_dir(tree_root).expect("the tree root").count(), 0, "{}", run.describe());
 }
 

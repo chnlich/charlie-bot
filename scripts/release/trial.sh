@@ -20,8 +20,11 @@
 #
 # A side is ready only when the port's listener is this trial's server (or a process it started) and that server
 # answers its auth status with 200 after it logged server_ready. free-port picks the port before the server binds it,
-# so another process can take the port in between. Then the side fails at start: the FAIL and CAUSE lines name the
-# port and its holder, and no command runs.
+# so another process can take the port in between, and a side that starts while another side's server is still booting
+# can pick the same port. Then the side fails at start: the FAIL and CAUSE lines name the port and its holder, and no
+# command runs. Each server carries its trial's pid in CHARLIEBOT_RELEASE_TRIAL_PID. A holder whose trial has ended is a
+# teardown defect, named as one with the holder's pid, binary and scope. A holder whose trial still runs is a side
+# serving at the same time. Any other holder is reported as another process.
 #
 # This host gives an unprivileged process no read-only view of /sys/fs/cgroup, so the preflight refuses (exit 2,
 # nothing started) a commit whose diff against its merge base with origin/main touches the cgroup code
@@ -1029,9 +1032,9 @@ server_tree_pids() {
   done
 }
 
-# unproven_holders LISTENERS TREE prints the holder of each listening line whose socket no process of TREE holds, one
-# per line. A process of TREE holds a socket when its fd table lists the socket's inode. Only the trial's own processes
-# are read, so the proof admits nothing else. It fails when a line has no socket inode.
+# unproven_holders LISTENERS TREE prints the CAUSE text (holder_cause) of each listening line whose socket no process
+# of TREE holds, one per line. A process of TREE holds a socket when its fd table lists the socket's inode. Only the
+# trial's own processes are read, so the proof admits nothing else. It fails when a line has no socket inode.
 unproven_holders() {
   local listeners=$1 tree=$2 line inode pid proven
   while IFS= read -r line; do
@@ -1044,26 +1047,36 @@ unproven_holders() {
       fi
     done
     if (( proven == 0 )); then
-      holder_text "$line" "$inode"
+      holder_cause "$line" "$inode"
       printf '\n'
     fi
   done <<<"$listeners"
 }
 
-# holder_text LINE describes the process that holds the socket of one `ss -e` line: the pid that `ss -p -e` names for
-# the same socket inode, with its command line and working directory. When `ss -p` names no pid, the line describes
-# the listener and its inode. The name is for the CAUSE line only; no decision reads it.
-holder_text() {
+# holder_pid LINE INODE prints the pid that `ss -p -e` names for the socket inode of one `ss -e` line, or nothing when
+# ss names no pid for it. It fails when ss cannot list the sockets. The pid names the holder in a CAUSE line and selects
+# the holder's trial; no check of the trial's own tree reads it.
+holder_pid() {
   local line=$1 inode=$2 named named_line pid=
   if ! named=$(ss -H -ltnpe "sport = :$CHOSEN_PORT"); then
-    printf 'a listener ss could not name (%s)' "$line"
-    return 0
+    return 1
   fi
   while IFS= read -r named_line; do
     [[ $named_line =~ (^|[[:space:]])ino:${inode}([[:space:]]|$) ]] || continue
     pid=$(sed -n 's/.*pid=\([0-9]*\).*/\1/p' <<<"$named_line")
     break
   done <<<"$named"
+  printf '%s' "$pid"
+}
+
+# holder_text LINE INODE describes the process that holds the socket of one `ss -e` line: its pid, command line and
+# working directory. When `ss -p` names no pid, the line describes the listener and its inode.
+holder_text() {
+  local line=$1 inode=$2 pid
+  if ! pid=$(holder_pid "$line" "$inode"); then
+    printf 'a listener ss could not name (%s)' "$line"
+    return 0
+  fi
   if [[ -z $pid ]]; then
     printf 'a process this user cannot name (%s)' "$line"
     return 0
@@ -1072,25 +1085,71 @@ holder_text() {
     "$(readlink "/proc/$pid/cwd" 2>/dev/null)"
 }
 
+# holder_trial_pid PID prints the pid of the trial that started PID: each trial gives its server
+# CHARLIEBOT_RELEASE_TRIAL_PID, its own pid, in the server's environment. It prints nothing for a process that no trial
+# started, or whose environment this user cannot read.
+holder_trial_pid() {
+  { tr '\0' '\n' <"/proc/$1/environ"; } 2>/dev/null | sed -n 's/^CHARLIEBOT_RELEASE_TRIAL_PID=//p'
+}
+
+# trial_holder_text PID names a trial's server that holds the port: its pid, its binary, its scope and its working
+# directory. The scope is the leaf of the process's cgroup: the serve unit of a scoped trial, or the caller's cgroup.
+trial_holder_text() {
+  local pid=$1 cmdline cgroup
+  cmdline=$({ tr '\0' ' ' <"/proc/$pid/cmdline"; } 2>/dev/null)
+  cgroup=$(sed -n 's/^0:://p' "/proc/$pid/cgroup" 2>/dev/null)
+  printf 'pid %s, binary %s, scope %s (cwd %s)' "$pid" "${cmdline%% *}" "${cgroup##*/}" \
+    "$(readlink "/proc/$pid/cwd" 2>/dev/null)"
+}
+
+# holder_cause LINE INODE prints the CAUSE text of one listener that no process of this trial holds. A holder that a
+# trial started names that trial's pid. When the trial has ended, the holder is a teardown defect: a trial stops its
+# server before it ends, so a server that still holds the port outlived its trial. When the trial still runs, the holder
+# is a side that serves at the same time. A holder no trial started keeps the generic text.
+holder_cause() {
+  local line=$1 inode=$2 pid trial holder
+  pid=$(holder_pid "$line" "$inode") || pid=
+  trial=
+  if [[ -n $pid ]]; then
+    trial=$(holder_trial_pid "$pid")
+  fi
+  if [[ -z $trial ]]; then
+    printf '%s' "port $CHOSEN_PORT is held by another process, so this trial's server cannot bind it: " \
+      "$(holder_text "$line" "$inode")"
+    return 0
+  fi
+  holder=$(trial_holder_text "$pid")
+  if kill -0 "$trial" 2>/dev/null; then
+    printf '%s' "port $CHOSEN_PORT is held by another process, so this trial's server cannot bind it: $holder, " \
+      "the server of trial pid $trial, which still runs: a side serving at the same time holds the port"
+  else
+    printf '%s' "teardown defect: port $CHOSEN_PORT is held by $holder, " \
+      "the server of trial pid $trial, which has ended and left its server running"
+  fi
+}
+
 start_server() {
   local server_number=$(( ${#SERVER_PIDS[@]} + 1 ))
   SERVER_LOG="$TREE/server-$server_number.log"
   SERVER_LOGS+=("$SERVER_LOG")
+  # The server carries this trial's pid in CHARLIEBOT_RELEASE_TRIAL_PID. A later trial that finds the server on its port
+  # reads the pid, and holder_cause names the trial that started the holder and whether that trial has ended.
   if (( IN_CALLER_SCOPE == 1 )); then
     # The server stays in the caller's cgroup, whose memory limit the caller's scope already sets.
-    "$BINARY" >>"$SERVER_LOG" 2>&1 &
+    CHARLIEBOT_RELEASE_TRIAL_PID=$$ "$BINARY" >>"$SERVER_LOG" 2>&1 &
   else
     # The server runs inside a scope whose MemoryMax keeps a measurement beside the live server from pressing the host
     # into swap.
     SERVE_UNIT_STARTED=1
-    systemd-run --user --scope -p "MemoryMax=$SERVE_MEMORY_MAX" --unit="$SERVE_UNIT" "$BINARY" >>"$SERVER_LOG" 2>&1 &
+    CHARLIEBOT_RELEASE_TRIAL_PID=$$ systemd-run --user --scope -p "MemoryMax=$SERVE_MEMORY_MAX" --unit="$SERVE_UNIT" \
+      "$BINARY" >>"$SERVER_LOG" 2>&1 &
   fi
   SERVER_PID=$!
   SERVER_PIDS+=("$SERVER_PID")
   # Each poll reads the port's listeners, then asks whether a process this trial started holds each one. A listener that
   # none of them holds is another process's: this server's bind fails behind it, so the side fails now, with the holder.
   for _ in $(seq 1 "$SERVE_READY_POLLS"); do
-    local listeners tree holders summary held_by status state
+    local listeners tree holders summary held status state
     if ! listeners=$(port_listeners); then
       startup_failed "ss cannot list the listeners on 127.0.0.1:$CHOSEN_PORT"
       return 1
@@ -1107,8 +1166,7 @@ start_server() {
         return 1
       fi
       if [[ -n $holders ]]; then
-        summary=$(paste -sd ';' <<<"$holders")
-        startup_failed "port $CHOSEN_PORT is held by another process, so this trial's server cannot bind it: $summary"
+        startup_failed "$(paste -sd ';' <<<"$holders")"
         return 1
       fi
       # Every listener on the port is held by this trial's server, so the answer is this server's.
@@ -1139,9 +1197,12 @@ start_server() {
         startup_failed "server exited before ready; port $CHOSEN_PORT has listener without socket inode: $summary"
         return 1
       fi
-      summary=$(paste -sd ';' <<<"$holders")
-      held_by=${summary:-a process of the trial tree}
-      startup_failed "the trial server exited before it became ready; port $CHOSEN_PORT is held by $held_by"
+      if [[ -z $holders ]]; then
+        held="port $CHOSEN_PORT is held by a process of the trial tree"
+        startup_failed "the trial server exited before it became ready; $held"
+        return 1
+      fi
+      startup_failed "the trial server exited before it became ready; $(paste -sd ';' <<<"$holders")"
       return 1
     fi
     sleep 0.25

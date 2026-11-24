@@ -36,7 +36,9 @@
 # The two Claude stand-in options are the step backends of the default memory-curator,
 # and `release-helper stand-in-options` copies each record from the commit's configs/config.example.yaml. The trial
 # fires no scheduled task: before its server starts, `release-helper disable-cron-tasks` seeds the commit's default cron
-# tasks and sets `enabled: false` on every cron task file of the trial home, copied seed tasks included.
+# tasks and sets `enabled: false` on every cron task file of the trial home, copied seed tasks included. Once the server
+# is ready, the trial reads its task list back and fails the side unless every task reads disabled. The scheduler still
+# binds a session to each task that has none, on its first tick, enabled or not, so those sessions join the trial home.
 # CHARLIEBOT_TRIAL_CGROUP_ROOT replaces /sys/fs/cgroup, the root the agents slice path is built on, so the tests point
 # it at a sandbox.
 #
@@ -53,8 +55,9 @@
 # the responses, the logs and the sessions this script gathers.
 #
 # Exit: the command's exit code; 1 a foreign cgroup removal, a remaining child process, a cleanup failure, a server
-# that did not become ready on its own port, a server that stopped before the wait for its runs ended, or a server that
-# did not exit on SIGTERM, or a server that its scope's memory cap ended; 2 the preflight failed, nothing started.
+# that did not become ready on its own port, a server that stopped before the wait for its runs ended, a server that
+# did not exit on SIGTERM, a server that its scope's memory cap ended, or a scheduled task that the started server does
+# not read as disabled; 2 the preflight failed, nothing started.
 # Evidence goes to $CHARLIEBOT_RELEASE_RUN_DIR/trial-<UTC>/ (or a directory under $CHARLIEBOT_RELEASE_LOG_DIR) and is
 # kept after a failure.
 set -uo pipefail
@@ -83,6 +86,8 @@ readonly SERVE_MEMORY_MAX_BYTES=$(( ${SERVE_MEMORY_MAX%G} * 1024 * 1024 * 1024 )
 readonly SERVE_READY_POLLS=2400
 # stop_server_pid waits this long for a server to exit after SIGTERM, then sends SIGKILL and fails the side.
 readonly SERVER_STOP_WAIT_MS=20000
+# The scheduled task list route of the server, which charliebot_cron names TASKS_PATH.
+readonly CRON_TASKS_PATH=/api/cron/tasks
 
 preflight_fail() {
   printf 'preflight failed: %s\n' "$1" >&2
@@ -1228,6 +1233,33 @@ stop_serve_scope() {
   return "$fail"
 }
 
+# cron_disabled_readback DISABLED: reads the scheduled task list of the started server back and passes only when every
+# listed task reads enabled false and each task in DISABLED (one name per line, from disable-cron-tasks) is listed. The
+# server seeds nothing enabled at its start, so a listed task that reads enabled means a task would fire in the trial.
+cron_disabled_readback() {
+  local disabled=$1 status verdict tasks_file="$HTTP_ROOT/cron-tasks.json"
+  status=$(http_get "$CRON_TASKS_PATH" "$tasks_file")
+  if [[ $status != 200 ]]; then
+    printf 'FAIL serve CronDisabled: the server gave status %s for its scheduled task list\n' "$status"
+    return 1
+  fi
+  if ! verdict=$(jq -r --arg disabled "$disabled" '
+    [.[] | select(.enabled != false) | (.name // "(unnamed)")] as $enabled
+    | [$disabled | split("\n")[] | select(length > 0)] as $wanted
+    | [.[].name] as $listed
+    | [$wanted[] | select(. as $name | $listed | index($name) | not)] as $missing
+    | if ($enabled | length) == 0 and ($missing | length) == 0 then "ok \(length)"
+      else "enabled: \($enabled | join(" ")); not listed: \($missing | join(" "))" end' "$tasks_file"); then
+    printf 'FAIL serve CronDisabled: the scheduled task list did not parse: %s\n' "$tasks_file"
+    return 1
+  fi
+  if [[ $verdict != ok\ * ]]; then
+    printf 'FAIL serve CronDisabled: the started server does not read every cron task as disabled: %s\n' "$verdict"
+    return 1
+  fi
+  printf 'SERVE PASS CronDisabled readback: %s listed tasks read disabled\n' "${verdict#ok }"
+}
+
 run_serve_mode() {
   # One caller command. The exit code is the command's, demoted to 1 by a foreign cgroup removal (sweep-check) or any
   # cleanup failure.
@@ -1257,6 +1289,7 @@ run_serve_mode() {
     printf 'SERVE PASS Startup url=http://127.0.0.1:%s pid=%s unit=%s memory_max=%s\n' "$CHOSEN_PORT" "$SERVER_PID" \
       "$SERVE_UNIT" "$SERVE_MEMORY_MAX_BYTES"
   fi
+  cron_disabled_readback "$disabled_tasks" || return 1
   check_sweep_names 'start 1' || sweep_failed=1
 
   export CHARLIEBOT_SERVE_URL="http://127.0.0.1:$CHOSEN_PORT"

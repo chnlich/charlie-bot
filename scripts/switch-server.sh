@@ -64,8 +64,9 @@
 # line per capture naming the file, the commit, the view and the size. The files stay under
 # CHARLIEBOT_LOG_DIR/live-screenshots/<switch log name>/<commit>/. A view the live server does not resolve, such as a
 # session id the server does not know, fails its capture. After all captures succeed, the switch runs
-# `charliebot backend run --call judge` sequentially for each distinct commit with `View:` trailers in that commit's
-# screenshot directory, writing `task.md`, `answer.txt`, and `events.ndjson` beside the PNGs. A capture failure or a
+# `charliebot backend run --call judge` sequentially for each distinct commit with `View:` trailers, with the caller's
+# run token unset so the home's access key authenticates it, in that commit's screenshot directory, writing `task.md`,
+# `answer.txt`, and `events.ndjson` beside the PNGs. A capture failure or a
 # live view check reporting `not-visible`, `broken`, a missing or unrecognized verdict, or a `judge` run failure keeps
 # the new release serving, switches nothing back, logs the commit, view, and reason, and exits 7.
 #
@@ -1789,10 +1790,13 @@ check_live_view_verdicts() {
 }
 
 # live_view_checks: after `live_screenshots` succeeds, run `charliebot backend run --call judge` (with tool access,
-# never `--one-shot`) sequentially for each distinct commit in OLD_SHA..TARGET_SHA that carries `View:` trailers. Each
-# commit's `task.md`, `answer.txt`, and `events.ndjson` live beside its PNGs in its screenshot directory. Fails loud
-# without retry (caller exits 7 and keeps the new release serving) when `judge` fails, when a verdict is missing or
-# unrecognized, or when any View is `not-visible` or `broken`.
+# never `--one-shot`) sequentially for each distinct commit in OLD_SHA..TARGET_SHA that carries `View:` trailers. The
+# call runs with CHARLIEBOT_RUN_TOKEN unset, so the CLI authenticates it with the home's access key, the one the live
+# screenshots use. An inherited token is the run of whichever agent turn started the switch, and a switch that a trigger
+# watch started inherits the token of a turn that may have ended, which the server refuses. Each commit's `task.md`,
+# `answer.txt`, and `events.ndjson` live beside its PNGs in its screenshot directory. Fails loud without retry (caller
+# exits 7 and keeps the new release serving) when `judge` fails, when a verdict is missing or unrecognized, or when any
+# View is `not-visible` or `broken`.
 live_view_checks() {
   local sha views short dir sizes="" prompt="" err
   for sha in $(git -C "$REPO_ROOT" rev-list "$OLD_SHA..$TARGET_SHA"); do
@@ -1814,7 +1818,8 @@ live_view_checks() {
       log "live view check: commit $short: failed to write task file in $dir"
       return 1
     }
-    if ! (cd "$dir" && CHARLIEBOT_HOME="$HOME_DIR" "$RELEASE_DIR/charliebot" backend run --call judge \
+    if ! (cd "$dir" && unset CHARLIEBOT_RUN_TOKEN \
+      && CHARLIEBOT_HOME="$HOME_DIR" "$RELEASE_DIR/charliebot" backend run --call judge \
       --task-file "$dir/task.md" > "$dir/answer.txt" 2> "$dir/judge.stderr"); then
       err="$(cat "$dir/judge.stderr" "$dir/answer.txt" 2> /dev/null | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/[[:space:]]*$//')"
       log "live view check: commit $short: judge failed: ${err:-exit status non-zero}"

@@ -369,6 +369,46 @@ fn test_judge_all_views_shows_exits_0_and_logs_one_line_per_view() {
   assert!(run.stdout.contains("SWITCH COMPLETE:"), "{}", world.report(&run));
 }
 
+/// The run token of a run that has finished. The stand-in server refuses it, and a switch that a trigger watch starts
+/// inherits it from the agent turn that registered the watch.
+const FINISHED_RUN_TOKEN: &str = "run-token-of-a-finished-run";
+
+/// One switch to a commit whose `/diff` View the judge shows, with `extra` added to the switch's environment. The judge
+/// answers only after its option resolves on the server, so a verdict in the log means the call got through.
+fn switch_judge_shows(extra: &[(&str, &str)]) {
+  let (world, pid) = setup_judge_world();
+  let (target, short) = commit_with_file_and_views(&world, "Show the diff on phones", &["/diff"]);
+  let mut judge_env = vec![("FAKE_JUDGE_STDOUT", "VERDICT /diff shows The diff viewer renders the commit's change.\n")];
+  judge_env.extend_from_slice(extra);
+
+  let run = world.switch_forward_live(&target, pid, &drain_line("run-live"), "/diff", &judge_env);
+
+  assert_eq!(run.code, 0, "{}", world.report(&run));
+  assert!(
+    run.stdout.contains(&format!(
+      "live view check: commit {short} view /diff shows: The diff viewer renders the commit's change."
+    )),
+    "{}",
+    world.report(&run)
+  );
+  assert!(run.stdout.contains("SWITCH COMPLETE:"), "{}", world.report(&run));
+}
+
+/// The switch inherits a run token that the server refuses. The judge call must authenticate with the access key
+/// instead, so it still yields its verdict.
+#[test]
+#[ignore = "integration"]
+fn test_judge_runs_on_the_access_key_when_the_switch_inherits_a_refused_run_token() {
+  switch_judge_shows(&[("CHARLIEBOT_RUN_TOKEN", FINISHED_RUN_TOKEN)]);
+}
+
+/// A switch from a plain shell carries no run token, and its judge call runs on the access key the same way.
+#[test]
+#[ignore = "integration"]
+fn test_judge_runs_on_the_access_key_from_a_shell_without_a_run_token() {
+  switch_judge_shows(&[]);
+}
+
 #[test]
 #[ignore = "integration"]
 fn test_judge_broken_verdict_exits_7_and_logs_reason() {

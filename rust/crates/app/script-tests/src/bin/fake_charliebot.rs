@@ -7,9 +7,12 @@ use std::fs;
 use std::path::Path;
 use std::process::exit;
 
+use charliebot_agents::call_resolve::RESOLVE_PATH;
 use charliebot_charlie_code::TASK_FILE_NAME;
+use charliebot_cli_common::client;
 use charliebot_core::config::CONFIG_FILENAME;
 use charliebot_core::home::CHARLIEBOT_HOME_ENV;
+use serde_json::json;
 
 fn main() {
   let args: Vec<OsString> = std::env::args_os().skip(1).collect();
@@ -95,6 +98,14 @@ fn backend(args: &[OsString]) -> ! {
     eprintln!("charliebot backend run: cannot read {task_file}: {error}");
     exit(1);
   });
+
+  // The option comes from the server, asked the way the real `backend run` asks: the client picks the caller's
+  // credential from the environment, so a refused run token fails the call here as it does there.
+  let call = call.expect("checked");
+  if let Err(failure) = client::post(RESOLVE_PATH, json!({ "call": call }), None, &[]) {
+    eprintln!("{}", serde_json::to_string(&failure.body).expect("a JSON body"));
+    exit(failure.code);
+  }
 
   if std::env::var("FAKE_JUDGE_CHECK_CONFIG").ok().as_deref() == Some("1") {
     let home = std::env::var(CHARLIEBOT_HOME_ENV).unwrap_or_default();

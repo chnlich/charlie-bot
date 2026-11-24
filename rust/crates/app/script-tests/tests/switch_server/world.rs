@@ -239,7 +239,9 @@ impl World {
     fs::write(home.join("credentials.yaml"), format!("charliebot:\n  access_key: {ACCESS_KEY}\n"))
       .expect("the credentials");
 
+    // The test process may run inside an agent turn, whose run token must not reach the switch: a test names one itself.
     let mut env = sandbox.env();
+    env.remove("CHARLIEBOT_RUN_TOKEN");
     env.insert("CHARLIEBOT_HOME".to_string(), home.display().to_string());
     env.insert("CHARLIEBOT_RELEASES_DIR".to_string(), releases.display().to_string());
     env.insert("CHARLIEBOT_LOG_DIR".to_string(), logs.display().to_string());
@@ -368,7 +370,8 @@ impl World {
   }
 
   /// Like [`World::switch_forward_capturing`], with a stub `node` that writes each captured PNG and extra environment
-  /// variables for the fake `charliebot` `backend run` judge handler.
+  /// variables for the fake `charliebot` `backend run` judge handler. The judge's call reaches the server on the port,
+  /// so the target's stand-in server listens there for the forward path.
   pub fn switch_forward_live(
     &self,
     target: &str,
@@ -378,7 +381,30 @@ impl World {
     extra_env: &[(&str, &str)],
   ) -> Run {
     self.sandbox.stub("node", "mkdir -p \"$(dirname \"$6\")\" && printf 'png\\n' > \"$6\"\n");
+    let _server = self.stand_in_server(target);
     self.forward_to(target, run_pid, launch_output, ":", Capture::Real { known_view: known_views }, extra_env)
+  }
+
+  /// The target release's stand-in server, started on the world's port. It stops when the returned guard drops.
+  fn stand_in_server(&self, target: &str) -> StandInServer {
+    let log = OpenOptions::new()
+      .create(true)
+      .append(true)
+      .open(self.root().join("stand-in-server.log"))
+      .expect("the stand-in server's log");
+    let child = harness::command(self.releases.join(target).join("charliebot-server"), &self.env)
+      .stdout(Stdio::from(log.try_clone().expect("a log handle")))
+      .stderr(Stdio::from(log))
+      .spawn()
+      .expect("the stand-in server starts");
+    let server = StandInServer(child);
+    for _ in 0..200 {
+      if TcpStream::connect(("127.0.0.1", self.port)).is_ok() {
+        return server;
+      }
+      thread::sleep(Duration::from_millis(50));
+    }
+    panic!("the stand-in server does not listen on port {}", self.port);
   }
 
   /// The forward path to `target` with the live capture step `capture` names.
@@ -955,6 +981,20 @@ preflight
     let work = self.root().join("work");
     fs::create_dir_all(&work).expect("the work directory");
     (launch_log, work)
+  }
+}
+
+/// A stand-in server that a forward path serves from, stopped and reaped when the guard drops.
+struct StandInServer(Child);
+
+impl Drop for StandInServer {
+  fn drop(&mut self) {
+    if let Err(error) = self.0.kill() {
+      eprintln!("cannot stop the stand-in server: {error}");
+    }
+    if let Err(error) = self.0.wait() {
+      eprintln!("cannot reap the stand-in server: {error}");
+    }
   }
 }
 

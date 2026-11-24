@@ -16,6 +16,7 @@ use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 use std::thread;
 use std::time::Duration;
 
+use charliebot_agents::call_resolve::RESOLVE_PATH;
 use charliebot_cli_common::route;
 use charliebot_cli_common::skew;
 use charliebot_core::config::{CONFIG_FILENAME, CREDENTIALS_FILENAME, sessions_dir_in};
@@ -29,6 +30,7 @@ use charliebot_core::timefmt;
 use charliebot_session_api::api as session_routes;
 use charliebot_store::layout;
 use charliebot_store::metadata::{MetadataReadError, PARENT_SESSION_ID, REPO_PATH_FIELD};
+use charliebot_store::run_identity::RUN_IDENTITY_UNKNOWN_DETAIL;
 use charliebot_store::run_records::{
   ENDED_AT_FIELD, OBSERVATION_BRANCH_NAME, OBSERVATION_REPO_PATH, OBSERVATION_WORKTREE_PATH, RUN_EVENTS_NAME,
   event_line, read_run_metadata,
@@ -267,10 +269,13 @@ impl Server {
     reader.read_exact(&mut body)?;
     let request: Value =
       if body.is_empty() { json!({}) } else { serde_json::from_slice(&body).map_err(io::Error::other)? };
-    let authorized =
-      headers.get(&AUTHORIZATION.to_ascii_lowercase()).is_some_and(|value| *value == bearer_value(&self.key));
-    let (status, reply) =
-      if authorized { self.route(&method, &path, &request)? } else { (401, json!({"detail": "unauthorized"})) };
+    // The access key opens the routes. Any other bearer is a run token, which this stand-in refuses with the detail the
+    // server gives a token whose run is not active: the tests send a token of a finished run.
+    let (status, reply) = match headers.get(&AUTHORIZATION.to_ascii_lowercase()) {
+      Some(value) if *value == bearer_value(&self.key) => self.route(&method, &path, &request)?,
+      Some(_) => (401, json!({"detail": RUN_IDENTITY_UNKNOWN_DETAIL})),
+      None => (401, json!({"detail": "unauthorized"})),
+    };
     write_response(&mut stream, status, &reply)
   }
 
@@ -279,6 +284,9 @@ impl Server {
       return Ok((200, json!({"ok": true})));
     }
     self.log_call(method, path)?;
+    if method == "POST" && path == RESOLVE_PATH {
+      return Ok((200, json!({"option": {"id": "synthetic-option"}})));
+    }
     let delegation_prefixes = [
       task_routes::DELEGATE_PATH.to_string(),
       route::fill(session_routes::SESSION_PATH, &[PARENT_SESSION]),

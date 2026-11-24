@@ -24,8 +24,9 @@ pub mod task_tree;
 mod text;
 
 /// The data version. It names the mock home's directory, `~/improve/mock-home/<version>/`, and changes with any change
-/// to the bytes that `generate` writes.
-pub const DATA_VERSION: &str = "5";
+/// to the bytes that `generate` writes. Version 6 is the task-tree shape, which the improve rounds generate: its boot
+/// marker lets a start skip every session that holds no open task, run or worktree.
+pub const DATA_VERSION: &str = "6";
 /// The session count of the production home, and the default of `generate`: the live store's session directories when
 /// it was measured (14,451 at 18:04Z on 2026-11-19).
 pub const PRODUCTION_SESSIONS: usize = 14_451;
@@ -51,12 +52,13 @@ pub const SEARCH_WORDS: SearchWords = SearchWords { common: "the", hits_200: "si
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum Shape {
-  /// Sessions with metadata and an event log: the home of the hourly improve rounds, named by `DATA_VERSION`. The newest
-  /// rows, `NEWEST_WEB_STATUS_ROWS` of them, carry a `web_status` goal. Four of its manager sessions, in the middle of
-  /// the listing, carry the cron fixture's tasks, so a served round shows cron-bound session pages.
+  /// Sessions with metadata and an event log, and no task-tree node. The newest rows, `NEWEST_WEB_STATUS_ROWS` of them,
+  /// carry a `web_status` goal. Four of its manager sessions, in the middle of the listing, carry the cron fixture's
+  /// tasks. A start of this home logs a node failure for each session, since no boot marker skips them.
   #[default]
   Default,
-  /// Sessions of the default size curve, written as the task nodes of a production startup (`task_tree`).
+  /// Sessions of the default size curve, written as the task nodes of a production startup (`task_tree`), with the
+  /// boot marker and the cron fixture. The improve rounds' shared home is this shape, named by `DATA_VERSION`.
   TaskTree,
   /// Sessions of the default size curve, each with a synthetic task spec sized so that its session row matches a live
   /// view's rows. The default shape writes no task spec, so its bytes do not change.

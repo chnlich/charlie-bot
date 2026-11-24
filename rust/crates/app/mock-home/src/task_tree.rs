@@ -164,13 +164,14 @@ enum KeepReason {
 }
 
 impl KeepReason {
-  /// Whether a session kept for `reason` needs task metadata: a worker's task names its repository.
+  /// Whether a session kept for `reason` needs task metadata. A kept session with neither a task boundary nor a run has
+  /// no node, so its full pass reports a node failure (`has_no_task_node`). A worker's task names its repository.
   fn needs_task(reason: Option<KeepReason>) -> bool {
-    matches!(reason, Some(KeepReason::SequenceRef | KeepReason::WorktreeExists))
+    matches!(reason, Some(KeepReason::FileAfterMarker | KeepReason::SequenceRef | KeepReason::WorktreeExists))
   }
 
   /// Whether a session kept for `reason` needs runs. Three reasons name a run, and an open task's finished turns confirm
-  /// its inputs; a recent file needs none.
+  /// its inputs; a recent file takes its task instead.
   fn needs_runs(reason: Option<KeepReason>) -> bool {
     matches!(
       reason,
@@ -968,7 +969,6 @@ pub(crate) fn write_home(staging: &Path, home: &Path, sessions: usize, seed: u64
     manifest_sessions.push(ManifestSession { id, event_log_bytes: live_bytes, last_message: final_text });
     total += log.bytes;
   }
-  write_imported_chat(staging)?;
   let cron_tasks = cron::write_fixture(staging, &cron_bound_sessions(&plan)?)?;
   write_marker_seed(staging, &plan)?;
   write_live_runs(staging, &plan)?;
@@ -998,41 +998,6 @@ fn cron_bound_sessions(plan: &HomePlan) -> Result<[String; BOUND_SESSIONS]> {
     bail!("the plan holds no manager session to bind the cron fixture to");
   }
   Ok(std::array::from_fn(|index| managers[index % managers.len()].to_string()))
-}
-
-/// The id of the imported chat that `write_home` adds after the planned sessions. It has no task, no run directory and
-/// no task boundary in its log, so its node pass fails at every boot (`has_no_task_node`), as an imported chat does in
-/// production. The manifest does not list it, so `reset` leaves it as generated.
-const IMPORTED_CHAT_ID: &str = "6f0c3b8e-2d9a-4e71-8b5c-1a7e9d4f0b26";
-
-fn write_imported_chat(staging: &Path) -> Result<()> {
-  let session_dir = staging.join(IMPORTED_CHAT_ID);
-  fs::create_dir_all(layout::data_dir(&session_dir))
-    .with_context(|| format!("cannot create {}", session_dir.display()))?;
-  let stamp = session::stamp(marker_time());
-  let metadata = NodeMetadata {
-    session: SessionMetadata {
-      id: IMPORTED_CHAT_ID.to_string(),
-      name: "Imported chat".to_string(),
-      status: "active",
-      profile: "manager",
-      backend: "mock-backend",
-      created_at: stamp.clone(),
-      updated_at: stamp,
-      schema_version: 2,
-      has_unread: false,
-      starred: false,
-      task: None,
-      web_status: None,
-    },
-    task_parent_id: None,
-    task: None,
-    archive_offset: 0,
-  };
-  session::write_json(&layout::metadata_path(&session_dir), &metadata, b"  ")?;
-  let path = layout::chat_events_path(&session_dir);
-  let line = json!({"id": "imported-1", "type": "user", "content": "hello from an imported chat"});
-  fs::write(&path, format!("{line}\n")).with_context(|| format!("cannot write {}", path.display()))
 }
 
 /// Writes `live-runs.txt` into `staging`: one `<session> <run>` line for each live run of `plan`.
@@ -1165,6 +1130,20 @@ mod tests {
   /// The reference start's follow-up totals, scaled to `sessions`.
   fn scaled(reference: f64, sessions: usize) -> f64 {
     reference * sessions as f64 / REFERENCE_NODES
+  }
+
+  /// A kept session takes a full pass, and a pass on a session with no task boundary, run or prompt reports a node
+  /// failure. Every kept session of the plan holds a task or a run, so a start of this home logs no node failure.
+  #[test]
+  fn every_kept_session_of_the_plan_holds_a_task_or_a_run() {
+    let (_, _, sizes) = session::planned_home(crate::PRODUCTION_SESSIONS, 1, Language::Mixed);
+    for seed in [1, 2] {
+      let plan = HomePlan::new(&sizes, seed, Language::Mixed);
+      let kept = plan.sessions.iter().filter(|session| session.reason.is_some());
+      for session in kept {
+        assert!(session.has_task || !session.runs.is_empty(), "{} is kept with neither a task nor a run", session.id);
+      }
+    }
   }
 
   /// The plan deals every keep reason at its scaled reference count, so a lab start's full-pass distribution lands

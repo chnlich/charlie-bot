@@ -418,10 +418,6 @@ main > header > a[title="View JSONL events"]:hover {
   padding: 0.75rem 1rem; border-bottom: 1px solid #475569;
 }
 .diff-modal-body { flex: 1; overflow: auto; min-height: 0; }
-.diff-modal-footer {
-  display: flex; gap: 0.5rem; justify-content: flex-end;
-  padding: 0.75rem 1rem; border-top: 1px solid #475569;
-}
 /* Session-row action buttons, the hover reveal: at rest every row's buttons
    sit out of flow at the row's right end. The name and the second-line spans
    then reach the row's right edge, and no width is reserved for actions. On

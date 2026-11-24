@@ -87,7 +87,7 @@ const EXCEPTIONS = [
     [" = inject_artifact_ui(\"<body>page</body>\", \"计划😀\", \"v1\", \"v2\", \"window.CB_ICON_TABLE = {};\");", TEST_DATA_REASON],
     ["ns(r#\"window.__cbcServerSessionId=\"\\u8ba1\\u5212\\ud83d\\ude00\";\"#));", TEST_DATA_REASON],
   ]),
-  ...byFile('rust/crates/features/cron/src/loader.rs', [
+  ...byFile('rust/crates/features/cron/src/alert.rs', [
     ["format!(\"⚠️ cron tasks failed to load: {}\"", TELEGRAM_ALERT_REASON],
     ["assert_eq!(*notifications.lock().unwrap(), [\"⚠️ cron tasks failed to load: alpha, beta\".to_string()]);", TELEGRAM_ALERT_REASON],
     ["\"⚠️ cron tasks failed to load: alpha, beta\".to_string(),", TELEGRAM_ALERT_REASON],

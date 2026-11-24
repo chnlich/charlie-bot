@@ -3,10 +3,10 @@
 
 use std::fs;
 use std::io;
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use crate::config::CharlieBotConfig;
+use crate::credentials::write_credentials;
 use crate::repo_root::{CONFIG_EXAMPLE_FILE_NAME, CONFIGS_DIR_NAME, CREDENTIALS_EXAMPLE_FILE_NAME};
 use crate::str_methods::universal_newlines;
 
@@ -38,8 +38,8 @@ pub fn init_charliebot_home(cfg: &CharlieBotConfig, repo_root: &Path) -> io::Res
   }
   let credentials_file = cfg.credentials_file();
   if !credentials_file.exists() {
-    fs::copy(repo_root.join(CONFIGS_DIR_NAME).join(CREDENTIALS_EXAMPLE_FILE_NAME), &credentials_file)?;
-    fs::set_permissions(&credentials_file, fs::Permissions::from_mode(0o600))?;
+    let example = fs::read(repo_root.join(CONFIGS_DIR_NAME).join(CREDENTIALS_EXAMPLE_FILE_NAME))?;
+    write_credentials(&cfg.charliebot_home, &example).map_err(io::Error::other)?;
   }
   Ok(())
 }

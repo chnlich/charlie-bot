@@ -140,7 +140,6 @@ metadata_slot_validators	-	discord:Session
 metadata_slot_validators	-	feishu:Session
 metadata_slot_validators	-	web_reply:Session
 metadata_slot_validators	-	claude_code:Session
-turn contribution	features.chat_threads	chat_threads
 turn contribution	features.cron	cron
 turn contribution	features.drafts	drafts
 turn contribution	features.slack	slack

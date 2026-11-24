@@ -1573,6 +1573,12 @@ const EXACT_LITERAL_OWNER_TABLE: &[OwnerRow] = &[
     owner: "infra/core",
     hint: "Serialize `GithubConfig` from `infra/core` instead of spelling its fields.",
   },
+  OwnerRow {
+    name: "scheduled_tasks",
+    owner: "features/cron",
+    hint: "Use `charliebot_cron::seed::SCHEDULED_TASKS_KEY`; the repo's `configs/cron.default.yaml` names its task list \
+           there.",
+  },
 ];
 
 /// The phrases that one crate owns: the response detail sentences that a route answers with, and the log event

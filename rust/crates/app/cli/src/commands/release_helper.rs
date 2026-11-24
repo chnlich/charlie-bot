@@ -31,6 +31,7 @@ use charliebot_core::logline::{self, Row};
 use charliebot_core::proc_identity;
 use charliebot_core::run_kind::RunKind;
 use charliebot_core::text_repr::{self, JsonStyle};
+use charliebot_cron::seed::SCHEDULED_TASKS_KEY;
 use charliebot_session_api::api;
 use charliebot_store::chat_events::{self, LineRule};
 use charliebot_store::layout;
@@ -1016,8 +1017,9 @@ const STAND_IN_TASK: &str = "memory-curator";
 fn stand_in_records(cron_defaults: &str, config_example: &str) -> Result<Vec<Value>, String> {
   let cron = yaml_document_json(cron_defaults)?;
   let example = yaml_document_json(config_example)?;
-  let task = cron["scheduled_tasks"]
-    .as_array()
+  let task = cron
+    .get(SCHEDULED_TASKS_KEY)
+    .and_then(Value::as_array)
     .and_then(|tasks| tasks.iter().find(|task| task["name"] == STAND_IN_TASK))
     .ok_or_else(|| format!("{cron_defaults} has no scheduled task named {STAND_IN_TASK}"))?;
   let mut ids: Vec<&str> = Vec::new();

@@ -310,15 +310,21 @@ impl ClaudeCodeLifecycle {
       Some(&ctx.option.model),
       &excluded,
       None,
-      None,
+      Some(now),
       account_pool.as_deref(),
       &claude_accounts::run_key(ctx),
     )
     .map_err(|error| refused(error, MemberFailure::Other, None))?;
     let Some(reservation) = reservation else {
-      let no_login =
-        claude_accounts::no_usable_login(&self.state, &ctx.cfg, Some(&ctx.option.model), None, account_pool.as_deref())
-          .map_err(|error| refused(error, MemberFailure::Other, None))?;
+      let no_login = claude_accounts::no_usable_login_excluding(
+        &self.state,
+        &ctx.cfg,
+        Some(&ctx.option.model),
+        Some(now),
+        account_pool.as_deref(),
+        &excluded,
+      )
+      .map_err(|error| refused(error, MemberFailure::Other, None))?;
       if keyed && !short.is_empty() {
         // A spent quota among the pool's logins keeps the quota failure. The refusal then names token life too.
         if no_login.failure == MemberFailure::Quota {
@@ -999,6 +1005,7 @@ mod tests {
     };
 
     assert_eq!(refusal.failure, MemberFailure::Quota);
+    assert_eq!(refusal.resets_at.map(|at| at.into_inner().unix_timestamp()), Some(quota_reset));
     assert!(refusal.failure.fails_over(), "the pool moves the round to its next member");
     assert!(refusal.message.contains("short-a") && refusal.message.contains("short-b"), "{}", refusal.message);
     assert!(refusal.message.contains("access-token life"), "the refusal does not name token life: {}", refusal.message);
@@ -1009,6 +1016,33 @@ mod tests {
       "a login excluded for token life states a quota reset: {}",
       refusal.message
     );
+  }
+
+  #[tokio::test]
+  async fn a_keyed_task_with_only_short_logins_stays_token_short_when_a_short_login_also_hit_quota() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let short_a = root.path().join("short-a");
+    let short_b = root.path().join("short-b");
+    let now = UtcDateTime::now().into_inner().unix_timestamp();
+    let short_expiry = now + 3600;
+    token_credentials(&short_a, short_expiry * 1000);
+    token_credentials(&short_b, short_expiry * 1000);
+    let cfg = config(&home, &[("short-a", &short_a), ("short-b", &short_b)]);
+    let state = Arc::new(claude_accounts::ClaudeAccountState::new());
+    let short_a_reset = now + 7200;
+    claude_accounts::observe_rate_limit(&state, "short-a", &rejection(short_a_reset), None, None);
+    let lifecycle = ClaudeCodeLifecycle::with_state(Arc::clone(&state));
+
+    let refusal = match lifecycle.place(&keyed_task_context(cfg)).await {
+      Err(refusal) => refusal,
+      Ok(_) => panic!("the task started without a login that has enough token life"),
+    };
+
+    assert_eq!(refusal.failure, MemberFailure::TokenShort);
+    assert_eq!(refusal.resets_at, None);
+    assert!(!refusal.message.contains("quota"), "token life alone excluded every login: {}", refusal.message);
+    assert!(!refusal.message.contains(&clock_of(short_a_reset)), "{}", refusal.message);
   }
 
   #[tokio::test]

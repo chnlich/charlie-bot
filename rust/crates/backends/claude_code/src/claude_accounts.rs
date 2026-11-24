@@ -320,8 +320,9 @@ pub fn short_token_clause(short: &[ShortTokenLogin], now: UtcDateTime) -> String
     .join(", ")
 }
 
-/// The quota resets a refusal names: each login of the pool outside `short` that a rejection holds out for `model`, as
-/// `label HH:MM UTC`. A login in `short` states its token life instead, never its quota reset.
+/// The quota resets a refusal names: each login of the pool outside `short` that a rejection or spent window holds
+/// out for `model`, as `label HH:MM UTC` (or `label (no reset known)` when no reset is known). A login in `short`
+/// states its token life instead, never its quota reset.
 pub fn quota_reset_clause(
   state: &ClaudeAccountState,
   cfg: &CharlieBotConfig,
@@ -334,8 +335,19 @@ pub fn quota_reset_clause(
     .into_iter()
     .filter(|account| !short.iter().any(|login| login.label == account.label))
     .filter_map(|account| {
-      rejected_until(state, &account.label, model, Some(now))
-        .map(|reset| format!("{} {}", account.label, clock_text(reset)))
+      if let Some(reset) = rejected_until(state, &account.label, model, Some(now)) {
+        return Some(format!("{} {}", account.label, clock_text(reset)));
+      }
+      if credentials_present(&account) && headroom(state, &account.label, model, Some(now)) <= 0.0 {
+        let reset = login_reading(state, &account.label, model, Some(now))
+          .and_then(|reading| reading.limiting_resets_at)
+          .filter(|reset| *reset > now);
+        return Some(match reset {
+          Some(reset) => format!("{} {}", account.label, clock_text(reset)),
+          None => format!("{} (no reset known)", account.label),
+        });
+      }
+      None
     })
     .collect::<Vec<_>>();
   Ok(resets.join(", "))
@@ -1045,10 +1057,26 @@ pub fn no_usable_login(
   now: Option<UtcDateTime>,
   account_pool: Option<&str>,
 ) -> anyhow::Result<NoUsableLogin> {
+  no_usable_login_excluding(state, cfg, model, now, account_pool, &HashSet::new())
+}
+
+/// Like [`no_usable_login`], over the pool logins outside `exclude`. A keyed round passes its short-token logins so a
+/// short login neither turns a token shortage into a quota refusal nor sets `recovers_at` from a token-excluded login.
+pub fn no_usable_login_excluding(
+  state: &ClaudeAccountState,
+  cfg: &CharlieBotConfig,
+  model: Option<&str>,
+  now: Option<UtcDateTime>,
+  account_pool: Option<&str>,
+  exclude: &HashSet<String>,
+) -> anyhow::Result<NoUsableLogin> {
   let moment = now_or(now);
   let mut out_for_quota = false;
   let mut recovers_at: Option<UtcDateTime> = None;
   for account in pool_accounts(cfg, account_pool)? {
+    if exclude.contains(&account.label) {
+      continue;
+    }
     let (quota, recovery) = login_unavailability(state, &account, model, moment);
     out_for_quota |= quota;
     if let Some(time) = recovery {
@@ -1984,6 +2012,26 @@ mod tests {
     assert_eq!(quota, "", "no login outside the short set holds a rejection");
     let quota = quota_reset_clause(&state, &cfg, Some("claude-fable-5-1"), now, None, &short[1..]).unwrap();
     assert_eq!(quota, "short_a 13:00 UTC", "short_a is outside the set, so its quota reset is named");
+
+    // A non-short login at zero headroom from the usage panel also reports its panel reset, or notes no known reset.
+    observe_usage_panel(
+      &state,
+      "fresh",
+      &json!({
+        "fetched_at": "2025-01-01T12:00:00Z",
+        "windows": [{"utilization": 100.0, "window_minutes": 300, "resets_at": "2025-01-01T14:00:00Z"}]
+      }),
+    );
+    let quota = quota_reset_clause(&state, &cfg, Some("claude-fable-5-1"), now, None, &short).unwrap();
+    assert_eq!(quota, "fresh 14:00 UTC");
+
+    observe_usage_panel(
+      &state,
+      "fresh",
+      &json!({"fetched_at": "2025-01-01T12:00:00Z", "windows": [{"utilization": 100.0, "window_minutes": 300}]}),
+    );
+    let quota = quota_reset_clause(&state, &cfg, Some("claude-fable-5-1"), now, None, &short).unwrap();
+    assert_eq!(quota, "fresh (no reset known)");
   }
 
   #[test]

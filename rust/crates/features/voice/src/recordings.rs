@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 
 use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::fsutil;
 use charliebot_store::{layout, metadata};
 use nix::errno::Errno;
 use nix::fcntl::AtFlags;
@@ -92,10 +93,11 @@ fn note_voice_session(sessions_dir: &Path, session_id: &str) {
 /// The stem of one run's files: the existing stem for `run_id`, or a fresh one this call creates.
 ///
 /// The caller holds the run's lock, so two resolvers never race. The resolution scans the directory for the run
-/// id's suffix on every file kind the run writes. That includes the `.wav.partial` and `.json.tmp` forms a crash
-/// can leave behind. Two different stems for one run id is a state this module never creates, so it is an error.
+/// id's suffix on every file kind the run writes. A crash can leave a hidden temporary sibling of a run file behind;
+/// no suffix below matches it, so it names no stem. Two different stems for one run id is a state this module never
+/// creates, so it is an error.
 fn resolve_stem(voice_dir: &Path, run_id: &str) -> io::Result<PathBuf> {
-  const SUFFIXES: [&str; 5] = [".wav", ".txt", ".json", ".wav.partial", ".json.tmp"];
+  const SUFFIXES: [&str; 3] = [".wav", ".txt", ".json"];
   let run_suffix = format!("_{run_id}");
   let mut stamps: Vec<String> = Vec::new();
   let entries = match fs::read_dir(voice_dir) {
@@ -209,13 +211,10 @@ fn stem_run_id(stem: &Path) -> String {
     .unwrap_or_default()
 }
 
-/// Replaces the run's `.json` atomically: the new text lands on a temporary file beside it, then renames over it.
+/// Replaces the run's `.json` atomically, through `fsutil::atomic_write_text`.
 fn write_parts(stem: &Path, parts: &Map<String, Value>) -> io::Result<()> {
-  let path = with_kind(stem, "json");
   let text = Value::Object(parts.clone()).to_string();
-  let temporary = with_kind(stem, "json.tmp");
-  fs::write(&temporary, text.as_bytes())?;
-  fs::rename(&temporary, &path)
+  fsutil::atomic_write_text(&with_kind(stem, "json"), &text)
 }
 
 /// The run's `.json` update through `update`: read and replaced under the caller's run lock.
@@ -230,12 +229,14 @@ fn audio_part(kind: &str, backend: Option<&str>, devices: Option<&Value>) -> Val
   json!({ "path": kind, "backend": backend, "devices": devices })
 }
 
-/// The atomic WAV write of one run's stem: the bytes land on the `.wav.partial`, then rename over the WAV.
+/// The atomic WAV write of one run's stem, streamed through `fsutil::atomic_write_stream`.
 fn write_run_wav(stem: &Path, pcm_bytes: &[u8]) -> io::Result<()> {
-  let wav = with_kind(stem, "wav");
-  let partial = with_kind(stem, "wav.partial");
-  wav::write(&partial, pcm_bytes)?;
-  fs::rename(&partial, &wav)
+  fsutil::atomic_write_stream(&with_kind(stem, "wav"), |out| wav::write_to(out, pcm_bytes))
+}
+
+/// The run's transcript, published atomically like the run's `.json` and WAV.
+fn write_transcript(stem: &Path, text: &str) -> io::Result<()> {
+  fsutil::atomic_write_text(&with_kind(stem, "txt"), text)
 }
 
 /// The startup report of one run, persisted as its `startup` part.
@@ -295,7 +296,7 @@ pub(crate) fn write_upload_transcript(
   text: &str,
 ) -> io::Result<()> {
   with_run_stem(cfg, session_id, run_id, |stem| {
-    fs::write(with_kind(stem, "txt"), text.as_bytes())?;
+    write_transcript(stem, text)?;
     update_parts(stem, |parts| {
       parts.insert("failure".to_string(), Value::Null);
     })?;
@@ -322,7 +323,7 @@ pub(crate) fn archive_relay_final(
 ) -> io::Result<PathBuf> {
   with_run_stem(cfg, session_id, run_id, |stem| {
     write_run_wav(stem, capture.pcm_bytes)?;
-    fs::write(with_kind(stem, "txt"), text.as_bytes())?;
+    write_transcript(stem, text)?;
     update_parts(stem, |parts| {
       parts.insert("audio".to_string(), audio_part("relay", Some(capture.backend), capture.devices));
       parts.insert("chunk_arrived_ms".to_string(), json!(capture.chunk_arrived_ms));
@@ -399,7 +400,7 @@ pub(crate) fn query_value(query: &str, target: &str) -> Option<String> {
 }
 
 /// A stem file's name minus its row-creating extension. Only the `.wav` and the `.json` of a run list it, so a
-/// lone `.txt`, a leftover `.wav.partial` or a `.json.tmp` names no row.
+/// lone `.txt` or a hidden temporary sibling that a crash left behind names no row.
 fn stem_of_row_name(name: &str) -> Option<&str> {
   for suffix in [".wav", ".json"] {
     if let Some(stem) = name.strip_suffix(suffix) {

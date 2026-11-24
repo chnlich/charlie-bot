@@ -74,7 +74,7 @@ fn compaction_option(cfg: &CharlieBotConfig) -> Option<&BackendOption> {
 /// families list is an error that names the key, so no session is compacted on a guessed family.
 fn family_is_compacted(cfg: &CharlieBotConfig, model: Option<&str>) -> anyhow::Result<bool> {
   let families = cfg
-    .section::<claude_config::AccountsConfig>("accounts")
+    .section::<claude_config::AccountsConfig>(claude_config::ACCOUNTS_SECTION_KEY)
     .claude_compaction
     .families
     .as_ref()
@@ -108,7 +108,11 @@ pub fn expired_cache_compaction_wanted(
   Ok(
     context_tokens.is_some_and(|tokens| {
       u64::try_from(tokens).is_ok_and(|tokens| {
-        tokens >= cfg.section::<claude_config::AccountsConfig>("accounts").claude_compaction.expired_cache_tokens
+        tokens
+          >= cfg
+            .section::<claude_config::AccountsConfig>(claude_config::ACCOUNTS_SECTION_KEY)
+            .claude_compaction
+            .expired_cache_tokens
       })
     }) && cache_expired(last_request_at, now),
   )
@@ -124,7 +128,11 @@ pub fn relay_compaction_wanted(
   }
   Ok(context_tokens.is_some_and(|tokens| {
     u64::try_from(tokens).is_ok_and(|tokens| {
-      tokens >= cfg.section::<claude_config::AccountsConfig>("accounts").claude_compaction.relay_tokens
+      tokens
+        >= cfg
+          .section::<claude_config::AccountsConfig>(claude_config::ACCOUNTS_SECTION_KEY)
+          .claude_compaction
+          .relay_tokens
     })
   }))
 }

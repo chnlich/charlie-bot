@@ -558,7 +558,10 @@ pub fn arm_for_round(ctx: IdleArmContext<'_>) -> BoxFuture<'_, anyhow::Result<()
       });
       Ok(Some(IdleCandidate {
         facts,
-        idle_tokens: current_cfg.section::<claude_config::AccountsConfig>("accounts").claude_compaction.idle_tokens,
+        idle_tokens: current_cfg
+          .section::<claude_config::AccountsConfig>(claude_config::ACCOUNTS_SECTION_KEY)
+          .claude_compaction
+          .idle_tokens,
         run,
       }))
     });

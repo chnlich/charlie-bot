@@ -91,7 +91,7 @@ pub fn register_with_host(registry: &mut Registry, host: ClaudeHost, http: Quota
     Arc::new(move |cfg, option, now| claude_accounts::member_reading(&reading_state, cfg, option, now)),
   )?;
   registry.config_section(charliebot_core::config::ConfigSection {
-    key: "accounts",
+    key: claude_config::ACCOUNTS_SECTION_KEY,
     legacy_keys: &[("claude_accounts", "accounts.claude"), ("claude_compaction", "accounts.claude_compaction")],
     parse: claude_config::parse_accounts,
     dump: claude_config::dump_accounts,

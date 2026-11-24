@@ -39,7 +39,7 @@ use serde_json::{Map, Value, json};
 
 pub use super::claude_accounts::QuotaState;
 use super::claude_accounts::{self, ClaudeAccountState};
-use super::claude_config::{AccountsConfig, ClaudeAccount};
+use super::claude_config::{ACCOUNTS_SECTION_KEY, AccountsConfig, ClaudeAccount};
 use super::login_dirs::{CREDENTIALS_FILE, ClaudeHost};
 
 /// The OAuth usage endpoint.
@@ -121,7 +121,7 @@ impl QuotaAccounts {
   /// list.
   pub fn derive(&self, host: &ClaudeHost, cfg: &CharlieBotConfig) -> anyhow::Result<Vec<Arc<dyn QuotaAccount>>> {
     let pool: Vec<(String, String)> = cfg
-      .section::<AccountsConfig>("accounts")
+      .section::<AccountsConfig>(ACCOUNTS_SECTION_KEY)
       .claude
       .iter()
       .map(|account| (account.label.clone(), account.config_dir.clone()))

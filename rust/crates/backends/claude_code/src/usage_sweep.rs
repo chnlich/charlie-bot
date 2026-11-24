@@ -21,7 +21,7 @@ use charliebot_registry::usage_sweep::SweepCounter;
 use regex::Regex;
 use walkdir::WalkDir;
 
-use super::claude_config::AccountsConfig;
+use super::claude_config::{ACCOUNTS_SECTION_KEY, AccountsConfig};
 use super::login_dirs::ClaudeHost;
 
 const UNIT: &str = "dirs";
@@ -47,7 +47,7 @@ pub fn claude_project_dir_name(cwd: &Path) -> String {
 /// `CLAUDE_CONFIG_DIR` home are searched beside the configured pool accounts.
 pub fn claude_projects_roots(host: &ClaudeHost, cfg: &CharlieBotConfig) -> Vec<PathBuf> {
   let mut homes = BTreeSet::from([host.default_dir(), host.claude_config_dir.clone()]);
-  for account in &cfg.section::<AccountsConfig>("accounts").claude {
+  for account in &cfg.section::<AccountsConfig>(ACCOUNTS_SECTION_KEY).claude {
     homes.insert(host.expand(&account.config_dir));
   }
   homes.into_iter().map(|home| home.join("projects")).collect()

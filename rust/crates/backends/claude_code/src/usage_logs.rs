@@ -33,7 +33,7 @@ use serde_json::{Map, Value};
 use walkdir::WalkDir;
 
 use super::claude_accounts::ClaudeAccountState;
-use super::claude_config::AccountsConfig;
+use super::claude_config::{ACCOUNTS_SECTION_KEY, AccountsConfig};
 use super::login_dirs::ClaudeHost;
 use super::usage_quota::{QuotaAccounts, QuotaHttp};
 use super::usage_sweep;
@@ -58,7 +58,7 @@ impl ClaudeLogs {
   /// The current config's login directories: the default one and every `accounts.claude` entry, sorted and deduplicated.
   fn login_dirs(&self, cfg: &CharlieBotConfig) -> Vec<PathBuf> {
     let mut dirs = BTreeSet::from([self.host.default_dir()]);
-    for account in &cfg.section::<AccountsConfig>("accounts").claude {
+    for account in &cfg.section::<AccountsConfig>(ACCOUNTS_SECTION_KEY).claude {
       dirs.insert(self.host.expand(&account.config_dir));
     }
     dirs.into_iter().collect()

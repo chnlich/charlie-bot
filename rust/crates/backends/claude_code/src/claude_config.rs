@@ -76,6 +76,9 @@ where
   Ok(value)
 }
 
+/// The `accounts:` config section key that this package registers and every reader looks up.
+pub const ACCOUNTS_SECTION_KEY: &str = "accounts";
+
 /// The `accounts:` config section: the Claude Code logins and pools a `cc-claude` backend option draws from.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -143,7 +146,7 @@ pub fn dump_accounts(value: &charliebot_core::config::SectionValue) -> Result<se
 }
 
 pub fn check_claude_pools(cfg: &CharlieBotConfig) -> Result<(), String> {
-  let accounts = cfg.section::<AccountsConfig>("accounts");
+  let accounts = cfg.section::<AccountsConfig>(ACCOUNTS_SECTION_KEY);
   let labels = accounts.claude.iter().map(|account| account.label.as_str()).collect::<std::collections::HashSet<_>>();
   for (pool_name, pool_labels) in &accounts.claude_pools {
     let unknown =
@@ -215,7 +218,7 @@ mod tests {
   #[test]
   fn config_defaults_and_legacy_shape_are_typed() {
     let cfg = config("  claude: []\n", None);
-    let accounts = cfg.section::<AccountsConfig>("accounts");
+    let accounts = cfg.section::<AccountsConfig>(ACCOUNTS_SECTION_KEY);
     assert_eq!(accounts.claude_compaction.relay_tokens, 100_000);
     assert_eq!(accounts.claude_compaction.expired_cache_tokens, 50_000);
     assert_eq!(accounts.claude_compaction.idle_tokens, 100_000);
@@ -254,7 +257,8 @@ mod tests {
   fn registration_keeps_the_legacy_keys_and_shared_pool_membership() {
     let mut registry = Registry::new();
     registry.register_package("backends.claude_code", crate::register).unwrap();
-    let section = registry.config_schema().sections.into_iter().find(|section| section.key == "accounts").unwrap();
+    let section =
+      registry.config_schema().sections.into_iter().find(|section| section.key == ACCOUNTS_SECTION_KEY).unwrap();
     assert_eq!(
       section.legacy_keys,
       &[("claude_accounts", "accounts.claude"), ("claude_compaction", "accounts.claude_compaction")]
@@ -276,7 +280,7 @@ mod tests {
     )
     .unwrap();
     let cfg = registry.load_config(home.path()).unwrap();
-    let accounts = cfg.section::<AccountsConfig>("accounts");
+    let accounts = cfg.section::<AccountsConfig>(ACCOUNTS_SECTION_KEY);
     assert_eq!(accounts.claude_pools["alpha"], ["a", "b"]);
     assert_eq!(accounts.claude_pools["beta"], ["b", "c"]);
     assert_eq!(cfg.backends.options.len(), 2);

@@ -23,16 +23,16 @@ Check, in order of importance:
 6. Import form in Python files: import modules and access members as `module.attr` (Google style 2.2);
    flag direct class/function imports (`from x import Klass`) that the diff introduces.
    Rust and web diffs have no equivalent rule.
-7. Screenshots: when the task file has an `EVIDENCE:` line, read the direction file in its `DIRECTION:` line and
-   compare the attached after image named in its `IMAGES:` line with the attached before image named there, at the
-   widths and states that the Web UI Screenshots rule in `prompts/task_base.md` sets; report overlap with page content,
-   clipping and missing controls; a finding names the after image by its file name.
+7. Screenshots: when the task file has an `EVIDENCE:` line, read every screenshot file that the pull request body
+   names, and compare each after image with its before image. Compare at the widths and states that the Web UI
+   Screenshots rule in `prompts/task_base.md` sets. A direction file named on the task's `DIRECTION:` line adds its own
+   criteria. Report overlap with page content, clipping and missing controls; a finding names the after image by its
+   file name.
 
 Report every finding whose confidence is at least 80 on a 0-100 scale, as one list item:
-`- <finding> (confidence <n>) — <file>: <one-line reason>`. With no findings above the bar, output exactly:
-
-    Code review: no issues found.
-    Scope: <one line naming the commits and files you read>.
+`- <finding> (confidence <n>) — <file>: <one-line reason>`. With no finding above the bar, the verdict's first line is
+exactly `Code review: no issues found.`, and its next line is `Scope: <one line naming the commits and files you read>.`
+Every verdict has a line that starts `Screenshots read:` and names each screenshot file you read, or `none`.
 
 Write every file path in the verdict relative to the repository root, and name no host path or host name in it.
 The verdict is posted to a public pull request; a path beyond the repository or a machine name leaks where the code runs.

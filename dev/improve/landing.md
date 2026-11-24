@@ -23,9 +23,11 @@ A credential value never enters any text the round writes, and no write reaches 
 A leak-rule hit is the only hit the round rewrites: the round removes the matched content from the text, rewrites it, and runs the subcommand again.
 The script sends nothing on a hit, so the posted text is always text that passed.
 A credential hit stops the round. The kind that the check names is the round's stop reason, and the round writes no rewrite of the text.
-A merge goes through the posting script's `pr-merge`, which refuses a merge whose head lacks a clean verdict, refuses a web
-page change whose evidence directory fails the screenshot check or whose pull request body names no `View:` line, and
-carries the `View:` lines into the squash commit message. Each `View:` line follows the View contract of the Web UI Screenshots rule in `prompts/task_base.md`.
+A merge goes through the posting script's `pr-merge`, which refuses a merge whose head lacks a clean verdict,
+refuses a web page change whose evidence directory fails the screenshot check, whose pull request body names no
+`View:` line, or whose review record shows no read of a screenshot that the body names, and carries the `View:` lines
+into the squash commit message. Each `View:` line follows the View contract of the Web UI Screenshots rule in
+`prompts/task_base.md`.
 Calls that carry no round-written text stay bare `gh` calls through `gh-shim.sh`, which checks their arguments. This includes:
 
 - `gh api -X PUT "repos/{owner}/{repo}/pulls/<PR>/update-branch"`;
@@ -253,8 +255,9 @@ The round runs the review through `charliebot backend run`, and names no model, 
 `option.json` in the review launch directory already holds the resolved backend for `backends.calls.improve_review`; its
 `login` variables carry that backend's login.
 Pass `--launch "$IMPROVE_LAUNCH_DIR/review"` without `--call` or `--backend`.
-The review receives `dev/improve/code_review_prompt.md` and the pull request reference.
-When the pull request names screenshots, the review also receives the round's evidence directory.
+The review's task file is `dev/improve/code_review_prompt.md` with the pull request reference on its `PR:` line.
+When the pull request names screenshots, the task file also names the round's evidence directory on an `EVIDENCE:`
+line, whatever the round's direction.
 The review's credential reaches only the review process.
 The review's working directory is a scratch directory outside the clone, and it is not a git checkout.
 The review prompt has the reviewer clone the repository into that directory, and the reviewer's git commands run only in that clone.
@@ -309,11 +312,14 @@ Read GitHub's `mergeable` state of the pull request. When GitHub has not compute
 Every `improve-abandoned:` and `improve-waiting:` comment goes through the posting script.
 The comment records the topic for the next round.
 
-The round merges through the posting script with the round's evidence directory:
+The round merges through the posting script with the round's evidence directory and with the `events.ndjson` of the
+review whose verdict names the merge head:
 
-    dev/improve/github-post.sh pr-merge --evidence-dir <the round's evidence directory> <PR>
+    dev/improve/github-post.sh pr-merge --evidence-dir <the round's evidence directory> --review-record <that review's events.ndjson> <PR>
 
-The merge checks the verdict on its head and a web page change's screenshots, and its squash message comes from the pull request's title and body, which the posting script checks before it sends them.
+The merge checks the verdict on its head, a web page change's screenshots, and the review record's reads of the
+screenshots that the body names. Its squash message comes from the pull request's title and body, which the posting
+script checks before it sends them.
 
 Read a red check with `gh run view --log-failed <run-id>`.
 The failure class selects the fix steps below.
@@ -396,7 +402,7 @@ These steps return `main` to green and resume the step that needed it.
    A red check follows the inside-diff fix steps with the same two-fix budget.
 5. Confirm that the repair still carries a diff against a fresh `origin/main`.
    An emptied repair has nothing to merge, so close it through the posting script with `--delete-branch` and a comment file that reads `improve-abandoned: main repair — nothing left to merge`, then return to the sending step.
-6. Review the repair pull request with Step 6, act on its findings, and merge it through `dev/improve/github-post.sh pr-merge --evidence-dir <the round's evidence directory> <PR>` once it is green and its merge head carries a clean verdict (Step 7).
+6. Review the repair pull request with Step 6, act on its findings, and merge it as Step 7 states once it is green and its merge head carries a clean verdict.
    A repair lands on `main` as well, so it gets the same review as a topic.
    Wait for the merge's main run with `gh run watch`, then return to the sending step.
 7. When the failure names no fix, or the repair pull request is abandoned,

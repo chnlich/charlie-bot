@@ -94,7 +94,8 @@ opens the changed state with real content on the live server, such as
 `/diff?repo=~/workspace/charlie-bot&base=<sha>~1&head=<sha>` or `/?session=<id>`. A `/?session=<id>` view names a
 session the server knows. An improve round merges through
 `dev/improve/github-post.sh pr-merge`, which refuses a web page change whose evidence directory lacks a screenshot at
-each window size or whose PR body lacks its `View:` line.
+each window size, whose PR body lacks its `View:` line, or whose review record shows no read of a screenshot the
+body names.
 
 After the release switch, compare each live screenshot that `scripts/switch-server.sh` prints for a commit with the demo
 before you report the change delivered. When the switch exits 7 with `not-visible` on a commit whose change only opens

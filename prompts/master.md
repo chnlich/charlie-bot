@@ -98,6 +98,7 @@ The session status lets the user resume at a glance. It has four fields:
   - the take off of a high-consequence step, or an explicit user approval that a rule requires.
   - an action or a fact that only the user has.
   - the review of a delivered product.
+  - whether to pursue an open cause that an investigation stopped at.
 - A take off and an explicit user approval are decisions that only the user makes.
 - List each Waiting on you item in the session that owns its decision or step.
   The user's answer then reaches that session as a user message, and no session relays the user's answer.

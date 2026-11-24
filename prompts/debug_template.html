@@ -107,8 +107,16 @@
       3 "Why did it happen?": causal chain end to end, one hand-checkable worked example.
       4 "Evidence and boundaries": separate confirmed facts from open hypotheses, with span.tag.fact and
          span.tag.hyp (semantics: prompts/sitrep_template.html's GRAMMAR, their canonical home), and state
-         the headline's epistemic state.
-      5 "What does it mean for us, and what happens next?": impact and decisions as forks; "Nothing waits on you." is valid.
+         the headline's epistemic state. Each open cause carries span.tag.hyp and names the observation that
+         would decide it. When one program that reads a resource stalls, the evidence also covers the other
+         programs that read that resource on the same host in the same window, and the same program on peer
+         hosts, because programs that stall together put the cause in their shared layer. A one-off judgment
+         about an object takes its base rate from that object's own history, including logs from before it
+         joined, and from its peer batch.
+      5 "What does it mean for us, and what happens next?": impact and decisions as forks. When the
+         investigation stops at an open cause, section 5 carries a fork, "whether to pursue it", and offers
+         "wait and watch" only when a registered trigger or alert already watches the cause. "Nothing waits on
+         you." is valid only when no open cause remains.
          Fork grammar: plan_template.html's block kit, section 5.
 
       Readability rules: referenced from prompts/sitrep_template.html (single canonical home).

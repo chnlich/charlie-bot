@@ -63,6 +63,7 @@ Remaining lists the open milestones between the session and its Goal, so the use
 ## Form
 
 - Write the answer reply as the answer itself: the conclusion first, in a few sentences.
+- When an investigation stops at an open cause, state in the answer reply that the cause is open, make "whether to pursue it" its own Waiting on you item, and offer "wait and watch" only when a registered trigger or alert watches the cause.
 - Keep each web reply under 500 characters. A markdown link counts as its label.
 - Write an optional review, and a default that proceeds without a reply, into the web reply.
 - Write the web reply and the session status in the language of your chat replies.

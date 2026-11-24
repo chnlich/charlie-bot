@@ -1509,11 +1509,20 @@ fn test_trial_serve_ends_within_a_minute_when_its_server_stops_as_the_command_ex
   assert_eq!(fs::read_dir(tree_root).expect("the tree root").count(), 0, "{}", run.describe());
 }
 
+/// The file that the scope stub counts its ActiveState reads in.
+fn scope_state_reads(world: &ServeWorld) -> PathBuf {
+  world.sandbox.dir("scope").join("state-reads")
+}
+
 /// Stubs for a serve trial whose server starts in a scope. `systemd-run` logs its arguments to the returned file and
-/// starts the command with no scope of its own; `systemctl` reports the scope's Result as `result`, the way systemd
-/// reports a unit whose processes the OOM killer ended (`oom-kill`) or another signal ended (`signal`).
-fn stub_serve_scope(world: &ServeWorld, result: &str) -> PathBuf {
+/// starts the command with no scope of its own. `systemctl` answers the scope's ActiveState and Result: its first
+/// `active_reads` reads report the scope active, and later reads report it terminal with `result`, the way systemd
+/// reports a unit whose processes the OOM killer ended (`oom-kill`) or another signal ended (`signal`). A count of
+/// `u32::MAX` keeps the scope active past the trial's bound.
+fn stub_serve_scope(world: &ServeWorld, result: &str, active_reads: u32) -> PathBuf {
   let log = world.sandbox.dir("scope").join("systemd-run.log");
+  let reads_path = scope_state_reads(world).display().to_string();
+  let terminal = if result == "success" { "inactive" } else { "failed" };
   world.sandbox.stub(
     "systemd-run",
     &format!(
@@ -1525,8 +1534,20 @@ fn stub_serve_scope(world: &ServeWorld, result: &str) -> PathBuf {
   world.sandbox.stub(
     "systemctl",
     &format!(
-      "case \"$*\" in\n  *\"show -p Result\"*) echo '{result}' ;;\n  *\"show -p ControlGroup\"*) echo ;;\n  *\"is-active\"*) \
-       echo inactive ;;\n  *) exit 0 ;;\nesac\n"
+      r#"case "$*" in
+  *"show -p ActiveState -p Result"*)
+    n=$(cat '{reads_path}' 2>/dev/null || echo 0)
+    echo $((n + 1)) > '{reads_path}'
+    if [ "$n" -lt {active_reads} ]; then
+      printf 'ActiveState=active\nResult=success\n'
+    else
+      printf 'ActiveState={terminal}\nResult={result}\n'
+    fi ;;
+  *"show -p ControlGroup"*) echo ;;
+  *"is-active"*) echo inactive ;;
+  *) exit 0 ;;
+esac
+"#
     ),
   );
   log
@@ -1555,22 +1576,9 @@ fn own_cgroup_path() -> String {
   text.lines().find_map(|line| line.strip_prefix("0::")).expect("a unified cgroup line").to_string()
 }
 
-/// A serve trial whose scope OOM killer ends the server: the command SIGKILLs the server after systemd has recorded the
-/// scope's result as oom-kill. The trial fails naming the memory cap, the peak and the scope, and it does not report a
-/// generic RunWait failure.
-#[test]
-#[ignore = "integration"]
-fn test_trial_serve_names_the_memory_cap_when_the_scope_oom_kill_ends_the_server() {
-  let _serial = TRIAL_RUNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-  let world = ServeWorld::new();
-  let seed = world.seed_home("seed", "1");
-  let log = stub_serve_scope(&world, "oom-kill");
-  let env = serve_scope_env(&world);
-  let mut trial = harness::command("bash", &env);
-  trial.args(serve_scope_arguments(&world, &seed, &["sh", "-c", "kill -KILL \"$CHARLIEBOT_SERVE_PID\""]));
-
-  let run = run_within(&mut trial, Duration::from_secs(120));
-
+/// Asserts that a serve trial ended by its scope's memory cap: exit 1, a MemoryCap failure that names the cap, the peak
+/// and the scope, no RunWait failure, and a scope started with the 16G cap.
+fn assert_memory_cap_failure(run: &Run, log: &Path) {
   assert_eq!(run.code, 1, "{}", run.describe());
   assert!(
     run.stdout.contains("FAIL serve MemoryCap: the memory cap of scope charliebot-release-trial-serve-"),
@@ -1580,7 +1588,98 @@ fn test_trial_serve_names_the_memory_cap_when_the_scope_oom_kill_ends_the_server
   let cause = "CAUSE serve: MemoryMax=17179869184 bytes, peak 17179869184 bytes (at the cap), scope charliebot-release-trial-serve-";
   assert!(run.stdout.lines().any(|line| line.starts_with(cause) && line.ends_with(".scope")), "{}", run.describe());
   assert!(!run.stdout.contains("FAIL serve RunWait"), "{}", run.describe());
-  assert!(fs::read_to_string(&log).expect("the scope log").contains("-p MemoryMax=16G"), "{}", run.describe());
+  assert!(fs::read_to_string(log).expect("the scope log").contains("-p MemoryMax=16G"), "{}", run.describe());
+}
+
+/// The command of a serve trial that stops its server, then SIGKILLs it `seconds` later from a background shell. A
+/// stopped server accepts connections but answers none, so a runs read blocks until the kill ends the server.
+fn stop_then_kill_server_after(seconds: u32) -> String {
+  format!(
+    "kill -STOP \"$CHARLIEBOT_SERVE_PID\"; (sleep {seconds}; kill -KILL \"$CHARLIEBOT_SERVE_PID\") </dev/null >/dev/null 2>&1 &"
+  )
+}
+
+/// A serve trial whose scope OOM killer ends the server: the command SIGKILLs the server, and the scope reports itself
+/// active on its first two state reads before systemd records the terminal oom-kill. The trial waits for that terminal
+/// state, then fails naming the memory cap, the peak and the scope, and it does not report a generic RunWait failure.
+#[test]
+#[ignore = "integration"]
+fn test_trial_serve_names_the_memory_cap_when_the_scope_oom_kill_ends_the_server() {
+  let _serial = TRIAL_RUNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+  let world = ServeWorld::new();
+  let seed = world.seed_home("seed", "1");
+  let log = stub_serve_scope(&world, "oom-kill", 2);
+  let env = serve_scope_env(&world);
+  let mut trial = harness::command("bash", &env);
+  trial.args(serve_scope_arguments(&world, &seed, &["sh", "-c", "kill -KILL \"$CHARLIEBOT_SERVE_PID\""]));
+
+  let run = run_within(&mut trial, Duration::from_secs(120));
+
+  assert_memory_cap_failure(&run, &log);
+}
+
+/// A serve trial whose server dies while the trial reads its runs. The command stops the server, so the trial's state
+/// check finds it running and its runs read blocks; a second later the server is SIGKILLed, so the read fails with the
+/// server gone. The trial classifies that exit as the memory cap of the scope, as it does when the server dies first.
+#[test]
+#[ignore = "integration"]
+fn test_trial_serve_names_the_memory_cap_when_the_server_dies_during_its_runs_read() {
+  let _serial = TRIAL_RUNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+  let world = ServeWorld::new();
+  let seed = world.seed_home("seed", "1");
+  let log = stub_serve_scope(&world, "oom-kill", 2);
+  let env = serve_scope_env(&world);
+  let mut trial = harness::command("bash", &env);
+  let command = stop_then_kill_server_after(2);
+  trial.args(serve_scope_arguments(&world, &seed, &["sh", "-c", command.as_str()]));
+
+  let run = run_within(&mut trial, Duration::from_secs(120));
+
+  assert_memory_cap_failure(&run, &log);
+}
+
+/// A serve trial whose runs read fails while its server still runs, and whose server dies after that failure. The
+/// command stops the server, so the read blocks until curl's 10 s limit fails it, and the server is SIGKILLed at 12 s.
+/// The trial waits for the exit inside its bound, and the scope's oom-kill then names the memory cap.
+#[test]
+#[ignore = "integration"]
+fn test_trial_serve_names_the_memory_cap_when_the_runs_read_fails_before_the_server_dies() {
+  let _serial = TRIAL_RUNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+  let world = ServeWorld::new();
+  let seed = world.seed_home("seed", "1");
+  let log = stub_serve_scope(&world, "oom-kill", 2);
+  let env = serve_scope_env(&world);
+  let mut trial = harness::command("bash", &env);
+  let command = stop_then_kill_server_after(12);
+  trial.args(serve_scope_arguments(&world, &seed, &["sh", "-c", command.as_str()]));
+
+  let run = run_within(&mut trial, Duration::from_secs(120));
+
+  assert_memory_cap_failure(&run, &log);
+}
+
+/// A serve trial whose scope stays active after its server is gone. The command SIGKILLs the server, and the scope
+/// never reaches a terminal state. The trial polls the scope's state up to its bound, then reports the RunWait failure
+/// and names no memory cap, since the scope never ended by one as far as the trial can read.
+#[test]
+#[ignore = "integration"]
+fn test_trial_serve_names_no_memory_cap_while_the_scope_stays_active() {
+  let _serial = TRIAL_RUNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+  let world = ServeWorld::new();
+  let seed = world.seed_home("seed", "1");
+  stub_serve_scope(&world, "oom-kill", u32::MAX);
+  let env = serve_scope_env(&world);
+  let mut trial = harness::command("bash", &env);
+  trial.args(serve_scope_arguments(&world, &seed, &["sh", "-c", "kill -KILL \"$CHARLIEBOT_SERVE_PID\""]));
+
+  let run = run_within(&mut trial, Duration::from_secs(120));
+
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(run.stdout.contains("FAIL serve RunWait:"), "{}", run.describe());
+  assert!(!run.stdout.contains("MemoryCap"), "{}", run.describe());
+  let polls = fs::read_to_string(scope_state_reads(&world)).expect("the scope state reads");
+  let polls: u64 = polls.trim().parse().expect("a count of scope state reads");
+  assert!(polls > 1, "the trial read the scope's state {polls} time(s)");
 }
 
 /// A serve trial whose server a signal ends, not the OOM killer: the trial reports the generic RunWait failure, since
@@ -1591,7 +1690,7 @@ fn test_trial_serve_names_a_server_killed_by_a_signal_as_a_run_wait_failure_not_
   let _serial = TRIAL_RUNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
   let world = ServeWorld::new();
   let seed = world.seed_home("seed", "1");
-  stub_serve_scope(&world, "signal");
+  stub_serve_scope(&world, "signal", 0);
   let env = serve_scope_env(&world);
   let mut trial = harness::command("bash", &env);
   trial.args(serve_scope_arguments(&world, &seed, &["sh", "-c", "kill -KILL \"$CHARLIEBOT_SERVE_PID\""]));
@@ -1612,7 +1711,7 @@ fn test_trial_serve_reads_its_scope_memory_peak() {
   let _serial = TRIAL_RUNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
   let world = ServeWorld::new();
   let seed = world.seed_home("seed", "1");
-  let log = stub_serve_scope(&world, "success");
+  let log = stub_serve_scope(&world, "success", 0);
   let cgroup = world.sandbox.dir(&format!("cgroup{}", own_cgroup_path()));
   fs::write(cgroup.join("memory.peak"), "1048576\n").expect("the peak counter");
   fs::write(cgroup.join("memory.max"), "17179869184\n").expect("the cap counter");

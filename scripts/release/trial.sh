@@ -11,9 +11,12 @@
 # ends fails the trial with a MemoryCap line that names the cap, the peak and the scope. A trial whose server still runs
 # at the end of its wait prints the scope's memory peak as SERVE PASS MemoryPeak. After the command ends the trial waits
 # until every run of the trial home has ended, stops the server, asserts that no process of the trial tree remains,
-# cleans up and runs sweep-check on the server log. A server that stops before the wait ends fails the trial at once,
-# and a server that does not exit on SIGTERM within SERVER_STOP_WAIT_MS fails the side; the FAIL and CAUSE lines of
-# either name its pid, binary and scope.
+# cleans up and runs sweep-check on the server log. After a scoped server exits, the trial waits up to
+# SERVE_EXIT_WAIT_SECONDS for its scope to reach a terminal state before classifying the exit. For a scoped serve, a
+# runs-read error first waits up to the same bound for the server to exit. If either wait cannot establish the state,
+# the trial does not report a memory cap. In --in-caller-scope mode, memory-cap classification stays disabled and a
+# runs-read error is reported as before. A server that does not exit on SIGTERM within SERVER_STOP_WAIT_MS fails the
+# side.
 #
 # A side is ready only when the port's listener is this trial's server (or a process it started) and that server
 # answers its auth status with 200 after it logged server_ready. free-port picks the port before the server binds it,
@@ -86,6 +89,8 @@ readonly SERVE_MEMORY_MAX_BYTES=$(( ${SERVE_MEMORY_MAX%G} * 1024 * 1024 * 1024 )
 readonly SERVE_READY_POLLS=2400
 # stop_server_pid waits this long for a server to exit after SIGTERM, then sends SIGKILL and fails the side.
 readonly SERVER_STOP_WAIT_MS=20000
+# Each wait for the server or its scope to settle uses this bound.
+readonly SERVE_EXIT_WAIT_SECONDS=10
 # The scheduled task list route of the server, which charliebot_cron names TASKS_PATH.
 readonly CRON_TASKS_PATH=/api/cron/tasks
 
@@ -893,17 +898,83 @@ server_cgroup_dir() {
   printf '%s%s' "$CGROUP_ROOT" "$cgroup"
 }
 
-# server_memory_cap_killed: succeeds when systemd records the serve scope's result as oom-kill, the result of a scope
-# whose OOM killer ended one of its processes. The scope stays loaded in the failed state until stop_serve_scope resets
-# it, so a caller reads the result before the stop. A host-wide OOM kill of a scope process leaves the same result, and
-# the trial does not tell the two apart. In --in-caller-scope mode the caller's scope holds the cap, so this reads
-# nothing.
+# SCOPE_RESULT is the Result of the serve scope once its state is terminal. SCOPE_CAUSE says what
+# serve_scope_result read.
+SCOPE_RESULT=
+SCOPE_CAUSE=
+
+# serve_scope_result sets SCOPE_RESULT and SCOPE_CAUSE from the serve scope's ActiveState and Result. systemd moves a
+# scope to a terminal state (failed or inactive) after its last process exits, so the call polls the state for at most
+# SERVE_EXIT_WAIT_SECONDS. It fails when the state is still active at the bound or the read fails; it does not guess a
+# result from an active scope.
+serve_scope_result() {
+  local started=$SECONDS props state
+  SCOPE_RESULT=
+  while :; do
+    if ! props=$(systemctl --user show -p ActiveState -p Result "$SERVE_UNIT.scope"); then
+      SCOPE_CAUSE="the state of scope $SERVE_UNIT.scope cannot be read"
+      return 1
+    fi
+    state=$(sed -n 's/^ActiveState=//p' <<<"$props")
+    if [[ $state == failed || $state == inactive ]]; then
+      SCOPE_RESULT=$(sed -n 's/^Result=//p' <<<"$props")
+      SCOPE_CAUSE="scope $SERVE_UNIT.scope ended with Result=$SCOPE_RESULT"
+      return 0
+    fi
+    if (( SECONDS - started >= SERVE_EXIT_WAIT_SECONDS )); then
+      SCOPE_CAUSE="scope $SERVE_UNIT.scope is still $state after $SERVE_EXIT_WAIT_SECONDS s"
+      return 1
+    fi
+    sleep 0.1
+  done
+}
+
+# server_memory_cap_killed succeeds when the serve scope ended by its memory cap: systemd records the scope's Result as
+# oom-kill, the result of a scope whose OOM killer ended one of its processes. The scope stays loaded in the failed
+# state until stop_serve_scope resets it, so a caller reads the result before the stop. A host-wide OOM kill of a scope
+# process leaves the same result, and the trial does not tell the two apart. In --in-caller-scope mode the caller's
+# scope holds the cap, so this reads nothing.
 server_memory_cap_killed() {
-  local result
   (( IN_CALLER_SCOPE == 0 )) || return 1
-  result=$(systemctl --user show -p Result --value "$SERVE_UNIT.scope") \
-    || { printf 'trial serve scope result read failed: %s\n' "$SERVE_UNIT.scope" >&2; return 1; }
-  [[ $result == oom-kill ]]
+  serve_scope_result || return 1
+  [[ $SCOPE_RESULT == oom-kill ]]
+}
+
+# server_is_gone succeeds when the trial server process has exited or is a zombie, so it no longer runs.
+server_is_gone() {
+  local state
+  state=$(process_state "$SERVER_PID")
+  [[ -z $state || $state == *Z* ]]
+}
+
+# wait_server_gone succeeds once the trial server is gone, and it polls for at most SERVE_EXIT_WAIT_SECONDS. A server
+# that has closed its listener can still be running for a moment while the kernel finishes its exit, so a failed runs
+# read waits here before the read failure is reported.
+wait_server_gone() {
+  local started=$SECONDS
+  while ! server_is_gone; do
+    if (( SECONDS - started >= SERVE_EXIT_WAIT_SECONDS )); then
+      return 1
+    fi
+    sleep 0.1
+  done
+  return 0
+}
+
+# report_server_exit prints the FAIL and CAUSE lines of a serve whose server exited before every run of its home had
+# ended. A scope that ended by its memory cap is the memory-cap failure. Any other end is the RunWait failure, and its
+# CAUSE names the scope's state, so a scope still active at the bound is never reported as a memory cap.
+report_server_exit() {
+  if server_memory_cap_killed; then
+    memory_cap_failed
+    return
+  fi
+  printf 'FAIL serve RunWait: the trial server stopped before every run of the trial home had ended\n'
+  if (( IN_CALLER_SCOPE == 1 )); then
+    printf 'CAUSE serve: server pid %s exited while the trial waited for its runs\n' "$SERVER_PID"
+  else
+    printf 'CAUSE serve: server pid %s exited while the trial waited for its runs; %s\n' "$SERVER_PID" "$SCOPE_CAUSE"
+  fi
 }
 
 # memory_cap_failed: the FAIL and CAUSE lines of a serve whose memory cap ended the server. The kernel keeps no peak
@@ -1301,19 +1372,15 @@ run_serve_mode() {
   unset CHARLIEBOT_SERVE_URL CHARLIEBOT_SERVE_AUTH_HEADER CHARLIEBOT_SERVE_PID
   printf 'SERVE command exit=%s\n' "$cmd_rc"
 
-  # The wait stops the moment the server is gone, or a runs page cannot be read, and it runs out at the bound.
+  # The wait stops the moment the server is gone, or a runs page cannot be read, and it runs out at the bound. A runs
+  # page that cannot be read while the server still runs may be the read of a server that is exiting, so the exit is
+  # awaited before that read is reported.
   wait_started=$SECONDS
   RUN_WAIT_STARTED=$wait_started
   while :; do
-    server_state=$(process_state "$SERVER_PID")
-    if [[ -z $server_state || $server_state == *Z* ]]; then
+    if server_is_gone; then
       cleanup_failed=1
-      if server_memory_cap_killed; then
-        memory_cap_failed
-      else
-        printf 'FAIL serve RunWait: the trial server stopped before every run of the trial home had ended\n'
-        printf 'CAUSE serve: server pid %s exited while the trial waited for its runs\n' "$SERVER_PID"
-      fi
+      report_server_exit
       break
     fi
     if ! serve_home_has_active_run; then
@@ -1324,8 +1391,12 @@ run_serve_mode() {
         continue
       fi
       cleanup_failed=1
-      printf 'FAIL serve RunWait: a run of the trial home could not be read\n'
-      printf 'CAUSE serve: %s\n' "$RUN_CAUSE"
+      if wait_server_gone; then
+        report_server_exit
+      else
+        printf 'FAIL serve RunWait: a run of the trial home could not be read\n'
+        printf 'CAUSE serve: %s\n' "$RUN_CAUSE"
+      fi
       break
     fi
     if (( RUN_ACTIVE == 0 )); then

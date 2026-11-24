@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // Session status panel: the loader the document carries in place of the module.
 // ---------------------------------------------------------------------------
-// The panel holds a web session's own status, its history's web_status messages
+// The panel holds a manager session's own status, its history's web_status messages
 // and its descendant rows. The page shows it only while the Status view is
 // selected, and the status itself puts the waiting count on the view toggle.
 // The panel's code stays at web/static/js/chat/status-panel.js, which the static
@@ -9,7 +9,7 @@
 // the loader's search path reads web/templates before web/static, and the page
 // includes the same name.
 //
-// A web session's open starts the download only when its status has a waiting
+// A manager session's open starts the download only when its status has a waiting
 // item to count on the toggle. Any other session downloads nothing until the
 // reader selects the Status view. The open the page asked for is kept here,
 // with any web_status message or descendant refresh that lands in the meantime,
@@ -84,7 +84,7 @@
     return !!panel && !panel.classList.contains('hidden');
   }
 
-  // The session open: only a web session carries a panel or a badge, and either
+  // The session open: only a manager session carries a panel or a badge, and either
   // one of them is what starts the download. The module's own definition
   // replaces this one when it runs, so the calls after that reach the module.
   function openSessionStatusPanel(session, messages) {
@@ -92,7 +92,7 @@
     newestStatus = null;
     pendingMessages = [];
     refreshPending = false;
-    if (!Chat.ForYou.isWebSession(session)) return;
+    if (!Chat.ForYou.isManagerSession(session)) return;
     opened = {session, messages};
     newestStatus = session.web_status || null;
     absorb(messages);

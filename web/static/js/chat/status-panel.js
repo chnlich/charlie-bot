@@ -1,13 +1,13 @@
 // ---------------------------------------------------------------------------
 // Session status panel (the Status view)
 // ---------------------------------------------------------------------------
-// A web session's status shows in the Status view (#status-panel). That panel
+// A manager session's status shows in the Status view (#status-panel). That panel
 // takes the message list's place in the Chat column while Status is selected in
 // the view toggle. The selection and the panel's visibility belong to
 // chat/for-you.js's applyChatView. This file renders the panel's content and
-// the waiting count on the toggle option's badge. A thread session and a worker
-// session show neither the option nor the badge. A web session is one that
-// Chat.ForYou.isWebSession (for-you.js) accepts.
+// the waiting count on the toggle option's badge. A worker session shows neither
+// the option nor the badge. A manager session is one that Chat.ForYou.isManagerSession
+// (for-you.js) accepts, bound to a chat thread or not.
 //
 // The session's own status, list version and answered marks come from GET /api/internal/web/status. The descendant and
 // child rows use the same read, fetched at open and after status notifications.
@@ -595,7 +595,7 @@
 
   // The toggle option's waiting count holds this session's own stored Waiting on you
   // items. A child session's waiting items show in the Status view's child rows. Hidden at 0 and when
-  // the page shows no web session.
+  // the page shows no manager session.
   function renderWaitingBadge() {
     const badge = document.getElementById(BADGE_ID);
     if (!badge) return;
@@ -632,7 +632,7 @@
   // Session open loads the status tree from the server. Whether the panel shows
   // comes from the session's remembered view choice (chat/for-you.js applyChatView).
   function openSessionStatusPanel(session) {
-    if (!Chat.ForYou.isWebSession(session)) {
+    if (!Chat.ForYou.isManagerSession(session)) {
       clearSessionStatusPanel();
       return;
     }

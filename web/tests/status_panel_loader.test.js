@@ -37,7 +37,7 @@ function loadPage({statusViewShown = false} = {}) {
     console: {error: (message) => errors.push(message)},
   };
   context.Chat = {
-    ForYou: {isWebSession: (session) => session.profile === 'manager' && !session.thread_session},
+    ForYou: {isManagerSession: (session) => session.profile === 'manager'},
     wire(globals, chatOnly) {
       Object.assign(this, globals, chatOnly || {});
       Object.assign(context, globals);

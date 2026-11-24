@@ -1,29 +1,33 @@
 (function() {
   const Chat = globalThis.Chat;
   const isErrorRow = Chat.isErrorRow;
+  const threadReplyOf = Chat.threadReplyOf;
+  const summonPlatformOf = Chat.summonPlatformOf;
 
 // ---------------------------------------------------------------------------
 // The For-you view: the session page's reading layer for web and worker sessions.
 //
 // For you shows the user's messages, the agent's web replies (web_reply) and
-// the web reply notices (web_reply_notice). It also shows draft cards waiting
-// for the user's click (draft), error rows, and nothing else. It reads the
-// store's server order, never the segment order that Everything shows.
+// the web reply notices (web_reply_notice). It also shows the replies a chat
+// thread received (thread_reply, or a legacy `Posted to <Platform>:` system
+// line), the platform summons that started a thread (agent_message with a
+// platform block), draft cards waiting for the user's click (draft), and error
+// rows. Nothing else. It reads the store's server order, never the segment
+// order that Everything shows.
 // The shared span rule (shared.js splitTurnSpan) carries an input that arrives
 // after a turn's first assistant message into the next turn. The segment order
 // would put that input below the web replies that followed it. When none of
 // them is in the store, one row offers Everything, which shows the whole
 // record as the page always has.
 //
-// A web session (a manager session that is not a Slack or Discord thread)
-// opens in For you, root or child. So does a worker session. A thread session
-// opens in Everything. A worker's For you holds its one summary card
-// (chat/worker-summary.js) — nothing else. A manual switch holds for that
-// session until the page reloads.
+// A manager session opens in For you, root or child, whether or not it is
+// bound to a Slack, Discord or Feishu thread. So does a worker session. A
+// worker's For you holds its one summary card (chat/worker-summary.js) —
+// nothing else. A manual switch holds for that session until the page reloads.
 //
 // turn-engine.js builds the list from the store. This file holds the rules
-// (what shows, the web-session test and the default view), the empty-state row,
-// the toggle and the one function that applies a session's view choice.
+// (what shows, the manager-session test and the default view), the empty-state
+// row, the toggle and the one function that applies a session's view choice.
 // ---------------------------------------------------------------------------
 const FOR_YOU = 'foryou';
 const EVERYTHING = 'everything';
@@ -37,7 +41,7 @@ const manualViews = new Map();
 // The session this page shows, set by every open path (session-view.js
 // renderSessionView). The worker's For you holds only its summary card. The row
 // filter and the empty row need to know that, and the toggle's Status option
-// shows for a web session only.
+// shows for a manager session only.
 let currentSession = null;
 let summaryCardRenderer = null;
 
@@ -72,7 +76,8 @@ function summaryCard() {
 }
 
 function showsInForYou(msg) {
-  return SHOWN_ROLES.includes(msg.role) || isErrorRow(msg);
+  return SHOWN_ROLES.includes(msg.role) || isErrorRow(msg) || threadReplyOf(msg) !== null
+    || summonPlatformOf(msg) !== null;
 }
 
 // The entries the last projection was handed. The engine passes every entry of the session to items()
@@ -147,17 +152,15 @@ function renderEmptyRow() {
   emptyRowLine = emptyRow.appendChild(btn);
 }
 
-// A web session: a manager session that no chat thread owns. The server sets
-// `thread_session` on every session it returns. The Status view reads the same test.
-function isWebSession(session) {
-  return session.profile === 'manager' && !session.thread_session;
+// A manager session, bound to a chat thread or not. The Status view and the
+// For you default read this one test.
+function isManagerSession(session) {
+  return session.profile === 'manager';
 }
 
-// A web session, root or child, or a worker session opens in For you. A thread
-// session opens in Everything.
+// A manager or worker session opens in For you. Any other session opens in Everything.
 function defaultView(session) {
-  if (session.profile === 'worker') return FOR_YOU;
-  return isWebSession(session) ? FOR_YOU : EVERYTHING;
+  return isManagerSession(session) || session.profile === 'worker' ? FOR_YOU : EVERYTHING;
 }
 
 // What a session shows: the message view the engine mounts, and whether the
@@ -173,10 +176,10 @@ function viewFor(session) {
 }
 
 // The toggle's buttons carry aria-pressed, and their styles follow it. The
-// Status option shows for a web session only: a thread session and a worker
-// session toggle between For you and Everything.
+// Status option shows for a manager session only: a worker session toggles
+// between For you and Everything.
 function renderToggle(view, statusShown) {
-  const statusAllowed = currentSession != null && isWebSession(currentSession);
+  const statusAllowed = currentSession != null && isManagerSession(currentSession);
   document.querySelectorAll('[data-chat-view-option]').forEach((btn) => {
     const isStatus = btn.dataset.chatViewOption === STATUS;
     btn.classList.toggle('hidden', isStatus && !statusAllowed);
@@ -258,7 +261,7 @@ const ForYou = {
   replaceSummaryCardRenderer,
   summaryCard,
   buildEmptyLine,
-  isWebSession,
+  isManagerSession,
   defaultView,
   viewFor,
   applySessionChatView,

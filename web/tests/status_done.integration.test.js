@@ -81,7 +81,7 @@ function pageHtml(mobile) {
     // As the page's chat namespace does, a wired module's functions become globals: shared.js's label function
     // is read by the status panel's child rows.
     wire(fns) { window.__status = fns; Object.assign(window, fns); },
-    ForYou: {isWebSession: () => true},
+    ForYou: {isManagerSession: () => true},
     disclosureIcon: () => '',
   };
   window.fetch = async (url, options = {}) => {

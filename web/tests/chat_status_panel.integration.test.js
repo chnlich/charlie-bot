@@ -999,36 +999,35 @@ test('a session left at Status re-opens with the panel shown and the list hidden
   assert.equal(rig.statusGets.length, 3);
 });
 
-test('the toggle offers Status for a web session only, and its badge follows the session kinds', async () => {
+test('the toggle offers Status for every manager session, and its badge follows the session', async () => {
   const rig = panelRig();
   await openSession(rig, {web_status: STATUS});
-  assert.equal(statusOption(rig).classList.contains('hidden'), false, 'a web session shows the Status option');
+  assert.equal(statusOption(rig).classList.contains('hidden'), false, 'a manager session shows the Status option');
   assert.equal(rig.badge.classList.contains('hidden'), false, 'the option\'s badge carries the count');
 
-  await openSession(rig, {id: 'session-b', thread_session: true, slack_origin: {team_id: 'T1', channel_id: 'C1', thread_ts: '1.5'}});
-  assert.equal(statusOption(rig).classList.contains('hidden'), true,
-      'a Slack thread session shows no Status option');
-  assert.equal(rig.badge.classList.contains('hidden'), true, 'and no badge');
+  await openSession(rig, {id: 'session-b', slack_origin: {team_id: 'T1', channel_id: 'C1', thread_ts: '1.5'}});
+  assert.equal(statusOption(rig).classList.contains('hidden'), false,
+      'a Slack thread-bound manager session shows the Status option');
   await deliver(rig, {
     type: 'message',
     message: {role: 'web_status', id: 'w1', content: 'Status updated: Now', web_status: NEWER, timestamp: 't'},
   });
-  assert.equal(statusOption(rig).classList.contains('hidden'), true,
-      'a web_status message does not show the option');
-  assert.equal(rig.statusGets.length, 1, 'the thread session makes no descendant GET');
+  assert.equal(statusOption(rig).classList.contains('hidden'), false,
+      'a web_status message keeps the option shown');
 
   // A worker session's page renders its own transcript; the status hook takes the session alone.
   rig.context.openSessionStatusPanel({id: 'session-c', profile: 'worker'}, []);
   assert.equal(statusOption(rig).classList.contains('hidden'), true, 'a worker session shows no Status option');
+  assert.equal(rig.badge.classList.contains('hidden'), true, 'and no badge');
 });
 
-test('a child web session shows the Status option, and a discord thread session does not', async () => {
+test('a child manager session shows the Status option, and a Discord thread-bound one does too', async () => {
   const rig = panelRig();
   await openSession(rig, {id: 'child-a', task_parent_id: 'parent-1', web_status: STATUS});
-  assert.equal(statusOption(rig).classList.contains('hidden'), false, 'a child web session shows the Status option');
-  await openSession(rig, {id: 'thread-d', thread_session: true, discord_origin: {guild_id: 'G1', channel_id: 'C2', thread_id: 'th-2'}});
-  assert.equal(statusOption(rig).classList.contains('hidden'), true,
-      'a Discord thread session shows no Status option');
+  assert.equal(statusOption(rig).classList.contains('hidden'), false, 'a child manager session shows the Status option');
+  await openSession(rig, {id: 'thread-d', discord_origin: {guild_id: 'G1', channel_id: 'C2', thread_id: 'th-2'}});
+  assert.equal(statusOption(rig).classList.contains('hidden'), false,
+      'a Discord thread-bound manager session shows the Status option');
 });
 
 test('selecting Status hides the list and shows the panel in its place', async () => {

@@ -455,6 +455,30 @@ test('For you shows an error row with every line of its text', () => {
   assert.equal(row.textContent, text, 'the row keeps the whole text, line breaks included');
 });
 
+// A chat thread's reply shows under the badge of its platform, with the reply's own text. The summon that started the
+// thread shows too, under its platform badge. A nudge wakes a thread the session already joined, so For you omits it.
+// A reply that predates the thread_reply role keeps its `Posted to <Platform>:` system line, which reads the same.
+test('For you shows thread replies and the summons that started them, each under its platform', () => {
+  const rig = forYouRig([
+    eMsg('agent_message', 'sum1', 'What drives the LIST traffic?', {slack: {channel_id: 'C1', thread_ts: '1.5'}}),
+    eMsg('thread_reply', 'tr1', 'The cause is the poll loop.', {platform: 'slack'}),
+    eMsg('agent_message', 'nudge1', 'the same question again', {slack: {channel_id: 'C1', nudge_of: 'sum1'}}),
+    eMsg('system', 'legacy1', 'Posted to Discord: Channel update posted.'),
+    eMsg('thread_reply', 'tr2', 'Shared with the Feishu team.', {platform: 'feishu'}),
+  ]);
+  const rows = rig.root.children.filter((el) => el.dataset.messageRole);
+  assert.deepEqual(rows.map((el) => el.dataset.messageRole), ['agent_message', 'thread_reply', 'thread_reply', 'thread_reply']);
+  const [summon, slackReply, legacyReply, feishuReply] = rows;
+  assert.match(summon.textContent, /Slack thread summon/);
+  assert.match(summon.textContent, /What drives the LIST traffic\?/);
+  assert.match(slackReply.innerHTML, />Slack<\/span>/, 'the reply carries the Slack badge');
+  assert.match(slackReply.textContent, /The cause is the poll loop\./);
+  assert.match(legacyReply.innerHTML, />Discord<\/span>/, 'the legacy line carries the Discord badge');
+  assert.match(legacyReply.textContent, /Channel update posted\./);
+  assert.doesNotMatch(legacyReply.textContent, /Posted to Discord:/, 'the legacy prefix is read, not shown');
+  assert.match(feishuReply.innerHTML, />Feishu<\/span>/, 'the reply carries the Feishu badge');
+});
+
 test('a web reply mid-turn shows in For you and sits inside the folded steps in Everything', () => {
   const rig = forYouRig(fixture());
   assert.ok(rowsOf(rig.root).includes('web_reply'), 'For you shows the reply');

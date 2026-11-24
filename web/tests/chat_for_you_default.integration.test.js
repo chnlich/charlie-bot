@@ -14,8 +14,8 @@ const {baseSessionContext, createChatSidebarContext} = require('./session_contex
 const {readStatic} = require('./read_static');
 
 // ---------------------------------------------------------------------------
-// The session page's view at open: a web session, root or child, opens in For
-// you. A thread session and a worker session open in Everything, and a manual
+// The session page's view at open: a manager session, root or child and bound to
+// a chat thread or not, opens in For you, and so does a worker session. A manual
 // switch holds for its session until the page reloads. These cases drive the
 // real renderSessionView through the sidebar context, the way a first load and
 // a session switch land.
@@ -141,31 +141,37 @@ function el(rig, id) {
   return rig.context.document.getElementById(id);
 }
 
-test('a root web session opens in For you', () => {
+test('a root manager session opens in For you', () => {
   const rig = pageRig();
   assert.equal(openedView(rig, {}), 'foryou');
   assert.deepEqual(pressed(rig), ['true', 'false', 'false']);
 });
 
-test('a child web session opens in For you', () => {
+test('a child manager session opens in For you', () => {
   const rig = pageRig();
   assert.equal(openedView(rig, {task_parent_id: 'parent-1'}), 'foryou');
   assert.deepEqual(pressed(rig), ['true', 'false', 'false']);
 });
 
-test('a Slack thread session opens in Everything', () => {
+test('a Slack thread-bound manager session opens in For you', () => {
   const rig = pageRig();
-  assert.equal(openedView(rig, {thread_session: true, slack_origin: SLACK_ORIGIN}), 'everything');
+  assert.equal(openedView(rig, {slack_origin: SLACK_ORIGIN}), 'foryou');
+  assert.deepEqual(pressed(rig), ['true', 'false', 'false']);
 });
 
-test('a Discord thread session opens in Everything', () => {
+test('a Discord thread-bound manager session opens in For you', () => {
   const rig = pageRig();
-  assert.equal(openedView(rig, {thread_session: true, discord_origin: DISCORD_ORIGIN}), 'everything');
+  assert.equal(openedView(rig, {discord_origin: DISCORD_ORIGIN}), 'foryou');
 });
 
-test('a Feishu thread session opens in Everything', () => {
+test('a Feishu thread-bound manager session opens in For you', () => {
   const rig = pageRig();
-  assert.equal(openedView(rig, {thread_session: true, feishu_origin: FEISHU_ORIGIN}), 'everything');
+  assert.equal(openedView(rig, {feishu_origin: FEISHU_ORIGIN}), 'foryou');
+});
+
+test('a session with no profile opens in Everything', () => {
+  const rig = pageRig();
+  assert.equal(openedView(rig, {profile: null}), 'everything');
 });
 
 test('a worker session opens in For you, root or child', () => {
@@ -174,16 +180,16 @@ test('a worker session opens in For you, root or child', () => {
   assert.equal(openedView(rig, {profile: 'worker', task_parent_id: 'parent-1'}), 'foryou');
 });
 
-// The toggle carries the Status option for a web session only: a thread session
-// and a worker session toggle between For you and Everything.
-test('the view toggle offers Status for a web session only', () => {
+// The toggle carries the Status option for a manager session, bound to a chat thread or not. A worker
+// session toggles between For you and Everything.
+test('the view toggle offers Status for every manager session', () => {
   const rig = pageRig();
   openedView(rig, {});
   assert.deepEqual(rig.toggles.map((btn) => btn.dataset.chatViewOption), ['foryou', 'everything', 'status']);
-  assert.equal(rig.toggles[2].classList.contains('hidden'), false, 'a web session shows the Status option');
+  assert.equal(rig.toggles[2].classList.contains('hidden'), false, 'a manager session shows the Status option');
 
-  openedView(rig, {thread_session: true, slack_origin: SLACK_ORIGIN});
-  assert.equal(rig.toggles[2].classList.contains('hidden'), true, 'a Slack thread session hides the Status option');
+  openedView(rig, {slack_origin: SLACK_ORIGIN});
+  assert.equal(rig.toggles[2].classList.contains('hidden'), false, 'a Slack thread-bound manager shows Status too');
   openedView(rig, {id: 'session-w', profile: 'worker'});
   assert.equal(rig.toggles[2].classList.contains('hidden'), true, 'a worker session hides the Status option');
 });

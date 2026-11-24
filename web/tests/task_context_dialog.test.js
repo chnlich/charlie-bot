@@ -117,6 +117,19 @@ test('opening the dialog renders the task record and one row per assembled block
   assert.doesNotMatch(html, /Launch overlay unavailable|\(none\)/);
 });
 
+// A manager bound to a Slack thread keeps its own Goal: the dialog reads the stored status for every manager.
+test('a thread-bound manager shows its stored Goal in Task & context', async () => {
+  const detail = {...DETAIL, channel_platform: 'slack', slack_origin: {team_id: 'T1', channel_id: 'C1', thread_ts: '1.5'}};
+  const h = buildHarness({
+    '/api/sessions/s1': jsonResponse(200, detail),
+    '/api/sessions/s1/effective-prompt': jsonResponse(200, PREVIEW),
+  });
+
+  await h.context.openTaskContextModal('s1');
+
+  assert.match(h.body.innerHTML, /<md>Migrate users to the new schema<\/md>/, 'the Goal of a thread-bound manager shows');
+});
+
 test('empty task fields show a visible empty state; an overlay error is named', async () => {
   const detail = {...DETAIL, web_status: {goal: '  ', now: null, waiting: []}};
   const preview = {...PREVIEW, blocks: [], char_count: 0, overlay: {declared: true, error: 'FileNotFoundError'}};

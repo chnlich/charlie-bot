@@ -8,6 +8,10 @@
   const markFileLinks = Chat.markFileLinks;
   const toolInputSummary = Chat.toolInputSummary;
   const isErrorRow = Chat.isErrorRow;
+  const threadReplyOf = Chat.threadReplyOf;
+  const summonPlatformOf = Chat.summonPlatformOf;
+  const platformBadgeHtml = Chat.platformBadgeHtml;
+  const platformLabel = Chat.platformLabel;
 
 // The one branch glyph: the clone_start banner's "Cloned from" marker below
 // and the separator's "Clone to here" button (sidebar/modals.js).
@@ -1007,6 +1011,25 @@ function renderMessage(msg, sessionId) {
   // A `cold_read_check` line records the audit of one check's text. A reply check's findings ride on the reply, so
   // its marker draws nothing; the legacy `web_reply_check` line draws nothing the same way.
   if (msg.role === "cold_read_check" && msg.name === "reply") return "";
+  // A reply a chat thread received: the agent's text, under a badge that names the platform. A legacy `Posted to
+  // <Platform>:` system line reads as the same reply.
+  var threadReply = threadReplyOf(msg);
+  if (threadReply) {
+    return openMessageWrapper("flex justify-start", msg) + "<div class=\"max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm\">"
+      + "<div class=\"flex items-center gap-2 text-[10px] font-semibold tracking-wider text-slate-400 mb-1\">"
+      + platformBadgeHtml(threadReply.platform)
+      + "<span>Posted to " + escapeHtml(platformLabel(threadReply.platform)) + " thread</span></div>"
+      + mdDiv(threadReply.content) + timeDiv() + "</div></div>";
+  }
+  // A message from a platform thread that summoned this session: the thread's own text, under its platform badge.
+  var summonPlatform = summonPlatformOf(msg);
+  if (summonPlatform) {
+    return openMessageWrapper("flex justify-start", msg) + "<div class=\"max-w-[90%] overflow-hidden bg-slate-800 border border-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-200\">"
+      + "<div class=\"flex items-center gap-2 mb-1 text-xs text-slate-400\">"
+      + platformBadgeHtml(summonPlatform)
+      + "<span>" + escapeHtml(platformLabel(summonPlatform)) + " thread summon</span></div>"
+      + "<div class=\"whitespace-pre-wrap break-words\">" + escapeHtml(msg.content) + "</div>" + timeDiv() + "</div></div>";
+  }
   // A web_status change and a cold read of a waiting item read as a system line. The For you view folds both instead.
   if (msg.role === "system" || msg.role === "web_status" || msg.role === "web_ask_check" || msg.role === "cold_read_check") {
     var titleAttr = msg.timestamp ? " title=\"" + formatBubbleTime(msg.timestamp) + "\"" : "";

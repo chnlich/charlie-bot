@@ -998,7 +998,7 @@ function renderSessionView(data) {
   // the status poll drives refetches.
   globalThis.renderPendingTriggersTray(session.id);
 
-  // The status panel opens for this session: a web session's status, its history's
+  // The status panel opens for this session: a manager session's status, its history's
   // web_status messages, and the descendant rows from one GET.
   globalThis.openSessionStatusPanel(session, messages);
 

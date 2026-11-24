@@ -227,6 +227,57 @@ function isErrorRow(msg) {
   return msg.role === FOR_YOU_RULE.error.role && String(msg.content || '').startsWith(FOR_YOU_RULE.error.prefix);
 }
 
+// ---------------------------------------------------------------------------
+// Chat threads: the platforms a thread-bound session answers on, and the lines a thread posts.
+//
+// The server keys a platform by its name: `slack`, `discord` or `feishu`. A summon carries the block its listener
+// stored under that key, and a reply renders as a `thread_reply` line that names the platform. Every reader of those
+// lines goes through the helpers below, so the badge and the label have one owner.
+// ---------------------------------------------------------------------------
+const PLATFORM_LABELS = {slack: 'Slack', discord: 'Discord', feishu: 'Feishu'};
+
+function platformLabel(platform) {
+  if (!Object.hasOwn(PLATFORM_LABELS, platform)) throw new Error('Unknown thread platform: ' + platform);
+  return PLATFORM_LABELS[platform];
+}
+
+// The platform badge. The tone classes are literal strings, so the Tailwind scanner keeps each one.
+const PLATFORM_BADGE_TONE = {
+  slack: 'bg-purple-900/40 text-purple-100 border-purple-400/55',
+  discord: 'bg-indigo-900/40 text-indigo-100 border-indigo-400/55',
+  feishu: 'bg-teal-900/40 text-teal-100 border-teal-400/55',
+};
+
+function platformBadgeHtml(platform, extraClass = '') {
+  const label = platformLabel(platform);
+  return `<span class="inline-flex items-center h-[18px] px-1.5 rounded-[5px] border text-[10.5px] font-bold `
+    + `tracking-wide whitespace-nowrap flex-shrink-0 ${PLATFORM_BADGE_TONE[platform]} ${extraClass}">${label}</span>`;
+}
+
+// The legacy line a thread reply wrote before the `thread_reply` role. A cached history still holds it, so the reader
+// parses it at read time: the history is never rewritten.
+const LEGACY_THREAD_REPLY = /^Posted to (Slack|Discord|Feishu): ([\s\S]*)$/;
+
+// A thread reply as the chat shows it, or null for any other message: {platform, content}.
+function threadReplyOf(msg) {
+  if (msg.role === 'thread_reply') return {platform: msg.platform, content: String(msg.content ?? '')};
+  if (msg.role !== 'system') return null;
+  const match = LEGACY_THREAD_REPLY.exec(String(msg.content || ''));
+  if (!match) return null;
+  return {platform: match[1].toLowerCase(), content: match[2]};
+}
+
+// The platform of an inbound summon: an agent_message that carries a platform block without a nudge marker. A nudge
+// wakes a session on a thread it already joined, so it is not a summon. The server's is_platform_summon reads this rule.
+function summonPlatformOf(msg) {
+  if (msg.role !== 'agent_message') return null;
+  for (const platform of Object.keys(PLATFORM_LABELS)) {
+    const block = msg[platform];
+    if (block && typeof block === 'object' && !Object.hasOwn(block, 'nudge_of')) return platform;
+  }
+  return null;
+}
+
 function isRenderedMessage(msg) {
   const id = messageRenderId(msg);
   if (!id) return false;
@@ -308,6 +359,10 @@ const GLOBALS = {
 };
 const CHAT_ONLY = {
   PENDING_TRIGGER_BELL_SVG_PATH,
+  platformLabel,
+  platformBadgeHtml,
+  threadReplyOf,
+  summonPlatformOf,
   disclosureIcon,
   escapeJsSingleQuoted,
   messageIdentityAttrs,

@@ -1403,9 +1403,9 @@ test('a user-gesture call re-arms the trigger-zone chain, and the viewport fill 
 // so the list stays short across many pages in a row.
 // ---------------------------------------------------------------------------
 
-// A web session opens in For you; a thread session opens in Everything.
+// A manager session opens in For you; a session that is not a task node yet opens in Everything.
 const WEB_SESSION = {profile: 'manager'};
-const THREAD_SESSION = {profile: 'manager', thread_session: true, slack_origin: {team_id: 'T1', channel_id: 'C1', thread_ts: '1.5'}};
+const EVERYTHING_SESSION = {profile: null};
 
 // The tail the For you cases open on: two rows, so the reader's place has a row to hold on to.
 const FOR_YOU_TAIL = [eMsg('user', 'tail-u', 'the question'), eMsg('web_reply', 'tail-r', 'the answer')];
@@ -1465,7 +1465,7 @@ test('switching to a short For you list resumes the paging an Everything list le
       ...Array.from({length: 20}, (_, i) => eMsg('assistant', `tail-a${i}`, `work ${i}`))];
   const {context, root, fetchCalls, timers} = mountPagerCase(
       pagedHistory((page) => (page < 8 ? quietPage(`p${page}`) : rowsPage('p8', 10))),
-      {session: THREAD_SESSION, messages: tail, clientHeight: 300, baseHeight: 0, clampScrollTop: true});
+      {session: EVERYTHING_SESSION, messages: tail, clientHeight: 300, baseHeight: 0, clampScrollTop: true});
   scrollTo(timers, root, 0);
   await flush();
   assert.ok(root.scrollHeight > root.clientHeight + 80, 'the Everything list scrolls');

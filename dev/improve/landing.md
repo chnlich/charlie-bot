@@ -425,6 +425,7 @@ It names:
 - the topic;
 - the pull-request link;
 - the evidence summary;
+- for a pull request that names screenshots, each named screenshot and whether the review read it, as its review record shows;
 - the absolute path of the round's evidence directory on the remote host.
 
 It names no file-server URL, because the remote host holds no CharlieBot URL and the round constructs none.

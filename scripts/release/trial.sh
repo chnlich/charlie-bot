@@ -1317,6 +1317,12 @@ run_serve_mode() {
       break
     fi
     if ! serve_home_has_active_run; then
+      # A read that fails because the server exited is classified by the first check of the next pass, which names a
+      # memory cap when the scope's OOM killer ended the server.
+      server_state=$(process_state "$SERVER_PID")
+      if [[ -z $server_state || $server_state == *Z* ]]; then
+        continue
+      fi
       cleanup_failed=1
       printf 'FAIL serve RunWait: a run of the trial home could not be read\n'
       printf 'CAUSE serve: %s\n' "$RUN_CAUSE"

@@ -7,7 +7,6 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use anyhow::bail;
-use charliebot_core::fsutil;
 use charliebot_core::paths;
 use charliebot_core::text_repr::{self, is_truthy};
 use charliebot_registry::sidebar::SidebarContribution;
@@ -111,8 +110,7 @@ fn copy_plans_sync(parent_plans_path: &Path, parent_dir: &Path, child_dir: &Path
   }
 
   fs::create_dir_all(child_dir)?;
-  let text = plans::registry_text(&data);
-  fsutil::atomic_write_text(&child_dir.join(PLANS_FILE), &text)?;
+  plans::publish_registry(&child_dir.join(PLANS_FILE), &data)?;
   Ok(())
 }
 

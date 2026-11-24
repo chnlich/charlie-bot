@@ -640,12 +640,20 @@ impl World {
     let sandbox = Sandbox::new();
     let repo = sandbox.dir("repo");
     let scripts = sandbox.dir("repo/dev/improve");
-    for name in
-      ["remote-launch.sh", "remote-runner.sh", "inflight-files.sh", "clone-check.sh", "member_kinds.txt", "gh-shim.sh"]
-    {
+    for name in [
+      "remote-launch.sh",
+      "remote-runner.sh",
+      "inflight-files.sh",
+      "clone-check.sh",
+      "member_kinds.txt",
+      "gh-shim.sh",
+      "github-post.sh",
+      "side-record.sh",
+    ] {
       harness::copy_file(&harness::repo_root().join("dev/improve").join(name), &scripts.join(name));
     }
-    // The runner installs the round's gh shim and its scanner from the commit's objects, and its clone check requires
+    // The runner installs the round's gh shim and its scanner from the commit's objects, and the round's kit is the
+    // commit's dev/ tree, so the commit carries the posting script and the scripts it sources. Its clone check requires
     // the clone's pre-push hook. The commit carries them as a clone of the real repository does.
     let hooks = sandbox.dir("repo/dev/git-hooks");
     harness::write_executable(
@@ -657,6 +665,7 @@ impl World {
       &repo.join("dev/check-skills-host-leak.sh"),
     );
     harness::copy_file(&harness::repo_root().join("dev/leak-patterns.sh"), &repo.join("dev/leak-patterns.sh"));
+    harness::copy_file(&harness::repo_root().join("dev/push-text-lists.sh"), &repo.join("dev/push-text-lists.sh"));
     let local_home = sandbox.dir("local");
     let remote_home = sandbox.dir("remote");
     let profile_home = sandbox.dir("profile");
@@ -1187,6 +1196,8 @@ impl World {
     harness::copy_file(&self.repo.join("dev/improve/clone-check.sh"), &launch.join("clone-check.sh"));
     harness::copy_file(&self.resolve_answer, &launch.join("review/option.json"));
     harness::copy_file(&self.probe_answer, &launch.join("probe/option.json"));
+    // The launcher names the revision of the kit the runner fetches, which is the commit its charliebot is built from.
+    fs::write(launch.join("kit-revision"), format!("{}\n", self.commit)).expect("the launch's kit revision");
     launch
   }
 

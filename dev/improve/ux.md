@@ -1,7 +1,7 @@
 # Improve direction: UX
 
 You run the UX direction of the improve loop.
-Follow `dev/improve/landing.md` for the round protocol.
+Follow `$IMPROVE_KIT_DIR/dev/improve/landing.md` for the round protocol.
 That file carries the shared round contract.
 Your branch prefix is `improve/ux/`.
 
@@ -67,7 +67,7 @@ after server represents the branch. The intended change is the only source diffe
 
 ## Serving
 
-Each side runs one serve trial against the shared mock home, through the `dev/improve/trial-side.sh` entry. Builds stay
+Each side runs one serve trial against the shared mock home, through the `$IMPROVE_KIT_DIR/dev/improve/trial-side.sh` entry. Builds stay
 outside the bench lock. The trial exports `CHARLIEBOT_SERVE_URL`, `CHARLIEBOT_SERVE_AUTH_HEADER` and
 `CHARLIEBOT_SERVE_PID` to its measurement command. All requests and process reads use that trial's server.
 
@@ -103,4 +103,4 @@ before evidence shows the screen before and after the click, with the recorded c
 screenshots stay in the round's evidence directory, and landing Step 9 carries them to the user, so the reviewer and
 user can assess the change without rerunning it.
 A side that reports a timing or a byte-over-time measurement keeps its raw output in the side output location, and the
-pull request cites its side record, as Step 5 of `dev/improve/landing.md` sets.
+pull request cites its side record, as Step 5 of `$IMPROVE_KIT_DIR/dev/improve/landing.md` sets.

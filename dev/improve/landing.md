@@ -330,7 +330,7 @@ That directory is `~/improve/<direction>/evidence/<Round start>/` on the host th
 
 When the newest verdict comment has no `Round start:` line, or that directory is missing, or the body names a screenshot file and the record is missing, the merge needs a new review.
 The round reviews the head again (Step 6) before the merge, and the merge then names this round's directory.
-A merge outside a round leaves the pull request open, and Step 2 of the next round adopts it.
+When a merge outside a round needs that new review, it leaves the pull request open, and Step 2 of the next round adopts it.
 
 The merge checks the verdict on its head, a web page change's screenshots, and the review record's reads of the
 screenshots that the body names. Its squash message comes from the pull request's title and body, which the posting

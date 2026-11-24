@@ -455,3 +455,18 @@ test('the module adopts the loader card and paints the summary it queued', () =>
   assert.equal(context.Chat.workerSummaryCard(), stood, 'the module fills the node the list already holds');
   assert.match(stood.innerHTML, /Open|Running/);
 });
+
+test('run rows, status header and stop line wrap instead of clipping on narrow cards', () => {
+  const rig = loadCard();
+  rig.context.Chat.applyWorkerSummary({
+    ...DELIVERED,
+    stop: {run_id: 'r1', request_id: 'custom-' + 'x'.repeat(80), timestamp: '2026-10-17T08:51:00+00:00'},
+  });
+  const html = rig.html();
+  assert.match(html, /class="flex flex-wrap items-center gap-x-2 gap-y-1">/);
+  assert.match(html, /class="flex flex-wrap items-center gap-1\.5 text-xs text-slate-400">/);
+  assert.doesNotMatch(html, /class="flex items-center gap-1\.5 text-xs text-slate-400 whitespace-nowrap">/);
+  assert.match(html, /<span class="inline-flex items-center gap-1\.5">work run<span class="text-slate-500"> · <\/span><\/span>/);
+  assert.match(html, /<span class="inline-flex items-center gap-1\.5">161 tool calls<\/span>/);
+  assert.match(html, /class="text-xs text-slate-400 break-words">Stop requested /);
+});

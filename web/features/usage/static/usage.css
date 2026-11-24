@@ -20,7 +20,14 @@
    unreachable. The nowrap rule keeps each account row on that one line: a hyphenated
    account name otherwise splits mid-word, leaving its percentage on a second
    line. The collapsed summary is the exception, wrapped on phones above. */
-#ext-usage-strip { overflow-x: auto; white-space: nowrap; }
+#ext-usage-strip {
+  overflow-x: auto;
+  white-space: nowrap;
+  /* Hold the 44px #ext-usage-toggle (top: 2px) inside the 1px border-b when
+     expanded with a single 20px account row, and vertically center that row. */
+  min-height: 49px;
+  justify-content: center;
+}
 /* Quota-strip collapse chip: floats over the strip's top-right corner from a
    position:relative wrapper, so the strip's horizontal scrolling never drags
    it along (same pattern as #scroll-to-bottom inside #tab-chat). The template

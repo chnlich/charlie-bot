@@ -81,6 +81,8 @@ const MEASURE = `(() => {
     stripHeight: strip.getBoundingClientRect().height,
     wrapperTop: wrapper.top,
     wrapperBottom: wrapper.bottom,
+    toggleTop: document.getElementById('ext-usage-toggle').getBoundingClientRect().top,
+    toggleBottom: document.getElementById('ext-usage-toggle').getBoundingClientRect().bottom,
     conversationTop: document.getElementById('tab-chat').getBoundingClientRect().top,
     panelRendered: !!document.getElementById('cron-session-panel'),
   };
@@ -166,6 +168,22 @@ for (const {width, height} of VIEWPORTS) {
         `the strip starts at ${m.wrapperTop} px, under a header that ends at ${m.headerBottom} px`);
       assert.ok(Math.abs(m.conversationTop - m.wrapperBottom) < 1,
         `the conversation starts at ${m.conversationTop} px, under a strip that ends at ${m.wrapperBottom} px`);
+      assert.ok(m.toggleTop >= m.wrapperTop && m.toggleBottom <= m.wrapperBottom,
+        `the toggle (${m.toggleTop}–${m.toggleBottom} px) stays inside the strip (${m.wrapperTop}–${m.wrapperBottom} px)`);
+      assertComposerInView(m);
+    });
+
+  test(`the expanded single-account usage strip holds its toggle inside its bounds at ${width} px`,
+    {timeout: 120000}, async () => {
+      const m = await withSessionPage({width, height, usage: USAGE, bound: false}, async (page) => {
+        await page.evaluate("document.getElementById('ext-usage-toggle').click()");
+        return page.evaluate(MEASURE);
+      });
+      assert.equal(m.stripShown, true, 'the usage strip stays shown when expanded');
+      assert.ok(m.toggleTop >= m.wrapperTop && m.toggleBottom <= m.wrapperBottom,
+        `the toggle (${m.toggleTop}–${m.toggleBottom} px) stays inside the expanded strip (${m.wrapperTop}–${m.wrapperBottom} px)`);
+      assert.ok(Math.abs(m.conversationTop - m.wrapperBottom) < 1,
+        `the conversation starts at ${m.conversationTop} px, under the expanded strip (${m.wrapperBottom} px)`);
       assertComposerInView(m);
     });
 

@@ -2,7 +2,7 @@
 //! the running and target builds. A run re-attaches after a restart only when its backend type's registration sets
 //! `restart_reattach` in both builds.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsString;
 use std::fs;
 use std::io::ErrorKind;
@@ -24,13 +24,24 @@ use serde_json::Value;
 use crate::common::{exact, failed, metadata_read_failure, read_config, value_repr};
 use crate::process;
 
-/// The three registration layouts a build may have: the agents crate's backends, the runtime/agents crate's
-/// backends, and each backend's own crate. A build's tree holds exactly one of them.
-const BACKEND_LAYOUTS: [(&str, &str); 3] = [
-  ("rust/crates/charliebot-agents/src/backends", "/mod.rs"),
-  ("rust/crates/runtime/agents/src/backends", "/mod.rs"),
-  ("rust/crates/backends", "/src/lib.rs"),
+/// The three registration layouts a build may have, each with the directory that holds its backends: the agents
+/// crate's backends, the runtime/agents crate's backends, and each backend's own crate. A build's tree holds exactly
+/// one of them.
+const BACKEND_LAYOUTS: [(&str, Layout); 3] = [
+  ("rust/crates/charliebot-agents/src/backends", Layout::ModRs),
+  ("rust/crates/runtime/agents/src/backends", Layout::ModRs),
+  ("rust/crates/backends", Layout::CrateSrc),
 ];
+
+/// How a layout's backends sit under its directory.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Layout {
+  /// A backend is one `mod.rs`. Its registration is that file's text, and the other files under its directory
+  /// declare the const names it uses.
+  ModRs,
+  /// A backend is one crate. A registration may sit in any file under the crate's `src/`, and each crate holds one.
+  CrateSrc,
+}
 
 /// The foundation's shared backend type names. A registration may name one by path, such as `backend_types::CODEX`,
 /// and the scan reads that constant from this file in the same build. Builds older than the file lack it.
@@ -202,9 +213,13 @@ fn git(repo: &Path, args: &[&str]) -> Result<Output> {
   Command::new("git").arg("-C").arg(repo).args(args).output().with_context(|| format!("run git {args:?}"))
 }
 
-/// The registration file and other Rust source files of one backend module or crate.
+/// One backend in a build: the files that may hold its registration, and the other files that may declare its const
+/// names.
 struct BackendFiles {
-  registration: String,
+  /// The backend's directory in messages: its crate, or the directory of its `mod.rs`.
+  name: String,
+  layout: Layout,
+  registrations: Vec<String>,
   siblings: Vec<String>,
 }
 
@@ -231,9 +246,9 @@ impl ReattachState {
 /// The declared backend types in one build, keyed by type name.
 type BuildRegistrations = HashMap<String, (ReattachState, String)>;
 
-/// The registration files of one build in the layout its tree has, with each file's sibling sources, or the read error.
+/// The backends of the first layout whose directory holds one in build `sha`, or the read error.
 fn registration_files(repo: &Path, sha: &str) -> Result<(Vec<BackendFiles>, Option<String>)> {
-  for (prefix, suffix) in BACKEND_LAYOUTS {
+  for (prefix, layout) in BACKEND_LAYOUTS {
     let listed = git(repo, &["ls-tree", "-r", "--name-only", sha, prefix])?;
     if !listed.status.success() {
       let stderr = String::from_utf8_lossy(&listed.stderr);
@@ -244,31 +259,64 @@ fn registration_files(repo: &Path, sha: &str) -> Result<(Vec<BackendFiles>, Opti
       .filter(|line| line.ends_with(".rs"))
       .map(str::to_string)
       .collect();
-    let reg_paths: Vec<String> = all_files.iter().filter(|path| path.ends_with(suffix)).cloned().collect();
-    if !reg_paths.is_empty() {
-      let backends = reg_paths
-        .into_iter()
-        .map(|registration| {
-          let crate_prefix = format!("{}/", registration.strip_suffix(suffix).expect("ends with suffix"));
-          let siblings = all_files
-            .iter()
-            .filter(|path| path.starts_with(&crate_prefix) && *path != &registration)
-            .cloned()
-            .collect();
-          BackendFiles { registration, siblings }
-        })
-        .collect();
+    let backends = match layout {
+      Layout::ModRs => mod_rs_backends(&all_files),
+      Layout::CrateSrc => crate_backends(prefix, &all_files),
+    };
+    if !backends.is_empty() {
       return Ok((backends, None));
     }
   }
   Ok((Vec::new(), None))
 }
 
-/// The text of each sibling source of a backend in build `sha`, then of the shared names file. A file the build lacks is
+/// The backends of a `mod.rs` layout: each `mod.rs` is one backend, and the files under its directory are its siblings.
+fn mod_rs_backends(all_files: &[String]) -> Vec<BackendFiles> {
+  all_files
+    .iter()
+    .filter(|path| path.ends_with("/mod.rs"))
+    .map(|registration| {
+      let directory = registration.strip_suffix("/mod.rs").expect("ends with /mod.rs");
+      let siblings = all_files
+        .iter()
+        .filter(|path| path.starts_with(&format!("{directory}/")) && *path != registration)
+        .cloned()
+        .collect();
+      BackendFiles {
+        name: directory.to_string(),
+        layout: Layout::ModRs,
+        registrations: vec![registration.clone()],
+        siblings,
+      }
+    })
+    .collect()
+}
+
+/// The backends of the per-crate layout: each crate under `prefix` that has a source file under its `src/`. Every
+/// source file of a crate may hold its registration. Files outside a crate's `src/`, such as its tests, are not read.
+fn crate_backends(prefix: &str, all_files: &[String]) -> Vec<BackendFiles> {
+  let mut crates: BTreeMap<String, Vec<String>> = BTreeMap::new();
+  for path in all_files {
+    let rest =
+      path.strip_prefix(prefix).and_then(|rest| rest.strip_prefix('/')).expect("ls-tree lists paths under the prefix");
+    let Some((krate, inner)) = rest.split_once('/') else {
+      continue;
+    };
+    if inner.starts_with("src/") {
+      crates.entry(format!("{prefix}/{krate}")).or_default().push(path.clone());
+    }
+  }
+  crates
+    .into_iter()
+    .map(|(name, registrations)| BackendFiles { name, layout: Layout::CrateSrc, registrations, siblings: Vec::new() })
+    .collect()
+}
+
+/// The text of each other source of a backend in build `sha`, then of the shared names file. A file the build lacks is
 /// skipped: an older build has no shared names file, and its registrations spell their names directly.
-fn read_sources(repo: &Path, sha: &str, siblings: &[String]) -> Result<Vec<String>> {
+fn read_sources(repo: &Path, sha: &str, paths: &[String]) -> Result<Vec<String>> {
   let mut texts = Vec::new();
-  for path in siblings.iter().map(String::as_str).chain(std::iter::once(SHARED_NAMES_FILE)) {
+  for path in paths.iter().map(String::as_str).chain(std::iter::once(SHARED_NAMES_FILE)) {
     let shown = git(repo, &["show", &format!("{sha}:{path}")])?;
     if shown.status.success() {
       texts.push(String::from_utf8_lossy(&shown.stdout).into_owned());
@@ -277,47 +325,63 @@ fn read_sources(repo: &Path, sha: &str, siblings: &[String]) -> Result<Vec<Strin
   Ok(texts)
 }
 
-/// Every backend type registration in build `sha`, read without checking out or changing its source tree.
+/// Every backend type registration in build `sha`, read without checking out or changing its source tree. A type
+/// registered twice, or a crate with no readable registration, refuses the whole build: the scan cannot tell which
+/// declaration holds.
 fn read_build_registrations(repo: &Path, sha: &str) -> Result<Result<BuildRegistrations, String>> {
   let (backends, error) = registration_files(repo, sha)?;
   if let Some(error) = error {
     return Ok(Err(error));
   }
-  let mut registrations = HashMap::new();
+  let mut registrations: BuildRegistrations = HashMap::new();
   for backend in backends {
-    let shown = git(repo, &["show", &format!("{sha}:{}", backend.registration)])?;
-    if !shown.status.success() {
-      let stderr = String::from_utf8_lossy(&shown.stderr);
-      return Ok(Err(format!("cannot read {} from build {sha}: {}", backend.registration, stderr.trim())));
+    let mut resolved = 0;
+    for file in &backend.registrations {
+      let shown = git(repo, &["show", &format!("{sha}:{file}")])?;
+      if !shown.status.success() {
+        let stderr = String::from_utf8_lossy(&shown.stderr);
+        return Ok(Err(format!("cannot read {file} from build {sha}: {}", stderr.trim())));
+      }
+      let source = String::from_utf8_lossy(&shown.stdout);
+      // The other sources are read on the first registration whose name is a const, not a quoted literal.
+      let mut others: Option<Vec<String>> = None;
+      for capture in REGISTRATION.captures_iter(&source) {
+        let name = &capture["name"];
+        let declared = if name.starts_with('"') {
+          declared_name(name, &[])
+        } else {
+          if others.is_none() {
+            let paths: Vec<String> =
+              backend.registrations.iter().filter(|path| *path != file).chain(&backend.siblings).cloned().collect();
+            others = Some(read_sources(repo, sha, &paths)?);
+          }
+          let mut sources: Vec<&str> = vec![&*source];
+          sources.extend(others.iter().flatten().map(String::as_str));
+          declared_name(name, &sources)
+        };
+        let Some(declared) = declared else {
+          continue;
+        };
+        resolved += 1;
+        let reattach = match REATTACH.captures(&capture["body"]) {
+          Some(value) => {
+            let state = if &value[1] == "true" { ReattachState::Enabled } else { ReattachState::Disabled };
+            (state, file.clone())
+          }
+          None => (ReattachState::Unknown, format!("{file} in build {sha} has no restart_reattach value")),
+        };
+        if let Some((_, first)) = registrations.get(&declared) {
+          return Ok(Err(format!("backend type {declared} is registered twice in build {sha}: {first} and {file}")));
+        }
+        registrations.insert(declared, reattach);
+      }
     }
-    let source = String::from_utf8_lossy(&shown.stdout);
-    // The sibling sources are read on the first registration whose name is a const, not a quoted literal.
-    let mut others: Option<Vec<String>> = None;
-    for capture in REGISTRATION.captures_iter(&source) {
-      let name = &capture["name"];
-      let declared = if name.starts_with('"') {
-        declared_name(name, &[])
-      } else {
-        if others.is_none() {
-          others = Some(read_sources(repo, sha, &backend.siblings)?);
-        }
-        let mut sources: Vec<&str> = vec![&*source];
-        sources.extend(others.iter().flatten().map(String::as_str));
-        declared_name(name, &sources)
-      };
-      let Some(declared) = declared else {
-        continue;
-      };
-      let reattach = match REATTACH.captures(&capture["body"]) {
-        Some(value) => {
-          let state = if &value[1] == "true" { ReattachState::Enabled } else { ReattachState::Disabled };
-          (state, backend.registration.clone())
-        }
-        None => {
-          (ReattachState::Unknown, format!("{} in build {sha} has no restart_reattach value", backend.registration))
-        }
-      };
-      registrations.insert(declared, reattach);
+    if backend.layout == Layout::CrateSrc && resolved == 0 {
+      return Ok(Err(format!(
+        "crate {} in build {sha} has no backend registration that the scan reads; it read {}",
+        backend.name,
+        backend.registrations.join(", ")
+      )));
     }
   }
   Ok(Ok(registrations))
@@ -413,6 +477,97 @@ mod tests {
     let registration = REGISTRATION.captures(source).expect("the registration");
     assert_eq!(&registration["name"], "\"antigravity\"");
     assert_eq!(&REATTACH.captures(&registration["body"]).expect("the value")[1], "false");
+  }
+
+  const CRATE_LIB: &str = "rust/crates/backends/fake/src/lib.rs";
+  const CRATE_API: &str = "rust/crates/backends/fake/src/api.rs";
+  const DECLARATION: &str = "pub const TYPE_NAME: &str = \"fake-type\";\n";
+
+  /// A registration laid out as the backend crates write it: the trait block's `restart_reattach` sits on its own line.
+  fn registration_source(restart_reattach: bool) -> String {
+    format!(
+      "pub fn register(registry: &mut Registry) {{\n  registry.add(TypeRegistration {{\n    type_name: TYPE_NAME,\n    \
+       traits: BackendTraits {{\n      restart_reattach: {restart_reattach},\n    }},\n  }});\n}}\n"
+    )
+  }
+
+  /// A git repository whose one commit holds `files`, each a path and its text. The directory lives as long as the
+  /// returned handle.
+  fn repo_with_files(files: &[(&str, String)]) -> (tempfile::TempDir, String) {
+    let dir = tempfile::tempdir().expect("a temporary repository");
+    let root = dir.path();
+    for (path, text) in files {
+      let file = root.join(path);
+      fs::create_dir_all(file.parent().expect("a file has a directory")).expect("the file's directory");
+      fs::write(&file, text).expect("the source file");
+    }
+    let run = |args: &[&str]| {
+      let output = git(root, args).expect("git runs");
+      assert!(output.status.success(), "git {args:?} failed: {}", String::from_utf8_lossy(&output.stderr));
+    };
+    run(&["init", "-q"]);
+    run(&["add", "-A"]);
+    run(&[
+      "-c",
+      "user.name=scan-test",
+      "-c",
+      "user.email=scan-test@example.invalid",
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "-q",
+      "-m",
+      "fixture",
+    ]);
+    let sha = git(root, &["rev-parse", "HEAD"]).expect("git runs");
+    (dir, String::from_utf8_lossy(&sha.stdout).trim().to_string())
+  }
+
+  /// A registration in a crate's `api.rs`, with `lib.rs` only declaring the module, reads the same declaration as one
+  /// in `lib.rs`. A file under the crate's `tests/` that repeats the type name is not read.
+  #[test]
+  fn a_registration_in_a_crate_source_file_other_than_lib_rs_reads_as_in_lib_rs() {
+    for restart_reattach in [true, false] {
+      let (lib_dir, lib_sha) =
+        repo_with_files(&[(CRATE_LIB, format!("{DECLARATION}{}", registration_source(restart_reattach)))]);
+      let (api_dir, api_sha) = repo_with_files(&[
+        (CRATE_LIB, format!("{DECLARATION}mod api;\npub use api::*;\n")),
+        (CRATE_API, registration_source(restart_reattach)),
+        ("rust/crates/backends/fake/tests/fake.rs", registration_source(!restart_reattach)),
+      ]);
+      let in_lib = read_registration(lib_dir.path(), &lib_sha, "fake-type").expect("lookup").0;
+      let in_api = read_registration(api_dir.path(), &api_sha, "fake-type").expect("lookup").0;
+      let expected = if restart_reattach { ReattachState::Enabled } else { ReattachState::Disabled };
+      assert_eq!(in_lib, expected);
+      assert_eq!(in_api, in_lib);
+    }
+  }
+
+  /// One type registered in two files of one crate refuses the build, and the refusal names both files.
+  #[test]
+  fn a_type_registered_twice_in_one_crate_refuses_naming_both_files() {
+    let (dir, sha) = repo_with_files(&[
+      (CRATE_LIB, format!("{DECLARATION}{}", registration_source(true))),
+      (CRATE_API, registration_source(false)),
+    ]);
+    let (state, detail) = read_registration(dir.path(), &sha, "fake-type").expect("lookup");
+    assert_eq!(state, ReattachState::Unknown);
+    assert!(detail.contains(CRATE_LIB) && detail.contains(CRATE_API), "{detail}");
+  }
+
+  /// A crate whose source files hold no registration refuses the build, and the refusal names the crate and the
+  /// files it read.
+  #[test]
+  fn a_crate_without_a_registration_refuses_naming_the_crate_and_its_files() {
+    let (dir, sha) = repo_with_files(&[
+      (CRATE_LIB, "mod api;\npub use api::*;\n".to_string()),
+      (CRATE_API, "pub fn helper() {}\n".to_string()),
+    ]);
+    let (state, detail) = read_registration(dir.path(), &sha, "fake-type").expect("lookup");
+    assert_eq!(state, ReattachState::Unknown);
+    for path in ["rust/crates/backends/fake", CRATE_LIB, CRATE_API] {
+      assert!(detail.contains(path), "{detail}");
+    }
   }
 
   #[test]

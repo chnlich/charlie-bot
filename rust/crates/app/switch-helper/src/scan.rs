@@ -525,7 +525,11 @@ mod tests {
 
   /// A registration in a crate's `api.rs`, with `lib.rs` only declaring the module, reads the same declaration as one
   /// in `lib.rs`. A file under the crate's `tests/` that repeats the type name is not read.
+  ///
+  /// Each fixture repository and each lookup spawns git, which puts the test over the unit-test time limit on CI
+  /// runners, so the Integration job runs it.
   #[test]
+  #[ignore = "integration"]
   fn a_registration_in_a_crate_source_file_other_than_lib_rs_reads_as_in_lib_rs() {
     for restart_reattach in [true, false] {
       let (lib_dir, lib_sha) =

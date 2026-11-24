@@ -29,7 +29,7 @@ class FakeNode {
     this.listeners = {};
     this.attributes = {};
     this.innerHTMLValue = '';
-    this.textContent = '';
+    this.ownText = '';
     this.title = '';
     this.value = '';
     this.dataset = {};
@@ -38,6 +38,17 @@ class FakeNode {
   }
 
   set className(value) { this.classList = createClassList(value); }
+
+  // The text a node was given, then the text of the text nodes appended to it. Element children add no text to this
+  // read, and the text nodes stay out of `children`, which the tests read as the node's elements.
+  get textContent() {
+    const textNodes = this.children.filter((node) => !(node instanceof FakeNode));
+    return this.ownText + textNodes.map((node) => node.textContent).join('');
+  }
+
+  set textContent(value) {
+    this.ownText = String(value);
+  }
 
   get innerHTML() { return this.innerHTMLValue; }
 

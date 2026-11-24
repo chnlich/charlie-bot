@@ -33,6 +33,8 @@ A finding is one of these:
 - a crate with two responsibilities
 - a user setting that two stores write, or that two edit entries write to different stores
 - a value in code that the user's configuration owns
+- a responsibility that two or more modules carry when one module already owns it, for example a write to one file or
+  record; the fix routes every site through the owner.
 
 An edit entry is a form or an API endpoint that writes a user setting.
 Two edit entries that write the same record are one store and raise no finding.
@@ -59,6 +61,8 @@ In a user-setting finding, name:
 - each store
 - each edit entry with its handler
 
+In a scattered-ownership finding, name the responsibility, each module that carries it, and the module that owns it.
+
 One finding per round keeps the review focused.
 
 ## Evidence
@@ -67,6 +71,7 @@ Count the dependency edges or the duplicate spellings before and after the chang
 For a user-setting finding, count its stores and edit entries (write sites) before and after the change.
 For a configuration-in-code finding, count the code sites that write the value before and after the change, and name
 the key that supplies it after.
+For a scattered-ownership finding, count the sites that carry the responsibility before and after the change.
 Write the counts in the pull request's `## Evidence` section.
 Let CI run the structure tests and the full suite, because a green run proves that the layout still holds.
 The count shows the reviewer that the coupling fell.

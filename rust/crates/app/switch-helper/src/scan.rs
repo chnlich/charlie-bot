@@ -141,8 +141,8 @@ pub fn scan(args: &[OsString]) -> Result<(), CliExit> {
 fn backend_types(home: &Path) -> Result<HashMap<String, String>, CliExit> {
   let document = read_config(home).map_err(failed)?;
   let options = document
-    .get("backends")
-    .and_then(|backends| backends.get("options"))
+    .get(config::BACKENDS_KEY)
+    .and_then(|backends| backends.get(config::BACKENDS_OPTIONS_KEY))
     .and_then(Value::as_array)
     .ok_or_else(|| CliExit::error("config.yaml has no backends.options"))?;
   let mut types = HashMap::new();

@@ -48,7 +48,7 @@ pub fn server_port(home: &Path) -> Result<u16, CliExit> {
   }
   let document = config::read_yaml_document(&path).map_err(|error| CliExit::error(error.0))?;
   let section = match &document {
-    Value::Mapping(mapping) => mapping.get(Value::String("server".to_string())).cloned(),
+    Value::Mapping(mapping) => mapping.get(Value::String(config::SERVER_KEY.to_string())).cloned(),
     Value::Null => None,
     other => {
       return Err(CliExit::error(format!(

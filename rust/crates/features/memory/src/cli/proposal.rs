@@ -13,6 +13,7 @@ use clap::{Args, Parser, Subcommand};
 use super::proposal_check;
 use super::store;
 use crate::memory::TOPICS_FILENAME;
+use crate::store_root;
 
 const PROPOSAL_BRANCH: &str = "proposal";
 const PROPOSAL_WORKTREE_SUFFIX: &str = "-proposal";
@@ -73,7 +74,7 @@ pub(super) fn main(args: &[OsString]) -> Result<(), CliExit> {
   let cli: ProposalCli = cli_args::parse("charliebot memory proposal", args);
 
   let home_dir = home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
-  let memory_dir = home_dir.join("memory");
+  let memory_dir = store_root::memory_dir_in(&home_dir);
   crate::memory::ensure_store(&memory_dir).map_err(|error| CliExit::error(error.to_string()))?;
   let memory_dir = fs::canonicalize(&memory_dir)
     .map_err(|error| CliExit::error(format!("resolve {}: {error}", memory_dir.display())))?;

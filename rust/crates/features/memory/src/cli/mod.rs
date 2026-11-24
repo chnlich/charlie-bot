@@ -23,6 +23,8 @@ use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
 use time::{OffsetDateTime, UtcOffset};
 
+use crate::store_root;
+
 mod digest;
 mod proposal;
 mod proposal_check;
@@ -122,7 +124,7 @@ fn query(args: &QueryArgs) -> Result<(), CliExit> {
   let audience = fixed_audience.as_deref().or(args.audience.as_deref());
   let memory_dir = match args.dir.as_deref().filter(|path| !path.as_os_str().is_empty()) {
     Some(path) => PathBuf::from(charliebot_core::paths::expanduser(&path.to_string_lossy())),
-    None => home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?.join("memory"),
+    None => store_root::memory_dir_in(&home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?),
   };
   let store = crate::memory::load_store(&memory_dir).map_err(|error| CliExit::error(error.to_string()))?;
   let unknown: Vec<&str> =
@@ -249,7 +251,7 @@ fn add(args: &AddArgs) -> Result<(), CliExit> {
   }
   let home_dir = home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
   let cwd = std::env::current_dir().map_err(|error| CliExit::error(error.to_string()))?;
-  let memory_dir = home_dir.join("memory");
+  let memory_dir = store_root::memory_dir_in(&home_dir);
   let target = write_capture(&memory_dir, &config::sessions_dir_in(&home_dir), &cwd, title, &body, cli_clock)?;
   println!("{}", target.display());
   Ok(())
@@ -319,7 +321,7 @@ fn slugify(title: &str) -> String {
 fn lint(args: &LintArgs) -> Result<(), CliExit> {
   let root = match args.dir.as_deref().filter(|path| !path.as_os_str().is_empty()) {
     Some(path) => PathBuf::from(charliebot_core::paths::expanduser(&path.to_string_lossy())),
-    None => home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?.join("memory"),
+    None => store_root::memory_dir_in(&home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?),
   };
   let (violations, warnings) = store::lint_store(&root)?;
   for warning in warnings {

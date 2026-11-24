@@ -45,11 +45,11 @@ pub fn generate(output: &Path, sessions: usize, seed: u64, shape: Shape, languag
 
   let written = match shape {
     Shape::Default | Shape::View | Shape::Search => write_home(&staging, sessions, seed, shape, language),
-    Shape::TaskTree => {
+    Shape::TaskTree | Shape::ServeTaskTree => {
       let home = fs::canonicalize(parent)
         .with_context(|| format!("cannot resolve {}", parent.display()))
         .map(|parent| parent.join(name.as_ref()));
-      home.and_then(|home| task_tree::write_home(&staging, &home, sessions, seed, language))
+      home.and_then(|home| task_tree::write_home(&staging, &home, sessions, seed, language, shape))
     }
   };
   let total = match written {

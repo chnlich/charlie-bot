@@ -23,7 +23,7 @@
 //!
 //! No state in the home makes a lab server start an agent or signal a process. An open task's manager confirms
 //! every input, a child's report among them, a repaired run sits in a closed task, and a live run sits in an open one
-//! (`HomePlan::plant_live_runs`). Every run's pid is at or above
+//! (`HomePlan::plant_live_runs`, called by the `TaskTree` shape only). Every run's pid is at or above
 //! Linux's PID_MAX_LIMIT, a parent is a root, a sequence run names an unconfigured cron task, and a pending trigger
 //! fires on 2030-01-01. No worker is a cold read, whose replay can start a run. The boot marker and every file time are
 //! fixed around `marker_time()`, so `reset` restores them from the seed's plan.
@@ -308,8 +308,9 @@ fn plan_id(rng: &mut Rng) -> String {
 }
 
 impl HomePlan {
-  /// The plan for sessions whose event logs take `sizes` bytes, in session order.
-  fn new(sizes: &[u64], seed: u64, language: Language) -> Self {
+  /// The plan for sessions whose event logs take `sizes` bytes, in session order. Only the `TaskTree` shape plants live
+  /// runs, so the other task-tree shape's plan draws the same sessions with each run's end as its record states.
+  fn new(sizes: &[u64], seed: u64, language: Language, shape: Shape) -> Self {
     let count = sizes.len();
     let mut rng = Rng::new(seed ^ PLAN_STREAM);
     let mut id_rng = Rng::new(seed ^ ID_STREAM);
@@ -341,7 +342,9 @@ impl HomePlan {
     Self::type_workers(&mut sessions, &mut rng);
     Self::plan_closes(&mut sessions, &mut rng, language);
     Self::plan_archives(&mut sessions, sizes);
-    Self::plant_live_runs(&mut sessions);
+    if shape == Shape::TaskTree {
+      Self::plant_live_runs(&mut sessions);
+    }
     let reports = Self::reports(&sessions);
     Self { sessions, reports }
   }
@@ -912,9 +915,16 @@ fn write_marker_seed(home: &Path, plan: &HomePlan) -> Result<()> {
 
 /// Writes a task-tree home of `sessions` sessions for `seed` into `staging`, whose final path is `home`. Returns the
 /// total event-log bytes.
-pub(crate) fn write_home(staging: &Path, home: &Path, sessions: usize, seed: u64, language: Language) -> Result<u64> {
+pub(crate) fn write_home(
+  staging: &Path,
+  home: &Path,
+  sessions: usize,
+  seed: u64,
+  language: Language,
+  shape: Shape,
+) -> Result<u64> {
   let (mut rng, text, sizes) = session::planned_home(sessions, seed, language);
-  let plan = HomePlan::new(&sizes, seed, language);
+  let plan = HomePlan::new(&sizes, seed, language, shape);
   let worktrees = home.join(WORKTREES_DIR);
   fs::create_dir(staging.join(WORKTREES_DIR)).context("cannot create the worktree directory")?;
   let mut manifest_sessions = Vec::with_capacity(sessions);
@@ -978,7 +988,7 @@ pub(crate) fn write_home(staging: &Path, home: &Path, sessions: usize, seed: u64
     session_count: sessions,
     event_log_bytes: total,
     sessions: manifest_sessions,
-    shape: Shape::TaskTree,
+    shape,
     language,
     cron_tasks,
   };
@@ -1023,11 +1033,11 @@ fn write_live_runs(staging: &Path, plan: &HomePlan) -> Result<()> {
 /// the append `append_growth` makes to set up a steady state; a log shorter than its generated size fails either way.
 pub fn reset(home: &Path, allow_growth: bool) -> Result<()> {
   let manifest = Manifest::read(home)?;
-  if manifest.shape != Shape::TaskTree {
+  if !manifest.shape.is_task_tree() {
     bail!("{} holds a {:?} home; only a task-tree home has a generated state to reset", home.display(), manifest.shape);
   }
   let (_, _, sizes) = session::planned_home(manifest.session_count, manifest.seed, manifest.language);
-  let plan = HomePlan::new(&sizes, manifest.seed, manifest.language);
+  let plan = HomePlan::new(&sizes, manifest.seed, manifest.language, manifest.shape);
   let worktrees = fs::canonicalize(home)?.join(WORKTREES_DIR);
   let mut restored_worktrees = 0;
   for (session, listed) in plan.sessions.iter().zip(&manifest.sessions) {
@@ -1077,11 +1087,11 @@ pub fn reset(home: &Path, allow_growth: bool) -> Result<()> {
 /// production chat line's.
 pub fn append_growth(home: &Path, bytes: u64) -> Result<()> {
   let manifest = Manifest::read(home)?;
-  if manifest.shape != Shape::TaskTree {
+  if !manifest.shape.is_task_tree() {
     bail!("{} holds a {:?} home; only a task-tree home has a generated state", home.display(), manifest.shape);
   }
   let (_, _, sizes) = session::planned_home(manifest.session_count, manifest.seed, manifest.language);
-  let plan = HomePlan::new(&sizes, manifest.seed, manifest.language);
+  let plan = HomePlan::new(&sizes, manifest.seed, manifest.language, manifest.shape);
   let kept: Vec<(usize, u64)> = plan
     .sessions
     .iter()
@@ -1139,12 +1149,29 @@ mod tests {
   fn every_kept_session_of_the_plan_holds_a_task_or_a_run() {
     let (_, _, sizes) = session::planned_home(crate::PRODUCTION_SESSIONS, 1, Language::Mixed);
     for seed in [1, 2] {
-      let plan = HomePlan::new(&sizes, seed, Language::Mixed);
+      let plan = HomePlan::new(&sizes, seed, Language::Mixed, Shape::TaskTree);
       let kept = plan.sessions.iter().filter(|session| session.reason.is_some());
       for session in kept {
         assert!(session.has_task || !session.runs.is_empty(), "{} is kept with neither a task nor a run", session.id);
       }
     }
+  }
+
+  /// A live run is one a release lab reattaches to a live process. The serve shape plants none, since a serve start
+  /// reattaches nothing and would drain each one with a node failure. Both shapes draw the same sessions.
+  #[test]
+  fn only_the_lab_shape_plants_live_runs() {
+    let (_, _, sizes) = session::planned_home(crate::PRODUCTION_SESSIONS, 1, Language::Mixed);
+    let live_runs = |shape| {
+      HomePlan::new(&sizes, 1, Language::Mixed, shape)
+        .sessions
+        .iter()
+        .flat_map(|session| &session.runs)
+        .filter(|run| run.end == RunEnd::Live)
+        .count()
+    };
+    assert_eq!(live_runs(Shape::TaskTree), LIVE_RUN_SESSIONS);
+    assert_eq!(live_runs(Shape::ServeTaskTree), 0);
   }
 
   /// The plan deals every keep reason at its scaled reference count, so a lab start's full-pass distribution lands
@@ -1156,7 +1183,7 @@ mod tests {
     // the stream of keep-reason draws, so the quarter-of-reference bound needs the production count.
     let sessions = crate::PRODUCTION_SESSIONS;
     let (_, _, sizes) = session::planned_home(sessions, 1, Language::Mixed);
-    let plan = HomePlan::new(&sizes, 1, Language::Mixed);
+    let plan = HomePlan::new(&sizes, 1, Language::Mixed, Shape::TaskTree);
     for (reason, reference) in REFERENCE_KEEPS {
       let dealt = plan.sessions.iter().filter(|session| session.reason == Some(reason)).count();
       assert_eq!(dealt, scaled(reference, sessions).round() as usize, "{reason:?}");
@@ -1194,7 +1221,7 @@ mod tests {
       assert!(parents.contains(&index) && band.contains(&sizes[index]), "session {index}");
     }
     let band_sizes = vec![30_000_000_u64; 500];
-    let band_plan = HomePlan::new(&band_sizes, 1, Language::Mixed);
+    let band_plan = HomePlan::new(&band_sizes, 1, Language::Mixed, Shape::TaskTree);
     let band_archived = band_plan.sessions.iter().filter(|session| session.archived).count();
     assert!(band_archived >= 5, "{band_archived} archived sessions");
   }

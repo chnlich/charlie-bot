@@ -58,8 +58,13 @@ pub enum Shape {
   #[default]
   Default,
   /// Sessions of the default size curve, written as the task nodes of a production startup (`task_tree`), with the
-  /// boot marker and the cron fixture. The improve rounds' shared home is this shape, named by `DATA_VERSION`.
+  /// boot marker and the cron fixture. Each open task's last run is live, and `live-runs.txt` lists it, so a release lab
+  /// reattaches a process to it.
   TaskTree,
+  /// The task-tree shape with no live run. A serve trial starts no process to reattach, so a live run would drain at its
+  /// start and log a node failure. Each run keeps the end its record states. The improve rounds' shared home is this
+  /// shape, named by `DATA_VERSION`.
+  ServeTaskTree,
   /// Sessions of the default size curve, each with a synthetic task spec sized so that its session row matches a live
   /// view's rows. The default shape writes no task spec, so its bytes do not change.
   View,
@@ -71,6 +76,11 @@ pub enum Shape {
 impl Shape {
   fn is_default(&self) -> bool {
     *self == Shape::Default
+  }
+
+  /// Whether the shape writes the task tree (`task_tree`), with or without its live runs.
+  pub fn is_task_tree(self) -> bool {
+    matches!(self, Shape::TaskTree | Shape::ServeTaskTree)
   }
 }
 

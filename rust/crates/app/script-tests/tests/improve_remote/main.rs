@@ -337,6 +337,21 @@ fn the_gateway_member_gets_its_token_and_no_review_key() {
   assert!(!record.contains(REVIEW_KEY), "the review key reached the member's environment:\n{record}");
 }
 
+/// The CLI refuses a server-backed command only inside a round: the launch directory is named and `CHARLIEBOT_HOME` is
+/// the round home. The runner sets both for the round's agent, so the round's server-backed commands refuse at once.
+#[test]
+#[ignore = "integration"]
+fn the_round_environment_names_its_launch_directory_and_its_round_home() {
+  let world = World::new();
+  let run = world.run(&world.env());
+  assert_eq!(run.code, 0, "{}", run.describe());
+  let env = world.claude_environment();
+  let round_home = format!("{}/improve/home", world.remote_home.display());
+  assert_eq!(env.get("CHARLIEBOT_HOME"), Some(&round_home), "{}", run.describe());
+  let launch_dir = env.get("IMPROVE_LAUNCH_DIR").expect("the round's environment names its launch directory");
+  assert!(launch_dir.starts_with(&format!("{}/improve/launch/", world.remote_home.display())), "{launch_dir}");
+}
+
 #[test]
 #[ignore = "integration"]
 fn the_review_runs_backend_run_on_the_launch_review_directory_from_its_scratch_directory() {

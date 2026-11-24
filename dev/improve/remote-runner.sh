@@ -796,7 +796,7 @@ ensure_mock_home() {
     return
   fi
 
-  if ! output=$("$mock_home_bin" generate "$mock_home_dir" --shape task-tree 2>&1); then
+  if ! output=$("$mock_home_bin" generate "$mock_home_dir" --shape serve-task-tree 2>&1); then
     fail 1 "cannot generate the shared mock home $mock_home_dir: ${output:-mock-home generate returned no diagnostic}"
   fi
   [[ -s $mock_home_dir/manifest.json ]] \

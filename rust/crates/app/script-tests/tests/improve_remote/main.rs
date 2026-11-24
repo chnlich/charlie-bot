@@ -3,8 +3,7 @@
 //! locally. Fake `claude`, `codex`, `systemd-run`, `systemctl` and `cargo` record what they receive, so each test checks
 //! the run's contract without a network, a server or a real remote host.
 //!
-//! The tests that assert a bound on time measure it: the approval preflight and the heartbeat stop must both finish
-//! inside five seconds.
+//! The tests that assert a bound on time measure it: the approval preflight must finish inside five seconds.
 
 mod world;
 
@@ -1946,10 +1945,10 @@ fn a_clone_without_the_hooks_exits_4_and_starts_no_claude() {
 
 #[test]
 #[ignore = "integration"]
-fn the_heartbeat_stops_the_scope_after_the_launcher_is_killed() {
+fn a_killed_launcher_leaves_its_round_to_finish_on_the_host() {
   let world = World::new();
   let mut env = world.env();
-  env.insert("FAKE_CLAUDE_WAIT_FOR".to_string(), world.scope_stopped.display().to_string());
+  env.insert("FAKE_CLAUDE_WAIT_FOR".to_string(), world.round_release.display().to_string());
   // The fake ssh forwards standard input, so the launcher gets an input that ends, as `run` gives it.
   let mut command = world.launcher_command(&env);
   command.stdin(Stdio::null());
@@ -1959,18 +1958,120 @@ fn the_heartbeat_stops_the_scope_after_the_launcher_is_killed() {
   });
   assert!(started, "the round never started a scope:\n{}", world.ssh_arguments());
   launcher.kill().expect("kill the launcher");
-  let stopped =
-    wait_until(Duration::from_secs(5), || world.systemctl_calls().contains(&format!("stop improve-{DIRECTION}.scope")));
-  let calls = world.systemctl_calls();
   let _ = launcher.wait();
-  assert!(stopped, "the heartbeat did not stop the scope within 5 seconds: {calls:?}");
-  // The stopped scope ends the round's own shell, which then removes its launch directory. Wait for that, so the
-  // orphaned remote side is done before the sandbox goes away.
+  // A launcher whose connections end looks to the host like a dropped connection, and a dropped connection never stops a
+  // round: no stop may follow the kill.
+  let stopped =
+    wait_until(Duration::from_secs(3), || world.systemctl_calls().contains(&format!("stop improve-{DIRECTION}.scope")));
+  assert!(!stopped, "the launcher's end stopped the round's scope: {}", world.systemctl_calls());
+  fs::write(&world.round_release, "").expect("release the round");
+  // The round then ends its own scope and its wrapper removes the launch directory.
   assert!(
-    wait_until(Duration::from_secs(15), || world.launch_directory().is_none()),
-    "the stopped round left its launch directory behind: {}",
+    wait_until(Duration::from_secs(30), || world.launch_directory().is_none()),
+    "the round did not finish after the launcher was killed: {}",
     world.ssh_arguments()
   );
+}
+
+/// The round's record directories under the remote home, named by launch id.
+fn round_records(world: &World) -> Vec<PathBuf> {
+  let Ok(entries) = fs::read_dir(world.remote_home.join("improve/results")) else {
+    return Vec::new();
+  };
+  entries.map(|entry| entry.expect("a round record entry").path()).collect()
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_dropped_connection_reattaches_to_the_round_and_returns_its_status_and_output() {
+  let world = World::new();
+  let mut env = world.env();
+  env.insert("FAKE_CLAUDE_DROP".to_string(), world.drop_trigger.display().to_string());
+  env.insert("FAKE_CLAUDE_WAIT_FOR".to_string(), world.round_release.display().to_string());
+  env.insert("FAKE_CLAUDE_EXIT".to_string(), "7".to_string());
+  env.insert("SSH_DROP_START_AFTER".to_string(), world.drop_trigger.display().to_string());
+  // The first state query finds the round running, and releases it once the query has answered.
+  env.insert("SSH_RELEASE_AFTER_STATE".to_string(), world.round_release.display().to_string());
+  env.insert("IMPROVE_REATTACH_POLL_SECONDS".to_string(), "1".to_string());
+  let run = world.run(&env);
+  assert_eq!(run.code, 7, "the launch returns the round's own exit status: {}", run.describe());
+  assert_eq!(
+    run.stdout.trim_start_matches('\n'),
+    "first part\nfinal part\n",
+    "the launch passes on the round's output once, before and after the drop: {}",
+    run.describe()
+  );
+  assert_eq!(world.cli_runs().len(), 1, "a dropped connection started a second round: {}", world.ssh_arguments());
+  let calls = world.ssh_arguments();
+  assert!(calls.matches("--round-state").count() >= 2, "the launch did not wait for the round's end: {calls}");
+  assert!(calls.contains("--round-output"), "the launch did not fetch the round's output: {calls}");
+  assert!(calls.contains("--round-release"), "the launch did not release the round's record: {calls}");
+  assert_eq!(
+    fs::read_to_string(world.local_evidence().join("round-result.txt")).expect("the round's evidence copy"),
+    "the round result\n",
+    "the launch did not copy the round's evidence"
+  );
+  assert!(round_records(&world).is_empty(), "the launch left its round record on the host");
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_host_unreachable_past_the_reattach_bound_fails_while_the_round_runs() {
+  let world = World::new();
+  let mut env = world.env();
+  env.insert("FAKE_CLAUDE_DROP".to_string(), world.drop_trigger.display().to_string());
+  env.insert("FAKE_CLAUDE_UNREACHABLE".to_string(), world.host_unreachable.display().to_string());
+  env.insert("SSH_UNREACHABLE_FILE".to_string(), world.host_unreachable.display().to_string());
+  env.insert("SSH_DROP_START_AFTER".to_string(), world.drop_trigger.display().to_string());
+  env.insert("FAKE_CLAUDE_WAIT_FOR".to_string(), world.round_release.display().to_string());
+  env.insert("FAKE_CLAUDE_EXIT".to_string(), "7".to_string());
+  env.insert("IMPROVE_REATTACH_SECONDS".to_string(), "2".to_string());
+  env.insert("IMPROVE_REATTACH_POLL_SECONDS".to_string(), "1".to_string());
+  let run = world.run(&env);
+  assert_eq!(run.code, 3, "{}", run.describe());
+  assert!(
+    stderr(&run).contains("stayed unreachable for 2 s"),
+    "the launch does not name the bound it stopped at: {}",
+    run.describe()
+  );
+  assert!(
+    stderr(&run).contains("improve/results/"),
+    "the launch does not name where the result is: {}",
+    run.describe()
+  );
+  assert_eq!(run.stdout.trim_start_matches('\n'), "first part\n", "{}", run.describe());
+  assert!(!world.round_release.exists(), "the round was released before the launch gave up");
+  assert!(
+    !world.systemctl_calls().contains("stop improve-"),
+    "the launch stopped the round's scope: {}",
+    world.systemctl_calls()
+  );
+  // The round still runs on the host: once it is released it ends with its own status and output in the record.
+  fs::write(&world.round_release, "").expect("release the round");
+  let records = round_records(&world);
+  assert_eq!(records.len(), 1, "the round's record is missing: {}", world.ssh_arguments());
+  let status = records[0].join("status");
+  assert!(wait_until(Duration::from_secs(30), || status.exists()), "the round did not end on the host");
+  assert_eq!(fs::read_to_string(&status).expect("the round's status"), "7\n");
+  assert_eq!(
+    fs::read_to_string(records[0].join("output")).expect("the round's output").trim_start_matches('\n'),
+    "first part\nfinal part\n",
+    "the round's record lacks the output after the drop"
+  );
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_dropped_connection_whose_round_left_no_status_exits_9_and_names_the_launch() {
+  let world = World::new();
+  let mut env = world.env();
+  // The connection drops before the host runs the start: no runner, no status.
+  env.insert("SSH_DROP_BEFORE_START".to_string(), "1".to_string());
+  let run = world.run(&env);
+  assert_eq!(run.code, 9, "{}", run.describe());
+  assert!(stderr(&run).contains("left no result"), "{}", run.describe());
+  assert!(stderr(&run).contains("improve-test_perf.scope"), "{}", run.describe());
+  assert!(!world.claude_ran(), "the round started after its start had dropped");
 }
 
 /// A fake live round of `direction`: a leader whose command line the runner's round state reads, beside the

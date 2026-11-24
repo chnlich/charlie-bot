@@ -53,6 +53,19 @@ The launch exits 7 when a round dependency is missing, and its stderr names the 
 Neither exit starts a round.
 An exit 8 moves the round to another pool member when the pool has one; an exit 7 does not, because another member would miss the same item.
 
+## A dropped connection
+
+The connection that carries a round can drop while the round runs.
+The round runs on the improve host under its own scope, and a drop leaves that round as it was:
+
+- A drop neither stops the round nor starts a second round of its direction.
+- When the host answers again, the launch waits for the round's end, copies its evidence, and returns the round's exit status and final output.
+- When the host stays unreachable past `IMPROVE_REATTACH_SECONDS` (1800 seconds by default), the launch exits 3.
+- When the round's runner ends with no status, the launch exits 9.
+
+Each failure message names the launch id.
+The round's result stays on the host in `~/improve/results/<launch id>/`, as `status` and `output`.
+
 ## The member CLI version
 
 A round runs the version of its member CLI that the server host runs, so any model that the server host's CLI serves also works on the improve host.

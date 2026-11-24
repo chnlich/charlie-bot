@@ -137,6 +137,29 @@ while IFS= read -r name; do
     FAKE_*) environment+=("$name=${!name}") ;;
   esac
 done < <(compgen -e)
+# A dropped connection carries the round's start: the call returns 255 once the trigger file appears, and the remote command
+# keeps running with its output and error going nowhere, as on a closed connection.
+if [[ -n ${SSH_DROP_START_AFTER:-} && $remote == *'remote-runner.sh '* && $remote != *' --'* ]]; then
+  { cat | env -i "HOME=$SSH_REMOTE_HOME" "PATH=$SSH_REMOTE_PATH" "${environment[@]}" bash -c "$remote"; } 2>>"$SSH_ARG_LOG.dropped" | cat &
+  pump=$!
+  while [[ ! -e $SSH_DROP_START_AFTER ]] && kill -0 "$pump" 2>/dev/null; do
+    sleep 0.05
+  done
+  sleep 0.5
+  kill "$pump" 2>/dev/null || true
+  exit 255
+fi
+if [[ ${SSH_DROP_BEFORE_START:-0} == 1 && $remote == *'remote-runner.sh '* && $remote != *' --'* ]]; then
+  printf 'Connection reset by peer\n' >&2
+  exit 255
+fi
+# A state query that releases the round after it answers: the round's wait ends once the launch has read a running state.
+if [[ -n ${SSH_RELEASE_AFTER_STATE:-} && $remote == *'--round-state'* ]]; then
+  cat | env -i "HOME=$SSH_REMOTE_HOME" "PATH=$SSH_REMOTE_PATH" "${environment[@]}" bash -c "$remote"
+  status=$?
+  : >"$SSH_RELEASE_AFTER_STATE"
+  exit "$status"
+fi
 forward=1
 for argument in "$@"; do
   [[ $argument == -n ]] && forward=0
@@ -204,11 +227,25 @@ fi
 if [[ -n ${CHARLIEBOT_TRIAL_PROBE_ANSWER-} ]]; then
   cp -- "$CHARLIEBOT_TRIAL_PROBE_ANSWER" "$FAKE_CLAUDE_PROBE"
 fi
+# A dropped connection: the round prints its first output, then the trigger file drops the connection that carries it. The
+# unreachable file, when set, makes every later call to the host fail the way an unreachable host does.
+if [[ -n ${FAKE_CLAUDE_DROP:-} ]]; then
+  printf 'first part\n'
+  if [[ -n ${FAKE_CLAUDE_UNREACHABLE:-} ]]; then
+    printf 'Timeout, server not responding.\n' >"$FAKE_CLAUDE_UNREACHABLE"
+  fi
+  : >"$FAKE_CLAUDE_DROP"
+fi
 if [[ -n ${FAKE_CLAUDE_WAIT_FOR:-} ]]; then
   for _ in $(seq 1 600); do
     [[ -e $FAKE_CLAUDE_WAIT_FOR ]] && break
     sleep 0.1
   done
+fi
+# After the drop, the round's final output and its evidence, which the launch copies back once it has the round's end.
+if [[ -n ${FAKE_CLAUDE_DROP:-} ]]; then
+  printf 'final part\n'
+  printf 'the round result\n' >evidence/round-result.txt
 fi
 # The round's review: the command the round's agent runs, from the review's scratch directory, with the launch's review
 # directory and no model, option or key.
@@ -621,6 +658,11 @@ pub struct World {
   pub systemctl_log: PathBuf,
   pub systemd_run_log: PathBuf,
   pub scope_stopped: PathBuf,
+  /// The file that drops the connection carrying the round's start, and the round's wait for its release.
+  pub drop_trigger: PathBuf,
+  pub round_release: PathBuf,
+  /// The file that makes the host unreachable for every later call.
+  pub host_unreachable: PathBuf,
   pub mock_home_log: PathBuf,
   pub mock_home_fixture: PathBuf,
   /// The fake vendor's root: each URL the fake curl serves is a file under its host and path.
@@ -782,6 +824,9 @@ impl World {
       systemctl_log: sandbox.root().join("systemctl.log"),
       systemd_run_log: sandbox.root().join("systemd-run.log"),
       scope_stopped: sandbox.root().join("scope-stopped"),
+      drop_trigger: sandbox.root().join("drop-trigger"),
+      round_release: sandbox.root().join("round-release"),
+      host_unreachable: sandbox.root().join("host-unreachable"),
       mock_home_log,
       mock_home_fixture,
       instructions,

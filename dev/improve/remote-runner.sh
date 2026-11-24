@@ -5,6 +5,9 @@
 #   remote-runner.sh --in-scope <launch id> <direction> <member kind>
 #   remote-runner.sh --prepare <launch id>     (the member's and the review's logins on standard input)
 #   remote-runner.sh --member-cli <member kind> <member version>     (a probe: install and report, no round)
+#   remote-runner.sh --round-state <launch id>                      (the launch's round: running, done <status>, lost)
+#   remote-runner.sh --round-output <launch id> <offset>            (the round's output from a byte offset)
+#   remote-runner.sh --round-release <launch id>                    (remove the round's record)
 #
 # The member kind is `claude` or `codex`: the agent the round runs. The member version is the version of that CLI that
 # the server host runs; the runner installs exactly that version from the vendor and runs it, and no other CLI. The
@@ -53,6 +56,14 @@
 # The clone sync and check run before the CLI build, so a refused clone starts no build. The runner deletes
 # its launch directory when it exits; the round's evidence is a separate directory, which the
 # launcher copies back after this script has ended.
+#
+# The round's record is ~/improve/results/<launch id>/: the runner's standard output and standard error and the exit
+# status, written last. The record belongs to the launch, not to the connection that carries it, so a launcher whose
+# connection drops reads the round's status and remaining output from it. The `--round-*` forms read the record:
+# `--round-state` prints `running` while the runner runs, `done <status>` once the record holds a status, and `lost` when
+# the runner ended without one; `--round-output` prints the output after an offset; `--round-release` removes the record
+# once the launcher has read it. A record that no launcher released is removed a day after its status. The launcher sends
+# this file on standard input to each `--round-*` call, so the calls need no copy of the runner on the host.
 set -euo pipefail
 
 readonly STDERR_PREFIX='improve runner:'
@@ -72,6 +83,9 @@ usage() {
   printf '       %s --in-scope <launch id> <direction> <member kind>\n' "${BASH_SOURCE[0]}" >&2
   printf '       %s --prepare <launch id>\n' "${BASH_SOURCE[0]}" >&2
   printf '       %s --member-cli <member kind> <member version>\n' "${BASH_SOURCE[0]}" >&2
+  printf '       %s --round-state <launch id>\n' "${BASH_SOURCE[0]}" >&2
+  printf '       %s --round-output <launch id> <offset>\n' "${BASH_SOURCE[0]}" >&2
+  printf '       %s --round-release <launch id>\n' "${BASH_SOURCE[0]}" >&2
   exit 1
 }
 
@@ -81,6 +95,7 @@ kind=
 member_version=
 review_kind=
 review_version=
+offset=
 case ${1:-} in
   --in-scope)
     [[ $# -eq 4 ]] || usage
@@ -103,6 +118,25 @@ case ${1:-} in
     kind=$2
     member_version=$3
     ;;
+  --round-state)
+    [[ $# -eq 2 ]] || usage
+    mode=round_state
+    launch_id=$2
+    direction=
+    ;;
+  --round-release)
+    [[ $# -eq 2 ]] || usage
+    mode=round_release
+    launch_id=$2
+    direction=
+    ;;
+  --round-output)
+    [[ $# -eq 3 ]] || usage
+    mode=round_output
+    launch_id=$2
+    direction=
+    offset=$3
+    ;;
   '')
     usage
     ;;
@@ -118,7 +152,12 @@ case ${1:-} in
     ;;
 esac
 if [[ $mode != member_cli ]]; then
-  [[ $launch_id =~ ^[0-9A-Za-z._-]+$ ]] || fail 1 "not a launch id: $launch_id"
+  # The id starts with an alphanumeric, so no id is `.` or `..`: a record or launch directory named by one would be
+  # the improve root itself.
+  [[ $launch_id =~ ^[0-9A-Za-z][0-9A-Za-z._-]*$ ]] || fail 1 "not a launch id: $launch_id"
+fi
+if [[ $mode == round_output ]]; then
+  [[ $offset =~ ^[0-9]+$ ]] || fail 1 "not a byte offset: $offset"
 fi
 if [[ $mode == run || $mode == in_scope ]]; then
   [[ $direction =~ ^[a-z][a-z0-9_]*$ ]] || fail 1 "not an improve direction: $direction"
@@ -128,6 +167,8 @@ readonly SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 readonly HOME_DIR=${HOME:-}
 [[ $HOME_DIR == /* ]] || fail 1 'HOME must be an absolute path'
 readonly LAUNCH_DIR="$HOME_DIR/improve/launch/$launch_id"
+readonly RESULTS_ROOT="$HOME_DIR/improve/results"
+readonly RESULT_DIR="$RESULTS_ROOT/$launch_id"
 if [[ $mode == run || $mode == in_scope ]]; then
   member_kinds_file="$LAUNCH_DIR/member_kinds.txt"
   [[ -r $member_kinds_file ]] || fail 1 "the member kind list is missing or unreadable: $member_kinds_file"
@@ -898,6 +939,89 @@ scope_review_pids() {
   done <"$procs"
 }
 
+# Whether this launch's wrapper runs: its run form, or its in-scope form that the wrapper's systemd-run starts. The check
+# reads the command lines, so the state query that names the launch id is not the wrapper.
+launch_wrapper_runs() {
+  local proc argument
+  local -a arguments=()
+  for proc in /proc/[0-9]*/cmdline; do
+    [[ -r $proc ]] || continue
+    arguments=()
+    while IFS= read -r -d '' argument; do
+      arguments+=("$argument")
+    done 2>/dev/null <"$proc" || continue
+    (( ${#arguments[@]} >= 3 )) || continue
+    [[ ${arguments[1]} == "$LAUNCH_DIR/remote-runner.sh" ]] || continue
+    if [[ ${arguments[2]} == "$launch_id" ]]; then
+      return 0
+    fi
+    if [[ ${arguments[2]} == --in-scope && ${arguments[3]-} == "$launch_id" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# The round's state, as the launcher's reattach reads it: `running` while the wrapper runs, `done <status>` once the record
+# holds the status, and `lost` when the wrapper has ended with no status. The wrapper is checked first: it writes its status
+# before it ends, so a wrapper that has ended already has its status in place.
+print_round_state() {
+  if launch_wrapper_runs; then
+    printf 'running\n'
+  elif [[ -s $RESULT_DIR/status ]]; then
+    printf 'done %s\n' "$(<"$RESULT_DIR/status")"
+  else
+    printf 'lost\n'
+  fi
+}
+
+# The round's output from the byte offset that the launcher names, to the end of the record's output.
+print_round_output() {
+  [[ -f $RESULT_DIR/output ]] || fail 1 "the round's record holds no output: $RESULT_DIR/output"
+  tail -c "+$(( offset + 1 ))" -- "$RESULT_DIR/output"
+}
+
+# Remove this launch's record once the launcher has read the round's result. Only a record under the results root goes.
+release_round_record() {
+  [[ $RESULT_DIR == "$RESULTS_ROOT"/?* ]] || fail 1 "the round's record is not under the results root: $RESULT_DIR"
+  rm -rf -- "$RESULT_DIR"
+}
+
+# Remove the records of rounds whose status is a day old. A launcher releases its record once it has read the result, so
+# this sweep takes the records that no launcher read.
+sweep_round_records() {
+  local status
+  while IFS= read -r -d '' status; do
+    rm -rf -- "${status%/status}"
+  done < <(find "$RESULTS_ROOT" -mindepth 2 -maxdepth 2 -name status -mtime +1 -print0)
+}
+
+# Open this launch's record and send the wrapper's standard output and standard error through it. Each tee writes the
+# record and then the connection. A tee keeps writing the record after the connection closes its end, so a dropped
+# connection neither stops the wrapper nor reaches the round.
+open_round_record() {
+  ( umask 077 && mkdir -p -- "$RESULTS_ROOT" ) || fail 1 "cannot create the round records directory: $RESULTS_ROOT"
+  sweep_round_records
+  ( umask 077 && mkdir -- "$RESULT_DIR" ) || fail 1 "cannot make the round's record: $RESULT_DIR"
+  exec > >(tee --output-error=warn-nopipe -a -- "$RESULT_DIR/output")
+  record_out_tee=$!
+  exec 2> >(tee --output-error=warn-nopipe -a -- "$RESULT_DIR/stderr" >&2)
+  record_err_tee=$!
+}
+
+# Close this launch's record: the wrapper's streams end, the tees write what they hold, and the exit status lands last, so
+# a reader that finds the status finds the whole output. A tee that failed leaves no status, which reads as `lost`.
+finish_round_record() {  # <exit status>
+  local status=$1 out_status=0 err_status=0
+  [[ -n ${record_out_tee-} ]] || return 0
+  exec >&- 2>&-
+  wait "$record_out_tee" || out_status=$?
+  wait "$record_err_tee" || err_status=$?
+  (( out_status == 0 && err_status == 0 )) || return 0
+  printf '%s\n' "$status" >"$RESULT_DIR/status.partial"
+  mv -f -- "$RESULT_DIR/status.partial" "$RESULT_DIR/status"
+}
+
 run_in_scope() {
   # The marker tells the heartbeat that this launch owns the scope: a refusal leaves no marker,
   # so a heartbeat that closes cannot stop the previous round's scope.
@@ -934,6 +1058,12 @@ if [[ $mode == in_scope ]]; then
   rewrite_command
   run_in_scope
 fi
+
+case $mode in
+  round_state) print_round_state; exit 0 ;;
+  round_output) print_round_output; exit 0 ;;
+  round_release) release_round_record; exit 0 ;;
+esac
 
 [[ $commit =~ ^[0-9a-f]{40}$ ]] || fail 1 "not a full commit: $commit"
 
@@ -1010,6 +1140,7 @@ end_round_scope() {
 OWNS_CODEX_AUTH=0
 SCOPE_PID=
 cleanup_launch_dir() {
+  local exit_status=$?
   end_round_scope
   if [[ -n $SCOPE_PID ]]; then
     kill "$SCOPE_PID" 2>/dev/null || true
@@ -1019,8 +1150,10 @@ cleanup_launch_dir() {
   if (( OWNS_CODEX_AUTH )); then
     rm -f -- "$CODEX_HOME_TARGET/auth.json" "$REVIEW_CODEX_HOME/auth.json"
   fi
+  finish_round_record "$exit_status"
   return 0
 }
+open_round_record
 trap cleanup_launch_dir EXIT
 # A signal this wrapper can handle ends the round the way the round's own end does: the scope ends, so the member
 # and every process it started stop.
@@ -1039,7 +1172,9 @@ read_launch_env
 check_round_dependencies
 install_pattern_file
 rewrite_command
-other_inflight_files >>"$LAUNCH_DIR/inflight-files.txt"
+# The call runs in a subshell. A function that exits inside a redirection keeps the redirection's saved output open in this
+# shell, so the round record's output would never reach its end and the wrapper would wait on it forever.
+( other_inflight_files ) >>"$LAUNCH_DIR/inflight-files.txt" || exit 1
 sync_clone
 check_clone
 

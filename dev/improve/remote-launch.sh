@@ -36,11 +36,14 @@
 #
 # Exit codes: the agent's exit code; 1 a local failure, such as a missing input file; 3 an ssh step to the improve host
 # failed: either the host asks for a login approval, or stderr quotes ssh's error, or the bound that ended the wait
-# when ssh printed nothing; 4 the direction's clone is missing, is not this protocol's clone, or holds uncommitted work
+# when ssh printed nothing, or the reattach bound after a dropped connection; 4 the direction's clone is missing, is not
+# this protocol's clone, or holds uncommitted work
 # that blocks its checkout of origin/main; 5 the previous round of this direction still runs; 6 the round's direction
 # cannot be read; 7 a round dependency is missing or dev/improve differs from HEAD, and stderr names it; 8 the member's
-# login has less access-token life than a round needs, and stderr names the login and its minutes left. Codes 3 to 8
-# start no agent and no scope, and codes 7 and 8 send nothing to the host. Code 7 also covers the review backend: an
+# login has less access-token life than a round needs, and stderr names the login and its minutes left; 9 the round's
+# runner ended with no status after a dropped connection, and stderr names the launch id. Codes 4 to 8 start no agent
+# and no scope, and codes 7 and 8 send nothing to the host. Codes 3 and 9 after a dropped connection come from a round that
+# the launch started; the reattach contract in landing.md states when each applies. Code 7 also covers the review backend: an
 # unresolved `backends.calls.improve_review`, a missing key or login, or a login with too little life; and the probe: a
 # `backends.calls.probe` target with no member that names an api_base. The review never exits 8,
 # because the server reads 8 as a member's short token and swaps the member. A code 7 for a member or review CLI means
@@ -60,6 +63,11 @@ readonly PREFLIGHT_SECONDS=4
 # The copy-back limit. The server stops following 90 seconds after output goes silent, so a slow
 # copy stops here and the next launch of this direction copies the rest.
 readonly EVIDENCE_COPY_SECONDS=${IMPROVE_EVIDENCE_COPY_SECONDS:-60}
+# The reattach bounds. A launch whose connection dropped asks the host every REATTACH_POLL_SECONDS, and stops waiting once the
+# host has stayed unreachable for REATTACH_SECONDS. A host call that runs past REATTACH_CALL_SECONDS counts as unreachable.
+readonly REATTACH_SECONDS=${IMPROVE_REATTACH_SECONDS:-1800}
+readonly REATTACH_POLL_SECONDS=${IMPROVE_REATTACH_POLL_SECONDS:-30}
+readonly REATTACH_CALL_SECONDS=60
 # A call that sends no input of its own adds -n. Without -n, ssh reads this launcher's standard input, which
 # carries the round's prompt, and the remote command drops what it does not read. Only the main run passes that
 # standard input on to the remote agent.
@@ -136,6 +144,8 @@ readonly TEMP_ROOT=${TMPDIR:-/tmp}
 # The least access-token life, in seconds, that a round may start with. The server sets it beside IMPROVE_REMOTE_HOST.
 readonly TOKEN_MIN_SECONDS=${IMPROVE_TOKEN_MIN_SECONDS:-}
 [[ $TOKEN_MIN_SECONDS =~ ^[0-9]+$ ]] || fail 7 'IMPROVE_TOKEN_MIN_SECONDS is not set to a whole number of seconds'
+[[ $REATTACH_SECONDS =~ ^[0-9]+$ ]] || fail 1 'IMPROVE_REATTACH_SECONDS is not a whole number of seconds'
+[[ $REATTACH_POLL_SECONDS =~ ^[0-9]+$ ]] || fail 1 'IMPROVE_REATTACH_POLL_SECONDS is not a whole number of seconds'
 
 # The value of one top-level YAML key in a file, unquoted, without a trailing comment.
 yaml_value() {
@@ -215,6 +225,90 @@ copy_evidence() {
   rm -rf -- "$work"
   if (( status != 0 )); then
     printf '%s the evidence copy stopped (status %s); the next launch copies the rest\n' "$STDERR_PREFIX" "$status" >&2
+  fi
+}
+
+# Whether a bounded host call did not answer: ssh's 255, or timeout's 124 and 137 for a call that ran past its bound.
+host_unanswered() {
+  (( $1 == 255 || $1 == 124 || $1 == 137 ))
+}
+
+# Exit 3 once the host has stayed unreachable past REATTACH_SECONDS since its last answer, which `$1` holds as a
+# SECONDS reading. The message names the bound, the launch id and where the round's result is on the host.
+check_reattach_bound() {
+  (( SECONDS - $1 < REATTACH_SECONDS )) && return 0
+  fail 3 "the improve host $REMOTE_HOST stayed unreachable for $REATTACH_SECONDS s after the connection of launch $launch_id" \
+    "dropped, so this launch stopped waiting; the round runs on the host until it ends. Its result is" \
+    "~/improve/results/$launch_id/status and its output ~/improve/results/$launch_id/output on $REMOTE_HOST."
+}
+
+# The connection that carried the round dropped (ssh exit 255), and the round may still run on the host under its scope. The
+# launch waits for the round's end: it reads the round's state until the state holds a status, copies the output that its
+# stream lacks, and sets run_status to the round's exit status. An unreachable host past the bound fails with 3, and a round
+# whose runner ended with no status fails with 9. The launch never sends the round again.
+reattach_round() {
+  local since=$SECONDS state call_status
+  while :; do
+    call_status=0
+    state=$(timeout --kill-after=5 "$REATTACH_CALL_SECONDS" "${SSH[@]}" "$REMOTE_HOST" \
+      "bash -s -- --round-state $launch_id" <"$SCRIPT_DIR/remote-runner.sh" \
+      2>"$failure_dir/reattach.stderr") || call_status=$?
+    if host_unanswered "$call_status"; then
+      check_reattach_bound "$since"
+      sleep "$REATTACH_POLL_SECONDS"
+      continue
+    fi
+    (( call_status == 0 )) || fail 3 "the round's state on $REMOTE_HOST failed for launch $launch_id: " \
+      "$(ssh_failure_evidence "$(<"$failure_dir/reattach.stderr")" 'no output')"
+    since=$SECONDS
+    case $state in
+      running)
+        sleep "$REATTACH_POLL_SECONDS"
+        ;;
+      lost)
+        copy_evidence "$EVIDENCE_COPY_SECONDS"
+        fail 9 "the round of launch $launch_id left no result on $REMOTE_HOST: its runner ended with no status. Its record," \
+          "if the runner started, is ~/improve/results/$launch_id/ (output and stderr); its scope is improve-$direction.scope."
+        ;;
+      "done "*)
+        run_status=${state#done }
+        break
+        ;;
+      *)
+        fail 3 "the round's state on $REMOTE_HOST names no state for launch $launch_id: '$state'"
+        ;;
+    esac
+  done
+  # The stream file holds exactly the bytes this launch passed on, so each call resumes at its size and a call that the
+  # bound stops leaves the next call to finish the rest.
+  while :; do
+    call_status=0
+    timeout --kill-after=5 "$REATTACH_CALL_SECONDS" "${SSH[@]}" "$REMOTE_HOST" \
+      "bash -s -- --round-output $launch_id $(stat -c %s -- "$round_stream")" <"$SCRIPT_DIR/remote-runner.sh" \
+      2>"$failure_dir/reattach.stderr" | tee -a -- "$round_stream" || call_status=$?
+    if (( call_status == 0 )); then
+      break
+    fi
+    if host_unanswered "$call_status"; then
+      check_reattach_bound "$since"
+      sleep "$REATTACH_POLL_SECONDS"
+      continue
+    fi
+    fail 3 "the round's output on $REMOTE_HOST failed for launch $launch_id: " \
+      "$(ssh_failure_evidence "$(<"$failure_dir/reattach.stderr")" 'no output')"
+  done
+}
+
+# Remove the launch's round record on the host once the launch has the round's result. A release that fails leaves the
+# record to the host's sweep, and the launch names that instead of failing.
+release_host_record() {
+  local status=0
+  timeout --kill-after=5 "$REATTACH_CALL_SECONDS" "${SSH[@]}" "$REMOTE_HOST" \
+    "bash -s -- --round-release $launch_id" <"$SCRIPT_DIR/remote-runner.sh" \
+    2>"$failure_dir/release.stderr" || status=$?
+  if (( status != 0 )); then
+    printf '%s the round record of launch %s stays on %s (status %s); the host sweeps it a day after its status\n' \
+      "$STDERR_PREFIX" "$launch_id" "$REMOTE_HOST" "$status" >&2
   fi
 }
 
@@ -436,6 +530,8 @@ payload=$(mktemp -d "$payload_parent/improve-launch.XXXXXXXX") || fail 1 'cannot
 # tarred with it.
 failure_dir=$(mktemp -d "$payload_parent/improve-failure.XXXXXXXX") \
   || { rm -rf -- "$payload"; fail 1 'cannot make the failure log directory'; }
+# The round's standard output as this launch passed it on. A reattach resumes from its size.
+round_stream=$failure_dir/round.stdout
 cleanup_payload() {
   [[ $payload == "$payload_parent"/improve-launch.* ]] && rm -rf -- "$payload"
   [[ $failure_dir == "$payload_parent"/improve-failure.* ]] && rm -rf -- "$failure_dir"
@@ -535,9 +631,9 @@ fi
 
 # The heartbeat carries this launch id as its own argument. The host's next-start sweep uses that live process to keep
 # this launch's member-credential file between `--prepare` and the wrapper's start. Start it before preparing that
-# file, so the sweep sees an owner before the credential exists.
-heartbeat_script='cat >/dev/null; if [ -e "$HOME/improve/launch/$1/started" ]; then systemctl --user stop "improve-$2.scope"; fi'
-heartbeat_command="bash -c '$heartbeat_script' improve-heartbeat $launch_id $direction"
+# file, so the sweep sees an owner before the credential exists. The heartbeat stops no scope: when its connection ends,
+# the host sees the same end as a dropped connection, and a dropped connection never stops a round.
+heartbeat_command="bash -c 'cat >/dev/null' improve-heartbeat $launch_id $direction"
 mkfifo "$payload/heartbeat"
 "${SSH[@]}" "$REMOTE_HOST" "$heartbeat_command" <"$payload/heartbeat" &
 heartbeat_pid=$!
@@ -567,17 +663,26 @@ if (( prepare_status != 0 )); then
 fi
 
 # ---------- 5. Start ----------
+# The start's output passes through the stream file, so the launch knows the bytes it has passed on when a connection drops.
+: >"$round_stream"
 set +e
 "${SSH[@]}" "$REMOTE_HOST" \
-  "bash \$HOME/improve/launch/$launch_id/remote-runner.sh $launch_id $direction $cli_commit $kind $member_version $review_kind $review_version" 3>&-
-run_status=$?
+  "bash \$HOME/improve/launch/$launch_id/remote-runner.sh $launch_id $direction $cli_commit $kind $member_version $review_kind $review_version" \
+  3>&- | tee -a -- "$round_stream"
+run_status=${PIPESTATUS[0]}
 set -e
+# A dropped connection leaves the round running on the host, so the launch reattaches to the round's record. A start that
+# returned its status leaves nothing to reattach to.
+if (( run_status == 255 )); then
+  reattach_round
+fi
+release_host_record
 
 # ---------- 6. End ----------
 copy_evidence "$EVIDENCE_COPY_SECONDS"
 
 exec 3>&-
-# The heartbeat's stop runs on the host; this bound only keeps a dead connection from holding the
+# The heartbeat stops nothing on the host, so this bound only keeps a dead connection from holding the
 # launcher open.
 for (( attempt = 0; attempt < 50; attempt++ )); do
   kill -0 "$heartbeat_pid" 2>/dev/null || break

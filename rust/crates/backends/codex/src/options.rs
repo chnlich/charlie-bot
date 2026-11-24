@@ -1,6 +1,8 @@
 //! The codex option fields of a `backends.options[]` entry.
 
+use charliebot_core::backend_types;
 use charliebot_core::config::{OptionField, OptionFieldDefault};
+use charliebot_registry::option_model::{self, UnknownOptionFieldStyle};
 use serde_yaml::{Mapping, Value};
 
 const REASONING_EFFORT: &str = "model_reasoning_effort";
@@ -28,28 +30,24 @@ pub fn option_model(fields: &Mapping) -> Result<(), String> {
 
 /// The codex fields parsed from one option's mapping. A key that is not a codex field fails.
 pub fn parse(fields: &Mapping) -> Result<CodexOptions, String> {
-  let mut options = CodexOptions::default();
-  for (key, value) in fields {
-    let Some(name) = key.as_str() else {
-      return Err(format!("codex option key must be a string: {key:?}"));
-    };
-    match (name, value) {
-      (REASONING_EFFORT, Value::Null) => {}
-      (REASONING_EFFORT, Value::String(effort)) => options.model_reasoning_effort = Some(effort.clone()),
-      (REASONING_EFFORT, _) => return Err(format!("codex option {name} must be a string or null")),
-      (AUTO_COMPACT_LIMIT, Value::Null) => {}
-      (AUTO_COMPACT_LIMIT, Value::Number(number)) => {
-        let limit = number
-          .as_i64()
-          .filter(|limit| *limit > 0)
-          .ok_or_else(|| format!("codex option {name} must be a positive integer"))?;
-        options.model_auto_compact_token_limit = Some(limit);
-      }
-      (AUTO_COMPACT_LIMIT, _) => return Err(format!("codex option {name} must be a positive integer or null")),
-      _ => return Err(format!("unknown codex option field {name:?}")),
-    }
+  option_model::validate_field_names(fields, SCHEMA, backend_types::CODEX, UnknownOptionFieldStyle::Unknown)?;
+  Ok(CodexOptions {
+    model_reasoning_effort: option_model::optional_text(fields, backend_types::CODEX, REASONING_EFFORT)?,
+    model_auto_compact_token_limit: auto_compact_limit(fields)?,
+  })
+}
+
+/// The auto-compact token limit: absent or null is `None`, and a positive integer is the limit.
+fn auto_compact_limit(fields: &Mapping) -> Result<Option<i64>, String> {
+  match fields.get(AUTO_COMPACT_LIMIT) {
+    None | Some(Value::Null) => Ok(None),
+    Some(Value::Number(number)) => number
+      .as_i64()
+      .filter(|limit| *limit > 0)
+      .map(Some)
+      .ok_or_else(|| format!("codex option {AUTO_COMPACT_LIMIT} must be a positive integer")),
+    Some(_) => Err(format!("codex option {AUTO_COMPACT_LIMIT} must be a positive integer or null")),
   }
-  Ok(options)
 }
 
 #[cfg(test)]

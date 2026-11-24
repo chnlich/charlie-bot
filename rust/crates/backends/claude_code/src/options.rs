@@ -2,7 +2,7 @@
 
 use charliebot_core::backend_types;
 use charliebot_core::config::{OptionField, OptionFieldDefault};
-use charliebot_registry::option_model;
+use charliebot_registry::option_model::{self, UnknownOptionFieldStyle};
 use serde_yaml::{Mapping, Value};
 
 /// The `effort` key of a `backends.options[]` entry: the Claude Code `--effort` level. The Anthropic-compatible
@@ -19,22 +19,10 @@ pub const SCHEMA: &[OptionField] = &[
 
 /// Validate the cc-claude-only fields of one backend option.
 pub fn option_model(fields: &Mapping) -> Result<(), String> {
-  for (key, value) in fields {
-    let Some(name) = key.as_str() else {
-      return Err(format!("cc-claude option key must be a string: {key:?}"));
-    };
-    match name {
-      EFFORT_KEY | "account_pool" => {
-        optional_text(fields, name)?;
-      }
-      "fast_mode" => {
-        if !matches!(value, Value::Bool(_)) {
-          return Err("cc-claude option fast_mode must be a boolean".to_string());
-        }
-      }
-      _ => return Err(format!("unknown cc-claude option field {name:?}")),
-    }
-  }
+  option_model::validate_field_names(fields, SCHEMA, backend_types::CC_CLAUDE, UnknownOptionFieldStyle::Unknown)?;
+  optional_text(fields, EFFORT_KEY)?;
+  optional_text(fields, "account_pool")?;
+  fast_mode(fields)?;
   Ok(())
 }
 

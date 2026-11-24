@@ -140,7 +140,7 @@ impl CronScheduler {
         .await?
         .ok_or_else(|| anyhow::anyhow!("scheduled task '{}' node {} vanished after restore", task.name, node.id))?;
     }
-    write_cron_key(cfg, &task.name, "session_id", Value::String(node.id.clone()))?;
+    loader::write_task_key(&cfg.charliebot_home, &task.name, "session_id", Value::String(node.id.clone()))?;
     task.session_id = Some(node.id.clone());
     self.archive_legacy(&task.name, old_by_task).await?;
     tracing::info!(task = %task.name, session = %node.id, "scheduled_task_auto_bound");
@@ -897,14 +897,6 @@ where
     .replace_microsecond(moment.timestamp_subsec_micros())?;
   let offset = time::UtcOffset::from_whole_seconds(moment.offset().fix().local_minus_utc())?;
   Ok(charliebot_core::timefmt::isoformat(instant.to_offset(offset)))
-}
-
-fn write_cron_key(cfg: &CharlieBotConfig, name: &str, key: &str, value: Value) -> anyhow::Result<()> {
-  let path = loader::cron_path(cfg, name);
-  let mut data = loader::read_task_file(&path).map_err(|error| anyhow::anyhow!(error.message_without_path()))?;
-  data.insert(key.to_string(), value);
-  loader::write_task_file(&path, &Value::Object(data))?;
-  Ok(())
 }
 
 #[derive(Clone)]

@@ -133,10 +133,7 @@ pub fn disable_cron_tasks(cfg: &CharlieBotConfig, repo_root: &Path) -> Result<Ve
     if !path.is_file() || !file_name.ends_with(".yaml") || file_name.starts_with('.') {
       continue;
     }
-    let mut task =
-      loader::read_task_file(&path).map_err(|error| format!("{}: {}", path.display(), error.message_without_path()))?;
-    task.insert("enabled".to_string(), Value::Bool(false));
-    loader::write_task_file(&path, &Value::Object(task)).map_err(|error| format!("{}: {error}", path.display()))?;
+    loader::write_task_key_at(&path, "enabled", Value::Bool(false)).map_err(|error| error.to_string())?;
     names.push(path.file_stem().and_then(|stem| stem.to_str()).unwrap_or_default().to_string());
   }
   Ok(names)

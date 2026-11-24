@@ -1176,3 +1176,27 @@ test('offline, the status panel shows the offline label and asks the server for 
   assert.equal(rig.panel.innerHTML, OFFLINE_PANEL_MARK);
   assert.deepEqual(rig.statusGets, [], 'no status request goes out while offline');
 });
+
+test('an empty Now keeps its update time flush and muted panel text stays on slate-400', async () => {
+  const rig = panelRig();
+  await openSession(rig, {
+    web_status: {
+      ...STATUS,
+      now: '',
+      waiting: [{text: 'Decide', link: null, since: '2026-10-16T19:00:00Z'}],
+    },
+    children: NOW_CHILDREN,
+  });
+  selectStatus(rig);
+
+  const nowRow = viewRow(rig.panel, 'now');
+  const updated = nowRow.querySelector('[data-status-updated]');
+  assert.equal(updated.classList.contains('ml-2'), false, 'an empty Now needs no separator margin');
+  assert.equal(updated.classList.contains('text-slate-400'), true);
+  assert.equal(allElements(rig.panel).filter((el) => el.classList.contains('text-slate-500')).length, 0);
+
+  const filled = panelRig();
+  await openSession(filled, {web_status: STATUS});
+  selectStatus(filled);
+  assert.equal(viewRow(filled.panel, 'now').querySelector('[data-status-updated]').classList.contains('ml-2'), true);
+});

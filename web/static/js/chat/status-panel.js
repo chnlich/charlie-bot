@@ -163,8 +163,10 @@
     return row;
   }
 
+  // The panel sits on bg-slate-900 (#0f172a), where text-slate-500 holds 3.75:1, under the 4.5:1 floor for
+  // 12 px text. text-slate-400 holds 6.82:1 while staying dimmer than the text-slate-200 values.
   function labelSpan(text) {
-    return textSpan(platform.isMobile ? 'text-slate-500' : 'shrink-0 w-28 text-slate-500', text);
+    return textSpan(platform.isMobile ? 'text-slate-400' : 'shrink-0 w-28 text-slate-400', text);
   }
 
   function goalRow(goal) {
@@ -198,8 +200,10 @@
     row.appendChild(labelSpan('Now'));
     const value = document.createElement('div');
     value.className = 'min-w-0 break-words text-slate-200';
-    value.appendChild(textSpan('', status.now || ''));
-    const updated = textSpan('ml-2 whitespace-nowrap text-slate-500', 'updated ' + relativeTime(status.updated_at));
+    const nowText = status.now || '';
+    value.appendChild(textSpan('', nowText));
+    const updatedClass = (nowText.trim() ? 'ml-2 ' : '') + 'whitespace-nowrap text-slate-400';
+    const updated = textSpan(updatedClass, 'updated ' + relativeTime(status.updated_at));
     updated.dataset.statusUpdated = status.updated_at;
     value.appendChild(updated);
     row.appendChild(value);
@@ -219,7 +223,7 @@
   function waitedAgeSpan(item) {
     const age = waitedAge(item);
     if (!age) return null;
-    const span = textSpan('shrink-0 whitespace-nowrap text-slate-500', age);
+    const span = textSpan('shrink-0 whitespace-nowrap text-slate-400', age);
     span.dataset.waitingAge = 'true';
     return span;
   }
@@ -442,7 +446,7 @@
     el.className = 'flex gap-2 break-words text-slate-200';
     el.dataset.childNowItem = 'true';
     el.appendChild(textSpan('min-w-0', childHead(row) + ': ' + row.now));
-    const updated = textSpan('whitespace-nowrap text-slate-500', 'updated ' + relativeTime(row.updated_at));
+    const updated = textSpan('whitespace-nowrap text-slate-400', 'updated ' + relativeTime(row.updated_at));
     updated.dataset.statusUpdated = row.updated_at;
     el.appendChild(updated);
     el.appendChild(openLink('/?session=' + encodeURIComponent(row.session_id)));

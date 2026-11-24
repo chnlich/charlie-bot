@@ -256,7 +256,7 @@ Before a serve trial side runs, set `CHARLIEBOT_RELEASE_RUN_DIR` to that round d
 The side record stays in that directory. The trial and its measurement command write their raw output in the side output
 location named by the record.
 Without the variable the trial writes `~/charliebot-release-logs`, which the write boundary refuses, so the step fails.
-The round's runner sets `CHARLIEBOT_TRIAL_PROBE_ANSWER` to the launch's probe answer, so the trial takes its probe model from that file: the round's host runs no server to resolve `backends.calls.probe`.
+The round's runner sets `CHARLIEBOT_TRIAL_PROBE_ANSWER` to the launch's probe answer, so the trial takes its probe model from that file rather than resolving `backends.calls.probe`, which only a server does.
 
 Each serve trial side leaves one side record in the round directory, and the record names that side's unique raw output location.
 The round keeps every side record, including the records of sides it discards.

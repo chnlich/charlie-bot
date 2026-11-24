@@ -10,11 +10,11 @@
 use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
 use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::fsutil::{self, ExclusiveLock};
 use serde_json::{Map, Value, json};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -532,7 +532,7 @@ pub fn mark_value(mark: &Mark) -> Value {
 pub fn add_row(taste_dir: &Path, value: &Value) -> anyhow::Result<String> {
   let mut row = parse_input_row(value)?;
   ensure_dir(taste_dir)?;
-  let _lock = StoreLock::acquire(taste_dir)?;
+  let _lock = lock_store(taste_dir)?;
   let store = load_store(taste_dir)?;
   if let Some(supersedes) = row.supersedes.as_deref()
     && store.row(supersedes).is_none()
@@ -554,7 +554,7 @@ pub fn add_row(taste_dir: &Path, value: &Value) -> anyhow::Result<String> {
 /// The append of a mark that takes `row_id` out of the active view.
 pub fn add_mark(taste_dir: &Path, row_id: &str, status: MarkStatus) -> anyhow::Result<()> {
   ensure_dir(taste_dir)?;
-  let _lock = StoreLock::acquire(taste_dir)?;
+  let _lock = lock_store(taste_dir)?;
   let store = load_store(taste_dir)?;
   let row = store.row(row_id).ok_or_else(|| anyhow::anyhow!("no row {row_id} in the store"))?;
   if store.active_rows().iter().all(|active| active.id != row.id) {
@@ -603,27 +603,10 @@ fn append_record(taste_dir: &Path, value: &Value) -> anyhow::Result<()> {
   file.write_all(line.as_bytes()).with_context(|| format!("append to {}", path.display()))
 }
 
-/// The exclusive store lock. Closing the file releases the `flock`.
-struct StoreLock {
-  _file: File,
-}
-
-impl StoreLock {
-  fn acquire(taste_dir: &Path) -> anyhow::Result<Self> {
-    let path = taste_dir.join(LOCK_FILENAME);
-    let file = OpenOptions::new()
-      .create(true)
-      .read(true)
-      .write(true)
-      .truncate(false)
-      .open(&path)
-      .with_context(|| format!("open {}", path.display()))?;
-    // SAFETY: `file` owns a valid descriptor for the duration of the call.
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
-      return Err(std::io::Error::last_os_error()).with_context(|| format!("lock {}", path.display()));
-    }
-    Ok(Self { _file: file })
-  }
+/// The exclusive store lock, held by the caller until its write ends.
+fn lock_store(taste_dir: &Path) -> anyhow::Result<ExclusiveLock> {
+  let path = taste_dir.join(LOCK_FILENAME);
+  fsutil::lock_exclusive(&path).with_context(|| format!("lock {}", path.display()))
 }
 
 #[cfg(test)]

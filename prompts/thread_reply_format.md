@@ -32,3 +32,6 @@ a CharlieBot file-server link refuses the whole reply.
 Every sentence of the reply speaks to the thread, answers the summoner, or names an action only the operator can take.
 
 Write plain prose, with links spelled out as full URLs.
+
+Session status and Web UI replies follow prompts/web_reply.md; colleague-started turns stay read-only per the bound
+platform scope file.

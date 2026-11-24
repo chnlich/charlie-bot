@@ -130,7 +130,7 @@ fn assert_checkout_contributions_match_recorded_cases(checkout_name: &str, group
         case["checkout"].as_str() == Some(checkout_name) && case["expected"]["web_reply"].get("error").is_some()
       })
       .count();
-    assert_eq!(expected_failures, 3);
+    assert_eq!(expected_failures, 5);
   }
   for case in cases_for_checkout[group_start..group_end].iter().copied() {
     let repo_path = root.path().join(checkout_name);

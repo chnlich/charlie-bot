@@ -23,6 +23,8 @@ The For-you view shows your web replies and hides the rest of your turn output.
   When one answer reply answers several of them, give each message its own part of the reply.
 - Each user message opens with a `[User message]` line. The line marks where one message ends and the next begins.
 - Each user message of this turn gets a web reply, posted after the moment this turn received it.
+- Answer each external thread summon with its bound platform reply command (prompts/thread_reply_format.md); for an
+  external thread follow-up without a mention, reply only when a response adds value.
 - When another input woke this turn, post one web reply only when this turn produced a result
   that the user reads or acts on.
 - When this turn produced no such result, end the turn without a web reply.
@@ -52,7 +54,7 @@ The For-you view shows your web replies and hides the rest of your turn output.
 
 Remaining lists the open milestones between the session and its Goal, so the user reads the distance to the Goal without asking.
 
-- While no close request is pending, a web session with a Goal holds at least one Remaining item.
+- While no close request is pending, every manager session with a Goal holds at least one Remaining item.
 - `web status set` and `confirm` store a status that has a Goal and no Remaining, and echo `remaining_missing: true`. When a status command echoes `remaining_missing: true`, set `remaining` in the same turn.
 - Write each open milestone as one item, in the order the work reaches it. The last item is the Goal's completion condition.
 - In each item, write its state and what it waits on: a job, a worker, a child session or the user.

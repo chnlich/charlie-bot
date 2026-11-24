@@ -1,6 +1,6 @@
-//! `web/features/chat_threads`: the chat thread sessions. Their turn contribution names the thread brief, the subtree
-//! of each top-level thread session is the Threads view, and `GET /api/sessions/chat-threads` lists that view. The
-//! reply contract that the platform turn contributions share is in `thread_entry`, the window their read commands
+//! `web/features/chat_threads`: the chat thread sessions. The subtree of each top-level thread session is the Threads
+//! view, and `GET /api/sessions/chat-threads` lists that view. The reply contract that the platform turn contributions
+//! share is in `thread_entry`, the window their read commands
 //! answer with is in `thread_read`, and the chat line their reply events render is in `reply_event`.
 
 mod api;
@@ -14,16 +14,13 @@ pub mod summon;
 pub mod test_support;
 pub mod thread_entry;
 pub mod thread_read;
-mod turn_contribution;
 
 use std::sync::Arc;
 
 use charliebot_registry::{Registry, RegistryError};
 
-/// `register`: the turn contribution, the router, then the
-/// sidebar contribution.
+/// `register`: the router, then the sidebar contribution.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
-  registry.turn_contribution("chat_threads", Arc::new(turn_contribution::ChatThreadsTurn))?;
   registry.router(api::routes, api::matches)?;
   registry.sidebar_contribution("chat_threads", Arc::new(sidebar::ChatThreadsSidebar))
 }
@@ -31,19 +28,12 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
 #[cfg(test)]
 mod tests {
   use charliebot_registry::Registry;
-  use charliebot_store::metadata::{SessionMetadata, TaskProfile};
-  use serde_json::json;
 
   #[test]
-  fn register_adds_the_turn_contribution_the_router_and_the_sidebar_view() {
+  fn register_adds_the_router_and_the_sidebar_view() {
     let mut registry = Registry::new();
     registry.register_package("features.chat_threads", super::register).expect("the package registers");
     assert_eq!(registry.routers().len(), 1);
     assert_eq!(registry.sidebar_contributions().count(), 1);
-
-    charliebot_registry::thread_origin::register_origin_field("slack", "slack_origin");
-    let mut thread = SessionMetadata::new("synthetic", "Synthetic", TaskProfile::Manager);
-    thread.set_extra("slack_origin", json!({"channel_id": "C0SYNTHETIC"}));
-    assert_eq!(registry.workflow_rules_file(&thread).expect("one contribution names a file"), "thread_session.md");
   }
 }

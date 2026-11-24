@@ -28,6 +28,8 @@ const STUB_BIN = path.join(ROOT, 'stub-bin');
 const PATTERNS = path.join(ROOT, 'patterns');
 const STUB_BODY = path.join(ROOT, 'stub-body.md');
 const GH_LOG = path.join(ROOT, 'gh.log');
+const LAUNCH = path.join(ROOT, 'launch');
+const WORK = path.join(ROOT, 'work');
 
 after(() => {
   fs.rmSync(ROOT, { recursive: true, force: true });
@@ -69,6 +71,33 @@ fs.writeFileSync(
   { mode: 0o755 },
 );
 fs.writeFileSync(PATTERNS, '# A host pattern for the test.\nzz-no-host-pattern-matches\n');
+
+// gitAt: one git command in the scratch tree. The pinned identity and config keep the commit independent of the
+// operator's git configuration.
+function gitAt(cwd, args) {
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: 'Example',
+    GIT_AUTHOR_EMAIL: '123+example@users.noreply.github.com',
+    GIT_COMMITTER_NAME: 'Example',
+    GIT_COMMITTER_EMAIL: '123+example@users.noreply.github.com',
+    GIT_CONFIG_GLOBAL: '/dev/null',
+    GIT_CONFIG_NOSYSTEM: '1',
+  };
+  const result = spawnSync('git', args, { cwd, env, encoding: 'utf8' });
+  assert.equal(result.status, 0, `git ${args.join(' ')}: ${result.stderr}`);
+}
+
+// The round's launch directory with an empty in-flight list, and the scratch checkout whose branch b the pr-create
+// cases name: the posting script's claim check reads the list and diffs the head against origin/main.
+fs.mkdirSync(LAUNCH);
+fs.writeFileSync(path.join(LAUNCH, 'inflight-files.txt'), '');
+gitAt(ROOT, ['init', '-q', '-b', 'main', WORK]);
+fs.writeFileSync(path.join(WORK, 'seed.txt'), 'seed\n');
+gitAt(WORK, ['add', 'seed.txt']);
+gitAt(WORK, ['commit', '-q', '-m', 'seed commit']);
+gitAt(WORK, ['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+gitAt(WORK, ['switch', '-q', '-c', 'b']);
 
 function writeFile(name, content) {
   const file = path.join(ROOT, name);
@@ -142,13 +171,16 @@ function checkBody(run, citations, draft) {
 // The accepted citation form, which each refusal of a near-miss citation names.
 const ACCEPTED_FORM = 'Side record: <record file name>';
 
-// post: run the posting script under the stub gh. It returns the exit status, the stderr and the stub's gh calls.
+// post: run the posting script under the stub gh, in the scratch checkout. It returns the exit status, the stderr
+// and the stub's gh calls.
 function post(args, body = '') {
   fs.writeFileSync(STUB_BODY, body);
   fs.rmSync(GH_LOG, { force: true });
   const result = spawnSync(POSTING, args, {
+    cwd: WORK,
     env: {
       ...process.env,
+      IMPROVE_LAUNCH_DIR: LAUNCH,
       PATH: `${STUB_BIN}:${process.env.PATH}`,
       GH_LOG,
       STUB_BODY_FILE: STUB_BODY,

@@ -1,11 +1,20 @@
 // Tests of the bench's segments: the rate verdict, the probe that starts each segment, the rerun of a probe that fails
-// the gate, exit status 5 when the rerun fails too, and the probe that a yield makes due again.
+// the gate, exit status 5 when the rerun fails too, the For-you branch's load wait before a reprobe, and the probe that
+// a yield makes due again.
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { LIVE_CPU_TAIL } from './profile.mjs';
-import { RateGateError, RATE_MAX, RATE_MIN, Segments, rateVerdict } from './segments.mjs';
+import {
+  LOAD_WAIT_CAP_MS,
+  LOAD_WAIT_SAMPLE_MS,
+  RateGateError,
+  RATE_MAX,
+  RATE_MIN,
+  Segments,
+  rateVerdict,
+} from './segments.mjs';
 
 // A reference repetition whose CPU tail reads as `rate` on the live device's tail.
 function probeAt(rate) {
@@ -36,7 +45,24 @@ function fakeGate(yields = []) {
   };
 }
 
-function segmentsWith(gate, rates, reference = null) {
+// A fake load clock for the For-you branch's wait: each reading comes from `readings` with the last one repeating, and
+// a sleep advances the clock by its time, so a test's wait costs no real time.
+function fakeLoadWait(readings) {
+  const state = { clock: 0, index: 0, reads: 0 };
+  return {
+    state,
+    load1: () => {
+      state.reads += 1;
+      return readings[Math.min(state.index++, readings.length - 1)];
+    },
+    now: () => state.clock,
+    sleep: async (ms) => {
+      state.clock += ms;
+    },
+  };
+}
+
+function segmentsWith(gate, rates, reference = null, loadWait = fakeLoadWait([0])) {
   const queue = rates.map((rate) => probeAt(rate));
   let probes = 0;
   const segments = new Segments({
@@ -47,6 +73,7 @@ function segmentsWith(gate, rates, reference = null) {
     },
     side: 'after',
     reference,
+    loadWait,
   });
   return { segments, probes: () => probes };
 }
@@ -137,4 +164,54 @@ test('a probe whose step gives the lock up is followed by a new probe before the
   assert.deepEqual(gate.units.map((unit) => unit.kind), ['probe', 'probe', 'rep']);
   assert.equal(gate.units[2].segment, 2, 'the unit runs in the segment its new probe started');
   assert.equal(segments.reference, 4.0);
+});
+
+test('a For-you probe below the rate floor waits for load1 <= 20 and is then run again', async () => {
+  const loadWait = fakeLoadWait([26, 23, 19, 19, 19]);
+  const gate = fakeGate();
+  const { segments, probes } = segmentsWith(gate, [RATE_MIN - 0.5, 4.0], null, loadWait);
+  const value = await segments.unit('cell', 'foryou switch large 1', () => 'measured');
+  assert.equal(value.status, 'ok');
+  assert.equal(probes(), 2, 'the probe is re-taken once the load is down');
+  const [discarded, passed] = gate.units;
+  assert.equal(discarded.discarded, true);
+  assert.equal(discarded.loadWaitMs, 4 * LOAD_WAIT_SAMPLE_MS, 'three readings in range, 30 s apart');
+  assert.deepEqual(discarded.loadWaitLoad1, [26, 23, 19, 19, 19]);
+  assert.equal(passed.kind, 'probe');
+  assert.equal(passed.discarded, undefined);
+  assert.equal(passed.segment, 1);
+});
+
+test('a probe below the rate floor outside the For-you branch keeps the one-rerun rule and reads no load', async () => {
+  const loadWait = fakeLoadWait([25]);
+  const gate = fakeGate();
+  const { segments } = segmentsWith(gate, [RATE_MIN - 0.5, RATE_MIN - 0.4], null, loadWait);
+  await assert.rejects(segments.unit('rep', 'background 1', () => 'never'), RateGateError);
+  assert.equal(loadWait.state.reads, 0);
+});
+
+test('a For-you probe above the rate max keeps the one-rerun rule: the wait covers the floor alone', async () => {
+  const loadWait = fakeLoadWait([19]);
+  const gate = fakeGate();
+  const { segments } = segmentsWith(gate, [RATE_MAX + 0.5, RATE_MAX + 0.6], null, loadWait);
+  await assert.rejects(segments.unit('cell', 'foryou switch large 1', () => 'never'), (error) => {
+    assert.match(error.message, /failed the rate gate 2 times/);
+    return true;
+  });
+  assert.equal(loadWait.state.reads, 0);
+});
+
+test('the For-you load wait ends the run when its 30 min cap runs out with the load still high', async () => {
+  const loadWait = fakeLoadWait([25]);
+  const gate = fakeGate();
+  const { segments, probes } = segmentsWith(gate, [RATE_MIN - 0.5, 4.0], null, loadWait);
+  await assert.rejects(segments.unit('cell', 'foryou switch large 1', () => 'never'), (error) => {
+    assert.ok(error instanceof RateGateError);
+    assert.equal(error.exitCode, 5);
+    assert.match(error.message, /30 min cap/);
+    return true;
+  });
+  assert.equal(probes(), 1, 'the wait is exhausted instead of a passing probe');
+  assert.equal(gate.units[0].loadWaitMs, LOAD_WAIT_CAP_MS);
+  assert.equal(gate.units[0].loadWaitLoad1.at(-1), 25);
 });

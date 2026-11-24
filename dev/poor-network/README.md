@@ -43,8 +43,8 @@ dev/remote-run/run.sh dev/poor-network/run.sh --side both --before-clone "$CLONE
 Exit codes: 0 both sides measured; 1 a measurement or build failed (the side's JSON still names the error); 2 a
 precondition failed and nothing started, or the change does not apply to R; 3 the baseline calibration did not
 reproduce; 4 a scenario the bench passed on the before side fails on the after side; 5 a segment's CPU probe failed the
-rate gate twice (the discarded segments stay in the side's `units[]`); 75 a take of the bench lock waited `--lock-wait`
-seconds without getting it.
+rate gate twice, or the For-you branch's load wait ran out its 30 min cap (the discarded segments and their waits stay
+in the side's `units[]`); 75 a take of the bench lock waited `--lock-wait` seconds without getting it.
 
 The bench holds the host's bench lock one step at a time: a preparation stage, a probe or one measurement. After each
 step, when `/proc/locks` lists a process queued behind the lock, the bench gives the lock up, waits until that process
@@ -678,8 +678,10 @@ The step-gate tests check the yield rule (a process queued behind the lock gets 
 nothing yields when nothing waits), the cap kill (a capped step's browsers and proxies stop, and the step runs once
 more), the descriptor's close-on-exec, and that closing the gate releases the lock. The segment tests check the rate
 gate: a probe outside 3.0 to 10.0 is discarded and rerun once; a second failure is exit 5 with the discarded segments
-kept in `units[]`. They also check that each segment calibrates on its own (its units carry its own probe rate,
-whatever rate the invocation shares) and which unit starts each segment. The
+kept in `units[]`. They also check the For-you branch's load wait: a probe below the floor waits until three readings of
+load1 30 s apart are at most 20, then runs again, the wait ends the run at its 30 min cap, and a probe at or above the
+floor keeps the one-rerun rule. They also check that each segment calibrates on its own (its units carry its own probe
+rate, whatever rate the invocation shares) and which unit starts each segment. The
 store tests check the reuse rule (R, Chrome, seed and tree all equal, and load-safe), the stale rule, the open group,
 the 24 h window, the saving of load-safe rows only, and the assembly of a before side from stored and measured rows.
 The scenario-map tests check the default four and the path rules.

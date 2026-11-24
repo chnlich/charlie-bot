@@ -13,7 +13,8 @@
 #                With --before-run DIR, it measures this tree after the stored before side in DIR (a run dir of
 #                --side both, with its before.json and seed.sha256). The seed copy, the Chrome and the bench code must
 #                equal the stored side's: the bench code is --before-bench-rev's, and this tree may differ from it only
-#                in run.sh, README.md and the test files. Its open cells check their newest-row targets against DIR's.
+#                in run.sh, README.md, the test files and segments.mjs' rate gate. Its open cells check their newest-row
+#                targets against DIR's.
 # --side both    measures the before side, then the after side, back to back in one invocation.
 #                With --before-rev, the before side is that commit, measured now. Without it, the before side is the
 #                stored reference commit R (before-store.mjs): each row R holds is reused when its key matches and the
@@ -259,7 +260,9 @@ if [[ -n $before_run ]]; then
   while IFS= read -r changed_path; do
     [[ -n $changed_path ]] || continue
     case $changed_path in
+      # segments.mjs differs only in the rate gate's For-you load wait (Plan 5 v4); every other module must match.
       dev/poor-network/run.sh|dev/poor-network/README.md|dev/poor-network/*.test.mjs) ;;
+      dev/poor-network/segments.mjs) ;;
       *) disallowed_bench_paths+=("$changed_path") ;;
     esac
   done < <(

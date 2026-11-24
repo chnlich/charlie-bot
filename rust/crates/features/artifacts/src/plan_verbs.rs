@@ -271,9 +271,15 @@ async fn validate_new_version_file(
     .startup
     .require::<RepoRoot>()
     .map_err(|error| VerbError::Failed { kind: "RuntimeError", detail: error.to_string() })?;
-  let outcomes = artifact_check::run_assertions("plan", artifact, &config, repo_root.path().to_path_buf(), only)
-    .await
-    .map_err(|error| VerbError::Failed { kind: "RuntimeError", detail: format!("{error:#}") })?;
+  let outcomes = artifact_check::run_assertions(
+    artifact_check::Genre::Plan,
+    artifact,
+    &config,
+    repo_root.path().to_path_buf(),
+    only,
+  )
+  .await
+  .map_err(|error| VerbError::Failed { kind: "RuntimeError", detail: format!("{error:#}") })?;
   let failures: Vec<String> = outcomes
     .iter()
     .filter(|outcome| !outcome.passed)
@@ -340,10 +346,11 @@ async fn amend_assertion_names(
       .map_err(|error| VerbError::Failed { kind: "RuntimeError", detail: format!("{error:#}") })?,
     None => false,
   };
-  Ok((!carries).then(|| {
-    artifact_check::assertion_names_excluding("plan", &[artifact_check::NON_GOALS_LINE])
-      .expect("the plan genre has an assertion set")
-  }))
+  Ok(
+    (!carries).then(|| {
+      artifact_check::assertion_names_excluding(artifact_check::Genre::Plan, &[artifact_check::NON_GOALS_LINE])
+    }),
+  )
 }
 
 /// The section 1 freeze: the candidate keeps the section 1 words of the lineage's most recent registered version. A

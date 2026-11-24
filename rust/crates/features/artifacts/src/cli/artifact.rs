@@ -50,8 +50,8 @@ struct CheckArgs {
   /// Artifact path as an ordinary filesystem path (absolute or cwd-relative)
   file: String,
   /// Genre the page claims to follow
-  #[arg(long, value_parser = artifact_check::ARTIFACT_GENRES)]
-  genre: String,
+  #[arg(long, value_enum)]
+  genre: artifact_check::Genre,
   /// Chat message that triggered the page (question 6 verbatim). Required for every genre unless --assertions-only
   #[arg(long)]
   trigger: Option<String>,
@@ -132,7 +132,7 @@ impl CheckInputs {
 
 /// The assertion lines, then the cold read the session's shape selects.
 fn check(args: &CheckArgs, lazy_host: &LazyHost) -> Result<CheckOutcome, CliExit> {
-  if args.genre == "waiting" && !args.assertions_only {
+  if args.genre == artifact_check::Genre::Waiting && !args.assertions_only {
     return Err(CliExit::usage(
       "--genre waiting has no cold read here: `charliebot web status set` runs the cold read of a waiting page, \
        reading the item with its page. Pass --assertions-only to run the assertions alone",
@@ -161,7 +161,7 @@ fn check_with_host(
     .build()
     .map_err(|error| CliExit::error(format!("could not start the assertion runtime: {error}")))?;
   let assertions = runtime.block_on(artifact_check::run_assertions(
-    &args.genre,
+    args.genre,
     artifact.to_path_buf(),
     &host.cfg,
     inputs.repo_root.clone(),
@@ -292,7 +292,7 @@ fn delegate_cold_read(
     (TASK_TYPE_FIELD): TaskType::ColdRead.as_str(),
     (COLD_READ_FIELD): {
       (COLD_READ_PAGE_PATH_FIELD): paths::display(artifact),
-      (COLD_READ_GENRE_FIELD): args.genre,
+      (COLD_READ_GENRE_FIELD): args.genre.as_str(),
       (COLD_READ_TRIGGER_FIELD): args.trigger,
     },
     (task_routes::DELEGATE_REQUEST_ID_FIELD): request_id,
@@ -413,7 +413,7 @@ mod tests {
     std::fs::copy(waiting_page, &artifact).unwrap();
     let args = CheckArgs {
       file: artifact.display().to_string(),
-      genre: "waiting".to_string(),
+      genre: artifact_check::Genre::Waiting,
       trigger: None,
       assertions_only: true,
     };
@@ -450,7 +450,7 @@ mod tests {
     std::fs::write(&artifact, plan_page("The internal id is zz123.")).unwrap();
     let args = CheckArgs {
       file: artifact.display().to_string(),
-      genre: "plan".to_string(),
+      genre: artifact_check::Genre::Plan,
       trigger: None,
       assertions_only: true,
     };
@@ -509,7 +509,7 @@ mod tests {
   fn a_waiting_check_without_assertions_only_is_refused_before_any_host_or_cold_read() {
     let args = CheckArgs {
       file: "page.html".to_string(),
-      genre: "waiting".to_string(),
+      genre: artifact_check::Genre::Waiting,
       trigger: Some("the trigger".to_string()),
       assertions_only: false,
     };

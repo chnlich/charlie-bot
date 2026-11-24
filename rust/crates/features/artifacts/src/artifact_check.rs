@@ -43,8 +43,41 @@ const TRACKER_ID_NEARBY: &str = user_text_checks::TRACKER_ID_NEARBY;
 const SESSION_LINKED: &str = user_text_checks::SESSION_LINKED;
 const LINK_RENDERABLE: &str = user_text_checks::LINK_RENDERABLE;
 
-/// The registered genres in the order the parser states them. `waiting` exists only here.
-pub const ARTIFACT_GENRES: [&str; 6] = ["plan", "understanding", "sitrep", "debug", "explain", "waiting"];
+/// An artifact genre: the page kind that `charliebot artifact` checks and wraps. Its `as_str` name is the `--genre`
+/// value, the file-name prefix and the cold-read task value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum Genre {
+  Plan,
+  Understanding,
+  Sitrep,
+  Debug,
+  Explain,
+  Waiting,
+}
+
+impl Genre {
+  /// Every registered genre, in the order the parser states them. `waiting` exists only here.
+  pub const ALL: [Genre; 6] =
+    [Genre::Plan, Genre::Understanding, Genre::Sitrep, Genre::Debug, Genre::Explain, Genre::Waiting];
+
+  /// The genre's name in file names, CLI flags and task records.
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Genre::Plan => "plan",
+      Genre::Understanding => "understanding",
+      Genre::Sitrep => "sitrep",
+      Genre::Debug => "debug",
+      Genre::Explain => "explain",
+      Genre::Waiting => "waiting",
+    }
+  }
+}
+
+impl std::fmt::Display for Genre {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.write_str(self.as_str())
+  }
+}
 
 /// The shape and text elements that `explain-figures` counts in an svg figure. A `div.flow` box strip is not a figure.
 const FIGURE_ELEMENT_TAGS: &[&str] = &["rect", "circle", "ellipse", "line", "polyline", "polygon", "path", "text"];
@@ -104,13 +137,12 @@ const KATEX_JS_HINT: &str = "katex.min.js";
 const KATEX_AUTO_RENDER_HINT: &str = "auto-render.min.js";
 
 /// `artifact_shared.GENRE_TEMPLATES`: the genre template whose `<style>` block a genre's pages carry.
-pub(crate) fn genre_template(genre: &str) -> &'static str {
+pub(crate) fn genre_template(genre: Genre) -> &'static str {
   match genre {
-    "plan" | "understanding" | "waiting" => "plan_template.html",
-    "sitrep" => "sitrep_template.html",
-    "debug" => "debug_template.html",
-    "explain" => "explain_template.html",
-    other => unreachable!("genre {other:?} is registered, so it has a template"),
+    Genre::Plan | Genre::Understanding | Genre::Waiting => "plan_template.html",
+    Genre::Sitrep => "sitrep_template.html",
+    Genre::Debug => "debug_template.html",
+    Genre::Explain => "explain_template.html",
   }
 }
 
@@ -121,14 +153,13 @@ enum SectionRule {
   Subset(usize),
 }
 
-fn section_count_rule(genre: &str) -> SectionRule {
+fn section_count_rule(genre: Genre) -> SectionRule {
   match genre {
-    "plan" => SectionRule::Run(5..=6),
-    "understanding" => SectionRule::Run(5..=usize::MAX),
-    "sitrep" | "debug" => SectionRule::Run(5..=5),
-    "explain" => SectionRule::Subset(5),
-    "waiting" => unreachable!("the waiting set omits sections-numbered, so it has no section-count rule"),
-    other => unreachable!("genre {other:?} is registered, so it has a section-count rule"),
+    Genre::Plan => SectionRule::Run(5..=6),
+    Genre::Understanding => SectionRule::Run(5..=usize::MAX),
+    Genre::Sitrep | Genre::Debug => SectionRule::Run(5..=5),
+    Genre::Explain => SectionRule::Subset(5),
+    Genre::Waiting => unreachable!("the waiting set omits sections-numbered, so it has no section-count rule"),
   }
 }
 
@@ -145,9 +176,9 @@ fn describe_count(count: &RangeInclusive<usize>) -> String {
 }
 
 /// The assertions of one genre, in the order their outcomes print.
-fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
+fn assertion_set(genre: Genre) -> &'static [&'static str] {
   match genre {
-    "plan" => Some(&[
+    Genre::Plan => &[
       BYTE_INTEGRITY,
       STYLE_VERBATIM,
       HEAD_TEXT,
@@ -166,8 +197,8 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
       TRACKER_ID_NEARBY,
       SESSION_LINKED,
       LINK_RENDERABLE,
-    ]),
-    "understanding" => Some(&[
+    ],
+    Genre::Understanding => &[
       BYTE_INTEGRITY,
       STYLE_VERBATIM,
       HEAD_TEXT,
@@ -182,8 +213,8 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
       TRACKER_ID_NEARBY,
       SESSION_LINKED,
       LINK_RENDERABLE,
-    ]),
-    "sitrep" => Some(&[
+    ],
+    Genre::Sitrep => &[
       BYTE_INTEGRITY,
       STYLE_VERBATIM,
       HEAD_TEXT,
@@ -199,8 +230,8 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
       TRACKER_ID_NEARBY,
       SESSION_LINKED,
       LINK_RENDERABLE,
-    ]),
-    "debug" => Some(&[
+    ],
+    Genre::Debug => &[
       BYTE_INTEGRITY,
       STYLE_VERBATIM,
       HEAD_TEXT,
@@ -214,8 +245,8 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
       TRACKER_ID_NEARBY,
       SESSION_LINKED,
       LINK_RENDERABLE,
-    ]),
-    "explain" => Some(&[
+    ],
+    Genre::Explain => &[
       BYTE_INTEGRITY,
       STYLE_VERBATIM,
       HEAD_TEXT,
@@ -232,8 +263,8 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
       TRACKER_ID_NEARBY,
       SESSION_LINKED,
       LINK_RENDERABLE,
-    ]),
-    "waiting" => Some(&[
+    ],
+    Genre::Waiting => &[
       BYTE_INTEGRITY,
       STYLE_VERBATIM,
       HEAD_TEXT,
@@ -246,22 +277,19 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
       TRACKER_ID_NEARBY,
       SESSION_LINKED,
       LINK_RENDERABLE,
-    ]),
-    _ => None,
+    ],
   }
 }
 
 /// The genre whose `<genre>_` prefix starts `file_name`, such as `plan_` in `plan_export_interval_v2.html`.
-pub fn genre_from_file_name(file_name: &str) -> Option<&'static str> {
-  ARTIFACT_GENRES.into_iter().find(|genre| file_name.starts_with(&format!("{genre}_")))
+pub fn genre_from_file_name(file_name: &str) -> Option<Genre> {
+  Genre::ALL.into_iter().find(|genre| file_name.starts_with(&format!("{genre}_")))
 }
 
 /// The fork assertions a genre's set holds, in set order: the web status set gate runs exactly these.
-pub fn fork_assertions(genre: &str) -> Vec<&'static str> {
+pub fn fork_assertions(genre: Genre) -> Vec<&'static str> {
   const FORK: [&str; 4] = [FORK_OPEN_SHAPE, FORK_OPTIONS, FORK_DEMOS, FORK_EXPLAINER];
-  assertion_set(genre)
-    .map(|names| names.iter().copied().filter(|name| FORK.contains(name)).collect())
-    .unwrap_or_default()
+  assertion_set(genre).iter().copied().filter(|name| FORK.contains(name)).collect()
 }
 
 /// The fork assertion outcomes of the genre that `page`'s file name names, or `None` when the name carries no genre
@@ -319,7 +347,7 @@ enum Child {
 }
 
 struct Context<'a> {
-  genre: &'a str,
+  genre: Genre,
   artifact: &'a Path,
   chrome_bin: &'a str,
   repo_root: &'a Path,
@@ -338,7 +366,7 @@ type OrdinalFailure = (usize, Vec<String>, String);
 /// One genre's assertion set, run on a blocking thread. `only` narrows the run to the named assertions. `None` runs
 /// the whole set.
 pub async fn run_assertions(
-  genre: &str,
+  genre: Genre,
   artifact: PathBuf,
   config: &CharlieBotConfig,
   repo_root: PathBuf,
@@ -358,7 +386,7 @@ pub async fn run_assertions(
 
 /// One genre's assertion set, run with an explicit Chrome path on a blocking thread.
 pub async fn run_assertions_with_chrome(
-  genre: &str,
+  genre: Genre,
   artifact: PathBuf,
   chrome_bin: String,
   repo_root: PathBuf,
@@ -366,16 +394,15 @@ pub async fn run_assertions_with_chrome(
   home: PathBuf,
   only: Option<Vec<String>>,
 ) -> anyhow::Result<Vec<AssertionOutcome>> {
-  let genre = genre.to_owned();
   tokio::task::spawn_blocking(move || {
-    run_assertions_sync_with_user_text(&genre, &artifact, &chrome_bin, &repo_root, &checks_config, &home, only)
+    run_assertions_sync_with_user_text(genre, &artifact, &chrome_bin, &repo_root, &checks_config, &home, only)
   })
   .await
   .context("plan assertion worker failed")?
 }
 
 fn run_assertions_sync_with_user_text(
-  genre: &str,
+  genre: Genre,
   artifact: &Path,
   chrome_bin: &str,
   repo_root: &Path,
@@ -383,13 +410,7 @@ fn run_assertions_sync_with_user_text(
   home: &Path,
   only: Option<Vec<String>>,
 ) -> anyhow::Result<Vec<AssertionOutcome>> {
-  let names = assertion_set(genre).ok_or_else(|| {
-    anyhow!(
-      "no assertion set registered for genre {}; genres with a set: plan, understanding, sitrep, debug, explain, \
-       waiting",
-      text_repr::str_repr(genre)
-    )
-  })?;
+  let names = assertion_set(genre);
   let source =
     fs::read_to_string(artifact).with_context(|| format!("could not read artifact {}", artifact.display()))?;
   // The user-text checks parse the page and read the session directories. A run narrowed to other assertions skips
@@ -938,11 +959,9 @@ pub(crate) fn section_text(source: &str, title: &str) -> anyhow::Result<Option<S
   )))
 }
 
-/// The named genre's assertion set without the named assertions, as the `only` list of `run_assertions`. `None` means
-/// the genre has no set.
-pub(crate) fn assertion_names_excluding(genre: &str, excluded: &[&str]) -> Option<Vec<String>> {
-  assertion_set(genre)
-    .map(|names| names.iter().copied().filter(|name| !excluded.contains(name)).map(String::from).collect())
+/// The named genre's assertion set without the named assertions, as the `only` list of `run_assertions`.
+pub(crate) fn assertion_names_excluding(genre: Genre, excluded: &[&str]) -> Vec<String> {
+  assertion_set(genre).iter().copied().filter(|name| !excluded.contains(name)).map(String::from).collect()
 }
 
 fn check_foot_present(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcome>> {
@@ -1887,7 +1906,7 @@ mod tests {
   }
 
   fn run_assertions_sync(
-    genre: &str,
+    genre: Genre,
     artifact: &Path,
     chrome_bin: &str,
     repo_root: &Path,
@@ -1911,7 +1930,7 @@ mod tests {
 
   fn run_plan_with_height(path: &Path, chrome: &str, height: i32) -> Vec<AssertionOutcome> {
     headless_render::set_test_height(Path::new(chrome), height);
-    run_assertions_sync("plan", path, chrome, &repo_root()).unwrap()
+    run_assertions_sync(Genre::Plan, path, chrome, &repo_root()).unwrap()
   }
 
   fn by_name<'a>(outcomes: &'a [AssertionOutcome], name: &str) -> Vec<&'a AssertionOutcome> {
@@ -1920,7 +1939,8 @@ mod tests {
 
   fn schema_dropped_outcome(source: &str) -> AssertionOutcome {
     let nodes = parse_dom(source).unwrap();
-    let context = Context { genre: "plan", artifact: Path::new(""), chrome_bin: "", repo_root: Path::new(""), nodes };
+    let context =
+      Context { genre: Genre::Plan, artifact: Path::new(""), chrome_bin: "", repo_root: Path::new(""), nodes };
     check_schema_dropped(&context).unwrap().into_iter().next().unwrap()
   }
 
@@ -1943,7 +1963,7 @@ mod tests {
   fn head_text_outcomes(source: &str) -> Vec<AssertionOutcome> {
     let nodes = parse_dom(source).unwrap();
     let context =
-      Context { genre: "understanding", artifact: Path::new(""), chrome_bin: "", repo_root: Path::new(""), nodes };
+      Context { genre: Genre::Understanding, artifact: Path::new(""), chrome_bin: "", repo_root: Path::new(""), nodes };
     check_head_text(&context).unwrap()
   }
 
@@ -1972,8 +1992,8 @@ mod tests {
 
   #[test]
   fn every_genre_runs_head_text() {
-    for genre in ARTIFACT_GENRES {
-      assert!(assertion_set(genre).unwrap().contains(&HEAD_TEXT), "{genre}");
+    for genre in Genre::ALL {
+      assert!(assertion_set(genre).contains(&HEAD_TEXT), "{genre}");
     }
   }
 
@@ -2027,7 +2047,8 @@ mod tests {
 
   fn non_goals_line(source: &str) -> AssertionOutcome {
     let nodes = parse_dom(source).unwrap();
-    let context = Context { genre: "plan", artifact: Path::new(""), chrome_bin: "", repo_root: Path::new(""), nodes };
+    let context =
+      Context { genre: Genre::Plan, artifact: Path::new(""), chrome_bin: "", repo_root: Path::new(""), nodes };
     check_non_goals_line(&context).unwrap().into_iter().next().unwrap()
   }
 
@@ -2121,7 +2142,8 @@ mod tests {
 
   fn added_state_outcome(source: &str) -> AssertionOutcome {
     let nodes = parse_dom(source).unwrap();
-    let context = Context { genre: "plan", artifact: Path::new(""), chrome_bin: "", repo_root: Path::new(""), nodes };
+    let context =
+      Context { genre: Genre::Plan, artifact: Path::new(""), chrome_bin: "", repo_root: Path::new(""), nodes };
     check_added_state(&context).unwrap().into_iter().next().unwrap()
   }
 
@@ -2252,7 +2274,7 @@ mod tests {
         other => panic!("unknown recorded Chrome mode {other:?}"),
       };
       let chrome_text = chrome.to_string_lossy().into_owned();
-      let outcomes = run_assertions_sync("plan", &page, &chrome_text, &repo_root()).unwrap();
+      let outcomes = run_assertions_sync(Genre::Plan, &page, &chrome_text, &repo_root()).unwrap();
       // The fixture predates the fork, schema-dropped, non-goals-line, added-state and head-text assertions, so those
       // outcomes have no recorded counterpart.
       let actual = outcomes
@@ -2430,7 +2452,7 @@ mod tests {
     let directory = tempfile::tempdir().unwrap();
     let page = write_page(directory.path(), "plan.html", &plan_page("Ship the fix."));
     let chrome = chrome_program(directory.path(), json!([{"stderr": "failure\n"}, {"exit": 1}]));
-    let outcomes = run_assertions_sync("plan", &page, chrome.to_str().unwrap(), &repo_root()).unwrap();
+    let outcomes = run_assertions_sync(Genre::Plan, &page, chrome.to_str().unwrap(), &repo_root()).unwrap();
     assert!(by_name(&outcomes, PAGE_HEIGHT)[0].passed);
     assert!(by_name(&outcomes, PAGE_HEIGHT)[0].detail.starts_with("not measured:"));
     assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 2);
@@ -2503,7 +2525,7 @@ mod tests {
 
   /// The assertion outcomes of only `names` over `source` as a page file, so a fork test needs no Chrome and no
   /// template.
-  fn run_only(genre: &str, source: &str, names: &[&str]) -> Vec<AssertionOutcome> {
+  fn run_only(genre: Genre, source: &str, names: &[&str]) -> Vec<AssertionOutcome> {
     let directory = tempfile::tempdir().unwrap();
     let page = write_page(directory.path(), "page.html", source);
     let home = tempfile::tempdir().unwrap();
@@ -2537,7 +2559,7 @@ mod tests {
       "<ul><li>「keep」: keep the file.</li><li>「delete」: delete the file.</li></ul>\
        <p class=\"rec\">Recommendation: 「keep」.</p><p class=\"trade\">Tradeoff.</p>",
     );
-    let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
+    let outcomes = run_only(Genre::Plan, &page, &[FORK_OPTIONS]);
     assert_eq!(outcomes.len(), 1);
     assert!(outcomes[0].passed, "{outcomes:#?}");
   }
@@ -2549,7 +2571,7 @@ mod tests {
       "Ship the fix.",
       "<ul><li>「keep」: keep the file.</li></ul><p class=\"rec\">Recommendation: 「keep」.</p>",
     );
-    let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
+    let outcomes = run_only(Genre::Plan, &page, &[FORK_OPTIONS]);
     assert_eq!(outcomes.len(), 1);
     assert!(!outcomes[0].passed);
     assert!(outcomes[0].detail.contains("has 1 option line outside folds (2 required)"), "{}", outcomes[0].detail);
@@ -2564,7 +2586,7 @@ mod tests {
        <ul><li>「keep」: keep the file.</li><li>「delete」: delete the file.</li></ul></details>\
        <p class=\"rec\">Recommendation: 「keep」.</p>",
     );
-    let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
+    let outcomes = run_only(Genre::Plan, &page, &[FORK_OPTIONS]);
     assert!(!outcomes[0].passed);
     assert!(outcomes[0].detail.contains("has 0 option line outside folds (2 required)"), "{}", outcomes[0].detail);
   }
@@ -2577,7 +2599,7 @@ mod tests {
   #[ignore = "integration"]
   fn a_plain_closed_details_hides_its_option_from_the_check() {
     let page = fork_page("Ship the fix.", ONE_VISIBLE_OPTION_AND_ONE_IN_A_PLAIN_DETAILS);
-    let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
+    let outcomes = run_only(Genre::Plan, &page, &[FORK_OPTIONS]);
     assert!(!outcomes[0].passed);
     assert!(outcomes[0].detail.contains("has 1 option line outside folds (2 required)"), "{}", outcomes[0].detail);
   }
@@ -2587,7 +2609,7 @@ mod tests {
   fn an_open_details_shows_its_option_to_the_check() {
     let body = ONE_VISIBLE_OPTION_AND_ONE_IN_A_PLAIN_DETAILS.replacen("<details>", "<details open>", 1);
     let page = fork_page("Ship the fix.", &body);
-    let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
+    let outcomes = run_only(Genre::Plan, &page, &[FORK_OPTIONS]);
     assert!(outcomes[0].passed, "{outcomes:#?}");
   }
 
@@ -2604,7 +2626,7 @@ mod tests {
   #[ignore = "integration"]
   fn an_open_fork_inside_a_closed_details_fails_with_one_line() {
     let page = fork_page_in_details("<details>", TWO_OPTIONS_AND_RECOMMENDATION);
-    let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
+    let outcomes = run_only(Genre::Plan, &page, &[FORK_OPTIONS]);
     assert_eq!(outcomes.len(), 1, "{outcomes:#?}");
     assert!(!outcomes[0].passed);
     assert!(outcomes[0].detail.starts_with("fork #1 (section"), "{}", outcomes[0].detail);
@@ -2615,7 +2637,7 @@ mod tests {
   #[ignore = "integration"]
   fn the_same_fork_inside_an_open_details_passes() {
     let page = fork_page_in_details("<details open>", TWO_OPTIONS_AND_RECOMMENDATION);
-    let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
+    let outcomes = run_only(Genre::Plan, &page, &[FORK_OPTIONS]);
     assert!(outcomes[0].passed, "{outcomes:#?}");
   }
 
@@ -2623,7 +2645,7 @@ mod tests {
   #[ignore = "integration"]
   fn a_resolved_fork_inside_a_closed_details_is_skipped() {
     let page = fork_page_in_details("<details>", "<p class=\"resolved\">Resolved: keep the file.</p>");
-    let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
+    let outcomes = run_only(Genre::Plan, &page, &[FORK_OPTIONS]);
     assert!(outcomes[0].passed, "{outcomes:#?}");
   }
 
@@ -2664,7 +2686,7 @@ mod tests {
       "<ul><li>keep: keep the file.</li><li>「delete」: delete the file.</li></ul>\
        <p class=\"rec\">Recommendation: 「delete」.</p>",
     );
-    let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
+    let outcomes = run_only(Genre::Plan, &page, &[FORK_OPTIONS]);
     assert!(!outcomes[0].passed);
     assert!(outcomes[0].detail.contains("option line 1 does not open with its name in 「」"), "{}", outcomes[0].detail);
   }
@@ -2677,7 +2699,7 @@ mod tests {
       "<ul><li>「keep」: keep the file.</li><li>「delete」: delete the file.</li></ul>\
        <p class=\"rec\">Recommendation: 「archive」.</p>",
     );
-    let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
+    let outcomes = run_only(Genre::Plan, &page, &[FORK_OPTIONS]);
     assert!(!outcomes[0].passed);
     assert!(outcomes[0].detail.contains("p.rec quotes no option name (quoted: 「archive」)"), "{}", outcomes[0].detail);
   }
@@ -2690,7 +2712,7 @@ mod tests {
       "<ul><li>「做」：现在就改。</li><li>「不做」：留着以后改。</li></ul>\
        <p class=\"rec\">推荐：「做」。</p>",
     );
-    let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
+    let outcomes = run_only(Genre::Plan, &page, &[FORK_OPTIONS]);
     assert!(outcomes[0].passed, "{outcomes:#?}");
   }
 
@@ -2702,7 +2724,7 @@ mod tests {
       "<ul><li>「GPU」: render on the GPU.</li><li>「CPU」: render on the CPU.</li></ul>\
        <p class=\"rec\">Recommendation: 「GPU」.</p>",
     );
-    let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
+    let outcomes = run_only(Genre::Plan, &page, &[FORK_OPTIONS]);
     assert!(outcomes[0].passed, "{outcomes:#?}");
   }
 
@@ -2710,7 +2732,7 @@ mod tests {
   #[ignore = "integration"]
   fn a_resolved_fork_is_skipped() {
     let page = fork_page("Ship the fix.", "<p class=\"resolved\">Resolved: keep the file.</p>");
-    let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
+    let outcomes = run_only(Genre::Plan, &page, &[FORK_OPTIONS]);
     assert!(outcomes[0].passed, "{outcomes:#?}");
   }
 
@@ -2724,7 +2746,7 @@ mod tests {
   #[ignore = "integration"]
   fn an_option_with_a_demo_and_one_with_a_reason_pass() {
     let page = fork_page("Ship the fix.", DEMO_AND_REASON_OPTIONS);
-    let outcomes = run_only("plan", &page, &[FORK_DEMOS]);
+    let outcomes = run_only(Genre::Plan, &page, &[FORK_DEMOS]);
     assert_eq!(outcomes.len(), 1);
     assert!(outcomes[0].passed, "{outcomes:#?}");
     assert_eq!(outcomes[0].detail, "");
@@ -2738,7 +2760,7 @@ mod tests {
       "",
     );
     let page = fork_page("Ship the fix.", &body);
-    let outcomes = run_only("plan", &page, &[FORK_DEMOS]);
+    let outcomes = run_only(Genre::Plan, &page, &[FORK_DEMOS]);
     assert_eq!(outcomes.len(), 1);
     assert!(!outcomes[0].passed);
     assert!(
@@ -2754,7 +2776,7 @@ mod tests {
     let body = DEMO_AND_REASON_OPTIONS
       .replace("The difference shows in the next page load, which a still picture cannot draw.", " ");
     let page = fork_page("Ship the fix.", &body);
-    let outcomes = run_only("plan", &page, &[FORK_DEMOS]);
+    let outcomes = run_only(Genre::Plan, &page, &[FORK_DEMOS]);
     assert_eq!(outcomes.len(), 1);
     assert!(!outcomes[0].passed);
     assert!(outcomes[0].detail.contains("option 「delete」: the reason is empty"), "{}", outcomes[0].detail);
@@ -2768,7 +2790,7 @@ mod tests {
       "<details><summary>Sample</summary><div class=\"demo\"><p>the file stays on the page</p></div></details>",
     );
     let page = fork_page("Ship the fix.", &body);
-    let outcomes = run_only("plan", &page, &[FORK_DEMOS]);
+    let outcomes = run_only(Genre::Plan, &page, &[FORK_DEMOS]);
     assert_eq!(outcomes.len(), 1);
     assert!(!outcomes[0].passed);
     assert!(outcomes[0].detail.contains("option 「keep」: the demo sits in a closed fold"), "{}", outcomes[0].detail);
@@ -2782,7 +2804,7 @@ mod tests {
       "<div class=\"demo\"><svg viewBox=\"0 0 10 10\"><rect x=\"0\" y=\"0\" width=\"5\" height=\"5\"/></svg></div>",
     );
     let page = fork_page("Ship the fix.", &body);
-    let outcomes = run_only("plan", &page, &[FORK_DEMOS]);
+    let outcomes = run_only(Genre::Plan, &page, &[FORK_DEMOS]);
     assert_eq!(outcomes.len(), 1);
     assert!(outcomes[0].passed, "{outcomes:#?}");
   }
@@ -2791,7 +2813,7 @@ mod tests {
   #[ignore = "integration"]
   fn a_fork_without_any_marker_on_an_option_line_is_not_checked() {
     let page = fork_page("Ship the fix.", TWO_OPTIONS_AND_RECOMMENDATION);
-    let outcomes = run_only("plan", &page, &[FORK_DEMOS]);
+    let outcomes = run_only(Genre::Plan, &page, &[FORK_DEMOS]);
     assert_eq!(outcomes.len(), 1);
     assert!(outcomes[0].passed, "{outcomes:#?}");
   }
@@ -2804,7 +2826,7 @@ mod tests {
        <details class=\"details-layer\"><summary>Why</summary><div class=\"demo\"><p>drawn</p></div></details>"
     );
     let page = fork_page("Ship the fix.", &body);
-    let outcomes = run_only("plan", &page, &[FORK_DEMOS]);
+    let outcomes = run_only(Genre::Plan, &page, &[FORK_DEMOS]);
     assert_eq!(outcomes.len(), 1);
     assert!(outcomes[0].passed, "{outcomes:#?}");
   }
@@ -2819,15 +2841,15 @@ mod tests {
        <li>「delete」: delete the file.</li></ul>\
        <p class=\"rec\">Recommendation: 「keep」.</p>",
     );
-    let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
+    let outcomes = run_only(Genre::Plan, &page, &[FORK_OPTIONS]);
     assert_eq!(outcomes.len(), 1);
     assert!(outcomes[0].passed, "{outcomes:#?}");
   }
 
   #[test]
   fn a_file_name_without_a_genre_prefix_has_no_genre() {
-    assert_eq!(genre_from_file_name("plan_export_interval_v2.html"), Some("plan"));
-    assert_eq!(genre_from_file_name("waiting_release.html"), Some("waiting"));
+    assert_eq!(genre_from_file_name("plan_export_interval_v2.html"), Some(Genre::Plan));
+    assert_eq!(genre_from_file_name("waiting_release.html"), Some(Genre::Waiting));
     assert_eq!(genre_from_file_name("linked-page.html"), None);
     assert_eq!(genre_from_file_name("planning.html"), None);
   }
@@ -2859,7 +2881,7 @@ mod tests {
   #[test]
   #[ignore = "integration"]
   fn the_waiting_sample_passes_every_waiting_assertion_in_order() {
-    let outcomes = run_assertions_sync("waiting", &waiting_sample(), "", &repo_root()).unwrap();
+    let outcomes = run_assertions_sync(Genre::Waiting, &waiting_sample(), "", &repo_root()).unwrap();
     let names = outcomes.iter().map(|outcome| outcome.name.as_str()).collect::<Vec<_>>();
     assert_eq!(
       names,
@@ -2883,8 +2905,8 @@ mod tests {
 
   #[test]
   fn every_genre_runs_shared_user_text_and_page_height_checks() {
-    for genre in ARTIFACT_GENRES {
-      let names = assertion_set(genre).expect("every artifact genre has an assertion set");
+    for genre in Genre::ALL {
+      let names = assertion_set(genre);
       assert!(user_text_checks::CHECK_NAMES.iter().all(|check| names.contains(check)), "{genre}: {names:?}");
       assert!(names.contains(&PAGE_HEIGHT), "{genre}: {names:?}");
     }
@@ -2915,7 +2937,7 @@ mod tests {
     for (index, (check, source, snippet, fix)) in cases.into_iter().enumerate() {
       let page = write_page(home.path(), &format!("user-text-{index}.html"), &plan_page(source));
       let outcomes = run_assertions_sync_with_user_text(
-        "plan",
+        Genre::Plan,
         &page,
         chrome.to_str().unwrap(),
         &repo_root(),
@@ -2940,14 +2962,14 @@ mod tests {
     let chrome = stub_chrome(directory.path(), 800);
     headless_render::set_test_height(&chrome, 800);
     let outcomes =
-      run_assertions_sync("understanding", &waiting_sample(), chrome.to_str().unwrap(), &repo_root()).unwrap();
+      run_assertions_sync(Genre::Understanding, &waiting_sample(), chrome.to_str().unwrap(), &repo_root()).unwrap();
     let failures =
       outcomes.iter().filter(|outcome| !outcome.passed).map(|outcome| outcome.name.as_str()).collect::<HashSet<_>>();
     assert_eq!(failures, [SECTIONS_NUMBERED, FOOT_PRESENT].into_iter().collect());
   }
 
   /// A page in the genre's template: the `<style>` block verbatim plus `body`.
-  fn genre_doc(genre: &str, body: &str) -> String {
+  fn genre_doc(genre: Genre, body: &str) -> String {
     let template = fs::read_to_string(repo_root().join("prompts").join(genre_template(genre))).unwrap();
     let start = template.find("<style>").expect("the template carries a style block");
     let end = template.find("</style>").expect("the style block closes") + "</style>".len();
@@ -2957,7 +2979,7 @@ mod tests {
   /// A sitrep page that passes every sitrep assertion.
   fn sitrep_ok_doc() -> String {
     genre_doc(
-      "sitrep",
+      Genre::Sitrep,
       concat!(
         r#"<section><h2><span class="n">1</span> What waits on you?</h2><p>Nothing.</p></section>"#,
         r#"<section><h2><span class="n">2</span> What is this and why?</h2>"#,
@@ -2973,7 +2995,7 @@ mod tests {
 
   /// The outcomes of `req-chips` on a sitrep page, run alone so no Chrome render runs.
   fn run_sitrep(source: &str) -> Vec<AssertionOutcome> {
-    run_only("sitrep", source, &[REQ_CHIPS])
+    run_only(Genre::Sitrep, source, &[REQ_CHIPS])
   }
 
   #[test]
@@ -2983,7 +3005,7 @@ mod tests {
       r#"<p>Done. <span class="src">s</span></p>"#,
       &format!("{table}<p>Done. <span class=\"src\">s</span></p>"),
     );
-    let outcomes = run_only("sitrep", &doc, assertion_set("sitrep").unwrap());
+    let outcomes = run_only(Genre::Sitrep, &doc, assertion_set(Genre::Sitrep));
     assert!(outcomes.iter().all(|outcome| outcome.passed), "{outcomes:#?}");
   }
 
@@ -3045,7 +3067,7 @@ mod tests {
   fn test_sections_numbered_accepts_a_plan_of_five_or_six_sections() {
     for count in [5, 6] {
       let numbers = (1..=count).collect::<Vec<_>>();
-      let outcomes = run_only("plan", &genre_doc("plan", &numbered_sections(&numbers)), &[SECTIONS_NUMBERED]);
+      let outcomes = run_only(Genre::Plan, &genre_doc(Genre::Plan, &numbered_sections(&numbers)), &[SECTIONS_NUMBERED]);
       assert!(outcomes[0].passed, "{count} sections: {outcomes:#?}");
     }
   }
@@ -3054,7 +3076,7 @@ mod tests {
   fn test_sections_numbered_fails_a_plan_of_four_or_seven_sections() {
     for count in [4, 7] {
       let numbers = (1..=count).collect::<Vec<_>>();
-      let outcomes = run_only("plan", &genre_doc("plan", &numbered_sections(&numbers)), &[SECTIONS_NUMBERED]);
+      let outcomes = run_only(Genre::Plan, &genre_doc(Genre::Plan, &numbered_sections(&numbers)), &[SECTIONS_NUMBERED]);
       let failures = failed(&outcomes, SECTIONS_NUMBERED);
       assert_eq!(failures.len(), 1, "{count} sections: {outcomes:#?}");
       assert_eq!(failures[0].detail, format!("plan requires 5 to 6 numbered sections, found {count}"));
@@ -3064,7 +3086,7 @@ mod tests {
   #[test]
   fn test_sections_numbered_accepts_any_subset_of_the_explain_sections_and_none() {
     for numbers in [vec![], vec![2, 5], vec![1, 3, 4], vec![1, 2, 3, 4, 5]] {
-      let outcomes = run_only("explain", &explain_doc(&numbered_sections(&numbers)), &[SECTIONS_NUMBERED]);
+      let outcomes = run_only(Genre::Explain, &explain_doc(&numbered_sections(&numbers)), &[SECTIONS_NUMBERED]);
       assert!(outcomes[0].passed, "{numbers:?}: {outcomes:#?}");
     }
   }
@@ -3072,7 +3094,7 @@ mod tests {
   #[test]
   fn test_sections_numbered_fails_explain_numbers_out_of_order_or_outside_one_to_five() {
     for numbers in [vec![3, 2], vec![2, 2], vec![1, 6], vec![0]] {
-      let outcomes = run_only("explain", &explain_doc(&numbered_sections(&numbers)), &[SECTIONS_NUMBERED]);
+      let outcomes = run_only(Genre::Explain, &explain_doc(&numbered_sections(&numbers)), &[SECTIONS_NUMBERED]);
       let failures = failed(&outcomes, SECTIONS_NUMBERED);
       assert_eq!(failures.len(), 1, "{numbers:?}: {outcomes:#?}");
       assert!(failures[0].detail.ends_with("expected an ascending subset of 1..=5"), "{}", failures[0].detail);
@@ -3139,7 +3161,7 @@ mod tests {
   fn run_explain(body: &str) -> Vec<AssertionOutcome> {
     let directory = tempfile::tempdir().unwrap();
     let page = write_page(directory.path(), "explain.html", &explain_doc(body));
-    run_assertions_sync("explain", &page, "", &repo_root()).unwrap()
+    run_assertions_sync(Genre::Explain, &page, "", &repo_root()).unwrap()
   }
 
   /// The failed outcomes of one assertion.
@@ -3151,7 +3173,7 @@ mod tests {
   #[ignore = "integration"]
   fn test_shipped_explain_template_passes_its_explain_set() {
     let template = repo_root().join("prompts/explain_template.html");
-    let outcomes = run_assertions_sync("explain", &template, "", &repo_root()).unwrap();
+    let outcomes = run_assertions_sync(Genre::Explain, &template, "", &repo_root()).unwrap();
     assert_eq!(outcomes.len(), 16, "{outcomes:#?}");
     assert!(outcomes.iter().all(|outcome| outcome.passed), "{outcomes:#?}");
   }
@@ -3166,20 +3188,20 @@ mod tests {
 
   #[test]
   fn test_explain_figures_passes_a_page_without_steps() {
-    let outcomes = run_only("explain", &explain_doc(OPENING), &[EXPLAIN_FIGURES]);
+    let outcomes = run_only(Genre::Explain, &explain_doc(OPENING), &[EXPLAIN_FIGURES]);
     assert!(failed(&outcomes, EXPLAIN_FIGURES).is_empty(), "{outcomes:#?}");
   }
 
   #[test]
   fn test_explain_examples_passes_a_page_without_steps_or_examples() {
-    let outcomes = run_only("explain", &explain_doc(OPENING), &[EXPLAIN_EXAMPLES]);
+    let outcomes = run_only(Genre::Explain, &explain_doc(OPENING), &[EXPLAIN_EXAMPLES]);
     assert!(failed(&outcomes, EXPLAIN_EXAMPLES).is_empty(), "{outcomes:#?}");
   }
 
   #[test]
   fn test_explain_examples_still_fails_a_page_with_steps_and_no_examples() {
     let mechanism = format!("{OPENING}{}", step(FIGURE));
-    let outcomes = run_only("explain", &explain_doc(&explain_body(&mechanism, "")), &[EXPLAIN_EXAMPLES]);
+    let outcomes = run_only(Genre::Explain, &explain_doc(&explain_body(&mechanism, "")), &[EXPLAIN_EXAMPLES]);
     let failures = failed(&outcomes, EXPLAIN_EXAMPLES);
     assert_eq!(failures.len(), 2, "{outcomes:#?}");
     assert_eq!(failures[0].detail, "no div.example.e2e on the page");

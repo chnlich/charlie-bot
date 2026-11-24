@@ -8,6 +8,8 @@ use charliebot_cli_common::exit::CliExit;
 use charliebot_registry::pages::package_directory;
 use clap::Args;
 
+use crate::artifact_check::Genre;
+
 const KATEX_CDN_URL: &str = "https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.js";
 
 #[derive(Args)]
@@ -15,8 +17,8 @@ pub(super) struct WrapArgs {
   /// Content fragment path: the page's `<body>` content
   fragment: String,
   /// Genre whose template shells the page
-  #[arg(long, value_parser = crate::artifact_check::ARTIFACT_GENRES)]
-  genre: String,
+  #[arg(long, value_enum)]
+  genre: Genre,
   /// Assembled page path
   #[arg(long)]
   output: String,
@@ -38,7 +40,7 @@ impl WrapArgs {
         None | Some(_) => None,
       })
       .next_back();
-    override_value.unwrap_or_else(|| self.math || (!self.no_math && self.genre == "explain"))
+    override_value.unwrap_or_else(|| self.math || (!self.no_math && self.genre == Genre::Explain))
   }
 }
 
@@ -58,13 +60,13 @@ pub(super) fn run(args: &WrapArgs, argv: &[OsString]) -> Result<String, CliExit>
   let vendor = home.join("vendor").join("katex").join("katex.min.js");
   let node = [OsString::from("node")];
   let written =
-    wrap_fragment(&args.genre, &fragment, &output, args.math_enabled(argv), &vendor, repo_root.path(), &node)
+    wrap_fragment(args.genre, &fragment, &output, args.math_enabled(argv), &vendor, repo_root.path(), &node)
       .map_err(CliExit::error)?;
   Ok(format!("wrote {}\n", written.display()))
 }
 
 fn wrap_fragment(
-  genre: &str,
+  genre: Genre,
   fragment: &Path,
   output: &Path,
   math: bool,
@@ -231,7 +233,7 @@ mod tests {
     };
     let fragment = fragment(home.path(), "<div class=\"wrap\"><main><p>body text</p></main></div>");
     let output = home.path().join("page.html");
-    wrap_fragment("explain", &fragment, &output, true, &vendor(home.path()), &repo_root(), &node).unwrap();
+    wrap_fragment(Genre::Explain, &fragment, &output, true, &vendor(home.path()), &repo_root(), &node).unwrap();
     let page = fs::read_to_string(output).unwrap();
     assert!(page.starts_with("<!doctype html>"));
     assert!(page.contains("<title>CharlieBot Explain Template</title>"));
@@ -260,20 +262,10 @@ mod tests {
     let Some(node) = node_command("test_cli_defaults_math_on_for_explain_and_off_for_other_genres").unwrap() else {
       return;
     };
-    let explain = WrapArgs {
-      fragment: String::new(),
-      genre: "explain".to_string(),
-      output: String::new(),
-      math: false,
-      no_math: false,
-    };
-    let sitrep = WrapArgs {
-      fragment: String::new(),
-      genre: "sitrep".to_string(),
-      output: String::new(),
-      math: false,
-      no_math: false,
-    };
+    let explain =
+      WrapArgs { fragment: String::new(), genre: Genre::Explain, output: String::new(), math: false, no_math: false };
+    let sitrep =
+      WrapArgs { fragment: String::new(), genre: Genre::Sitrep, output: String::new(), math: false, no_math: false };
     assert!(explain.math_enabled(&[]));
     assert!(!sitrep.math_enabled(&[]));
     assert!(!explain.math_enabled(&[OsString::from("--no-math")]));
@@ -283,7 +275,7 @@ mod tests {
     let source = fragment(home.path(), "<p>$$y = x$$</p>");
     let explain_output = home.path().join("explain.html");
     wrap_fragment(
-      "explain",
+      Genre::Explain,
       &source,
       &explain_output,
       explain.math_enabled(&[]),
@@ -296,7 +288,7 @@ mod tests {
 
     let sitrep_output = home.path().join("sitrep.html");
     wrap_fragment(
-      "sitrep",
+      Genre::Sitrep,
       &source,
       &sitrep_output,
       sitrep.math_enabled(&[]),
@@ -323,7 +315,7 @@ mod tests {
     let source = fragment(home.path(), damaged.as_bytes());
     let output = home.path().join("damaged_page.html");
     let error =
-      wrap_fragment("explain", &source, &output, true, &vendor(home.path()), &repo_root(), &node).unwrap_err();
+      wrap_fragment(Genre::Explain, &source, &output, true, &vendor(home.path()), &repo_root(), &node).unwrap_err();
     assert!(error.contains("0x09 at offset"), "{error}");
     assert!(error.contains("0x0c at offset"), "{error}");
     assert!(error.contains("write aborted"), "{error}");
@@ -340,7 +332,7 @@ mod tests {
     let source = fragment(home.path(), "<p>x\ty</p>");
     let output = home.path().join("page.html");
     let error =
-      wrap_fragment("explain", &source, &output, true, &vendor(home.path()), &repo_root(), &node).unwrap_err();
+      wrap_fragment(Genre::Explain, &source, &output, true, &vendor(home.path()), &repo_root(), &node).unwrap_err();
     let offset = error
       .split("0x09 at offset ")
       .nth(1)

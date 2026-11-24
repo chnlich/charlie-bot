@@ -40,27 +40,28 @@ let voiceInputStartPending = null;
 // The first-click state is visible before the lazy module arrives.
 function setVoiceButtonState(state) {
   const button = document.getElementById('voice-btn');
-  const styles = {
-    starting: ['bg-amber-600', 'border-amber-500'],
-    recording: ['bg-red-600', 'border-red-500'],
-    idle: ['bg-slate-800', 'border-slate-600'],
-  };
-  const classes = styles[state];
-  if (!classes) throw new Error('Unknown voice button state: ' + state);
+  let classes;
+  switch (state) {
+    case 'starting':
+      classes = ['bg-amber-600', 'border-amber-500'];
+      button.title = 'Preparing microphone…';
+      break;
+    case 'recording':
+      classes = ['bg-red-600', 'border-red-500'];
+      button.title = 'Speak now';
+      break;
+    case 'idle':
+      classes = ['bg-slate-800', 'border-slate-600'];
+      button.title = 'Voice input';
+      break;
+    default:
+      throw new Error('Unknown voice button state: ' + state);
+  }
   button.classList.remove('bg-slate-800', 'border-slate-600', 'bg-amber-600', 'border-amber-500',
       'bg-red-600', 'border-red-500');
   button.classList.add(...classes);
   button.dataset.state = state;
-  if (state === 'starting') {
-    button.title = 'Preparing microphone…';
-    button.setAttribute('aria-label', 'Preparing microphone…');
-  } else if (state === 'recording') {
-    button.title = 'Speak now';
-    button.setAttribute('aria-label', 'Speak now');
-  } else {
-    button.title = 'Voice input';
-    button.setAttribute('aria-label', 'Voice input');
-  }
+  button.setAttribute('aria-label', button.title);
 }
 
 // One promise per key: a second caller joins a pending request. The stylesheet

@@ -19,8 +19,8 @@
 # refuses a draft pull request, a web page change whose evidence directory fails
 # the screenshot check, whose body lacks a full-URL View line, or whose View value
 # does not start with `/`, and carries the View lines into the squash commit message.
-# For a web page change, the review record (--review-record, the review's events.ndjson)
-# must show a read of each screenshot the body names.
+# For a web page change, the review record (--review-record: the review's events.ndjson, kept by landing.md Step 6
+# as review-events.ndjson in the round's evidence directory) must show a read of each screenshot the body names.
 # It also refuses a merge unless the newest verdict comment names the pull request's head sha and reports no
 # issues. pr-comment --verdict-head writes that comment: its first line names the head the review read.
 #

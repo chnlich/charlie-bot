@@ -93,6 +93,7 @@ No round removes either scratch directory by name.
 The runner owns `codex-home/` under `/tmp/improve-<direction>/`, and a round leaves it in place.
 Each round's `TMPDIR` goes when the next round of its direction starts: before the round's agent starts, the runner removes the `TMPDIR` directories that earlier rounds made.
 Each review's scratch directory sits under one of those `TMPDIR` directories.
+The kept review record (Step 6) lives in the evidence directory, which this removal never touches.
 
 Before the round's agent starts, the runner sets the clone to `origin/main`: it fetches `origin` and detaches the clone's HEAD there, so the clone's hooks come from `main`.
 The runner keeps the clone's local branches and its uncommitted changes.
@@ -266,11 +267,15 @@ The round makes the scratch directory with `mktemp -d` under its TMPDIR.
 The write boundary allows the scratch directory and the session directory, and denies every other write.
 The verdict is the review's final text on stdout.
 The raw event stream stays in the review's working directory as `events.ndjson`.
+When each review ends, whether it passed or failed, the round copies that `events.ndjson` to `review-events.ndjson` in the round's evidence directory.
+A later review of the same round replaces that copy, so the kept copy is the record of the round's last review.
+The kept copy stays with the evidence directory after the round, and Step 7 reads it at the merge.
 A review that fails names its reason and its resume handle on stderr, and the round quotes that reason verbatim in the final message.
 Each review's scratch directory and its `events.ndjson` stay on disk until the next round's start (Step 1), whether the review passed or failed.
 A failed review's scratch directory and its `events.ndjson` are named in the round's final message.
 
 The round posts each verdict as one pull-request comment through `dev/improve/github-post.sh pr-comment`, with `--verdict-head` naming the full head sha that the review read.
+The verdict text ends with one line, `Round start: <the round's start stamp>`, which names the round's evidence directory.
 That comment is the verdict comment: it carries the verdict without the event stream, and `pr-merge` reads its head sha.
 A verdict is clean when it reports no issues; otherwise it reports findings.
 A verdict with findings is acted on: the round fixes every finding on the same branch, pushes the fix, runs the freshness step on the fixed head, and reruns this same review, with the same launch, once on that head.
@@ -312,10 +317,20 @@ Read GitHub's `mergeable` state of the pull request. When GitHub has not compute
 Every `improve-abandoned:` and `improve-waiting:` comment goes through the posting script.
 The comment records the topic for the next round.
 
-The round merges through the posting script with the round's evidence directory and with the `events.ndjson` of the
-review whose verdict names the merge head:
+The merge names the evidence directory of the round whose newest verdict names the merge head.
+That round is this round, or, for an adopted pull request or a merge after the round ends, the round that the newest verdict comment's `Round start:` line names.
+That directory is `~/improve/<direction>/evidence/<Round start>/` on the host that runs the merge.
 
-    dev/improve/github-post.sh pr-merge --evidence-dir <the round's evidence directory> --review-record <that review's events.ndjson> <PR>
+- The merge names that directory with `--evidence-dir`.
+- A pull request whose body names a screenshot file also passes `--review-record <that directory>/review-events.ndjson`.
+  The check reads the record for a web page change, and it refuses a web page change whose body names no screenshot.
+- A pull request whose body names no screenshot file merges without `--review-record`.
+
+    dev/improve/github-post.sh pr-merge --evidence-dir <that directory> [--review-record <that directory>/review-events.ndjson] <PR>
+
+When the newest verdict comment has no `Round start:` line, or that directory is missing, or the body names a screenshot file and the record is missing, the merge needs a new review.
+The round reviews the head again (Step 6) before the merge, and the merge then names this round's directory.
+A merge outside a round leaves the pull request open, and Step 2 of the next round adopts it.
 
 The merge checks the verdict on its head, a web page change's screenshots, and the review record's reads of the
 screenshots that the body names. Its squash message comes from the pull request's title and body, which the posting
@@ -417,7 +432,7 @@ When the main run passed, start at step 1 of the outside-diff steps above.
 
 Before the round ends, write the round's final report to `report.md` in its evidence directory.
 The report carries the same content as the final message, so it survives a lost final message.
-The evidence directory stays after the round: it holds the round's screenshots and measurement logs.
+The evidence directory stays after the round: it holds the round's screenshots, measurement logs and review record.
 
 Write one final message at the end of the round.
 It names:

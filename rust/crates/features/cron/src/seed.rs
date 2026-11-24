@@ -10,6 +10,10 @@ use serde_json::Value;
 
 use crate::loader;
 
+/// The repo's `configs/cron.default.yaml` key that lists the default cron tasks. The seed reads the list through it,
+/// and so does the release trial's stand-in reader in `app/cli`.
+pub const SCHEDULED_TASKS_KEY: &str = "scheduled_tasks";
+
 /// One seeded entry's report: the job name and whether its host file was `created`, already `exists`, or in a dry
 /// run `would-create`.
 #[derive(Debug)]
@@ -40,7 +44,7 @@ pub fn seed_default_cron_tasks(
   dry_run: bool,
 ) -> Result<Vec<SeedReport>, String> {
   let defaults_data = read_defaults(repo_root)?;
-  let default_entries = defaults_data.get("scheduled_tasks").and_then(Value::as_array).cloned().unwrap_or_default();
+  let default_entries = defaults_data.get(SCHEDULED_TASKS_KEY).and_then(Value::as_array).cloned().unwrap_or_default();
 
   // Validate every default entry on a resolved copy before touching the host
   // directory, so a bad repo default fails loudly without any partial write.
@@ -228,7 +232,7 @@ mod tests {
 
   /// The default table's entries, each with its `name`.
   fn default_entries(repo: &Path) -> Vec<Value> {
-    read_defaults(repo).expect("the default table")["scheduled_tasks"]
+    read_defaults(repo).expect("the default table")[SCHEDULED_TASKS_KEY]
       .as_array()
       .expect("the default table lists scheduled tasks")
       .clone()

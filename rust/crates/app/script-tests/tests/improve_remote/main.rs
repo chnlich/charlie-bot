@@ -3039,6 +3039,112 @@ fn a_launch_record_naming_the_worktree_claims_nothing() {
   }
 }
 
+/// A worktree on a branch at origin/main's tip, with one tracked edit and one untracked file and no commit of its own.
+fn worktree_at_main_with_uncommitted_edits(world: &World, name: &str) -> std::path::PathBuf {
+  fs::write(world.repo.join("tracked.md"), "base\n").expect("the tracked file");
+  world.git(&world.repo, &["add", "-A"]);
+  world.git(&world.repo, &["commit", "-q", "-m", "add the tracked fixture file"]);
+  world.git(&world.repo, &["push", "-q", "origin", "main"]);
+  let checkout = world.sandbox.root().join(name);
+  world
+    .git(&world.repo, &["worktree", "add", "-q", &checkout.display().to_string(), "-b", &format!("charliebot/{name}")]);
+  fs::write(checkout.join("tracked.md"), "edited\n").expect("the uncommitted edit");
+  fs::write(checkout.join("untracked.md"), "untracked\n").expect("the untracked file");
+  checkout
+}
+
+/// The instant `days` days before now, for a change time that the in-flight list reads as old or recent.
+fn days_ago(days: u64) -> std::time::SystemTime {
+  std::time::SystemTime::now() - Duration::from_secs(days * 86_400)
+}
+
+/// Set a path's modification time, which the in-flight list reads as the path's change time.
+fn set_change_time(path: &Path, when: std::time::SystemTime) {
+  fs::File::options()
+    .write(true)
+    .open(path)
+    .expect("the path to age")
+    .set_modified(when)
+    .expect("the aged change time");
+}
+
+/// `when` in the UTC form that the in-flight list's notice prints, formatted by the same `date`.
+fn utc_timestamp(when: std::time::SystemTime) -> String {
+  let seconds = when.duration_since(std::time::UNIX_EPOCH).expect("a time after the epoch").as_secs();
+  let output = std::process::Command::new("date")
+    .args(["-u", "-d", &format!("@{seconds}"), "+%Y-%m-%dT%H:%M:%SZ"])
+    .output()
+    .expect("date");
+  String::from_utf8(output.stdout).expect("the date output").trim().to_string()
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_no_record_worktree_with_only_old_edits_and_no_commit_ahead_names_no_path_and_a_notice() {
+  let world = World::new();
+  let checkout = worktree_at_main_with_uncommitted_edits(&world, "old-edits");
+  let when = days_ago(8);
+  set_change_time(&checkout.join("tracked.md"), when);
+  set_change_time(&checkout.join("untracked.md"), when);
+
+  let run = run_inflight_list(&world);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  for listed in ["tracked.md", "untracked.md"] {
+    assert!(
+      !lists_path(&run.stdout, listed),
+      "the in-flight list claims {listed} of a worktree whose changes are all 8 days old:\n{}",
+      run.describe()
+    );
+  }
+  assert!(
+    run.stderr.contains(&checkout.display().to_string())
+      && run.stderr.contains("charliebot/old-edits")
+      && run.stderr.contains(&utc_timestamp(when)),
+    "the in-flight list does not name the dropped worktree with its newest change time:\n{}",
+    run.describe()
+  );
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_no_record_worktree_with_one_edit_from_the_last_day_claims_all_its_paths() {
+  let world = World::new();
+  let checkout = worktree_at_main_with_uncommitted_edits(&world, "recent-edit");
+  set_change_time(&checkout.join("tracked.md"), days_ago(8));
+  set_change_time(&checkout.join("untracked.md"), days_ago(1));
+
+  let run = run_inflight_list(&world);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  for listed in ["tracked.md\tcharliebot/recent-edit", "untracked.md\tcharliebot/recent-edit"] {
+    assert!(
+      run.stdout.lines().any(|line| line == listed),
+      "the in-flight list drops {listed} although one of the worktree's changes is a day old:\n{}",
+      run.describe()
+    );
+  }
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_no_record_worktree_with_a_commit_ahead_claims_its_paths_whatever_their_age() {
+  let world = World::new();
+  let checkout = unlanded_worktree_with_uncommitted_state(&world, "ahead-old-edits");
+  set_change_time(&checkout.join("dirty.md"), days_ago(8));
+
+  let run = run_inflight_list(&world);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  for listed in ["topic.md\tcharliebot/ahead-old-edits", "dirty.md\tcharliebot/ahead-old-edits"] {
+    assert!(
+      run.stdout.lines().any(|line| line == listed),
+      "the in-flight list drops {listed} from a worktree with an unmerged commit:\n{}",
+      run.describe()
+    );
+  }
+}
+
 /// The path that a fake member CLI records when the round or a probe runs the member's copy of `kind` at `version`.
 fn member_path(world: &World, kind: &str, version: &str) -> String {
   world.remote_home.join(format!("improve/runner/members/{kind}-{version}/bin/{kind}")).display().to_string()

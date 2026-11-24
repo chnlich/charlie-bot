@@ -12,13 +12,16 @@
 # bare when the fetched main tree holds it, so a squash-landed or rebased path
 # reads as landed work, not as that branch's live work. An open pull request
 # for the branch, a process in its worktree, or an open owning task keeps those
-# paths claimed. A worktree no task names also keeps its
-# claims. A task owns the worktree when a record of the task store names that
-# path, a run record under `data/runs/` or a task record under `threads/`; the
-# task store's event history, not a run's end, decides whether that task is
-# open. With a closed task, no process, and no open pull request, the worktree
-# claims no path, whether or not its branch landed. A condition that cannot be
-# read stops the script with an error naming the condition.
+# paths claimed. A worktree no task names claims its paths only while its branch
+# has a commit ahead of origin/main, or one of its changed, uncommitted or
+# untracked paths changed within NO_RECORD_CLAIM_DAYS. Otherwise it claims no
+# path, and stderr names it with its newest change time. A task owns the worktree
+# when a record of the task store names that path, a run record under
+# `data/runs/` or a task record under `threads/`; the task store's event history,
+# not a run's end, decides whether that task is open. With a closed task, no
+# process, and no open pull request, the worktree claims no path, whether or not
+# its branch landed. A condition that cannot be read stops the script with an
+# error naming the condition.
 #
 # A branch whose name starts with the own prefix is skipped, because its work
 # belongs to the caller.
@@ -35,6 +38,9 @@
 # the clones' refs/remotes/origin/main stay with their owners. Otherwise the
 # script only reads: it writes no branch, worktree or pull request.
 set -euo pipefail
+
+# The window, in days, in which a worktree that no task record names keeps its claim through a changed path.
+readonly NO_RECORD_CLAIM_DAYS=7
 
 # The patch ids of main's commits, shared by every branch this run classifies. Reading them once
 # per run keeps one pass over main's history instead of one per branch.
@@ -121,18 +127,85 @@ list_committed_paths() {
   done <<<"$changed_paths"
 }
 
-# Print the tracked changes from HEAD and every untracked path of one checkout. Uncommitted work
-# is on no branch's main comparison, so each path prints with the branch that carries the
-# checkout's dirty work.
+# Print the tracked changes from HEAD and every untracked path of one checkout, one path per line. A checkout
+# whose paths cannot be read stops the script, because a claim it cannot state would be guessed.
+dirty_paths() {
+  local worktree=$1
+  local listing
+  if ! listing=$(git -C "$worktree" diff --name-only HEAD \
+    && git -C "$worktree" ls-files --others --exclude-standard); then
+    printf 'cannot read the changed paths of worktree %s\n' "$worktree" >&2
+    exit 1
+  fi
+  printf '%s\n' "$listing"
+}
+
+# Print each dirty path with the branch that carries the checkout's dirty work. Uncommitted work is on no
+# branch's main comparison, so it prints with that branch, never as landed work.
 list_dirty_paths() {
   local worktree=$1
   local branch=$2
   local path listing
-  listing=$(git -C "$worktree" diff --name-only HEAD; git -C "$worktree" ls-files --others --exclude-standard)
+  listing=$(dirty_paths "$worktree") || exit 1
   while IFS= read -r path; do
     [[ -n $path ]] || continue
     printf '%s\t%s\n' "$path" "$branch"
   done <<<"$listing"
+}
+
+# Print the newest change time, in epoch seconds, of one checkout's changed, uncommitted and untracked paths, or
+# `none` when it has none. A deleted path has no file to time, so its deletion takes the time of the nearest
+# directory that still exists, because removing an entry changes that directory.
+newest_change_time() {
+  local worktree=$1
+  local listing path target mtime newest=none
+  listing=$(dirty_paths "$worktree") || exit 1
+  while IFS= read -r path; do
+    [[ -n $path ]] || continue
+    target=$worktree/$path
+    while [[ ! -e $target && ! -L $target ]]; do
+      target=${target%/*}
+    done
+    if ! mtime=$(stat -c %Y -- "$target"); then
+      printf 'cannot read the change time of %s\n' "$target" >&2
+      exit 1
+    fi
+    if [[ $newest == none ]] || (( mtime > newest )); then
+      newest=$mtime
+    fi
+  done <<<"$listing"
+  printf '%s\n' "$newest"
+}
+
+# Return success when a worktree that no task record names keeps its claim: its branch has a commit ahead of
+# origin/main, or one of its changed, uncommitted or untracked paths changed within NO_RECORD_CLAIM_DAYS. Otherwise
+# return failure and name the worktree on stderr with its newest change time. The notice changes no exit status.
+no_record_worktree_is_live() {
+  local worktree=$1
+  local branch=$2
+  local ahead newest=none now when=none
+
+  if ! ahead=$(git -C "$main_root" rev-list --count "$main_ref..$branch"); then
+    printf 'cannot count the commits of %s ahead of origin/main in %s\n' "$branch" "$main_root" >&2
+    exit 1
+  fi
+  if (( ahead > 0 )); then
+    return 0
+  fi
+
+  if [[ -d $worktree ]]; then
+    newest=$(newest_change_time "$worktree") || exit 1
+  fi
+  if [[ $newest != none ]]; then
+    now=$(date +%s)
+    if (( newest >= now - NO_RECORD_CLAIM_DAYS * 86400 )); then
+      return 0
+    fi
+    when=$(date -u -d "@$newest" +%Y-%m-%dT%H:%M:%SZ)
+  fi
+  printf 'inflight-files: dropped worktree %s (branch %s): no task record names it, ' "$worktree" "$branch" >&2
+  printf 'no commit is ahead of origin/main, newest change: %s\n' "$when" >&2
+  return 1
 }
 
 # Print whether a process runs in one worktree: yes when its working directory is the worktree or a path inside it,
@@ -322,7 +395,8 @@ read_worktree_task_states() {
   done
 }
 
-# Return success when an open pull request, an open task, a process, or no task owner keeps this worktree live.
+# Return success when an open pull request, an open task, a process, or recent work in a worktree that no task names
+# keeps this worktree live.
 worktree_has_live_claimant() {
   local worktree=$1
   local branch=$2
@@ -337,7 +411,13 @@ worktree_has_live_claimant() {
     return 0
   fi
   case $task_state in
-    open | no_task) return 0 ;;
+    open) return 0 ;;
+    no_task)
+      if no_record_worktree_is_live "$worktree" "$branch"; then
+        return 0
+      fi
+      return 1
+      ;;
     closed)
       ;;
     *)

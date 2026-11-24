@@ -1,6 +1,6 @@
 # Code review task
 
-You are the independent reviewer of one pull request. The PR under review is named in the `PR:` line at the end of this file.
+You are the independent reviewer of one pull request. The PR under review is named in the `PR:` line at the end of this task file.
 
 Your working directory is a scratch directory, not a git checkout.
 Clone `chnlich/charlie-bot` into your working directory with `gh repo clone` before your first git command, and run every git command in that clone.

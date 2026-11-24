@@ -267,9 +267,12 @@ The round runs the review through `charliebot backend run`, and names no model, 
 `option.json` in the review launch directory already holds the resolved backend for `backends.calls.improve_review`; its
 `login` variables carry that backend's login.
 Pass `--launch "$IMPROVE_LAUNCH_DIR/review"` without `--call` or `--backend`.
-The review's task file is a copy of `$IMPROVE_KIT_DIR/dev/improve/code_review_prompt.md` with the pull request reference on its `PR:` line.
-When the pull request names screenshots, the task file also names the round's evidence directory on an `EVIDENCE:`
-line, whatever the round's direction.
+The review's task file is a copy of `$IMPROVE_KIT_DIR/dev/improve/code_review_prompt.md` that the round writes in the
+review's scratch directory, outside the clone.
+The round appends to the copy a `PR:` line that names the pull request by its number, as the copy's last line.
+When the pull request names screenshots, the round appends an `EVIDENCE:` line before the `PR:` line, naming the
+round's evidence directory, whatever the round's direction.
+The repository file stays unchanged, so the `PR:` and `EVIDENCE:` lines exist only in the copy.
 The review's credential reaches only the review process.
 The review's working directory is a scratch directory outside the clone, and it is not a git checkout.
 The review prompt has the reviewer clone the repository into that directory, and the reviewer's git commands run only in that clone.

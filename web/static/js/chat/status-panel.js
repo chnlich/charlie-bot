@@ -164,7 +164,7 @@
   }
 
   // The panel sits on bg-slate-900 (#0f172a), where text-slate-500 holds 3.75:1, under the 4.5:1 floor for
-  // 12 px text. text-slate-400 holds 6.82:1 while staying dimmer than the text-slate-200 values.
+  // 12 px text. text-slate-400 holds 6.96:1 while staying dimmer than the text-slate-200 values.
   function labelSpan(text) {
     return textSpan(platform.isMobile ? 'text-slate-400' : 'shrink-0 w-28 text-slate-400', text);
   }

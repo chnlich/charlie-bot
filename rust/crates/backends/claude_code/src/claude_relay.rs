@@ -44,8 +44,9 @@ impl Decision {
   }
 }
 
-/// Per-process quota and authentication watch. A keyed round's watch records the readings and the decision, but it never
-/// arms the warning relay: the round's token lives on its improve host, so no second login can take the round over.
+/// Per-process quota and authentication watch. A keyed round's watch records the readings and the decision.
+/// It never arms the warning relay.
+/// The round's token lives on its improve host, so no second login can take the round over.
 /// A process whose last result reports no error and is followed by no assistant or user event ended cleanly: it is not
 /// relayed, whatever its exit code.
 pub struct RelayWatch {
@@ -363,8 +364,8 @@ pub fn relay_move(
   relay_move_excluding(state, cfg, model, current, &HashSet::new(), session_id, now, account_pool, run_id)
 }
 
-/// The move of a run off `current` to a login of its pool. `used` holds the logins the run has launched on; the move
-/// never picks one of them, `current` included, so each login serves a run at most once.
+/// The move of a run off `current` to a login of its pool. `used` holds the logins the run has launched on.
+/// The move never picks one of them, `current` included, so each login serves a run at most once.
 #[allow(clippy::too_many_arguments)]
 pub fn relay_move_excluding(
   state: &ClaudeAccountStateRef,
@@ -800,8 +801,9 @@ mod tests {
     assert!(movement.handle.is_some(), "the relay's pick holds a reservation");
   }
 
-  /// The relay cap judges raw headroom: a login over the line whose headroom is all reserved still relays past the
-  /// cap, and a rejected decision there is not a quota fact.
+  /// The relay cap judges raw headroom.
+  /// A login over the line whose headroom is all reserved still relays past the cap.
+  /// A rejected decision there is not a quota fact.
   #[test]
   fn the_relay_cap_judges_raw_headroom_not_reservations() {
     let root = tempfile::tempdir().unwrap();

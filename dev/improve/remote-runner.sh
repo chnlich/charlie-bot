@@ -168,7 +168,6 @@ readonly SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 readonly HOME_DIR=${HOME:-}
 [[ $HOME_DIR == /* ]] || fail 1 'HOME must be an absolute path'
 readonly LAUNCH_DIR="$HOME_DIR/improve/launch/$launch_id"
-readonly LAUNCH_DIR="$HOME_DIR/improve/launch/$launch_id"
 readonly RESULTS_ROOT="$HOME_DIR/improve/results"
 readonly RESULT_DIR="$RESULTS_ROOT/$launch_id"
 # The round's event log: the stream-json its agent writes, which the scope keeps beside the launch's other files.

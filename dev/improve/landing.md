@@ -24,6 +24,7 @@ A leak-rule hit is the only hit the round rewrites: the round removes the matche
 The script sends nothing on a hit, so the posted text is always text that passed.
 A credential hit stops the round. The kind that the check names is the round's stop reason, and the round writes no rewrite of the text.
 A merge goes through the posting script's `pr-merge`, which refuses a merge whose head lacks a clean verdict,
+refuses a diff that changes a path the Step 3 list names under another branch,
 refuses a web page change whose evidence directory fails the screenshot check, whose pull request body names no
 `View:` line, or whose review record shows no read of a screenshot that the body names, and carries the `View:` lines
 into the squash commit message. Each `View:` line follows the View contract of the Web UI Screenshots rule in
@@ -185,6 +186,12 @@ Both computations fetch `origin/main` before they compare a branch against it, b
 The fetch goes into a ref the reading side owns, `refs/improve/inflight/<direction>` in each clone and `refs/improve/inflight/<branch prefix>` in this host's main checkout, and never into `refs/remotes/origin/main` or `FETCH_HEAD`: the directions start in a burst, so concurrent launches, rounds and operators fetch those shared refs themselves.
 Pick a topic whose files the list does not name.
 A file that another branch changes would force that branch to resolve our conflict.
+The claim check covers the final diff, not only the topic's planned files.
+`pr-create` and `pr-merge` read this same list and refuse a diff that changes a path
+the list names under another branch.
+Each refusal names the claimed path and its claimant, and nothing is sent or merged.
+The round keeps claimed paths out of its diff rather than sending past a refusal.
+The list is the launch's snapshot, so a claim made after the launch is not in it.
 A path whose only changes are landed commits is not listed. Every listed path prints as `path<TAB>branch`, naming the branch that carries it:
 - uncommitted work, with the branch of its dirty worktree;
 - an unmerged commit's path, with that commit's branch;

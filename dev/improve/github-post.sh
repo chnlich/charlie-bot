@@ -16,7 +16,7 @@
 # "repos/{owner}/{repo}/pulls/<PR>/update-branch", gh run rerun, and the read-only calls.
 # The gh shim checks their arguments. gh 2.45 has no gh pr update-branch command,
 # so branch updates use the REST endpoint. A merge goes through pr-merge, which
-# refuses a draft pull request, a web page change whose evidence directory fails
+# refuses a draft pull request, a diff that changes a claimed path, a web page change whose evidence directory fails
 # the screenshot check, whose body lacks a full-URL View line, or whose View value
 # does not start with `/`, and carries the View lines into the squash commit message.
 # For a web page change, the review record (--review-record: the review's events.ndjson, kept by landing.md Step 6
@@ -33,6 +33,10 @@
 # evidence directory when they receive --evidence-dir, and a body that cites a record without it is refused.
 # pr-create catches a bad citation before the pull request exists. pr-merge runs the check on the body as it will
 # merge, so an edit made after creation is checked too; pr-edit does not check.
+#
+# pr-create and pr-merge also refuse a diff that changes a path another branch claims in the round's in-flight list,
+# $IMPROVE_LAUNCH_DIR/inflight-files.txt, the list Step 3 reads. The pull request's own head branch claims nothing for
+# itself. A refusal names each claimed path with its claimant and sends nothing.
 #
 # usage:
 #   github-post.sh pr-create --title <title> --body-file <file> [--evidence-dir <dir>] [--draft] [gh pr create args...]
@@ -111,6 +115,32 @@ require_readable() {  # require_readable <path> <what>
   fi
 }
 
+# check_inflight_claims <changed paths file> <head branch>: return 1 after naming each path that the diff changes and
+# another branch claims. The claims come from the round's in-flight list, the file the runner writes at launch and
+# Step 3 reads, so the check and the round's own avoidance share one source. The head branch never refuses itself.
+check_inflight_claims() {
+  local changed=$1 head=$2
+  local -A changed_paths=()
+  local path claimed branch found=0
+  [[ -n ${IMPROVE_LAUNCH_DIR:-} ]] || {
+    printf 'Cannot check the claims of the pull request: IMPROVE_LAUNCH_DIR is unset; nothing was sent or merged.\n' >&2
+    exit 2
+  }
+  local list="$IMPROVE_LAUNCH_DIR/inflight-files.txt"
+  require_readable "$list" "in-flight list"
+  while IFS= read -r path; do
+    [[ -n $path ]] || continue
+    changed_paths["$path"]=1
+  done < "$changed"
+  while IFS=$'\t' read -r claimed branch; do
+    [[ -n $claimed && -n ${changed_paths["$claimed"]:-} ]] || continue
+    [[ $branch != "$head" ]] || continue
+    printf 'claimed path %s, claimed by %s\n' "$claimed" "$branch" >&2
+    found=1
+  done < "$list"
+  [[ $found -eq 0 ]]
+}
+
 # without_evidence_dir: set gh_args to the call's arguments without each --evidence-dir option, which this script reads.
 without_evidence_dir() {
   local skip_next=0 arg
@@ -167,13 +197,42 @@ case "$subcommand" in
     check_string title "$title"
     check_text body "$body_file"
     # A draft waits for its measurements, so it may cite no record yet; its cited records still pass the check.
+    # The head is the branch the call names. Without --head, gh takes the current branch, and so does this check.
     draft=0
-    for arg in "${orig_args[@]}"; do
-      if [[ "$arg" == --draft || "$arg" == -d ]]; then
-        draft=1
-      fi
+    pr_head=$(git branch --show-current) || {
+      printf 'Cannot read the current branch for the claim check; nothing was sent.\n' >&2
+      exit 2
+    }
+    set -- "${orig_args[@]}"
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --draft|-d)
+          draft=1
+          shift
+          ;;
+        --head|-H)
+          [[ $# -ge 2 && -n "$2" ]] || { printf 'Refused %s without a branch.\n' "$1" >&2; exit 2; }
+          pr_head=$2
+          shift 2
+          ;;
+        --head=*)
+          pr_head=${1#--head=}
+          [[ -n "$pr_head" ]] || { printf 'Refused --head without a branch.\n' >&2; exit 2; }
+          shift
+          ;;
+        *) shift ;;
+      esac
     done
     side_record_check_body "$evidence_dir" "$body_file" "$draft" || exit 2
+    # The claim check reads the diff the pull request will show: its head against origin/main, the round's base.
+    git diff --name-only "origin/main...$pr_head" > "$tmp_dir/changed" || {
+      printf 'Cannot read the changed paths of %s for the claim check; nothing was sent.\n' "$pr_head" >&2
+      exit 2
+    }
+    check_inflight_claims "$tmp_dir/changed" "$pr_head" || {
+      printf 'PR changes a path that live work claims; nothing was sent.\n' >&2
+      exit 2
+    }
     without_evidence_dir
     gh pr create "${gh_args[@]}"
     ;;
@@ -389,6 +448,15 @@ case "$subcommand" in
     }
     changed=$(gh pr diff --name-only "$pr_selector" "${repo_args[@]}") || {
       printf 'Cannot read the changed paths of PR %s; nothing was merged.\n' "$pr_selector" >&2
+      exit 2
+    }
+    printf '%s\n' "$changed" > "$tmp_dir/changed"
+    pr_head=$(gh pr view "$pr_selector" "${repo_args[@]}" --json headRefName --jq .headRefName) || {
+      printf 'Cannot read the head branch of PR %s; nothing was merged.\n' "$pr_selector" >&2
+      exit 2
+    }
+    check_inflight_claims "$tmp_dir/changed" "$pr_head" || {
+      printf 'PR %s changes a path that live work claims; nothing was merged.\n' "$pr_selector" >&2
       exit 2
     }
     # `charliebot` is the round's own build (dev/improve/remote-runner.sh builds it), so it carries

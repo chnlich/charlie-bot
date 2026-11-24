@@ -69,6 +69,11 @@ printf '%s\n' "$*" >> "$GH_CALL_LOG"
   for name in ["GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"] {
     env.insert(name.to_string(), "123+example@users.noreply.github.com".to_string());
   }
+  // The round's launch directory with an empty in-flight list: the runner writes that list at launch, and the claim
+  // check of pr-create and pr-merge reads it.
+  let launch = sandbox.dir("round-launch");
+  std::fs::write(launch.join("inflight-files.txt"), "").unwrap();
+  env.insert("IMPROVE_LAUNCH_DIR".to_string(), launch.display().to_string());
   without_credential_env(env)
 }
 
@@ -151,6 +156,12 @@ fn post(sandbox: &Sandbox) -> (Env, PathBuf, PathBuf) {
   (env, gh_log, home)
 }
 
+/// Writes the round's in-flight list as the runner writes it at launch: `path<TAB>branch` per claimed path.
+fn write_inflight_list(env: &Env, claims: &[(&str, &str)]) {
+  let list: String = claims.iter().map(|(path, branch)| format!("{path}\t{branch}\n")).collect();
+  std::fs::write(Path::new(&env["IMPROVE_LAUNCH_DIR"]).join("inflight-files.txt"), list).unwrap();
+}
+
 #[test]
 #[ignore = "integration"]
 fn a_pr_comment_refuses_a_home_path() {
@@ -226,6 +237,7 @@ fn a_missing_pattern_file_exits_2() {
 fn a_pr_create_checks_title_and_body() {
   let sandbox = Sandbox::new();
   let (env, gh_log, _home) = post(&sandbox);
+  let clone = push_repo(&sandbox, &env);
   let body = body_file(&sandbox, "body.md", CLEAN_BODY);
 
   let mut command = harness::command("bash", &env);
@@ -236,18 +248,49 @@ fn a_pr_create_checks_title_and_body() {
     .args(["--body-file"])
     .arg(&body)
     .args(["--base", "main"]);
-  let run = run_in(&mut command, sandbox.root());
+  let run = run_in(&mut command, &clone);
   assert_eq!(run.code, 1, "{}", run.describe());
   assert!(run.stderr.contains("title"), "{}", run.stderr);
   assert!(gh_log_lines(&gh_log).is_empty());
 
+  // Without --head, pr-create takes the current branch, as gh does.
   let mut command = harness::command("bash", &env);
   command
     .arg(github_post())
     .args(["pr-create", "--title", "clean topic", "--body-file"])
     .arg(&body)
     .args(["--base", "main"]);
-  let run = run_in(&mut command, sandbox.root());
+  let run = run_in(&mut command, &clone);
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(gh_log_lines(&gh_log)[0].contains("pr create"), "{}", gh_log_lines(&gh_log)[0]);
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_create_refuses_a_claimed_path_and_allows_a_path_only_its_own_branch_claims() {
+  let sandbox = Sandbox::new();
+  let (env, gh_log, _home) = post(&sandbox);
+  let work = push_repo(&sandbox, &env);
+  let body = body_file(&sandbox, "body.md", CLEAN_BODY);
+  let create = |env: &Env| {
+    let mut command = harness::command("bash", env);
+    command.arg(github_post()).args(["pr-create", "--title", "clean topic", "--body-file"]).arg(&body);
+    command.args(["--base", "main", "--head", HEAD_BRANCH]);
+    run_in(&mut command, &work)
+  };
+
+  write_inflight_list(&env, &[("change.txt", OTHER_CLAIMANT)]);
+  let run = create(&env);
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(
+    run.stderr.lines().any(|line| line.contains("change.txt") && line.contains(OTHER_CLAIMANT)),
+    "{}",
+    run.stderr
+  );
+  assert!(gh_log_lines(&gh_log).is_empty(), "no pull request was created");
+
+  write_inflight_list(&env, &[("change.txt", HEAD_BRANCH), ("docs/unrelated.md", OTHER_CLAIMANT)]);
+  let run = create(&env);
   assert_eq!(run.code, 0, "{}", run.describe());
   assert!(gh_log_lines(&gh_log)[0].contains("pr create"), "{}", gh_log_lines(&gh_log)[0]);
 }
@@ -754,6 +797,7 @@ const MERGE_GH_STUB: &str = r#"case "$1 $2" in
       body) cat "$GH_PR_BODY" ;;
       isDraft) cat "$GH_PR_DRAFT" ;;
       headRefOid) printf '%s\n' "$GH_HEAD_SHA" ;;
+      headRefName) printf '%s\n' "$GH_HEAD_BRANCH" ;;
       comments) jq --raw-output "${!#}" "$GH_COMMENTS" ;;
       *) printf '%s\n' 'https://github.com/chnlich/charlie-bot/pull/5046' ;;
     esac
@@ -777,6 +821,10 @@ fi
 /// The head sha of the synthetic pull request, and an older head it was rebased or fixed from.
 const HEAD_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 const OLDER_SHA: &str = "89abcdef0123456789abcdef0123456789abcdef";
+/// The synthetic pull request's head branch, which is the round's own branch, and two branches of other live work.
+const HEAD_BRANCH: &str = "improve/perf/topic-slug";
+const OTHER_CLAIMANT: &str = "charliebot/task-1795416635-2e6cf3d4";
+const OTHER_CLAIMANT_TWO: &str = "improve/ux/other-topic";
 /// The review's stdout for a verdict with no issues, and for one with a finding at the bar of confidence 80.
 const CLEAN_REVIEW: &str = "Code review: no issues found.\nScope: commits a1 and files web/static/ui.js.\n";
 const FINDING_REVIEW: &str =
@@ -845,6 +893,7 @@ impl MergeWorld {
     env.insert("GH_COMMENT_BODY".to_string(), comment_body.display().to_string());
     env.insert("GH_COMMENTS".to_string(), comments.display().to_string());
     env.insert("GH_HEAD_SHA".to_string(), HEAD_SHA.to_string());
+    env.insert("GH_HEAD_BRANCH".to_string(), HEAD_BRANCH.to_string());
     let evidence = sandbox.dir("evidence");
     let world = MergeWorld { sandbox, env, gh_log, merge_body, comment_body, comments, evidence, pr_draft };
     world.set_comments(&[verdict_comment(HEAD_SHA, CLEAN_REVIEW)]);
@@ -1052,6 +1101,34 @@ fn a_pr_merge_carries_the_view_line_into_the_squash_message() {
   );
   assert!(message.lines().any(|line| line == "View: /?session=abc"), "{message}");
   assert!(message.contains("## Evidence"), "the pull request body stays in the squash message: {message}");
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_refuses_a_diff_that_changes_a_claimed_path_and_names_each_claimant() {
+  let world = MergeWorld::new("rust/crates/x/src/lib.rs\nrust/crates/y/src/main.rs\n", CLEAN_BODY);
+  let claims = [("rust/crates/x/src/lib.rs", OTHER_CLAIMANT), ("rust/crates/y/src/main.rs", OTHER_CLAIMANT_TWO)];
+  write_inflight_list(&world.env, &claims);
+
+  let run = world.merge(&["5046"]);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  for (path, claimant) in claims {
+    assert!(run.stderr.lines().any(|line| line.contains(path) && line.contains(claimant)), "{}", run.stderr);
+  }
+  assert!(world.merge_calls().is_empty(), "nothing may merge: {}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_allows_a_diff_claimed_only_by_its_own_branch_or_not_at_all() {
+  let world = MergeWorld::new("rust/crates/x/src/lib.rs\n", CLEAN_BODY);
+  write_inflight_list(&world.env, &[("rust/crates/x/src/lib.rs", HEAD_BRANCH), ("docs/unrelated.md", OTHER_CLAIMANT)]);
+
+  let run = world.merge(&["5046"]);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert_eq!(world.merge_calls().len(), 1, "{}", run.describe());
 }
 
 #[test]

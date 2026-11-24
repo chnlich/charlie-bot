@@ -58,7 +58,13 @@ mod tests {
   use super::*;
 
   fn vocab() -> Vocabulary {
-    Vocabulary { options: BTreeSet::from(["claude-opus".to_string()]), ..Vocabulary::default() }
+    Vocabulary {
+      options: BTreeSet::from(["claude-opus".to_string()]),
+      pools: BTreeSet::new(),
+      models: BTreeSet::new(),
+      hosts: BTreeSet::new(),
+      id_prefixes: BTreeSet::new(),
+    }
   }
 
   fn roots(home: &Path) -> Roots {

@@ -10,11 +10,14 @@ use charliebot_core::event_types::{
   RATE_LIMIT_RESETS_AT, RATE_LIMIT_STATUS, RATE_LIMIT_STATUS_ALLOWED_WARNING, RATE_LIMIT_STATUS_REJECTED, RESULT,
   TOOL_RESULT, USER,
 };
-use charliebot_registry::backend::{LaunchRefused, LaunchWatch as LaunchWatchTrait, MemberFailure};
+use charliebot_registry::backend::{
+  IMPROVE_TOKEN_MIN_SECONDS, LaunchRefused, LaunchWatch as LaunchWatchTrait, MemberFailure,
+};
 use charliebot_store::metadata::UtcDateTime;
 use serde_json::{Value, json};
 use time::Duration;
 
+use super::claude_accounts::ShortTokenLogin;
 use super::{claude_accounts, claude_config, event_types};
 
 pub const MAX_RELAYS_PER_TURN: usize = 3;
@@ -231,7 +234,7 @@ fn pool_detail(
   account_pool: Option<&str>,
 ) -> anyhow::Result<String> {
   let detail = if let Some(reset) = claude_accounts::earliest_reset(state, cfg, model, now, account_pool)? {
-    format!("earliest reset {:02}:{:02} UTC", reset.into_inner().hour(), reset.into_inner().minute())
+    format!("earliest reset {}", claude_accounts::clock_text(reset))
   } else {
     claude_accounts::unavailable_detail(state, cfg, now, account_pool)?
   };
@@ -249,6 +252,47 @@ pub fn pool_exhausted_message(
   Ok(format!(
     "{POOL_EXHAUSTED_PHRASE} ({}); this run did not complete.",
     pool_detail(state, cfg, model, now, account_pool)?
+  ))
+}
+
+/// What a short login needs before a keyed round can start on it again. Only a renewal of its token restores its life,
+/// and the server knows no renewal time.
+fn token_renewal_clause() -> String {
+  format!(
+    "each short login regains {IMPROVE_TOKEN_MIN_SECONDS} seconds of access-token life only when its token renews, \
+     and no renewal time is known"
+  )
+}
+
+/// The refusal of a keyed round that no login can start on, because access-token life excludes every login of the pool.
+/// It names each excluded login with its token's expiry.
+pub fn token_short_message(short: &[ShortTokenLogin], now: UtcDateTime) -> String {
+  format!(
+    "no login of the pool has {IMPROVE_TOKEN_MIN_SECONDS} seconds of access-token life for this round; short: {}; {}.",
+    claude_accounts::short_token_clause(short, now),
+    token_renewal_clause()
+  )
+}
+
+/// The refusal of a keyed round that access-token life and a spent quota both hold out. It names each login that
+/// access-token life excludes, with its token's expiry, and the quota reset of each other login that a rejection holds
+/// out.
+pub fn keyed_pool_exhausted_message(
+  state: &claude_accounts::ClaudeAccountState,
+  cfg: &CharlieBotConfig,
+  model: Option<&str>,
+  now: UtcDateTime,
+  account_pool: Option<&str>,
+  short: &[ShortTokenLogin],
+) -> anyhow::Result<String> {
+  let resets = claude_accounts::quota_reset_clause(state, cfg, model, now, account_pool, short)?;
+  let resets = if resets.is_empty() { String::new() } else { format!("; quota reset: {resets}") };
+  let pool = account_pool.map_or_else(String::new, |pool| format!("pool '{pool}'; "));
+  let short_clause = claude_accounts::short_token_clause(short, now);
+  Ok(format!(
+    "{POOL_EXHAUSTED_PHRASE} ({pool}access-token life short for this round: {short_clause}{resets}; {}); this run did \
+     not complete.",
+    token_renewal_clause()
   ))
 }
 

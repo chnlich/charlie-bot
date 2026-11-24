@@ -228,57 +228,117 @@ pub fn continuation_domain(option: &BackendOption, cfg: &CharlieBotConfig) -> an
 }
 
 pub fn credentials_present(account: &claude_config::ClaudeAccount) -> bool {
-  let path = Path::new(&account.config_dir).join(login_dirs::CREDENTIALS_FILE);
-  let Ok(contents) = fs::read_to_string(path) else {
-    return false;
-  };
-  let Ok(data) = serde_json::from_str::<Value>(&contents) else {
-    return false;
-  };
-  data.get("claudeAiOauth").and_then(|oauth| oauth.get("accessToken")).is_some_and(is_truthy)
+  oauth_with_access_token(account).is_some()
 }
 
-/// Whether a login's access token lives at least `IMPROVE_TOKEN_MIN_SECONDS` past `now`. An error names why the login
-/// cannot be used for a keyed round. It never carries credential contents.
-fn token_life_suffices(account: &claude_config::ClaudeAccount, now: UtcDateTime) -> Result<(), &'static str> {
+/// The `claudeAiOauth` object of a login's credentials, when the file is readable JSON that holds an access token.
+/// `None` covers each case that `credentials_present` reports as absent.
+fn oauth_with_access_token(account: &claude_config::ClaudeAccount) -> Option<Value> {
   let path = Path::new(&account.config_dir).join(login_dirs::CREDENTIALS_FILE);
-  let contents = fs::read_to_string(path).map_err(|_| "credentials_unreadable")?;
-  let data = serde_json::from_str::<Value>(&contents).map_err(|_| "credentials_invalid_json")?;
-  let oauth = data.get("claudeAiOauth").ok_or("claudeAiOauth_missing")?;
+  let contents = fs::read_to_string(path).ok()?;
+  let data = serde_json::from_str::<Value>(&contents).ok()?;
+  let oauth = data.get("claudeAiOauth")?;
+  oauth.get("accessToken").is_some_and(is_truthy).then(|| oauth.clone())
+}
+
+/// The reason of a login that a keyed round cannot start on: its access token lives less than
+/// `IMPROVE_TOKEN_MIN_SECONDS`.
+pub const LESS_THAN_ROUND_MINIMUM: &str = "less_than_round_minimum";
+
+/// One login that a keyed round cannot start on. `reason` is `LESS_THAN_ROUND_MINIMUM`, or the credentials field whose
+/// expiry is unusable. `expires_at` is the access token's expiry, when the credentials state a usable one.
+#[derive(Debug, PartialEq)]
+pub struct ShortTokenLogin {
+  pub label: String,
+  pub reason: &'static str,
+  pub expires_at: Option<UtcDateTime>,
+}
+
+/// The access token's expiry in a login's `claudeAiOauth`. The stamp is in milliseconds, as the Claude CLI writes it.
+/// An error names the field whose value cannot be used. It never carries credential contents.
+fn token_expiry(oauth: &Value) -> Result<UtcDateTime, &'static str> {
   let expires_at = oauth.get("expiresAt").ok_or("expiresAt_missing")?;
   let expires_at_ms = expires_at.as_i64().ok_or("expiresAt_not_numeric")?;
-  if expires_at_ms / 1000 - now.into_inner().unix_timestamp() >= IMPROVE_TOKEN_MIN_SECONDS as i64 {
-    Ok(())
-  } else {
-    Err("less_than_round_minimum")
-  }
+  let seconds = OffsetDateTime::from_unix_timestamp(expires_at_ms / 1000).map_err(|_| "expiresAt_out_of_range")?;
+  Ok(to_utc_datetime(seconds))
 }
 
-/// The logins of the pool that a keyed round cannot start on, because their access token lives less than
-/// `IMPROVE_TOKEN_MIN_SECONDS`. The improve launcher checks the same life before the round starts.
+/// The logins of the pool that a keyed round cannot start on. Each login's credentials are read once: a login whose
+/// access token lives less than `IMPROVE_TOKEN_MIN_SECONDS`, or whose expiry is unusable, is short. A login without an
+/// access token is unhealthy rather than short. The improve launcher checks the same life before the round starts.
 pub fn short_token_logins(
   cfg: &CharlieBotConfig,
   account_pool: Option<&str>,
   now: Option<UtcDateTime>,
-) -> anyhow::Result<HashSet<String>> {
+) -> anyhow::Result<Vec<ShortTokenLogin>> {
   let moment = now_or(now);
-  let mut short = HashSet::new();
+  let mut short = Vec::new();
   for account in pool_accounts(cfg, account_pool)? {
-    if !credentials_present(&account) {
+    let Some(oauth) = oauth_with_access_token(&account) else {
       continue;
-    }
-    if let Err(reason) = token_life_suffices(&account, moment) {
-      tracing::warn!(
-        target: "charliebot_agents",
-        account = %account.label,
-        reason,
-        minimum_seconds = IMPROVE_TOKEN_MIN_SECONDS,
-        "claude_account_excluded_for_improve_token_life"
-      );
-      short.insert(account.label);
-    }
+    };
+    let login = match token_expiry(&oauth) {
+      Ok(expires_at) => {
+        let remaining = expires_at.into_inner().unix_timestamp() - moment.into_inner().unix_timestamp();
+        if remaining >= IMPROVE_TOKEN_MIN_SECONDS as i64 {
+          continue;
+        }
+        ShortTokenLogin { label: account.label, reason: LESS_THAN_ROUND_MINIMUM, expires_at: Some(expires_at) }
+      }
+      Err(reason) => ShortTokenLogin { label: account.label, reason, expires_at: None },
+    };
+    tracing::warn!(
+      target: "charliebot_agents",
+      account = %login.label,
+      reason = login.reason,
+      minimum_seconds = IMPROVE_TOKEN_MIN_SECONDS,
+      "claude_account_excluded_for_improve_token_life"
+    );
+    short.push(login);
   }
   Ok(short)
+}
+
+/// The `HH:MM UTC` clock of a time, as a refusal states it.
+pub fn clock_text(value: UtcDateTime) -> String {
+  format!("{:02}:{:02} UTC", value.into_inner().hour(), value.into_inner().minute())
+}
+
+/// The short logins with their token expiries, as a refusal names them: `label token expires HH:MM UTC`, or `label
+/// token expired HH:MM UTC` once the expiry has passed. A login without a usable expiry names its reason instead.
+pub fn short_token_clause(short: &[ShortTokenLogin], now: UtcDateTime) -> String {
+  short
+    .iter()
+    .map(|login| match login.expires_at {
+      Some(expires_at) if expires_at.into_inner() > now.into_inner() => {
+        format!("{} token expires {}", login.label, clock_text(expires_at))
+      }
+      Some(expires_at) => format!("{} token expired {}", login.label, clock_text(expires_at)),
+      None => format!("{} ({})", login.label, login.reason),
+    })
+    .collect::<Vec<_>>()
+    .join(", ")
+}
+
+/// The quota resets a refusal names: each login of the pool outside `short` that a rejection holds out for `model`, as
+/// `label HH:MM UTC`. A login in `short` states its token life instead, never its quota reset.
+pub fn quota_reset_clause(
+  state: &ClaudeAccountState,
+  cfg: &CharlieBotConfig,
+  model: Option<&str>,
+  now: UtcDateTime,
+  account_pool: Option<&str>,
+  short: &[ShortTokenLogin],
+) -> anyhow::Result<String> {
+  let resets = pool_accounts(cfg, account_pool)?
+    .into_iter()
+    .filter(|account| !short.iter().any(|login| login.label == account.label))
+    .filter_map(|account| {
+      rejected_until(state, &account.label, model, Some(now))
+        .map(|reset| format!("{} {}", account.label, clock_text(reset)))
+    })
+    .collect::<Vec<_>>();
+  Ok(resets.join(", "))
 }
 
 pub fn record_auth_failure(state: &ClaudeAccountState, label: &str, now: Option<UtcDateTime>) {
@@ -1874,12 +1934,82 @@ mod tests {
     );
 
     let short = short_token_logins(&cfg, None, Some(now)).unwrap();
-    assert_eq!(short, HashSet::from(["one_short".to_string(), "unnamed".to_string(), "nonnumeric".to_string()]));
-    let accounts = pool_accounts(&cfg, None).unwrap();
-    let unnamed_account = accounts.iter().find(|account| account.label == "unnamed").unwrap();
-    let nonnumeric_account = accounts.iter().find(|account| account.label == "nonnumeric").unwrap();
-    assert_eq!(token_life_suffices(unnamed_account, now), Err("expiresAt_missing"));
-    assert_eq!(token_life_suffices(nonnumeric_account, now), Err("expiresAt_not_numeric"));
+    let one_short_expiry = to_utc_datetime(OffsetDateTime::from_unix_timestamp(seconds + min - 1).unwrap());
+    assert_eq!(
+      short,
+      vec![
+        ShortTokenLogin {
+          label: "one_short".to_string(),
+          reason: LESS_THAN_ROUND_MINIMUM,
+          expires_at: Some(one_short_expiry),
+        },
+        ShortTokenLogin { label: "unnamed".to_string(), reason: "expiresAt_missing", expires_at: None },
+        ShortTokenLogin { label: "nonnumeric".to_string(), reason: "expiresAt_not_numeric", expires_at: None },
+      ]
+    );
+  }
+
+  #[test]
+  fn a_token_short_clause_names_each_login_with_its_expiry_and_a_quota_clause_skips_it() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let now = timestamp("2025-01-01T12:00:00Z");
+    let short_a = root.path().join("short_a");
+    let short_b = root.path().join("short_b");
+    let fresh = root.path().join("fresh");
+    add_credentials(&fresh);
+    for dir in [&short_a, &short_b] {
+      add_credentials(dir);
+    }
+    let cfg = config(&home, &[("short_a", &short_a), ("short_b", &short_b), ("fresh", &fresh)]);
+    let state = ClaudeAccountState::new();
+    let seconds = now.into_inner().unix_timestamp();
+    // Both short logins are out for quota, and the quota of `short_b` is not a reset the refusal may name.
+    observe_rate_limit(&state, "short_a", &rejection_at(seconds + 3600), Some(now), None);
+    observe_rate_limit(&state, "short_b", &rejection_at(seconds + 7200), Some(now), None);
+    let short = vec![
+      ShortTokenLogin {
+        label: "short_a".to_string(),
+        reason: LESS_THAN_ROUND_MINIMUM,
+        expires_at: Some(to_utc_datetime(OffsetDateTime::from_unix_timestamp(seconds + 1800).unwrap())),
+      },
+      ShortTokenLogin { label: "short_b".to_string(), reason: "expiresAt_missing", expires_at: None },
+    ];
+
+    let clause = short_token_clause(&short, now);
+    assert!(clause.contains("short_a") && clause.contains("12:30 UTC"), "the expiry of short_a: {clause}");
+    assert!(clause.contains("short_b"), "the login without an expiry: {clause}");
+    let quota = quota_reset_clause(&state, &cfg, Some("claude-fable-5-1"), now, None, &short).unwrap();
+    assert_eq!(quota, "", "no login outside the short set holds a rejection");
+    let quota = quota_reset_clause(&state, &cfg, Some("claude-fable-5-1"), now, None, &short[1..]).unwrap();
+    assert_eq!(quota, "short_a 13:00 UTC", "short_a is outside the set, so its quota reset is named");
+  }
+
+  #[test]
+  fn a_login_short_for_a_round_keeps_its_member_open_for_other_sessions() {
+    // A quota refusal of a keyed round records its member out only when no login of the member can run. The member's
+    // outlook applies no round minimum, so a login that the round cannot use still counts as headroom for other runs.
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let spent = root.path().join("spent");
+    let short = root.path().join("short");
+    add_credentials(&spent);
+    add_credentials(&short);
+    let cfg = config(&home, &[("spent", &spent), ("short", &short)]);
+    let now = timestamp("2025-01-01T12:00:00Z");
+    let state = ClaudeAccountState::new();
+    observe_rate_limit(&state, "spent", &rejection_at(now.into_inner().unix_timestamp() + 3600), Some(now), None);
+    let option = cfg.get_backend_option("fable").unwrap();
+
+    let reading = member_reading(&state, &cfg, option, now).unwrap().expect("the logins read");
+    assert!(!reading.exhausted, "the short login's headroom keeps the member open");
+  }
+
+  /// A rate-limit event that rejects a login's whole window until `resets_at`, in unix seconds.
+  fn rejection_at(resets_at: i64) -> Value {
+    json!({"unifiedWindows": {"five_hour": {"utilization": 1.0}}, "status": "rejected", "resetsAt": resets_at as f64})
   }
 
   #[test]

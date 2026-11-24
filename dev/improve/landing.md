@@ -367,6 +367,8 @@ That directory is `~/improve/<direction>/evidence/<Round start>/` on the host th
 
     $IMPROVE_KIT_DIR/dev/improve/github-post.sh pr-merge --evidence-dir <that directory> [--review-record <that directory>/review-events.ndjson] <PR>
 
+On success, pr-merge prints the PR number, the reviewed head, the merge commit and the state that GitHub reports after the merge. Exit 4 means the merge was sent and GitHub does not show it merged at the reviewed head.
+
 When the newest verdict comment has no `Round start:` line, or that directory is missing, or the body names a screenshot file and the record is missing, the merge needs a new review.
 The round reviews the head again (Step 6) before the merge, and the merge then names this round's directory.
 When a merge outside a round needs that new review, it leaves the pull request open, and Step 2 of the next round adopts it.

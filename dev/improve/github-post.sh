@@ -25,6 +25,8 @@
 # issues. pr-comment --verdict-head writes that comment: its first line names the head the review read.
 # pr-merge also refuses a merge whose round event log ($IMPROVE_LAUNCH_DIR/round-events.ndjson) or review record
 # reads a skill file outside $IMPROVE_SKILLS_DIR; dev/improve/skill-reads.sh names each such path.
+# After the merge, pr-merge reads the pull request back from GitHub and prints its number, reviewed head, merge commit
+# and state; a readback that does not show the merge at the reviewed head exits 4.
 #
 # pr-edit does not call gh pr edit: on gh 2.45 that fails on the Projects
 # (classic) lookup. It reads the PR's URL with gh pr view, then sends the
@@ -49,7 +51,7 @@
 #   github-post.sh push [git push args...]
 #
 # Exit codes: 0 sent, 1 leak hit (nothing sent), 2 setup refusal (nothing sent),
-# 3 credential hit (nothing sent; the round stops).
+# 3 credential hit (nothing sent; the round stops), 4 merge sent but its readback does not confirm it.
 set -euo pipefail
 
 usage() {
@@ -77,26 +79,31 @@ credential_values="$tmp_dir/credential-values"
 "$scanner" --credential-values > "$credential_values" || exit 2
 
 # check_text <field> <file>: scan the file as one text, first for the credential values, then with the leak rules.
-# The scanner output above names the hit: a credential hit prints its kind and field, a leak-rule hit the matched lines.
+# Each scanner run writes its output to the check log. The log reaches stderr only when the check refuses: a credential
+# hit names its kind there, a leak-rule hit its matched lines. A passing check prints nothing, so stdout carries the
+# subcommand's own result alone.
 check_text() {
   local field=$1 file=$2 status
+  local log="$tmp_dir/check.log"
   set +e
-  "$scanner" --credential-check "$credential_values" "$field" < "$file"
+  "$scanner" --credential-check "$credential_values" "$field" < "$file" > "$log"
   status=$?
   set -e
   if [[ "$status" -eq 3 ]]; then
+    cat -- "$log" >&2
     printf 'credential check hit in %s; nothing was sent. The round stops here: the kind named above is the reason.\n' \
       "$field" >&2
     exit 3
   fi
-  [[ "$status" -eq 0 ]] || exit "$status"
+  [[ "$status" -eq 0 ]] || { cat -- "$log" >&2; exit "$status"; }
   set +e
-  "$scanner" --require-local-patterns --stdin < "$file"
+  "$scanner" --require-local-patterns --stdin < "$file" > "$log"
   status=$?
   set -e
   if [[ "$status" -eq 0 ]]; then
     return 0
   fi
+  cat -- "$log" >&2
   if [[ "$status" -eq 1 ]]; then
     printf 'host-leak check hit in %s; nothing was sent\n' "$field" >&2
     exit 1
@@ -521,7 +528,24 @@ case "$subcommand" in
       check_text body "$tmp_dir/merge-body"
       merge_args+=(--subject "$pr_title" --body-file "$tmp_dir/merge-body")
     fi
-    gh "${merge_args[@]}"
+    # gh's own merge line goes to stderr, so stdout carries the readback below and nothing else.
+    gh "${merge_args[@]}" >&2
+    # The readback is GitHub's state of the pull request after the merge. The merge counts only when GitHub shows it
+    # merged at the head the verdict reviewed. A failure after the merge was sent exits 4: nothing is retried.
+    readback=$(gh pr view "$pr_selector" "${repo_args[@]}" --json number,state,headRefOid,mergeCommit \
+      --jq '[.number, .state, .headRefOid, (.mergeCommit.oid // "")] | @tsv') || {
+      printf 'PR %s: the merge was sent, but its readback failed; the merge is not confirmed.\n' "$pr_selector" >&2
+      exit 4
+    }
+    IFS=$'\t' read -r merged_number merged_state merged_head merge_commit <<< "$readback"
+    if [[ "$merged_state" != MERGED || "$merged_head" != "$merge_head" || -z "$merge_commit" ]]; then
+      printf 'PR %s: the merge was sent, but the readback shows state %s at head %s, merge commit %s; ' \
+        "$pr_selector" "$merged_state" "$merged_head" "${merge_commit:-none}" >&2
+      printf 'the merge is not confirmed at the reviewed head %s.\n' "$merge_head" >&2
+      exit 4
+    fi
+    printf 'PR %s\nReviewed head: %s\nMerge commit: %s\nState: %s\n' \
+      "$merged_number" "$merged_head" "$merge_commit" "$merged_state"
     ;;
   push)
     # The pushed text is checked in-process before git push runs, so a clone without the hooks path is covered

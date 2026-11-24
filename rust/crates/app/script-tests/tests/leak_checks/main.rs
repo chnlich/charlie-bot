@@ -796,6 +796,7 @@ const MERGE_GH_STUB: &str = r#"case "$1 $2" in
       title) cat "$GH_PR_TITLE" ;;
       body) cat "$GH_PR_BODY" ;;
       isDraft) cat "$GH_PR_DRAFT" ;;
+      number,state,headRefOid,mergeCommit) jq --raw-output "${!#}" "$GH_READBACK" ;;
       headRefOid) printf '%s\n' "$GH_HEAD_SHA" ;;
       headRefName) printf '%s\n' "$GH_HEAD_BRANCH" ;;
       comments) jq --raw-output "${!#}" "$GH_COMMENTS" ;;
@@ -821,6 +822,8 @@ fi
 /// The head sha of the synthetic pull request, and an older head it was rebased or fixed from.
 const HEAD_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 const OLDER_SHA: &str = "89abcdef0123456789abcdef0123456789abcdef";
+/// The squash commit that GitHub reports as the merged pull request's merge commit.
+const MERGE_SHA: &str = "fedcba9876543210fedcba9876543210fedcba98";
 /// The synthetic pull request's head branch, which is the round's own branch, and two branches of other live work.
 const HEAD_BRANCH: &str = "improve/perf/topic-slug";
 const OTHER_CLAIMANT: &str = "charliebot/task-1795416635-2e6cf3d4";
@@ -879,11 +882,13 @@ struct MergeWorld {
   comments: PathBuf,
   evidence: PathBuf,
   pr_draft: PathBuf,
+  readback: PathBuf,
   round_events: PathBuf,
 }
 
 impl MergeWorld {
-  /// A pull request at `HEAD_SHA` whose newest verdict comment reports no issues on that head.
+  /// A pull request at `HEAD_SHA` whose newest verdict comment reports no issues on that head. Its readback after the
+  /// merge reports it merged at `HEAD_SHA`, until a test replaces the readback.
   fn new(changed: &str, pr_body: &str) -> MergeWorld {
     let sandbox = Sandbox::new();
     let home = pattern_home(&sandbox);
@@ -921,10 +926,34 @@ impl MergeWorld {
     let round_events = launch.join("round-events.ndjson");
     std::fs::write(&round_events, "").unwrap();
     env.insert("IMPROVE_SKILLS_DIR".to_string(), ROUND_SKILLS.to_string());
-    let world =
-      MergeWorld { sandbox, env, gh_log, merge_body, comment_body, comments, evidence, pr_draft, round_events };
+    let readback = sandbox.root().join("readback.json");
+    env.insert("GH_READBACK".to_string(), readback.display().to_string());
+    let world = MergeWorld {
+      sandbox,
+      env,
+      gh_log,
+      merge_body,
+      comment_body,
+      comments,
+      evidence,
+      pr_draft,
+      readback,
+      round_events,
+    };
     world.set_comments(&[verdict_comment(HEAD_SHA, CLEAN_REVIEW)]);
+    world.set_readback("MERGED", HEAD_SHA);
     world
+  }
+
+  /// Writes the pull request as GitHub reads it after the merge: its state, its head and its merge commit.
+  fn set_readback(&self, state: &str, head: &str) {
+    let readback = serde_json::json!({
+      "number": 5046,
+      "state": state,
+      "headRefOid": head,
+      "mergeCommit": { "oid": MERGE_SHA },
+    });
+    std::fs::write(&self.readback, readback.to_string()).unwrap();
   }
 
   /// Replaces the pull request's comments, oldest first.
@@ -1140,6 +1169,59 @@ fn a_pr_merge_carries_the_view_line_into_the_squash_message() {
   );
   assert!(message.lines().any(|line| line == "View: /?session=abc"), "{message}");
   assert!(message.contains("## Evidence"), "the pull request body stays in the squash message: {message}");
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_prints_the_pr_number_reviewed_head_merge_commit_and_state_read_back_from_github() {
+  let names = shot_names(2);
+  let world = MergeWorld::new("web/static/ui.js\n", &body_naming(&names, "\nView: /?session=abc\n"));
+  world.write_screenshots(2);
+  let record = world.review_record(&names);
+
+  let run = world.merge(&[
+    "--evidence-dir",
+    world.evidence.to_str().unwrap(),
+    "--review-record",
+    record.to_str().unwrap(),
+    "5046",
+  ]);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  // The title and body checks of a web change print nothing on a pass, so stdout is the merge result alone.
+  assert_eq!(
+    run.stdout,
+    format!("PR 5046\nReviewed head: {HEAD_SHA}\nMerge commit: {MERGE_SHA}\nState: MERGED\n"),
+    "{}",
+    run.describe()
+  );
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_whose_readback_does_not_show_the_merge_exits_4_and_claims_no_result() {
+  let world = MergeWorld::new("rust/crates/x/src/lib.rs\n", CLEAN_BODY);
+  world.set_readback("OPEN", HEAD_SHA);
+
+  let run = world.merge(&["5046"]);
+
+  assert_eq!(run.code, 4, "{}", run.describe());
+  assert!(run.stderr.contains("OPEN"), "the readback's state is named: {}", run.describe());
+  assert!(run.stdout.is_empty(), "no merge result is claimed: {}", run.describe());
+  assert_eq!(world.merge_calls().len(), 1, "the merge was sent once: {}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_whose_merged_head_is_not_the_reviewed_head_exits_4() {
+  let world = MergeWorld::new("rust/crates/x/src/lib.rs\n", CLEAN_BODY);
+  world.set_readback("MERGED", OLDER_SHA);
+
+  let run = world.merge(&["5046"]);
+
+  assert_eq!(run.code, 4, "{}", run.describe());
+  assert!(run.stderr.contains(OLDER_SHA), "the merged head is named: {}", run.describe());
+  assert!(run.stdout.is_empty(), "no merge result is claimed: {}", run.describe());
 }
 
 #[test]

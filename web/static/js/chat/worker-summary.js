@@ -111,8 +111,13 @@ function runRowHtml(row, activeStartedAt) {
   if (duration) parts.push(duration);
   parts.push(escapeHtml(state));
   parts.push(escapeHtml(toolCallWords(row.tool_calls)));
-  return '<div class="flex items-center gap-1.5 text-xs text-slate-400 whitespace-nowrap">'
-    + parts.join('<span class="text-slate-500"> · </span>')
+  return '<div class="flex flex-wrap items-center gap-1.5 text-xs text-slate-400">'
+    + parts.map((part, index) => (
+      '<span class="inline-flex items-center gap-1.5">'
+      + part
+      + (index < parts.length - 1 ? '<span class="text-slate-500"> · </span>' : '')
+      + '</span>'
+    )).join('')
     + '</div>';
 }
 
@@ -223,7 +228,7 @@ function render() {
   const summary = currentSummary;
   const status = statusOf(summary);
   const activeStart = summary.active && summary.active.started_at ? summary.active.started_at : null;
-  const head = '<div class="flex items-center gap-2">'
+  const head = '<div class="flex flex-wrap items-center gap-x-2 gap-y-1">'
     + cbIcon('dot', 8, 'flex-shrink-0 ' + status.dot)
     + '<span class="font-semibold text-slate-200">' + escapeHtml(status.label) + '</span>'
     + statusTimeHtml(summary)
@@ -232,7 +237,7 @@ function render() {
     ? '<div class="text-xs text-red-400 break-words">' + escapeHtml('Cause: ' + summary.cause.text) + '</div>'
     : '';
   const stopHtml = summary.stop
-    ? '<div class="text-xs text-slate-400">'
+    ? '<div class="text-xs text-slate-400 break-words">'
       + escapeHtml('Stop requested ' + formatBubbleTime(summary.stop.timestamp) + ' by '
         + stopOrigin(summary.stop.request_id)) + '</div>'
     : '';

@@ -1,7 +1,7 @@
 # Improve direction: performance
 
 You run the performance direction of the improve loop.
-Follow `dev/improve/landing.md` for the round protocol.
+Follow `$IMPROVE_KIT_DIR/dev/improve/landing.md` for the round protocol.
 That file carries the shared round contract.
 Your branch prefix is `improve/perf/`.
 
@@ -54,8 +54,8 @@ request evidence reports each changed test's isolated time.
 
 ## Serving
 
-Each side runs one serve trial against the shared mock home. The `dev/improve/trial-side.sh` entry holds the host's
-bench lock from trial startup through measurements and shutdown. Builds stay outside the lock. The round's scope owns
+Each side runs one serve trial against the shared mock home. The `$IMPROVE_KIT_DIR/dev/improve/trial-side.sh` entry holds
+the host's bench lock from trial startup through measurements and shutdown. Builds stay outside the lock. The round's scope owns
 the memory limit; the trial adds no separate scope.
 
 The trial exports `CHARLIEBOT_SERVE_URL`, `CHARLIEBOT_SERVE_AUTH_HEADER` and `CHARLIEBOT_SERVE_PID` to its measurement
@@ -101,4 +101,4 @@ The pull request evidence names each metric's before and after values, sample co
 logs for a reviewer to verify the result. The mock home and host differ from production, so absolute values are
 comparable only within one round and do not represent production measurements. The round's retained evidence includes
 each timing side's raw measurements, in the side output location.
-The pull request cites the side record of each side that produced a figure, as Step 5 of `dev/improve/landing.md` sets.
+The pull request cites the side record of each side that produced a figure, as Step 5 of `$IMPROVE_KIT_DIR/dev/improve/landing.md` sets.

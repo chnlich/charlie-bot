@@ -27,6 +27,7 @@
 #     $CLAUDE_CONFIG_DIR/.credentials.json, or a codex member's login in ~/.codex/auth.json;
 #   - the leak pattern file $CHARLIEBOT_HOME/skills_leak_patterns.local.txt;
 #   - the in-flight files list, which dev/improve/inflight-files.sh prints here;
+#   - the kit revision: HEAD of this checkout, whose dev/ tree the runner fetches as the round's kit;
 #   - the worker session's metadata.json, for task_parent_id;
 #   - the cron task file of that parent session, for prompt_file;
 #   - the origin URL of this launcher's checkout, which the runner clones from.
@@ -36,10 +37,10 @@
 # failed: either the host asks for a login approval, or stderr quotes ssh's error, or the bound that ended the wait
 # when ssh printed nothing; 4 the direction's clone is missing, is not this protocol's clone, or holds uncommitted work
 # that blocks its checkout of origin/main; 5 the previous round of this direction still runs; 6 the round's direction
-# cannot be read; 7 a round dependency is missing, and stderr names it; 8 the member's login has less access-token life
-# than a round needs, and stderr names the login and its minutes left. Codes 3 to 8 start no agent
-# and no scope, and codes 7 and 8 send nothing to the host. Code 7 also covers the review backend: an unresolved
-# `backends.calls.improve_review`, a missing key or login, or a login with too little life; and the probe: a
+# cannot be read; 7 a round dependency is missing or dev/improve differs from HEAD, and stderr names it; 8 the member's
+# login has less access-token life than a round needs, and stderr names the login and its minutes left. Codes 3 to 8
+# start no agent and no scope, and codes 7 and 8 send nothing to the host. Code 7 also covers the review backend: an
+# unresolved `backends.calls.improve_review`, a missing key or login, or a login with too little life; and the probe: a
 # `backends.calls.probe` target with no member that names an api_base. The review never exits 8,
 # because the server reads 8 as a member's short token and swaps the member. A code 7 for a member or review CLI means
 # this host's `--version` output names no version; the install and its check are the runner's.
@@ -404,6 +405,14 @@ fi
 jq -e '.option.id' <<<"$probe_answer" >/dev/null \
   || fail 7 "the probe answer of backends.calls.probe names no option id: $probe_answer"
 
+# ---------- 1e. The kit revision ----------
+# The kit files that this launch sends are copies of this checkout, and the launch names HEAD as their revision. A
+# checkout whose dev/improve differs from HEAD would send files of another revision, so the launch exits 7 here.
+cli_commit=$(git -C "$SCRIPT_DIR/../.." rev-parse HEAD 2>/dev/null) || cli_commit=
+[[ -n $cli_commit ]] || fail 1 'cannot read the commit of this launcher checkout'
+[[ -z $(git -C "$SCRIPT_DIR/../.." status --porcelain -- dev/improve) ]] \
+  || fail 7 "dev/improve differs from HEAD $cli_commit in this checkout, so the round's kit is not at that revision"
+
 # ---------- 2. Round preflight ----------
 set +e
 preflight_output=$(timeout "$PREFLIGHT_SECONDS" "${SSH[@]}" -n "$REMOTE_HOST" true 2>&1)
@@ -446,6 +455,9 @@ pattern_file="$PROFILE_HOME/skills_leak_patterns.local.txt"
 [[ -r $pattern_file ]] || fail 1 "the leak pattern file is missing: $pattern_file"
 cp -- "$pattern_file" "$payload/skills_leak_patterns.local.txt"
 cp -- "$SCRIPT_DIR/remote-runner.sh" "$payload/remote-runner.sh"
+# The revision of the kit the runner fetches from this launcher's origin; the runner refuses the launch unless its
+# charliebot is built from this commit.
+printf '%s\n' "$cli_commit" >"$payload/kit-revision"
 # The review backend's answer: the runner reads the review's backend record from it, and the answer holds no key.
 mkdir -- "$payload/review"
 printf '%s\n' "$review_answer" >"$payload/review/option.json"
@@ -495,9 +507,6 @@ while IFS= read -r name; do
   forwarded_name "$name" || continue
   printf '%s\0' "$name=${!name}" >>"$payload/env"
 done < <(compgen -e | LC_ALL=C sort)
-
-cli_commit=$(git -C "$SCRIPT_DIR/../.." rev-parse HEAD 2>/dev/null) || cli_commit=
-[[ -n $cli_commit ]] || fail 1 'cannot read the commit of this launcher checkout'
 
 copy_evidence "$EVIDENCE_COPY_SECONDS"
 

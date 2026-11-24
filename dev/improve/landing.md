@@ -17,7 +17,7 @@ A round merges only a pull request that is ready for review.
 A draft is left to its runner, and a round does not count a draft as the started topic.
 When a round opens a pull request whose body names pending measurements, the pull request opens as a draft.
 
-Every text the round writes to GitHub — a pull-request title, body, comment, commit message or branch name — goes through `dev/improve/github-post.sh`, which checks it against the leak rules and the round's credential values before it sends anything.
+Every text the round writes to GitHub — a pull-request title, body, comment, commit message or branch name — goes through `$IMPROVE_KIT_DIR/dev/improve/github-post.sh`, which checks it against the leak rules and the round's credential values before it sends anything.
 Every push and every `gh` call of the round passes the same credential check: the clone's pre-push hook checks each pushed commit's message and diff, and the round's `gh` checks every argument and file argument.
 A credential value never enters any text the round writes, and no write reaches GitHub while the check holds a hit.
 A leak-rule hit is the only hit the round rewrites: the round removes the matched content from the text, rewrites it, and runs the subcommand again.
@@ -94,7 +94,14 @@ The runner owns `codex-home/` under `/tmp/improve-<direction>/`, and a round lea
 Each round's `TMPDIR` goes when the next round of its direction starts: before the round's agent starts, the runner removes the `TMPDIR` directories that earlier rounds made.
 Each review's scratch directory sits under one of those `TMPDIR` directories.
 
-Before the round's agent starts, the runner sets the clone to `origin/main`: it fetches `origin` and detaches the clone's HEAD there, so the clone's hooks come from `main`.
+The kit is the set of `dev/improve/` documents and scripts that this protocol names, and the `dev/` scripts that those scripts source.
+The round reads and runs the kit from `$IMPROVE_KIT_DIR`, which holds the `dev/` tree of the revision that the runner names in `IMPROVE_KIT_REVISION`.
+That revision is the one that the round's charliebot is built from, and the runner refuses a round whose kit and charliebot differ.
+The clone is not the kit's source: the clone holds the round's own edits, so every `dev/improve/` path that the round reads or runs means its copy under `$IMPROVE_KIT_DIR`.
+Step 9 names the kit revision.
+
+Before the round's agent starts, the runner sets the clone to `origin/main`, the base of the round's topic: it fetches `origin` and detaches the clone's HEAD there.
+Git runs the clone's own `dev/git-hooks`, so the hooks come from that checkout and not from the kit.
 The runner keeps the clone's local branches and its uncommitted changes.
 A checkout that would overwrite uncommitted work ends the launch with exit 4.
 
@@ -210,7 +217,7 @@ The round's runner sets `CHARLIEBOT_TRIAL_PROBE_ANSWER` to the launch's probe an
 Each serve trial side leaves one side record in the round directory, and the record names that side's unique raw output location.
 The round keeps every side record, including the records of sides it discards.
 A timing side writes all of its raw output, the trial's own output included, to `IMPROVE_SIDE_OUTPUT`, so no later side overwrites it.
-The record fields are listed in the header of `dev/improve/trial-side.sh`.
+The record fields are listed in the header of `$IMPROVE_KIT_DIR/dev/improve/trial-side.sh`.
 
 The pull request names each screenshot by its file name and width, at the widths and states that the Web UI Screenshots rule in `prompts/task_base.md` sets.
 The pull request names no link to an evidence file and no host path; the evidence text stands on its own.
@@ -223,8 +230,8 @@ Step 9 carries the evidence files to the user.
 
 Push the branch and open one pull request against `main` through the posting script:
 
-    dev/improve/github-post.sh push -u origin improve/<direction>/<topic slug>
-    dev/improve/github-post.sh pr-create --title "<topic>" --body-file <body file> --evidence-dir <the round's evidence directory> --base main --head improve/<direction>/<topic slug>
+    $IMPROVE_KIT_DIR/dev/improve/github-post.sh push -u origin improve/<direction>/<topic slug>
+    $IMPROVE_KIT_DIR/dev/improve/github-post.sh pr-create --title "<topic>" --body-file <body file> --evidence-dir <the round's evidence directory> --base main --head improve/<direction>/<topic slug>
 
 When the body names pending measurements, add `--draft` to the pr-create command (category rule).
 
@@ -255,7 +262,7 @@ The round runs the review through `charliebot backend run`, and names no model, 
 `option.json` in the review launch directory already holds the resolved backend for `backends.calls.improve_review`; its
 `login` variables carry that backend's login.
 Pass `--launch "$IMPROVE_LAUNCH_DIR/review"` without `--call` or `--backend`.
-The review's task file is `dev/improve/code_review_prompt.md` with the pull request reference on its `PR:` line.
+The review's task file is a copy of `$IMPROVE_KIT_DIR/dev/improve/code_review_prompt.md` with the pull request reference on its `PR:` line.
 When the pull request names screenshots, the task file also names the round's evidence directory on an `EVIDENCE:`
 line, whatever the round's direction.
 The review's credential reaches only the review process.
@@ -270,7 +277,7 @@ A review that fails names its reason and its resume handle on stderr, and the ro
 Each review's scratch directory and its `events.ndjson` stay on disk until the next round's start (Step 1), whether the review passed or failed.
 A failed review's scratch directory and its `events.ndjson` are named in the round's final message.
 
-The round posts each verdict as one pull-request comment through `dev/improve/github-post.sh pr-comment`, with `--verdict-head` naming the full head sha that the review read.
+The round posts each verdict as one pull-request comment through `$IMPROVE_KIT_DIR/dev/improve/github-post.sh pr-comment`, with `--verdict-head` naming the full head sha that the review read.
 That comment is the verdict comment: it carries the verdict without the event stream, and `pr-merge` reads its head sha.
 A verdict is clean when it reports no issues; otherwise it reports findings.
 A verdict with findings is acted on: the round fixes every finding on the same branch, pushes the fix, runs the freshness step on the fixed head, and reruns this same review, with the same launch, once on that head.
@@ -294,7 +301,7 @@ When the round has no review left for the new head, it leaves the pull request o
 When the pull request is a draft, leave it open for its runner and end the round after its verdict.
 
 Before the merge, the pull request's title and body describe its final commits.
-When the branch gained commits after the description was written, update the title and body through `dev/improve/github-post.sh pr-edit`.
+When the branch gained commits after the description was written, update the title and body through `$IMPROVE_KIT_DIR/dev/improve/github-post.sh pr-edit`.
 Keep the body's `## Evidence` section.
 
 Read GitHub's `mergeable` state of the pull request. When GitHub has not computed it yet, read it again.
@@ -315,7 +322,7 @@ The comment records the topic for the next round.
 The round merges through the posting script with the round's evidence directory and with the `events.ndjson` of the
 review whose verdict names the merge head:
 
-    dev/improve/github-post.sh pr-merge --evidence-dir <the round's evidence directory> --review-record <that review's events.ndjson> <PR>
+    $IMPROVE_KIT_DIR/dev/improve/github-post.sh pr-merge --evidence-dir <the round's evidence directory> --review-record <that review's events.ndjson> <PR>
 
 The merge checks the verdict on its head, a web page change's screenshots, and the review record's reads of the
 screenshots that the body names. Its squash message comes from the pull request's title and body, which the posting
@@ -378,7 +385,7 @@ at repair step 5:
 
     git fetch origin main-repair/current
     git switch -c main-repair/current origin/main-repair/current
-    dev/improve/github-post.sh pr-create --title "<repair topic>" --body-file <body file> --evidence-dir <the round's evidence directory> --head main-repair/current
+    $IMPROVE_KIT_DIR/dev/improve/github-post.sh pr-create --title "<repair topic>" --body-file <body file> --evidence-dir <the round's evidence directory> --head main-repair/current
 
 A "pull request already exists" refusal means that another direction opened it first: wait as above.
 
@@ -392,7 +399,7 @@ These steps return `main` to green and resume the step that needed it.
 3. When the failure names its fix, create `main-repair/current` from the failing main sha, apply the fix, commit it, and push it without force:
 
        git switch -c main-repair/current origin/main
-       dev/improve/github-post.sh push origin HEAD:refs/heads/main-repair/current
+       $IMPROVE_KIT_DIR/dev/improve/github-post.sh push origin HEAD:refs/heads/main-repair/current
 
    A named fix is safe to apply without a design decision.
    A failing test without its expected value in the log names no fix, because a guessed value would hide the regression.
@@ -424,6 +431,7 @@ It names:
 
 - the topic;
 - each dropped worktree and its newest change time from `"$IMPROVE_LAUNCH_DIR/inflight-files-notices.txt"`;
+- the kit revision, which the round reads from `IMPROVE_KIT_REVISION`;
 - the pull-request link;
 - the evidence summary;
 - for a pull request that names screenshots, each named screenshot and whether the review read it, as its review record shows;

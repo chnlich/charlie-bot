@@ -35,6 +35,20 @@ Calls that carry no round-written text stay bare `gh` calls through `gh-shim.sh`
 - `gh run rerun`;
 - the read-only calls.
 
+## The round's state sources
+
+A round runs on the improve host, which has no CharlieBot server.
+Its state sources are these:
+
+- the launch directory, `$IMPROVE_LAUNCH_DIR`;
+- the direction prompt, `$IMPROVE_KIT_DIR/dev/improve/<direction>.md`;
+- the evidence directories under `~/improve/<direction>/evidence/`;
+- git, in the direction's clone and at `origin`.
+
+A `charliebot` command that needs the server exits non-zero in the round.
+When the round's own scan or measurement cannot run, the round stops and names the missing input.
+The round does not reuse an earlier round's result as its current state.
+
 ## The round's login and the launch's exit codes
 
 The launch forwards the member's login for one round only.
@@ -324,7 +338,7 @@ Its verdict comment names the head and the open findings, and Step 2 adopts the 
 A review that cannot run or fails leaves the pull request open, and the round reports the reason in its final message.
 One foreground tool call ends at 15 minutes. A review of any length completes: the round waits past that limit and reads back its outcome.
 Every wait of a round stays inside the round's run until the verdict is posted and the merge or no-PR outcome is reached.
-The round has no wake: its host runs no CharlieBot server, so no trigger registers for it.
+The round has no wake: no trigger registers for it.
 A silent skip breaks the protocol.
 
 ## Step 7: land the pull request or abandon it

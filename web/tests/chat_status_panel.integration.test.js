@@ -1015,8 +1015,11 @@ test('the toggle offers Status for every manager session, and its badge follows 
   assert.equal(statusOption(rig).classList.contains('hidden'), false,
       'a web_status message keeps the option shown');
 
-  // A worker session's page renders its own transcript; the status hook takes the session alone.
-  rig.context.openSessionStatusPanel({id: 'session-c', profile: 'worker'}, []);
+  // A worker session's open takes the status panel and applies its view choice; the choice hides the option.
+  const worker = {id: 'session-c', profile: 'worker'};
+  rig.context.openSessionStatusPanel(worker, []);
+  rig.context.Chat.ForYou.setSession(worker);
+  rig.context.Chat.ForYou.applySessionChatView(worker, 'foryou', null);
   assert.equal(statusOption(rig).classList.contains('hidden'), true, 'a worker session shows no Status option');
   assert.equal(rig.badge.classList.contains('hidden'), true, 'and no badge');
 });
@@ -1024,7 +1027,8 @@ test('the toggle offers Status for every manager session, and its badge follows 
 test('a child manager session shows the Status option, and a Discord thread-bound one does too', async () => {
   const rig = panelRig();
   await openSession(rig, {id: 'child-a', task_parent_id: 'parent-1', web_status: STATUS});
-  assert.equal(statusOption(rig).classList.contains('hidden'), false, 'a child manager session shows the Status option');
+  assert.equal(statusOption(rig).classList.contains('hidden'), false,
+      'a child manager session shows the Status option');
   await openSession(rig, {id: 'thread-d', discord_origin: {guild_id: 'G1', channel_id: 'C2', thread_id: 'th-2'}});
   assert.equal(statusOption(rig).classList.contains('hidden'), false,
       'a Discord thread-bound manager session shows the Status option');

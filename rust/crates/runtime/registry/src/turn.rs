@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub use crate::registry::{
-  DEFAULT_WORKFLOW_RULES_FILE, DELIVERY_FULL, DELIVERY_INDEX, EventRenderer, PromptSource, RuleSegment, SCOPE_BASE,
-  SCOPE_GOAL, SCOPE_MEMORY, SCOPE_NODE, SCOPE_SUBTREE, SCOPE_TASTE, TurnContribution,
+  DELIVERY_FULL, DELIVERY_INDEX, EventRenderer, PromptSource, RuleSegment, SCOPE_BASE, SCOPE_GOAL, SCOPE_MEMORY,
+  SCOPE_NODE, SCOPE_SUBTREE, SCOPE_TASTE, TurnContribution,
 };
 
 /// The input every turn-end check reads: the session's turn, with its exit and its stored status.

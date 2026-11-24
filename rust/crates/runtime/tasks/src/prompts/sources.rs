@@ -208,22 +208,21 @@ fn sections_text(repo: &Path, filename: &str, section_ids: &[&str]) -> anyhow::R
   Ok(section_ids.iter().map(|id| sections[*id].as_str()).collect::<Vec<&str>>().join("\n"))
 }
 
-/// The manager contract at any depth: the shared base, the shared manager rules, the workflow rules file a contribution
-/// names (default `manager_workflows.md`), the manager template, and the host supplement.
+/// The manager contract at any depth: the shared base, the shared manager rules, `manager_workflows.md`, the manager
+/// template, and the host supplement.
 fn manager_rule_segments(env: &PromptEnv<'_>, meta: &SessionMetadata) -> anyhow::Result<Vec<RuleSegment>> {
   let repo = env.checkout.path();
   let base = sections_text(repo, "task_base.md", &COMMON_SECTIONS)?;
   let shared =
     read_source_file(&repo.join("prompts/master.md"), "shared manager rules")?.replace("{{session_id}}", &meta.id);
-  let workflows_file = env.registry.workflow_rules_file(meta)?;
-  let workflows = read_source_file(&repo.join("prompts").join(workflows_file), "manager workflow rules")?
+  let workflows = read_source_file(&repo.join("prompts/manager_workflows.md"), "manager workflow rules")?
     .replace("{{session_id}}", &meta.id);
   let contract = sections_text(repo, "task_manager.md", &["manager_role", "manager_boundaries"])?
     .replace("{{agent_message_limit}}", &MAX_AGENT_MESSAGE_WEIGHTED_CHARS.to_string());
   let mut segments = vec![
     segment(base, vec![base_source("prompts/task_base.md")]),
     segment(shared, vec![base_source("prompts/master.md")]),
-    segment(workflows, vec![base_source(&format!("prompts/{workflows_file}"))]),
+    segment(workflows, vec![base_source("prompts/manager_workflows.md")]),
     segment(contract, vec![base_source("prompts/task_manager.md")]),
   ];
   if let Some(host) = host_supplement(env, meta)? {

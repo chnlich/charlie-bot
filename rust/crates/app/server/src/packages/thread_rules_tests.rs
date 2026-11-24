@@ -1,8 +1,4 @@
-//! Pins the five thread-rule sentences that a manager turn of a Slack or Discord thread session carries.
-//!
-//! The sentences sit in `prompts/thread_session.md` and `prompts/thread_reply_format.md`. This test assembles the
-//! turn from the real checkout and the server's registry, so a deleted sentence, or a thread package missing from
-//! the registry, fails it.
+//! Checks the manager prompt sources assembled for bound thread sessions.
 
 use std::path::{Path, PathBuf};
 
@@ -13,15 +9,6 @@ use charliebot_tasks::prompts::{PromptEnv, RuleInputs, SessionGoals, build_segme
 use serde_json::json;
 
 use super::registry;
-
-/// The five sentences, verbatim from the two prompt files.
-const THREAD_RULE_SENTENCES: [&str; 5] = [
-  "- In this thread session, open your last session message of each turn with the status block:",
-  "- The status block stays in the session message.",
-  "The thread reply follows `prompts/thread_reply_format.md`.",
-  "This rule decides the reply language for every summoner, the operator included.",
-  "The summon line of the round and the lines of this contract set no reply language.",
-];
 
 /// `rust/crates/app/server` sits four levels below the checkout root.
 fn checkout_root() -> PathBuf {
@@ -55,8 +42,8 @@ fn feishu_thread_session() -> SessionMetadata {
   meta
 }
 
-/// The rule text of one manager turn of `meta`: every segment, joined in the order the launch assembles them.
-fn manager_turn_text(meta: &SessionMetadata) -> String {
+/// The source refs of a manager turn, in the order they enter the prompt.
+fn manager_turn_sources(meta: &SessionMetadata) -> Vec<String> {
   let registry = registry().expect("the listed packages register");
   let checkout = RepoRoot::new(Some(checkout_root().into_os_string())).expect("the checkout path is valid");
   let home = tempfile::tempdir().expect("temp home");
@@ -65,30 +52,45 @@ fn manager_turn_text(meta: &SessionMetadata) -> String {
   let inputs = RuleInputs { overlay: None, chain: &[], node_ref: None, goals: &SessionGoals::default() };
   let (segments, _overlay_error) =
     build_segments(&env, meta, "manager_turn", &inputs).expect("the manager turn assembles from the checkout");
-  segments.iter().map(|segment| segment.text.as_str()).collect::<Vec<&str>>().join("\n")
+  segments.iter().flat_map(|segment| segment.sources.iter().map(|source| source.source_ref.clone())).collect()
 }
 
-fn assert_thread_rules(platform: &str, meta: &SessionMetadata) {
-  let text = manager_turn_text(meta);
-  for sentence in THREAD_RULE_SENTENCES {
-    assert!(text.contains(sentence), "{platform} thread session: the rule text lacks the sentence {sentence:?}");
+fn assert_thread_manager_sources(platform: &str, scope_source: &str, meta: &SessionMetadata) {
+  let sources = manager_turn_sources(meta);
+  let expected_sources = [
+    "prompts/task_base.md",
+    "prompts/master.md",
+    "prompts/manager_workflows.md",
+    "prompts/task_manager.md",
+    "prompts/web_reply.md",
+    "metadata.json#web_status.goal",
+    scope_source,
+    "prompts/thread_reply_redline.md",
+    "prompts/thread_reply_format.md",
+  ];
+  assert_eq!(sources.len(), expected_sources.len(), "{platform} thread manager prompt sources: {sources:?}");
+  for expected in expected_sources {
+    assert!(
+      sources.iter().any(|source| source.as_str() == expected),
+      "{platform} thread manager prompt lacks {expected}"
+    );
   }
 }
 
 #[test]
 #[ignore = "integration"]
-fn slack_thread_session_carries_the_thread_rule_sentences() {
-  assert_thread_rules("Slack", &slack_thread_session());
+fn slack_thread_manager_loads_the_shared_core_and_platform_supplements() {
+  assert_thread_manager_sources("Slack", "prompts/slack_reply_scope.md", &slack_thread_session());
 }
 
 #[test]
 #[ignore = "integration"]
-fn discord_thread_session_carries_the_thread_rule_sentences() {
-  assert_thread_rules("Discord", &discord_thread_session());
+fn discord_thread_manager_loads_the_shared_core_and_platform_supplements() {
+  assert_thread_manager_sources("Discord", "prompts/discord_reply_scope.md", &discord_thread_session());
 }
 
 #[test]
 #[ignore = "integration"]
-fn feishu_thread_session_carries_the_thread_rule_sentences() {
-  assert_thread_rules("Feishu", &feishu_thread_session());
+fn feishu_thread_manager_loads_the_shared_core_and_platform_supplements() {
+  assert_thread_manager_sources("Feishu", "prompts/feishu_reply_scope.md", &feishu_thread_session());
 }

@@ -111,7 +111,8 @@ The session status lets the user resume at a glance. It has four fields:
 - When nothing will report the next change, write that in **Now** in place of a time estimate.
 - When the turn shares a sitrep, take each field from the matching part of the page.
   The panel and the page then state the same facts.
-- When your rules include `prompts/web_reply.md`, keep the session status in the Status view as that file says.
+- Keep the session status in the Status view as prompts/web_reply.md defines; colleague-started turns stay read-only
+  per the bound platform's scope file.
 
 ## Concise Expression
 

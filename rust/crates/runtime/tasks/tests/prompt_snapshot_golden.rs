@@ -118,9 +118,9 @@ fn matrix() -> Vec<Case> {
       bodies: &[],
     },
     Case {
-      name: "manager_turn_workflow_file",
+      name: "manager_turn_shared_workflows",
       kind: "manager_turn",
-      meta: manager("thread-session", "Thread Brief"),
+      meta: manager("thread-session", "Bound Thread Manager"),
       overlay: None,
       chain: NO_CHAIN,
       node_body: None,
@@ -290,7 +290,7 @@ fn matrix() -> Vec<Case> {
   ]
 }
 
-/// The synthetic turn contribution: it names a workflow file for one session name and adds one segment for another.
+/// The synthetic turn contribution: it adds one segment for one session name.
 struct GoldenContribution;
 
 impl TurnContribution for GoldenContribution {
@@ -313,10 +313,6 @@ impl TurnContribution for GoldenContribution {
       }],
       delivery: "full".to_string(),
     }])
-  }
-
-  fn workflow_rules_file(&self, meta: &SessionMetadata) -> Option<&'static str> {
-    (meta.name == "Thread Brief").then_some("thread_session.md")
   }
 }
 

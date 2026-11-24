@@ -66,8 +66,8 @@ inherited rules above define your task.
 - Summarize the state of all lines only when the user asks for it.
   Then read each child's session status, and answer with a sitrep.
 - When your own completion conditions hold, archive your own task.
-  When your approver is the user, the server completes your archive after the user opens your session,
-  so the session stays open until the user has seen your last web reply.
+  When your approver is the user and your session has unread activity, the server completes your archive after the user
+  opens your session; otherwise the server completes the archive when the turn ends.
   A later run of this session, from any wake, cancels the archive,
   so a close that completes is one the newest turn decided.
 

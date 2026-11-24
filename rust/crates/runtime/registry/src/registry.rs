@@ -1885,9 +1885,6 @@ impl Registry {
   }
 }
 
-/// The workflow rules file a session gets when no contribution names one (`DEFAULT_WORKFLOW_RULES_FILE`).
-pub const DEFAULT_WORKFLOW_RULES_FILE: &str = "manager_workflows.md";
-
 /// Where an instruction segment's text came from, as the runtime's prompt assembly records it (`PromptSource`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PromptSource {
@@ -1937,11 +1934,6 @@ pub trait TurnContribution: Send + Sync {
     _repo: &RepoRoot,
   ) -> anyhow::Result<Vec<RuleSegment>> {
     Ok(Vec::new())
-  }
-
-  /// The workflow rules file for this session, or `None` to name none. At most one contribution answers `Some`.
-  fn workflow_rules_file(&self, _meta: &SessionMetadata) -> Option<&'static str> {
-    None
   }
 
   /// The contribution's work when a turn's input is queued, before the user event is appended.
@@ -2057,18 +2049,6 @@ impl Registry {
       rendered.push(event_type);
     }
     self.turn_contributions.insert(package, name, contribution)
-  }
-
-  /// The workflow rules file for `meta`: the one a contribution names, else [`DEFAULT_WORKFLOW_RULES_FILE`].
-  /// Two contributions that name a file fail.
-  pub fn workflow_rules_file(&self, meta: &SessionMetadata) -> anyhow::Result<&'static str> {
-    let answers = self.turn_contributions.values().filter_map(|contribution| contribution.workflow_rules_file(meta));
-    let named: Vec<&'static str> = answers.collect();
-    match named.as_slice() {
-      [] => Ok(DEFAULT_WORKFLOW_RULES_FILE),
-      [file] => Ok(file),
-      _ => bail!("workflow rules file: more than one turn contribution answers: {}", named.join(", ")),
-    }
   }
 
   /// The instruction segments of every contribution, in registration order.

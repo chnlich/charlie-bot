@@ -13,7 +13,6 @@ use charliebot_core::event_types::{WEB_ASK_CHECK, WEB_REPLY, WEB_REPLY_CHECK, WE
 use charliebot_core::run_kind::RunKind;
 use charliebot_core::str_methods;
 use charliebot_registry::FeatureContext;
-use charliebot_registry::thread_origin::is_thread_session;
 use charliebot_registry::turn::{
   CheckResult, DELIVERY_FULL, EventRenderer, PromptSource, RuleSegment, SCOPE_BASE, TurnContribution, TurnInput,
 };
@@ -34,9 +33,7 @@ impl TurnContribution for WebReplyTurnContribution {
     _cfg: &CharlieBotConfig,
     repo: &RepoRoot,
   ) -> anyhow::Result<Vec<RuleSegment>> {
-    // The web rules reach a thread session only through its thread contract until Stage 2 replaces that contract's
-    // workflow file, so a thread-bound manager keeps its current rules here.
-    if kind != RunKind::ManagerTurn.as_str() || !reply::is_manager_session(meta) || is_thread_session(meta) {
+    if kind != RunKind::ManagerTurn.as_str() || !reply::is_manager_session(meta) {
       return Ok(Vec::new());
     }
     let text = rules_text(&repo.path().join("prompts").join(reply::RULES_FILE))?;
@@ -200,7 +197,7 @@ mod tests {
   }
 
   #[test]
-  fn a_manager_run_outside_a_thread_gets_the_rules() {
+  fn every_manager_turn_gets_the_reply_rules_but_worker_turns_do_not() {
     charliebot_registry::thread_origin::register_origin_field("slack", "slack_origin");
     charliebot_registry::thread_origin::register_origin_field("discord", "discord_origin");
     charliebot_registry::thread_origin::register_origin_field("feishu", "feishu_origin");
@@ -218,21 +215,17 @@ mod tests {
         contribution.instruction_segments(&web, kind, &synthetic_config("/synthetic/home"), &repo).unwrap().is_empty()
       );
     }
-    for meta in [&worker, &slack_thread, &discord_thread, &feishu_thread] {
-      assert!(
-        contribution
-          .instruction_segments(meta, "manager_turn", &synthetic_config("/synthetic/home"), &repo)
-          .unwrap()
-          .is_empty()
-      );
-    }
-    assert_eq!(
+    assert!(
       contribution
-        .instruction_segments(&null_origin, "manager_turn", &synthetic_config("/synthetic/home"), &repo)
+        .instruction_segments(&worker, "manager_turn", &synthetic_config("/synthetic/home"), &repo)
         .unwrap()
-        .len(),
-      1
+        .is_empty()
     );
+    for meta in [&web, &slack_thread, &discord_thread, &feishu_thread, &null_origin] {
+      let segments =
+        contribution.instruction_segments(meta, "manager_turn", &synthetic_config("/synthetic/home"), &repo).unwrap();
+      assert_eq!(segments.len(), 1);
+    }
   }
 
   #[test]

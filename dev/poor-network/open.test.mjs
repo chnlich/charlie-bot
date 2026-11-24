@@ -12,8 +12,8 @@ import { test } from 'node:test';
 
 import { chromeBinary, launchBrowser } from './chrome.mjs';
 import {
-  assetVersionOf, failIfNavigatedAfter, hostInterference, openCpuRecord, openMeasuredTab, openRecord, openSettled,
-  runRepetitions, warmFailure,
+  assetVersionOf, assertOpenTarget, failIfNavigatedAfter, hostInterference, openCpuRecord, openMeasuredTab,
+  openRecord, openSettled, runRepetitions, warmFailure,
 } from './open.mjs';
 import { LIVE_CPU_TAIL, OPEN } from './profile.mjs';
 import { assertSameTargetAsBefore, expectedTargetsFrom, newestRowMessage, targetIdentity } from './newest-row.mjs';
@@ -164,6 +164,25 @@ test('the newest-row target is the last message the For you view paints, and a s
   assert.throws(() => assertSameTargetAsBefore(before, 'reference A link rate 1', 1, 'user@2'),
     /this side user@2, the before side system@4/);
   assertSameTargetAsBefore(null, 'A link', 1, 'user@2');
+});
+
+test('the segment probe skips the pre-background target while the reference open checks its post-background target', () => {
+  const expectedTargets = expectedTargetsFrom({
+    reference: {
+      id: 'reference A link rate 1',
+      reps: [{ rep: 1, newestTargetIdentity: 'web_reply_notice@139' }],
+    },
+    cells: [],
+  });
+  const ctx = { expectedTargets };
+  const reference = { id: 'reference A link rate 1', case: 'A', condition: 'link', rate: 1 };
+
+  assert.doesNotThrow(() => assertOpenTarget(ctx, reference, 1, { role: 'web_reply_notice', event_index: 61 }, {
+    checkTarget: false,
+  }));
+  assert.throws(() => assertOpenTarget(ctx, reference, 1, { role: 'web_reply_notice', event_index: 61 }),
+    /this side web_reply_notice@61, the before side web_reply_notice@139/);
+  assert.doesNotThrow(() => assertOpenTarget(ctx, reference, 1, { role: 'web_reply_notice', event_index: 139 }));
 });
 
 test('a warm profile is measured only when its shell and its on-demand files both stored', () => {

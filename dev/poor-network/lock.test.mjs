@@ -1,6 +1,6 @@
-// Tests of the bench lock: every side attempt takes the one file lock.sh names, so two side attempts on a host run one
-// after the other, and no caller option picks another file. The one option that skips the lock is an improve-ux
-// trial side's IMPROVE_TRIAL_USE_LOCK=0, which runs the side beside the lock and records the lock's holder instead.
+// Tests of the poor-network runner and bench lock. Both sides use the bench tree's trial script, and each side attempt
+// takes the one file lock.sh names, so no caller option picks another file. The one option that skips the lock is an
+// improve-ux trial side's IMPROVE_TRIAL_USE_LOCK=0, which records the lock's holder instead.
 
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
@@ -436,6 +436,13 @@ test('a marker that a dead side left is named and removed, and it never counts a
   }
 });
 
+test('both bench sides use the trial script from the bench tree', () => {
+  const source = fs.readFileSync(RUN, 'utf8');
+  assert.match(source, /bench_trial_script="\$tree\/scripts\/release\/trial\.sh"/);
+  assert.match(source, /run_side before "\$bench_trial_script"/);
+  assert.match(source, /run_side after "\$bench_trial_script"/);
+});
+
 // trial.sh's preflight refuses a socket path of 108 bytes or more. Its trial tree is <root>/trial-<12 hex>, its temp
 // root is the tree's tmp, and Chrome's singleton socket sits 45 bytes below that temp root.
 const SIDE_ROOT = path.join(BENCH_DIR, 'side-root.sh');
@@ -457,5 +464,204 @@ test('a side root keeps Chrome\'s socket path under trial.sh\'s limit for a 25-b
     );
   } finally {
     fs.rmSync(tmpdir, { recursive: true, force: true });
+  }
+});
+
+// run.sh names each side's commit in the bench tree before that side's trial starts, because trial.sh reads the commit
+// and its origin/main merge base from that tree.
+const SIDE_COMMIT = path.join(BENCH_DIR, 'side-commit.sh');
+
+test('side-commit.sh fetches a commit the bench tree lacks from its source and names it origin/main', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pn-side-commit-'));
+  try {
+    const env = {
+      ...process.env,
+      GIT_AUTHOR_NAME: 'bench',
+      GIT_AUTHOR_EMAIL: 'bench@example.invalid',
+      GIT_COMMITTER_NAME: 'bench',
+      GIT_COMMITTER_EMAIL: 'bench@example.invalid',
+    };
+    const git = (cwd, ...args) =>
+      execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    const source = path.join(dir, 'source');
+    const tree = path.join(dir, 'tree');
+    fs.mkdirSync(source);
+    fs.mkdirSync(tree);
+    git(source, 'init', '-q');
+    git(source, 'commit', '--allow-empty', '-q', '-m', 'baseline');
+    const baseline = git(source, 'rev-parse', 'HEAD');
+    git(tree, 'init', '-q');
+    git(tree, 'commit', '--allow-empty', '-q', '-m', 'upload');
+    assert.throws(() => git(tree, 'cat-file', '-e', `${baseline}^{commit}`), 'the tree starts without the baseline');
+
+    execFileSync('bash', [SIDE_COMMIT, tree, baseline, source], { env });
+
+    git(tree, 'cat-file', '-e', `${baseline}^{commit}`);
+    assert.equal(git(tree, 'rev-parse', 'refs/remotes/origin/main'), baseline);
+    assert.equal(git(tree, 'merge-base', 'origin/main', baseline), baseline);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// trial.sh reads its probe endpoint from the live home's `backends.calls.probe` through that home's server, and the
+// bench host runs no server. The bench home names one stand-in option, so run.sh hands the trial that option's answer.
+test('run.sh answers the trial\'s probe with the bench home\'s stand-in endpoint', () => {
+  const source = fs.readFileSync(RUN, 'utf8');
+  const yaml = source.slice(source.indexOf('cat >"$live_home/config.yaml"'), source.indexOf('\nYAML\n'));
+  const json = source.slice(source.indexOf('{"option"'), source.indexOf('\nJSON\n'));
+  const field = (text, name) => new RegExp(`^\\s+${name}: (\\S+)$`, 'm').exec(text)[1];
+  const option = { id: field(yaml, '- id'), model: field(yaml, 'model'), api_base: field(yaml, 'api_base') };
+  assert.deepEqual(JSON.parse(json).option, option);
+  const assigned = source.indexOf('probe_answer="$live_home/probe-answer.json"');
+  const exported = source.indexOf('export CHARLIEBOT_TRIAL_PROBE_ANSWER=$probe_answer');
+  assert.ok(assigned > 0 && assigned < exported, 'the answer file is named before the trial reads its path');
+});
+
+test('run.sh names each side\'s commit in the bench tree before that side\'s trial starts', () => {
+  const source = fs.readFileSync(RUN, 'utf8');
+  const beforeNamed = source.indexOf('name_trial_commit "$before_commit"');
+  const beforeRun = source.indexOf('run_side before "$bench_trial_script"');
+  const afterNamed = source.indexOf('name_trial_commit "$after_commit"');
+  const afterRun = source.indexOf('run_side after "$bench_trial_script"');
+  assert.ok(beforeNamed > 0 && beforeNamed < beforeRun, 'the before commit is named after the before trial starts');
+  assert.ok(afterNamed > 0 && afterNamed < afterRun, 'the after commit is named after the after trial starts');
+});
+
+test('run.sh --side after with --before-run passes stored targets and enforces seed, Chrome, and bench-code identity', () => {
+  const dir = scratch('pn-after-only-');
+  const gitEnv = {
+    ...process.env,
+    GIT_AUTHOR_NAME: 'bench',
+    GIT_AUTHOR_EMAIL: 'bench@example.invalid',
+    GIT_COMMITTER_NAME: 'bench',
+    GIT_COMMITTER_EMAIL: 'bench@example.invalid',
+  };
+  const git = (cwd, ...args) =>
+    execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', env: gitEnv, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+
+  try {
+    const repo = path.join(dir, 'repo');
+    const pnDir = path.join(repo, 'dev', 'poor-network');
+    fs.mkdirSync(pnDir, { recursive: true });
+    fs.mkdirSync(path.join(repo, 'rust'), { recursive: true });
+    fs.copyFileSync(RUN, path.join(pnDir, 'run.sh'));
+    fs.chmodSync(path.join(pnDir, 'run.sh'), 0o755);
+    for (const file of ['lock.sh', 'before-store.mjs', 'report.mjs', 'profile.mjs']) {
+      fs.copyFileSync(path.join(BENCH_DIR, file), path.join(pnDir, file));
+    }
+    fs.writeFileSync(path.join(pnDir, 'bench.mjs'), '// bench\n');
+    fs.writeFileSync(path.join(pnDir, 'README.md'), '# readme\n');
+    fs.writeFileSync(path.join(pnDir, 'open.test.mjs'), '// test\n');
+    git(repo, 'init', '-q');
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-q', '-m', 'before bench');
+    const beforeBenchRev = git(repo, 'rev-parse', 'HEAD');
+
+    // Allowed edits (run.sh, README.md, *.test.mjs) advance HEAD past beforeBenchRev.
+    fs.appendFileSync(path.join(pnDir, 'README.md'), 'note\n');
+    fs.appendFileSync(path.join(pnDir, 'open.test.mjs'), '// extra\n');
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-q', '-m', 'allowed bench edits');
+
+    const seedDir = path.join(dir, 'seed');
+    fs.mkdirSync(seedDir);
+    fs.writeFileSync(path.join(seedDir, 'sessions.json'), '[]\n');
+    const seedSha = execFileSync(
+      'bash',
+      ['-c', 'cd "$1" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -d" " -f1', 'bash', seedDir],
+      { encoding: 'utf8' },
+    ).trim();
+
+    const beforeRun = path.join(dir, 'before-run');
+    fs.mkdirSync(beforeRun);
+    fs.writeFileSync(path.join(beforeRun, 'seed.sha256'), `${seedSha}  ${seedDir}\n`);
+    fs.writeFileSync(path.join(beforeRun, 'before.json'), JSON.stringify({
+      side: 'before',
+      status: 'measured',
+      chrome: { version: 'Chrome/149.0.7827.0' },
+      open: {
+        cpu: { rate: 4.56 },
+        reference: { id: 'reference A link rate 1', reps: [{ rep: 1, newestTargetIdentity: 'web_reply_notice@139' }] },
+        cells: [],
+      },
+    }));
+
+    const binDir = path.join(dir, 'bin');
+    fs.mkdirSync(binDir);
+    const chromeGood = path.join(binDir, 'chrome-good');
+    fs.writeFileSync(chromeGood, '#!/usr/bin/env bash\nprintf "Chromium 149.0.7827.0\\n"\n');
+    fs.chmodSync(chromeGood, 0o755);
+    const chromeBad = path.join(binDir, 'chrome-bad');
+    fs.writeFileSync(chromeBad, '#!/usr/bin/env bash\nprintf "Google Chrome for Testing 156.0.8078.4\\n"\n');
+    fs.chmodSync(chromeBad, 0o755);
+    const cargoStop = path.join(binDir, 'cargo');
+    fs.writeFileSync(cargoStop, '#!/usr/bin/env bash\nexit 99\n');
+    fs.chmodSync(cargoStop, 0o755);
+
+    const outDir = path.join(dir, 'out');
+    const baseArgs = [
+      path.join(pnDir, 'run.sh'),
+      '--side', 'after',
+      '--out-dir', outDir,
+      '--before-run', beforeRun,
+      '--before-bench-rev', beforeBenchRev,
+      '--open-cpu-rate', '4.56',
+      '--scenarios', 'open,foryou',
+      '--seed-home', seedDir,
+    ];
+    const runWith = (chromeBin, extraArgs = []) => spawnSync('bash', [...baseArgs, ...extraArgs], {
+      env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, POOR_NETWORK_CHROME: chromeBin },
+      encoding: 'utf8',
+    });
+
+    // 1. Chrome mismatch refuses with exit 2 before creating a run or building.
+    const badChrome = runWith(chromeBad);
+    assert.equal(badChrome.status, 2, badChrome.stderr);
+    assert.match(badChrome.stderr, /Chrome version mismatch/);
+
+    // 2. Seed checksum mismatch refuses with exit 2.
+    const wrongSeedDir = path.join(dir, 'wrong-seed');
+    fs.mkdirSync(wrongSeedDir);
+    fs.writeFileSync(path.join(wrongSeedDir, 'sessions.json'), '[{"id":"x"}]\n');
+    const badSeed = spawnSync('bash', [
+      path.join(pnDir, 'run.sh'),
+      '--side', 'after',
+      '--out-dir', outDir,
+      '--before-run', beforeRun,
+      '--before-bench-rev', beforeBenchRev,
+      '--open-cpu-rate', '4.56',
+      '--scenarios', 'open,foryou',
+      '--seed-home', wrongSeedDir,
+    ], {
+      env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, POOR_NETWORK_CHROME: chromeGood },
+      encoding: 'utf8',
+    });
+    assert.equal(badSeed.status, 2, badSeed.stderr);
+    assert.match(badSeed.stderr, /seed checksum mismatch/);
+
+    // 3. Disallowed change to bench.mjs refuses with exit 2.
+    fs.appendFileSync(path.join(pnDir, 'bench.mjs'), '// changed\n');
+    const badBench = runWith(chromeGood);
+    assert.equal(badBench.status, 2, badBench.stderr);
+    assert.match(badBench.stderr, /disallowed path.*bench\.mjs/);
+    git(repo, 'checkout', '--', 'dev/poor-network/bench.mjs');
+
+    // 4. Matching seed, Chrome, and allowed-only diff passes preflight and records bench-identity.json before cargo.
+    const ok = runWith(chromeGood);
+    assert.equal(ok.status, 99, `${ok.stdout}\n${ok.stderr}`);
+    assert.match(ok.stdout, /stored benchTree/);
+    const runs = fs.readdirSync(outDir).filter((name) => /^\d{8}T\d{6}Z$/.test(name));
+    assert.equal(runs.length, 1);
+    const identity = JSON.parse(fs.readFileSync(path.join(outDir, runs[0], 'bench-identity.json'), 'utf8'));
+    assert.equal(identity.beforeBenchCommit, beforeBenchRev);
+    assert.ok(identity.comparedFiles.includes('dev/poor-network/bench.mjs'));
+
+    // 5. run.sh wires --expect-targets from before_run/before.json and compares against it in report.mjs.
+    const runSource = fs.readFileSync(RUN, 'utf8');
+    assert.match(runSource, /expect_args=\(--expect-targets "\$before_run\/before\.json"\)/);
+    assert.match(runSource, /report\.mjs" "\$before_run\/before\.json" "\$run_dir\/after\.json"/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });

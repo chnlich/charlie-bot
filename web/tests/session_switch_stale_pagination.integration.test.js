@@ -74,10 +74,9 @@ function buildHarness(eventsHandler) {
             entry.reject = reject;
           });
           h.pendingEvents.push(entry);
-          return entry.done.then((payload) => ({
-            ok: true, headers: NO_STORED_COPY, status: 200, json: async () => payload}));
+          return entry.done.then((payload) => new Response(JSON.stringify(payload), {status: 200}));
         }
-        return {ok: true, headers: NO_STORED_COPY, status: 200, json: async () => out};
+        return new Response(JSON.stringify(out), {status: 200});
       }
       return {ok: true, headers: NO_STORED_COPY, status: 200, json: async () => ({})};
     },

@@ -1,10 +1,14 @@
 #!/bin/sh
 # The bench's scripted backend: a stand-in for the charlie-code CLI, which the server runs once per turn. It prints the
-# NDJSON that the backend reads: session_attached, the next reply piece of POOR_NETWORK_REPLY_DIR, then result. It
-# calls no model and reads no credential. A prompt carrying the marker bench-hold keeps its turn open, so the session
+# NDJSON that the backend reads: a session event (the conversation id the backend stores, which a turn-end check
+# continues with), the next reply piece of POOR_NETWORK_REPLY_DIR, then result. The real CLI names this event `session`
+# (backends/charlie_code/src/translate.rs); the backend translates it to its `session_attached` event.
+# It calls no model and reads no credential. A prompt carrying the marker bench-hold keeps its turn open, so the session
 # stays running for the background load until the bench cancels it. A prompt carrying the marker bench-tools prints the
 # tool piece instead of a reply piece. A sizing turn (a prompt carrying pn-seed-sized or pn-foryou size) prints the
-# sized seed piece of the same rotation. Each line is replayed after the delay it states in bench_delay_s; a line that
+# sized seed piece of the same rotation. A continuation run (a prompt that is a turn-end check's block reasons) prints a
+# one-line acknowledgement: its turn already carried the reply, and a second reply piece would put the turn past the
+# bootstrap's 10 KB first-screen budget. Each line is replayed after the delay it states in bench_delay_s; a line that
 # states none keeps 0.05 s.
 set -eu
 
@@ -24,7 +28,16 @@ if [ -n "$resume" ]; then
 else
   session_id=$(cat /proc/sys/kernel/random/uuid)
 fi
-printf '{"type":"session_attached","session_id":"%s"}\n' "$session_id"
+printf '{"type":"session","session_id":"%s"}\n' "$session_id"
+
+# A continuation run's prompt is the checkpoint's continuation prompt: the blocked checks' reasons, each opened by its
+# check name and a colon (turn_hooks.rs continuation_prompt). The turn's first run already printed the reply.
+if [ -n "$task_file" ] && head -n 1 "$task_file" | grep -q -e '^web-reply: ' -e '^web-status: ' -e '^thread-reply: ' \
+  -e '^pending-wake: ' -e '^status-reread: '; then
+  printf '{"type":"thought","text":"Reminder acknowledged.\\n"}\n'
+  printf '{"type":"result","usage":{"input_tokens":1000,"output_tokens":2000}}\n'
+  exit 0
+fi
 
 # The reply pieces are printed in turn, so consecutive turns carry different text. The tool piece is selected, not
 # rotated: it never advances the rotation.
@@ -44,7 +57,7 @@ else
   # A sizing turn advances the same rotation and prints the seed piece at its index (reply.mjs sets the seed events).
   kind=reply
   if [ -n "$task_file" ] && grep -q -e 'pn-seed-sized' -e 'pn-foryou size' "$task_file"; then kind=seed; fi
-  pieces=$(ls "$replies" | grep -c '^reply-')
+  pieces=$(ls "$replies" | grep -c "^$kind-")
   piece="$replies/$kind-$((next % pieces)).ndjson"
 fi
 while IFS= read -r line; do

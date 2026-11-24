@@ -5,7 +5,7 @@ const {loadPageTimersOnce} = require('./websocket_context_stub');
 
 const {createElement, createEscapingElement} = require('./dom_element_stub');
 const {createFakeWebSocketClass} = require('./fake_websocket');
-const {readStatic, runIconModule} = require('./read_static');
+const {readStatic, runIconModule, FOR_YOU_RULE} = require('./read_static');
 
 // renderMessages loads the real chat/rendering.js, so each engine node holds the markup renderMessage builds.
 function buildPage(initialMessages = [], sessionId = 'session-a', {renderMessages = false} = {}) {
@@ -70,6 +70,7 @@ function buildPage(initialMessages = [], sessionId = 'session-a', {renderMessage
   vm.runInContext(readStatic('websocket.js'), context, {filename: 'websocket.js'});
   runIconModule(context);
   vm.runInContext(readStatic('chat/namespace.js'), context, {filename: 'chat/namespace.js'});
+  context.FOR_YOU_RULE = FOR_YOU_RULE;
   vm.runInContext(readStatic('chat/shared.js'), context, {filename: 'chat/shared.js'});
   if (renderMessages) {
     // escapeHtml round-trips text through an element's innerHTML, so the rendered markup needs the escaping stub.

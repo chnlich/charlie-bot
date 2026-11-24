@@ -161,6 +161,9 @@ test('a refused subscribe reaches the real session view failure path', () => {
       setStreamDraftModeSupplier: () => {},
       registerProjectionCheck: () => {},
     },
+    // The page-request backoff chat/shared.js publishes; this harness loads no chat module.
+    PAGE_REQUEST_RETRY_BASE_MS: 1000,
+    PAGE_REQUEST_RETRY_MAX_MS: 30000,
   });
   // The page's sidebar namespace and session view load for real: nothing stands in for sessionSubscribeFailed.
   vm.runInContext(readStatic('sidebar/namespace.js'), context.context, {filename: 'sidebar/namespace.js'});

@@ -5,10 +5,15 @@
 #   dev/remote-run/run.sh dev/poor-network/run.sh --side both --out-dir <dir> --before-rev <rev> --before-clone <clone>
 #   dev/remote-run/run.sh dev/poor-network/run.sh --side both --out-dir <dir> --before-clone <clone> \
 #     --change-patch <file>
-#   dev/remote-run/run.sh dev/poor-network/run.sh --side after --out-dir <dir>
+#   dev/remote-run/run.sh dev/poor-network/run.sh --side after --out-dir <dir> --before-run <stored run dir> \
+#     --before-bench-rev <rev> --open-cpu-rate <rate>
 #
 # --side before  measures --before-rev (default origin/main, a commit of --before-clone, which holds it);
 # --side after   measures this tree;
+#                With --before-run DIR, it measures this tree after the stored before side in DIR (a run dir of
+#                --side both, with its before.json and seed.sha256). The seed copy, the Chrome and the bench code must
+#                equal the stored side's: the bench code is --before-bench-rev's, and this tree may differ from it only
+#                in run.sh, README.md and the test files. Its open cells check their newest-row targets against DIR's.
 # --side both    measures the before side, then the after side, back to back in one invocation.
 #                With --before-rev, the before side is that commit, measured now. Without it, the before side is the
 #                stored reference commit R (before-store.mjs): each row R holds is reused when its key matches and the
@@ -27,6 +32,9 @@
 # --seed-only    sizes the sessions on each side the run names (bench --mode seed), writes each side's sizes to its
 #                JSON and stops: no scenario, no store update and no report. The sizing check takes minutes, so a
 #                sizing change is checked on both sides before a bench lock is taken for the measurement.
+# --scenario-repetitions NAME=N,...  gives the named scenarios their own repetition count; the rest take --repetitions.
+# --foryou-shots  after the after side's measurement, writes the For-you screenshots (switch, retry and offline reopen at
+#                the three CSS sizes) into <run dir>/foryou-shots; needs the foryou scenario.
 # --seed-home DIR  the view home that the run copies as its seed (default: the shared home
 #                  ~/improve/mock-home/<version>-view-<sessions>). A run with a pinned home names it here, so a
 #                  rebuild of the shared home cannot change the run's seed; each side still checks the copy's
@@ -47,7 +55,8 @@
 #
 # Each side runs as the command of `scripts/release/trial.sh --serve`, so the trial starts, checks and stops the server
 # the bench measures, and proves that no process of the trial remains. The bench's own children (Chrome, the proxy, the
-# TLS front) end with the bench. The server's charlie-code backend is the scripted stub in dev/poor-network/stub. The
+# TLS front) end with the bench. The server's charlie-code backend is the scripted stub in dev/poor-network/stub; the
+# run hands the trial that same stand-in endpoint as its probe answer, so the bench host needs no live server. The
 # trial's tree is unique to this invocation and side, so two invocations on one commit never share a tree.
 #
 # Each side's trial tree goes under TMPDIR when the caller sets it, and under /tmp otherwise, so a caller inside a
@@ -75,6 +84,8 @@ side=both
 out_dir=
 before_clone=
 before_rev=
+before_run=
+before_bench_rev=
 change_patch=
 change_files=
 repetitions=5
@@ -83,6 +94,8 @@ open_conditions=link,held,reset,flaps,offline,release
 assets_dir=
 detach=0
 seed_only=0
+foryou_shots=0
+scenario_repetitions=
 lock_wait=$BENCH_LOCK_WAIT_SECONDS
 open_rate_args=()
 seed_home=
@@ -110,6 +123,8 @@ while (($#)); do
     --out-dir) out_dir=${2:?--out-dir needs a value}; shift 2 ;;
     --before-clone) before_clone=${2:?--before-clone needs a value}; shift 2 ;;
     --before-rev) before_rev=${2:?--before-rev needs a value}; shift 2 ;;
+    --before-run) before_run=${2:?--before-run needs a value}; shift 2 ;;
+    --before-bench-rev) before_bench_rev=${2:?--before-bench-rev needs a value}; shift 2 ;;
     --change-patch) change_patch=${2:?--change-patch needs a value}; shift 2 ;;
     --change-files) change_files=${2:?--change-files needs a value}; shift 2 ;;
     --repetitions) repetitions=${2:?--repetitions needs a value}; shift 2 ;;
@@ -121,6 +136,8 @@ while (($#)); do
     --seed-home) seed_home=${2:?--seed-home needs a value}; shift 2 ;;
     --detach) detach=1; shift ;;
     --seed-only) seed_only=1; shift ;;
+    --scenario-repetitions) scenario_repetitions=${2:?--scenario-repetitions needs a value}; shift 2 ;;
+    --foryou-shots) foryou_shots=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die 2 "unknown argument: $1" ;;
   esac
@@ -140,6 +157,14 @@ fi
 if [[ $side != after ]]; then
   [[ -n $before_clone ]] || die 2 "--before-clone is required for --side $side"
 fi
+if [[ -n $before_run || -n $before_bench_rev ]]; then
+  [[ $side == after ]] || die 2 "--before-run and --before-bench-rev require --side after"
+  [[ -n $before_run && -n $before_bench_rev ]] || die 2 "--before-run and --before-bench-rev must be passed together"
+  [[ -d $before_run ]] || die 2 "--before-run $before_run is not a directory"
+  [[ -f $before_run/before.json ]] || die 2 "--before-run $before_run has no before.json"
+  [[ -f $before_run/seed.sha256 ]] || die 2 "--before-run $before_run has no seed.sha256"
+  before_run=$(cd "$before_run" && pwd)
+fi
 # The stored mode: both sides without --before-rev. Its before side is the stored reference R and its after side is R
 # with the change's patch applied.
 mode=explicit
@@ -154,6 +179,7 @@ if [[ $side == before && -z $before_rev ]]; then
 fi
 
 tree=$(git -C "$BENCH_DIR" rev-parse --show-toplevel) || die 2 "$BENCH_DIR is not in a git tree"
+bench_trial_script="$tree/scripts/release/trial.sh"
 mkdir -p "$out_dir"
 out_dir=$(cd "$out_dir" && pwd)
 cd "$out_dir"
@@ -175,6 +201,8 @@ if ((detach)); then
     ${open_rate_args+"${open_rate_args[@]}"})
   [[ -n $before_rev ]] && forwarded+=(--before-rev "$before_rev")
   [[ -n $before_clone ]] && forwarded+=(--before-clone "$before_clone")
+  [[ -n $before_run ]] && forwarded+=(--before-run "$before_run")
+  [[ -n $before_bench_rev ]] && forwarded+=(--before-bench-rev "$before_bench_rev")
   [[ -n $change_patch ]] && forwarded+=(--change-patch "$change_patch")
   [[ -n $change_files ]] && forwarded+=(--change-files "$change_files")
   [[ -n $assets_dir ]] && forwarded+=(--assets-dir "$assets_dir")
@@ -182,6 +210,8 @@ if ((detach)); then
   if ((seed_only)); then
     forwarded+=(--seed-only)
   fi
+  [[ -n $scenario_repetitions ]] && forwarded+=(--scenario-repetitions "$scenario_repetitions")
+  ((foryou_shots)) && forwarded+=(--foryou-shots)
   systemd-run --user --unit="pn-$run_id" --collect --working-directory="$tree" \
     --setenv=PATH="$PATH" --setenv=HOME="$HOME" \
     "${detached_env[@]}" \
@@ -201,24 +231,142 @@ export POOR_NETWORK_CHROME=$chrome
 chrome_version=$("$chrome" --version 2>/dev/null | head -1)
 [[ -n $chrome_version ]] || die 2 "$chrome --version printed nothing"
 
+bench_tree=$(git -C "$tree" rev-parse 'HEAD:dev/poor-network')
+after_commit=$(git -C "$tree" rev-parse HEAD)
+after_src=$tree
+after_label="tree $(git -C "$tree" rev-parse 'HEAD^{tree}')"
+
+before_bench_commit=
+stored_bench_tree=
+expected_seed_hash=
+if [[ -n $before_run ]]; then
+  if before_bench_commit=$(git -C "$tree" rev-parse --verify --quiet "$before_bench_rev^{commit}"); then
+    :
+  elif [[ -n $before_clone ]]; then
+    before_bench_commit=$(git -C "$before_clone" rev-parse --verify --quiet "$before_bench_rev^{commit}") \
+      || die 2 "--before-bench-rev $before_bench_rev does not name a commit in $tree or $before_clone"
+    if ! git -C "$tree" fetch -q "$before_clone" "$before_bench_commit" 2>/dev/null; then
+      git -C "$tree" fetch -q "$before_clone" '+refs/heads/*:refs/before-bench/heads/*' '+refs/remotes/*:refs/before-bench/remotes/*'
+    fi
+    git -C "$tree" cat-file -e "$before_bench_commit^{commit}" 2>/dev/null \
+      || die 2 "failed to fetch --before-bench-rev $before_bench_commit from $before_clone"
+  else
+    die 2 "--before-bench-rev $before_bench_rev does not name a commit in $tree; pass --before-clone"
+  fi
+  stored_bench_tree=$(git -C "$tree" rev-parse --verify --quiet "$before_bench_commit:dev/poor-network") \
+    || die 2 "--before-bench-rev $before_bench_commit has no dev/poor-network tree"
+  disallowed_bench_paths=()
+  while IFS= read -r changed_path; do
+    [[ -n $changed_path ]] || continue
+    case $changed_path in
+      dev/poor-network/run.sh|dev/poor-network/README.md|dev/poor-network/*.test.mjs) ;;
+      *) disallowed_bench_paths+=("$changed_path") ;;
+    esac
+  done < <(
+    {
+      git -C "$tree" diff --name-only "$before_bench_commit" -- dev/poor-network
+      git -C "$tree" ls-files --others --exclude-standard -- dev/poor-network
+    } | LC_ALL=C sort -u
+  )
+  if ((${#disallowed_bench_paths[@]} > 0)); then
+    die 2 "dev/poor-network differs from $before_bench_commit in disallowed path(s): ${disallowed_bench_paths[*]}"
+  fi
+  expected_seed_hash=$(awk 'NR == 1 { print $1 }' "$before_run/seed.sha256")
+  [[ $expected_seed_hash =~ ^[0-9a-f]{64}$ ]] \
+    || die 2 "$before_run/seed.sha256 does not carry a sha256 checksum"
+  passed_open_rate=
+  if ((${#open_rate_args[@]} >= 2)); then
+    passed_open_rate=${open_rate_args[1]}
+  fi
+  before_open_rate=$(node -e '
+    const fs = require("node:fs");
+    const [beforeFile, actualChrome, scenariosCsv, seedOnly, passedRate] = process.argv.slice(1);
+    const before = JSON.parse(fs.readFileSync(beforeFile, "utf8"));
+    if (before.side !== "before" || before.status !== "measured") {
+      console.error(`${beforeFile} is not a measured before side (side=${before.side}, status=${before.status})`);
+      process.exit(1);
+    }
+    const beforeChrome = before.chrome?.version;
+    if (!beforeChrome) {
+      console.error(`${beforeFile} carries no chrome.version`);
+      process.exit(1);
+    }
+    const norm = (s) => {
+      const m = String(s).trim().match(/\d+(?:\.\d+)+/);
+      return m ? m[0] : String(s).trim();
+    };
+    if (norm(beforeChrome) !== norm(actualChrome)) {
+      console.error(`Chrome version mismatch: this run has ${actualChrome.trim()}, stored before side has ${beforeChrome}`);
+      process.exit(1);
+    }
+    const rate = before.open?.cpu?.rate;
+    if (seedOnly === "0" && `,${scenariosCsv},`.includes(",open,")) {
+      if (!before.open?.reference?.id || !Array.isArray(before.open?.cells)) {
+        console.error(`${beforeFile} carries no open targets`);
+        process.exit(1);
+      }
+      if (typeof rate !== "number" || !(rate >= 1)) {
+        console.error(`${beforeFile} open.cpu.rate is ${JSON.stringify(rate)}`);
+        process.exit(1);
+      }
+      if (passedRate !== "" && Number(passedRate) !== rate) {
+        console.error(`--open-cpu-rate ${passedRate} differs from stored before side rate ${rate}`);
+        process.exit(1);
+      }
+      process.stdout.write(String(rate));
+    }
+  ' "$before_run/before.json" "$chrome_version" "$scenarios" "$seed_only" "$passed_open_rate") \
+    || die 2 "stored before side validation failed for $before_run"
+  if [[ -n $before_open_rate && ${#open_rate_args[@]} -eq 0 ]]; then
+    open_rate_args=(--open-cpu-rate "$before_open_rate")
+  fi
+  if [[ -n $seed_home ]]; then
+    [[ -d $seed_home ]] || die 2 "--seed-home $seed_home is not a directory"
+    seed_home_hash=$(seed_content_hash "$seed_home")
+    [[ $seed_home_hash == "$expected_seed_hash" ]] \
+      || die 2 "seed checksum mismatch: $seed_home has $seed_home_hash, stored before side $before_run has $expected_seed_hash"
+  fi
+fi
+
 run_dir="$out_dir/$run_id"
 mkdir -p "$run_dir"
 readonly RUN_DIR=$run_dir
 export POOR_NETWORK_ASSETS=${assets_dir:-$out_dir/assets}
 mkdir -p "$POOR_NETWORK_ASSETS"
 
-# The bench code is this tree's. The after side is this tree in the explicit mode, and R with the change in the stored
-# one.
-bench_tree=$(git -C "$tree" rev-parse 'HEAD:dev/poor-network')
-after_commit=$(git -C "$tree" rev-parse HEAD)
-after_src=$tree
-after_label="tree $(git -C "$tree" rev-parse 'HEAD^{tree}')"
-
 # The stub backend goes first on the server's PATH, so the charlie-code backend runs the scripted reply.
 export PATH="$BENCH_DIR/stub:$PATH"
 
 echo "poor-network: run $run_id side=$side mode=$mode chrome=$chrome"
 echo "poor-network: after tree $tree at $after_label"
+if [[ -n $before_run ]]; then
+  echo "poor-network: stored before run $before_run (bench rev $before_bench_commit)"
+  echo "poor-network: stored benchTree $stored_bench_tree; new benchTree $bench_tree"
+  echo "poor-network: compared dev/poor-network files:"
+  git -C "$tree" ls-tree -r --name-only "$before_bench_commit" -- dev/poor-network | sed 's/^/  /'
+  echo "poor-network: dev/poor-network diff vs $before_bench_commit:"
+  git -C "$tree" diff --stat "$before_bench_commit" -- dev/poor-network
+  echo "poor-network: dev/poor-network/run.sh diff vs $before_bench_commit:"
+  git -C "$tree" diff "$before_bench_commit" -- dev/poor-network/run.sh
+  node -e '
+    const fs = require("node:fs");
+    const { execFileSync } = require("node:child_process");
+    const [outFile, tree, commit, storedTree, newTree] = process.argv.slice(1);
+    const git = (...args) => execFileSync("git", ["-C", tree, ...args], { encoding: "utf8" });
+    const comparedFiles = git("ls-tree", "-r", "--name-only", commit, "--", "dev/poor-network")
+      .split("\n").filter(Boolean);
+    const diffStat = git("diff", "--stat", commit, "--", "dev/poor-network");
+    const runShDiff = git("diff", commit, "--", "dev/poor-network/run.sh");
+    fs.writeFileSync(outFile, `${JSON.stringify({
+      beforeBenchCommit: commit,
+      storedBenchTree: storedTree,
+      newBenchTree: newTree,
+      comparedFiles,
+      diffStat,
+      runShDiff,
+    }, null, 2)}\n`);
+  ' "$run_dir/bench-identity.json" "$tree" "$before_bench_commit" "$stored_bench_tree" "$bench_tree"
+fi
 
 # The store's paths, and the stored reference R of this run when it has one.
 store_paths=$(node "$BENCH_DIR/before-store.mjs" paths)
@@ -325,6 +473,9 @@ mkdir -p "$seed_dir"
 seed_copy="$seed_dir/$(basename "$mock_home")"
 cp -a "$mock_home" "$seed_copy"
 seed_hash=$(seed_content_hash "$seed_copy")
+if [[ -n $before_run && $seed_hash != "$expected_seed_hash" ]]; then
+  die 2 "seed checksum mismatch: $seed_copy has $seed_hash, stored before side $before_run has $expected_seed_hash"
+fi
 printf '%s  %s\n' "$seed_hash" "$seed_copy" > "$run_dir/seed.sha256"
 echo "poor-network: seed $mock_home copied to $seed_copy (content sha256 $seed_hash)"
 mock_home=$seed_copy
@@ -345,6 +496,13 @@ backends:
       model: bench/stub
       api_base: http://127.0.0.1:9/v1
 YAML
+# The trial reads its probe endpoint from the live home's `backends.calls.probe` through the home's server, and the
+# bench host runs no server. CHARLIEBOT_TRIAL_PROBE_ANSWER names the answer instead: the same stand-in option, which the
+# stub never calls.
+probe_answer="$live_home/probe-answer.json"
+cat >"$probe_answer" <<'JSON'
+{"option": {"id": "bench-endpoint", "model": "bench/stub", "api_base": "http://127.0.0.1:9/v1"}}
+JSON
 
 # Builds the server of a tree at a commit: $1 the source directory, $2 its target directory name under out_dir.
 build_server() {
@@ -368,6 +526,7 @@ run_side() {
   local label=$commit
   [[ $name == after ]] && label=$after_label
   export CHARLIEBOT_HOME=$live_home
+  export CHARLIEBOT_TRIAL_PROBE_ANSWER=$probe_answer
   export CHARLIEBOT_RELEASE_RUN_DIR="$run_dir/evidence-$name"
   export POOR_NETWORK_REPLY_DIR="$run_dir/replies"
   # Chrome's process-singleton socket lives under TMPDIR, and the trial points TMPDIR into its tree. The caller's own
@@ -378,10 +537,18 @@ run_side() {
   [[ $(seed_content_hash "$mock_home") == "$seed_hash" ]] \
     || die 1 "the seed copy $mock_home changed since the run recorded $seed_hash; the $name side did not start"
   # The after side of one invocation checks its newest-row targets against the before side's JSON.
-  local expect_args=()
-  if [[ $name == after && $mode == explicit && $side == both && $seed_only == 0 \
+  local expect_args=() reps_args=() shots_args=()
+  [[ -z $scenario_repetitions ]] || reps_args=(--scenario-repetitions "$scenario_repetitions")
+  if [[ $name == after ]] && ((foryou_shots)); then
+    shots_args=(--foryou-shots-dir "$run_dir/foryou-shots")
+  fi
+  if [[ $name == after && $mode == explicit && $seed_only == 0 \
     && ",$side_scenarios," == *",open,"* ]]; then
-    expect_args=(--expect-targets "$run_dir/before.json")
+    if [[ $side == both ]]; then
+      expect_args=(--expect-targets "$run_dir/before.json")
+    elif [[ -n $before_run ]]; then
+      expect_args=(--expect-targets "$before_run/before.json")
+    fi
   fi
   # The trial starts and stops the server; the bench takes the lock one step at a time inside it (bench.mjs).
   set +e
@@ -395,7 +562,7 @@ run_side() {
       --repetitions "$repetitions" --scenarios "$side_scenarios" --open-conditions "$side_conditions" \
       --lock-wait "$lock_wait" \
       ${open_rate_args+"${open_rate_args[@]}"} ${expect_args+"${expect_args[@]}"} \
-      ${mode_args+"${mode_args[@]}"} &
+      ${mode_args+"${mode_args[@]}"} ${reps_args+"${reps_args[@]}"} ${shots_args+"${shots_args[@]}"} &
   trial_pid=$!
   # The side JSON is the bench's last artifact, and a bench that has written it can still sit alive and hold the trial.
   # Once the JSON is SIDE_EXIT_GRACE_SECONDS old and the trial still runs, the runner ends the trial tree itself, so the
@@ -435,25 +602,27 @@ run_side() {
   return "$trial_status"
 }
 
+# name_trial_commit COMMIT SOURCE names COMMIT in the bench tree for the trial that runs its side (side-commit.sh). Both
+# sides run the bench tree's trial.sh, so each side's commit must be there before its trial starts.
+name_trial_commit() {
+  bash "$BENCH_DIR/side-commit.sh" "$tree" "$1" "$2" \
+    || die 2 "the trial commit $1 cannot be named in $tree from $2"
+}
+
 # The before side: the commit `before_rev_resolved` (stored mode) or `before_rev` (explicit mode), measured for the rows
-# named below. Its server is built from that commit; its trial script is that commit's own.
+# named below. Its server is built from that commit; both sides use the bench tree's trial script.
 measure_before() {
   local rev=$1 side_scenarios=$2 side_conditions=$3
-  local before_commit before_bin before_src before_repo
+  local before_commit before_bin before_src
   before_commit=$(git -C "$before_clone" rev-parse --verify --quiet "$rev^{commit}") \
     || die 2 "$rev does not name a commit in $before_clone; fetch it there first"
   before_src="$run_dir/before-src"
   mkdir -p "$before_src"
   git -C "$before_clone" archive "$before_commit" | tar -x -C "$before_src"
   echo "poor-network: before commit $before_commit from $before_clone"
+  name_trial_commit "$before_commit" "$before_clone"
   before_bin=$(build_server "$before_src" target-before)
-  # The trial script is the measured commit's own. The clone at --before-clone may be on another commit, so a scratch
-  # clone at the commit holds the script; its origin/main is the commit, which the trial's preflight reads.
-  before_repo="$run_dir/before-repo"
-  git clone -q --shared --no-checkout "$before_clone" "$before_repo"
-  git -C "$before_repo" update-ref refs/remotes/origin/main "$before_commit"
-  git -C "$before_repo" checkout -q --detach "$before_commit"
-  (cd "$before_repo" && run_side before "$before_repo/scripts/release/trial.sh" "$before_commit" "$before_bin" \
+  (cd "$before_src" && run_side before "$bench_trial_script" "$before_commit" "$before_bin" \
     "$side_scenarios" "$side_conditions") \
     || die "$?" "the before side failed; see $run_dir/before.json"
 }
@@ -557,7 +726,8 @@ if [[ $stored_mode_before == 1 ]]; then
 fi
 
 if [[ $side == after || $side == both ]]; then
-  (cd "$after_src" && run_side after "$after_src/scripts/release/trial.sh" "$after_commit" "$after_bin" \
+  name_trial_commit "$after_commit" "$after_src"
+  (cd "$after_src" && run_side after "$bench_trial_script" "$after_commit" "$after_bin" \
     "$scenarios" "$open_conditions") \
     || die "$?" "the after side failed; see $run_dir/after.json"
 fi
@@ -582,6 +752,8 @@ fi
 echo "poor-network: JSON in $run_dir"
 if [[ $side == both ]]; then
   node "$BENCH_DIR/report.mjs" "$run_dir/before.json" "$run_dir/after.json"
+elif [[ -n $before_run ]]; then
+  node "$BENCH_DIR/report.mjs" "$before_run/before.json" "$run_dir/after.json"
 else
   node "$BENCH_DIR/report.mjs" "$run_dir/$side.json"
 fi

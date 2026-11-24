@@ -101,6 +101,140 @@ export const METRICS = Object.freeze([
     target: TARGETS.backgroundKbPerMinute,
     value: (rep) => rep.socketBytes / 1000 / (rep.turnMs / 60000),
   },
+  {
+    id: 'foryou.switch.large',
+    scenario: 8,
+    title: 'For-you switch, large target, click to the first row',
+    unit: 'ms',
+    target: TARGETS.foryouSwitchLargeMs,
+    value: (rep) => rep.switch?.large?.firstRowMs,
+    raw: (rep) => rep.switch?.large?.firstRowMs,
+    capped: (rep) => rep.switch?.large?.capped,
+  },
+  {
+    id: 'foryou.switch.large.pages',
+    scenario: 8,
+    title: 'For-you switch, large target, older-page requests before the first row',
+    unit: 'requests',
+    target: TARGETS.foryouPagesBeforeFirstRow,
+    value: (rep) => rep.switch?.large?.pages,
+  },
+  {
+    id: 'foryou.switch.typical',
+    scenario: 8,
+    title: 'For-you switch, typical target, click to the first row',
+    unit: 'ms',
+    target: TARGETS.foryouSwitchTypicalMs,
+    value: (rep) => rep.switch?.typical?.firstRowMs,
+    raw: (rep) => rep.switch?.typical?.firstRowMs,
+    capped: (rep) => rep.switch?.typical?.capped,
+  },
+  {
+    id: 'foryou.switch.typical.pages',
+    scenario: 8,
+    title: 'For-you switch, typical target, older-page requests before the first row',
+    unit: 'requests',
+    target: TARGETS.foryouPagesBeforeFirstRow,
+    value: (rep) => rep.switch?.typical?.pages,
+  },
+  {
+    id: 'foryou.switch.sparse',
+    scenario: 8,
+    title: 'For-you switch, sparse target (its only For-you row is the marker), click to the first row',
+    unit: 'ms',
+    target: null,
+    value: (rep) => rep.switch?.sparse?.firstRowMs,
+    raw: (rep) => rep.switch?.sparse?.firstRowMs,
+    capped: (rep) => rep.switch?.sparse?.capped,
+  },
+  {
+    id: 'foryou.switch.sparse.pages',
+    scenario: 8,
+    title: 'For-you switch, sparse target, older-page requests started before the first row',
+    unit: 'requests',
+    target: TARGETS.foryouPagesBeforeFirstRow,
+    value: (rep) => rep.switch?.sparse?.pages,
+  },
+  {
+    id: 'foryou.failed-page',
+    scenario: 8,
+    title: 'For-you switch with one injected failed older page, click to the first row',
+    unit: 'ms',
+    target: TARGETS.foryouFailedPageMs,
+    value: (rep) => rep.failedPage?.firstRowMs,
+    raw: (rep) => rep.failedPage?.firstRowMs,
+    capped: (rep) => rep.failedPage?.capped,
+  },
+  {
+    id: 'foryou.failed-page.retry',
+    scenario: 8,
+    title: 'For-you switch with one injected failed older page, its page requests after the failure',
+    unit: 'requests',
+    target: null,
+    value: (rep) => rep.failedPage?.pageRequestsAfterFailure,
+  },
+  {
+    id: 'foryou.open.large',
+    scenario: 8,
+    title: 'For-you first open, large target, navigation to the first row',
+    unit: 'ms',
+    target: TARGETS.foryouOpenLargeMs,
+    value: (rep) => rep.open?.large?.firstRowMs,
+    raw: (rep) => rep.open?.large?.firstRowMs,
+  },
+  {
+    id: 'foryou.open.large.pages',
+    scenario: 8,
+    title: 'For-you first open, large target, older-page requests before the first row',
+    unit: 'requests',
+    target: TARGETS.foryouPagesBeforeFirstRow,
+    value: (rep) => rep.open?.large?.pages,
+  },
+  {
+    id: 'foryou.open.large.document-bytes',
+    scenario: 8,
+    title: 'For-you first open, large target, document bytes',
+    unit: 'bytes',
+    target: null,
+    value: (rep) => rep.open?.large?.documentBytes,
+  },
+  {
+    id: 'foryou.open.typical',
+    scenario: 8,
+    title: 'For-you first open, typical target, navigation to the first row',
+    unit: 'ms',
+    target: TARGETS.foryouOpenTypicalMs,
+    value: (rep) => rep.open?.typical?.firstRowMs,
+    raw: (rep) => rep.open?.typical?.firstRowMs,
+  },
+  {
+    id: 'foryou.open.typical.pages',
+    scenario: 8,
+    title: 'For-you first open, typical target, older-page requests before the first row',
+    unit: 'requests',
+    target: TARGETS.foryouPagesBeforeFirstRow,
+    value: (rep) => rep.open?.typical?.pages,
+  },
+  {
+    id: 'foryou.offline.reopen',
+    scenario: 8,
+    title: 'For-you offline reopen of the large target after an online open, navigation to the first row',
+    unit: 'ms',
+    target: TARGETS.foryouOfflineReopenMs,
+    afterOnly: true,
+    value: (rep) => rep.offline?.firstRowMs,
+    raw: (rep) => rep.offline?.firstRowMs,
+    capped: (rep) => rep.offline?.capped,
+  },
+  {
+    id: 'foryou.offline.document-bytes',
+    scenario: 8,
+    title: 'For-you offline reopen, document bytes',
+    unit: 'bytes',
+    target: TARGETS.foryouOfflineDocumentBytes,
+    afterOnly: true,
+    value: (rep) => rep.offline?.documentBytes,
+  },
 ]);
 
 // The nearest-rank percentile of `values`.
@@ -110,7 +244,10 @@ export function percentile(values, fraction) {
   return sorted[Math.max(0, rank - 1)];
 }
 
-export function summarize(reps, metric) {
+export function summarize(allReps, metric) {
+  // A repetition that did not run the metric's cell has no value for it (its cell is null, plan 5 v4 section 4.2 counts
+  // each cell's own repetitions), so it is left out of the metric's values.
+  const reps = allReps.filter((rep) => metric.value(rep) !== undefined);
   const values = reps.map(metric.value);
   const median = percentile(values, 0.5);
   return {
@@ -132,7 +269,7 @@ export function summarize(reps, metric) {
 
 // The rep list that feeds each scenario number of METRICS.
 export const REPS_OF_SCENARIO = Object.freeze({
-  1: 'background', 2: 'background', 3: 'background', 4: 'held', 5: 'reset', 6: 'stream', 7: 'tools',
+  1: 'background', 2: 'background', 3: 'background', 4: 'held', 5: 'reset', 6: 'stream', 7: 'tools', 8: 'foryou',
 });
 
 // Fills a side's metrics and calibration from its repetitions. The bench writes the side this way, and a before side
@@ -141,7 +278,8 @@ export function deriveSide(side) {
   side.metrics = {};
   for (const metric of METRICS) {
     const reps = side.reps[REPS_OF_SCENARIO[metric.scenario]] ?? [];
-    if (reps.length > 0 && side.status === 'measured') {
+    // A metric whose cell no repetition ran (a null cell, or an after-only cell on the before side) has no row.
+    if (reps.some((rep) => metric.value(rep) !== undefined) && side.status === 'measured') {
       side.metrics[metric.id] = summarize(reps, metric);
     }
   }

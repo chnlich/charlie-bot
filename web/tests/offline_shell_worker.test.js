@@ -390,6 +390,32 @@ test('a stored first screen answers at once, sends no request, and the catch-up 
   assert.equal((await later.response.json()).body, 'two', 'the refreshed copy serves the next open');
 });
 
+// A copy main stored has no older_for_you. Offline it still answers with the body it holds, and the next online open
+// stores the field: the worker keeps the whole body, so the refresh carries the field into the copy.
+test('a copy stored without older_for_you answers offline, and the next online open stores the field', async () => {
+  const h = harness();
+  h.state.network = async () => firstScreen('main');
+  await answer(h, request(BOOTSTRAP_URL));
+
+  h.state.network = async () => {
+    throw new TypeError('the link is down');
+  };
+  const offline = await answer(h, request(BOOTSTRAP_URL));
+  const oldCopy = await offline.response.json();
+  assert.equal(oldCopy.body, 'main', 'the copy answers the offline open with the body it stores');
+  assert.equal(oldCopy.older_for_you, undefined, 'the copy from main has no For-you field');
+
+  const olderRow = {role: 'user', content: 'older question'};
+  h.state.network = async () => new Response(
+    JSON.stringify({body: 'release', event_count: 3, older_for_you: [olderRow]}),
+    {status: 200, headers: {'Content-Type': 'application/json', ETag: '"s2"'}},
+  );
+  // The page reports the catch-up complete; the refresh replaces the copy, and the next open answers with the field.
+  await Promise.all(h.fire('message', {data: {type: 'catchup-complete'}}).waits);
+  const next = await answer(h, request(BOOTSTRAP_URL));
+  assert.deepEqual((await next.response.json()).older_for_you, [olderRow], 'the refreshed copy holds the field');
+});
+
 test('a copy match that races the cache index answers at the cap, and its fetch is aborted', async (t) => {
   t.mock.timers.enable({apis: ['setTimeout']});
   const h = harness();

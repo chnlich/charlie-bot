@@ -53,6 +53,7 @@ function segmentsWith(gate, rates, reference = null) {
 
 test('the rate gate passes a rate inside the range and inside the band of the cells, and fails either outside', () => {
   assert.equal(rateVerdict(3.5, null).ok, true);
+  assert.equal(rateVerdict(4.9, null).ok, true, 'a rate a host reads at moderate load');
   assert.equal(rateVerdict(RATE_MIN - 0.1, null).ok, false, 'below the range');
   assert.equal(rateVerdict(RATE_MAX + 0.1, null).ok, false, 'above the range');
   assert.equal(rateVerdict(3.8, 4.0).ok, true, 'inside the band');
@@ -61,7 +62,7 @@ test('the rate gate passes a rate inside the range and inside the band of the ce
 
 test('a probe that fails the gate is discarded and run once more; the passing probe starts the segment', async () => {
   const gate = fakeGate();
-  const { segments, probes } = segmentsWith(gate, [5.0, 4.0]);
+  const { segments, probes } = segmentsWith(gate, [RATE_MAX + 0.5, 4.0]);
   const value = await segments.unit('rep', 'background 1', () => 'measured');
   assert.equal(value.status, 'ok');
   assert.equal(probes(), 2);
@@ -79,7 +80,7 @@ test('a probe that fails the gate is discarded and run once more; the passing pr
 
 test('two probes that fail the gate end the run with exit status 5', async () => {
   const gate = fakeGate();
-  const { segments } = segmentsWith(gate, [5.0, 5.2]);
+  const { segments } = segmentsWith(gate, [RATE_MAX + 0.5, RATE_MAX + 0.6]);
   await assert.rejects(segments.unit('rep', 'background 1', () => 'never'), (error) => {
     assert.ok(error instanceof RateGateError);
     assert.equal(error.exitCode, 5);

@@ -1257,19 +1257,14 @@ async function flush() {
 function mergePageFetch() {
   return async (url) => {
     const before = cursorOf(url);
-    return {
-      ok: true,
-      async json() {
-        return {
-          has_more: before - 1 > 0,
-          next_before: before - 1,
-          messages: [
-            {role: 'user', id: `u-${before}`, content: `older ask ${before}`},
-            {role: 'assistant', id: `a-${before}`, content: `older answer ${before}`},
-          ],
-        };
-      },
-    };
+    return new Response(JSON.stringify({
+      has_more: before - 1 > 0,
+      next_before: before - 1,
+      messages: [
+        {role: 'user', id: `u-${before}`, content: `older ask ${before}`},
+        {role: 'assistant', id: `a-${before}`, content: `older answer ${before}`},
+      ],
+    }), {status: 200});
   };
 }
 
@@ -1355,19 +1350,14 @@ test('a shift-0 landing with has_more lifts a viewport parked at scrollTop 0 to 
   // sentinel-removal correction, hiding the lift under test.
   const {context, root, fetchCalls} = mountPagerCase(async (url) => {
     if (cursorOf(url) !== 100) return {ok: false, status: 500};
-    return {
-      ok: true,
-      async json() {
-        return {
-          has_more: true,
-          next_before: 99,
-          messages: [
-            {role: 'user', id: 'u-100', content: 'older ask 100'},
-            {role: 'assistant', id: 'a-100', content: 'older answer 100'},
-          ],
-        };
-      },
-    };
+    return new Response(JSON.stringify({
+      has_more: true,
+      next_before: 99,
+      messages: [
+        {role: 'user', id: 'u-100', content: 'older ask 100'},
+        {role: 'assistant', id: 'a-100', content: 'older answer 100'},
+      ],
+    }), {status: 200});
   });
 
   await context.Sidebar.loadOlderIfNeeded(root);
@@ -1393,13 +1383,12 @@ test('a user-gesture call re-arms the trigger-zone chain, and the viewport fill 
   // the chain. The clamp holds scrollTop at 0 the way a real scroller does for
   // a list that does not scroll. No count bounds the chain: it runs to the
   // history's first event, and a gesture then finds nothing left to load.
-  const unscrollable = mountPagerCase(async (url) => ({
-    ok: true,
-    async json() {
-      const before = cursorOf(url);
-      return {has_more: before - 1 > 0, next_before: before - 1, messages: []};
-    },
-  }), {clientHeight: 400, baseHeight: 0, clampScrollTop: true});
+  const unscrollable = mountPagerCase(async (url) => {
+    const before = cursorOf(url);
+    return new Response(
+        JSON.stringify({has_more: before - 1 > 0, next_before: before - 1, messages: []}),
+        {status: 200});
+  }, {clientHeight: 400, baseHeight: 0, clampScrollTop: true});
   await flush();
   assert.deepEqual(cursors(unscrollable.fetchCalls), stepsFrom100(100),
       'every cursor step from 100 to 1 was fetched: no count cap on the chain');
@@ -1442,7 +1431,7 @@ function pagedHistory(pageMessages, {lastPage = Infinity, stuckAfter = Infinity}
       next_before: page > stuckAfter ? before : before - 1,
       messages: pageMessages(page),
     };
-    return {ok: true, async json() { return body; }};
+    return new Response(JSON.stringify(body), {status: 200});
   };
 }
 

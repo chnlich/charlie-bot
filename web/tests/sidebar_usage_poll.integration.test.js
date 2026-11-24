@@ -879,21 +879,16 @@ test('loadOlderIfNeeded post-processes prepended messages through the shared hel
   };
   context.fetch = async (url) => {
     assert.equal(url, '/api/sessions/session-a/events?before=4&limit=40');
-    return {
-      ok: true, headers: NO_STORED_COPY,
-      async json() {
-        return {
-          has_more: false,
-          next_before: 2,
-          messages: [{
-            role: 'assistant',
-            content: 'older $x$',
-            event_index: 3,
-            timestamp: '2026-04-02T04:00:00Z',
-          }],
-        };
-      },
-    };
+    return new Response(JSON.stringify({
+      has_more: false,
+      next_before: 2,
+      messages: [{
+        role: 'assistant',
+        content: 'older $x$',
+        event_index: 3,
+        timestamp: '2026-04-02T04:00:00Z',
+      }],
+    }), {status: 200});
   };
 
   context.renderSessionView({
@@ -932,29 +927,24 @@ test('loadOlderIfNeeded skips messages whose rendered id is already in the DOM',
   };
   context.fetch = async (url) => {
     assert.equal(url, '/api/sessions/session-a/events?before=4&limit=40');
-    return {
-      ok: true, headers: NO_STORED_COPY,
-      async json() {
-        return {
-          has_more: false,
-          next_before: 2,
-          messages: [
-            {
-              id: 'assistant-event-1',
-              role: 'assistant',
-              content: 'already visible',
-              event_index: 3,
-            },
-            {
-              id: 'user-event-0',
-              role: 'user',
-              content: 'older ask',
-              event_index: 1,
-            },
-          ],
-        };
-      },
-    };
+    return new Response(JSON.stringify({
+      has_more: false,
+      next_before: 2,
+      messages: [
+        {
+          id: 'assistant-event-1',
+          role: 'assistant',
+          content: 'already visible',
+          event_index: 3,
+        },
+        {
+          id: 'user-event-0',
+          role: 'user',
+          content: 'older ask',
+          event_index: 1,
+        },
+      ],
+    }), {status: 200});
   };
 
   context.renderSessionView({
@@ -971,7 +961,7 @@ test('loadOlderIfNeeded skips messages whose rendered id is already in the DOM',
 
   await context.Sidebar.loadOlderIfNeeded(messages);
 
-  assert.deepEqual(renderedMessages, [{
+  assert.deepEqual(JSON.parse(JSON.stringify(renderedMessages)), [{
     id: 'user-event-0',
     role: 'user',
     content: 'older ask',
@@ -1070,6 +1060,7 @@ test('createSession switches open chat through SPA state without full reload', a
     active_backend_type: 'codex',
     switchable_backends: [],
     has_more: false,
+    older_for_you: [],
   });
 });
 

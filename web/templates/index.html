@@ -19,6 +19,8 @@
     const PAGE_HOSTNAME = {{ hostname|tojson }};
     const SESSION_BOOTSTRAP = {{ session_bootstrap_json|safe }};
     const INITIAL_SESSIONS = {{ initial_sessions_json|safe }};
+    // The For-you rule the page and the server share: the roles For-you shows and the error-row test (store for_you).
+    const FOR_YOU_RULE = {{ for_you_rule|tojson }};
     const INITIAL_LOAD_ERRORS = {{ load_errors|tojson }};
     const BACKEND_OPTIONS = {
       {% for opt in backend_options %}

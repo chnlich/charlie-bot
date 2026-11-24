@@ -12,6 +12,7 @@ mod event_types;
 mod events;
 mod fact_checkpoint;
 mod fact_scan;
+pub mod for_you;
 mod held_run_lists;
 pub mod hooks;
 pub mod layout;

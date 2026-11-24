@@ -1263,8 +1263,7 @@ fn a_pr_merge_refuses_a_round_whose_event_log_reads_a_skill_outside_its_skills_d
 #[test]
 #[ignore = "integration"]
 fn a_pr_merge_refuses_a_review_record_that_reads_a_skill_outside_its_skills_dir() {
-  // The path that `skills/charliebot/SKILL.md` names for the commit genre: a review that follows it reads a copy that
-  // is not the round's.
+  // The path that `skills/charliebot/SKILL.md` names: a review that follows it reads a host copy.
   let world = MergeWorld::new("rust/crates/x/src/lib.rs\n", "## Evidence\nno screenshot needed.\n");
   world.round(&[read_call(&format!("{ROUND_SKILLS}/writing-style/genres/code.md"))]);
   let stale = "~/.claude/skills/writing-style/genres/commits-and-prs.md";

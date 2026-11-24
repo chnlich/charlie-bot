@@ -144,7 +144,7 @@ fn launch_with_skill_roots(world: &World, instructions: &str, prompt: &str) -> (
   (received_instructions, received_prompt)
 }
 
-/// The host's skill roots that a round's instructions name, which the launch no longer lets a round read.
+/// Host skill roots that a round's instructions must not leave in their text.
 const STALE_ROOTS: [&str; 3] = ["~/.claude/skills", "~/.agents/skills", "$CHARLIEBOT_HOME/skills"];
 
 #[test]
@@ -641,17 +641,17 @@ fn skill_check(skills: &Path, events: &[&Path]) -> harness::Run {
 
 #[test]
 #[ignore = "integration"]
-fn the_skill_check_names_each_skill_read_of_a_traced_round_and_passes_its_kit_reads() {
+fn the_skill_check_names_each_skill_read_outside_the_skills_dir_and_passes_the_kit_reads() {
   let world = World::new();
   let skills = round_skills_dir(&world);
   let kit_rule = skills.join("writing-style/genres/code.md").display().to_string();
-  // The two reads that the traced round made from host paths, as its event log holds them.
+  // Two skill reads from host copies, as a round's event log holds them.
   let improve_worker = "/synthetic/checkout/skills/improve-worker/SKILL.md";
   let commits = "/synthetic/home/.claude/skills/writing-style/genres/commits-and-prs.md";
   let listing = "ls -la ~/.claude/skills/ ~/.agents/skills/ 2>/dev/null || true";
-  let traced = write_event_log(
+  let stale = write_event_log(
     &world,
-    "traced-round.ndjson",
+    "stale-round.ndjson",
     &[
       tool_call("Bash", json!({"command": listing})),
       tool_call("Read", json!({"file_path": improve_worker})),
@@ -660,7 +660,7 @@ fn the_skill_check_names_each_skill_read_of_a_traced_round_and_passes_its_kit_re
     ],
   );
 
-  let run = skill_check(&skills, &[&traced]);
+  let run = skill_check(&skills, &[&stale]);
 
   assert_eq!(run.code, 1, "{}", run.describe());
   let stderr = stderr(&run);

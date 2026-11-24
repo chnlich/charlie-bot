@@ -15,11 +15,47 @@ use tokio::process::Command;
 pub const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 pub const DETAIL_MAX_CHARS: usize = 200;
 
-pub const STATUS_OK: &str = "ok";
-pub const STATUS_NEEDS_OKTA: &str = "needs-okta";
-pub const STATUS_NEEDS_INTERACTIVE_AUTH: &str = "needs-interactive-auth";
-pub const STATUS_ROUTER_REJECTED: &str = "router-rejected";
-pub const STATUS_UNREACHABLE: &str = "unreachable";
+/// A host probe's verdict. Its word is what the state file and the status JSON hold, and `as_str` is the one place
+/// that maps each verdict to its word.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProbeStatus {
+  Ok,
+  NeedsOkta,
+  NeedsInteractiveAuth,
+  RouterRejected,
+  Unreachable,
+}
+
+impl ProbeStatus {
+  const ALL: [ProbeStatus; 5] = [
+    ProbeStatus::Ok,
+    ProbeStatus::NeedsOkta,
+    ProbeStatus::NeedsInteractiveAuth,
+    ProbeStatus::RouterRejected,
+    ProbeStatus::Unreachable,
+  ];
+
+  /// The verdict's word in the state file and the status JSON.
+  pub fn as_str(self) -> &'static str {
+    match self {
+      ProbeStatus::Ok => "ok",
+      ProbeStatus::NeedsOkta => "needs-okta",
+      ProbeStatus::NeedsInteractiveAuth => "needs-interactive-auth",
+      ProbeStatus::RouterRejected => "router-rejected",
+      ProbeStatus::Unreachable => "unreachable",
+    }
+  }
+
+  /// The verdict that a stored word names, or `None` for a word that no probe writes.
+  pub fn from_word(word: &str) -> Option<ProbeStatus> {
+    ProbeStatus::ALL.into_iter().find(|status| status.as_str() == word)
+  }
+
+  /// Whether this verdict waits for the user to approve the host's login.
+  pub fn awaits_approval(self) -> bool {
+    matches!(self, ProbeStatus::NeedsOkta | ProbeStatus::NeedsInteractiveAuth | ProbeStatus::RouterRejected)
+  }
+}
 
 /// Output markers that name a hold. They are matched before any return code: a held host's prompt waits until the
 /// probe timeout kills it, so the return code of a held probe says nothing.
@@ -32,25 +68,20 @@ const INTERACTIVE_MARKERS: [&str; 3] =
 const URL_MARKER: &str = "http";
 
 /// `classify`: the verdict of one probe, the output markers first and the return code second.
-pub fn classify(returncode: i32, output: &str) -> &'static str {
+pub fn classify(returncode: i32, output: &str) -> ProbeStatus {
   if OKTA_MARKERS.iter().any(|marker| output.contains(marker)) {
-    return STATUS_NEEDS_OKTA;
+    return ProbeStatus::NeedsOkta;
   }
   if output.contains(ROUTER_REJECTION_MARKER) {
-    return STATUS_ROUTER_REJECTED;
+    return ProbeStatus::RouterRejected;
   }
   if returncode == 0 {
-    return STATUS_OK;
+    return ProbeStatus::Ok;
   }
   if INTERACTIVE_MARKERS.iter().any(|marker| output.contains(marker)) {
-    return STATUS_NEEDS_INTERACTIVE_AUTH;
+    return ProbeStatus::NeedsInteractiveAuth;
   }
-  STATUS_UNREACHABLE
-}
-
-/// `awaits_approval`: whether a verdict waits for the user to approve the host's login.
-pub fn awaits_approval(status: &str) -> bool {
-  matches!(status, STATUS_NEEDS_OKTA | STATUS_NEEDS_INTERACTIVE_AUTH | STATUS_ROUTER_REJECTED)
+  ProbeStatus::Unreachable
 }
 
 /// `build_detail`: the first output line, plus the first URL line that follows it. An empty output is named by its
@@ -115,21 +146,24 @@ mod tests {
 
   #[test]
   fn the_output_marker_beats_the_return_code_and_the_code_classifies_the_rest() {
-    assert_eq!(classify(124, "Okta verification required"), STATUS_NEEDS_OKTA);
-    assert_eq!(classify(-9, "Enroll at https://login.example.internal/activate?user_code=7f3c9d21"), STATUS_NEEDS_OKTA);
-    assert_eq!(classify(0, ""), STATUS_OK);
-    assert_eq!(classify(0, "some unrelated banner"), STATUS_OK);
+    assert_eq!(classify(124, "Okta verification required"), ProbeStatus::NeedsOkta);
+    assert_eq!(
+      classify(-9, "Enroll at https://login.example.internal/activate?user_code=7f3c9d21"),
+      ProbeStatus::NeedsOkta
+    );
+    assert_eq!(classify(0, ""), ProbeStatus::Ok);
+    assert_eq!(classify(0, "some unrelated banner"), ProbeStatus::Ok);
     assert_eq!(
       classify(1, "# Tailscale SSH requires an additional check.\nTo authenticate, visit: https://login.example.net/a"),
-      STATUS_NEEDS_INTERACTIVE_AUTH
+      ProbeStatus::NeedsInteractiveAuth
     );
-    assert_eq!(classify(255, "Host key verification failed."), STATUS_NEEDS_INTERACTIVE_AUTH);
+    assert_eq!(classify(255, "Host key verification failed."), ProbeStatus::NeedsInteractiveAuth);
     assert_eq!(
       classify(255, "someone@login-a.example.internal: Permission denied (keyboard-interactive)."),
-      STATUS_ROUTER_REJECTED
+      ProbeStatus::RouterRejected
     );
-    assert_eq!(classify(255, "ssh: connect to host port 22: Connection timed out"), STATUS_UNREACHABLE);
-    assert_eq!(classify(124, "ssh: connect to host port 22: Connection timed out"), STATUS_UNREACHABLE);
+    assert_eq!(classify(255, "ssh: connect to host port 22: Connection timed out"), ProbeStatus::Unreachable);
+    assert_eq!(classify(124, "ssh: connect to host port 22: Connection timed out"), ProbeStatus::Unreachable);
   }
 
   #[test]
@@ -195,7 +229,7 @@ esac
     let (returncode, output) =
       run_probe(&probe_argv("held"), Duration::from_millis(300)).await.expect("the probe runs");
     assert_eq!(returncode, -9);
-    assert_eq!(classify(returncode, &output), STATUS_NEEDS_OKTA);
+    assert_eq!(classify(returncode, &output), ProbeStatus::NeedsOkta);
     assert_eq!(
       build_detail(returncode, &output),
       "Okta verification required\nEnroll at https://login.example.internal/activate?user_code=7f3c9d21"
@@ -207,7 +241,7 @@ esac
   async fn a_host_that_exits_255_with_a_connect_error_is_unreachable_with_that_error() {
     let (returncode, output) = run_probe(&probe_argv("refused"), PROBE_TIMEOUT).await.expect("the probe runs");
     assert_eq!(returncode, 255);
-    assert_eq!(classify(returncode, &output), STATUS_UNREACHABLE);
+    assert_eq!(classify(returncode, &output), ProbeStatus::Unreachable);
     assert_eq!(
       build_detail(returncode, &output),
       "ssh: connect to host refused.example.internal port 22: Connection refused"
@@ -219,7 +253,7 @@ esac
   async fn a_host_with_no_output_is_named_by_its_return_code() {
     let (returncode, output) = run_probe(&probe_argv("silent"), PROBE_TIMEOUT).await.expect("the probe runs");
     assert!(output.is_empty());
-    assert_eq!(classify(returncode, &output), STATUS_UNREACHABLE);
+    assert_eq!(classify(returncode, &output), ProbeStatus::Unreachable);
     assert_eq!(build_detail(returncode, &output), "exit 255");
   }
 
@@ -227,7 +261,7 @@ esac
   #[ignore = "integration"]
   async fn output_with_invalid_utf8_decodes_with_replacement_characters() {
     let (returncode, output) = run_probe(&probe_argv("invalid-utf8"), PROBE_TIMEOUT).await.expect("the probe runs");
-    assert_eq!(classify(returncode, &output), STATUS_NEEDS_OKTA);
+    assert_eq!(classify(returncode, &output), ProbeStatus::NeedsOkta);
     assert_eq!(build_detail(returncode, &output), "Okta verification required \u{fffd}\u{fffd} tail");
   }
 }

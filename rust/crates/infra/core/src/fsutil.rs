@@ -3,6 +3,7 @@
 use std::fs::File;
 use std::io::{self, BufWriter, Read, Write};
 use std::num::NonZeroU64;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::sync::OnceLock;
 
@@ -93,6 +94,33 @@ pub fn atomic_write_stream<E: From<std::io::Error>>(
     drop(stream);
     std::fs::rename(&temporary, path)?;
     Ok(())
+  })();
+  if result.is_err()
+    && let Err(error) = std::fs::remove_file(&temporary)
+    && error.kind() != std::io::ErrorKind::NotFound
+  {
+    tracing::warn!(path = %temporary.display(), error = %error, "atomic_write_cleanup_failed");
+  }
+  result
+}
+
+/// `bytes` written to `path` with the access bits `mode`, through a uniquely named sibling that is created with `mode`,
+/// fsynced, and swapped in by `rename`. The directory is fsynced after the swap, so the new file survives a power loss.
+/// The sibling is removed when a step before the swap fails. Callers that hold owner-only data pass `0o600`, so the
+/// file never sits at a wider mode.
+pub fn atomic_write_mode(path: &Path, bytes: &[u8], mode: u32) -> std::io::Result<()> {
+  let name = path.file_name().expect("an atomic write target names a file").to_string_lossy();
+  let directory = path.parent().filter(|dir| !dir.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
+  let temporary = path.with_file_name(format!(".{name}.{}.tmp", uuid::Uuid::new_v4().simple()));
+  let result = (|| {
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(mode).open(&temporary)?;
+    file.write_all(bytes)?;
+    // The creating umask can clear bits that `mode` sets, so the mode is applied to the open file.
+    file.set_permissions(std::fs::Permissions::from_mode(mode))?;
+    file.sync_all()?;
+    drop(file);
+    std::fs::rename(&temporary, path)?;
+    File::open(directory)?.sync_all()
   })();
   if result.is_err()
     && let Err(error) = std::fs::remove_file(&temporary)

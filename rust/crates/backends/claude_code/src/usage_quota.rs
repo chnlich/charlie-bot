@@ -9,8 +9,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, LazyLock, Mutex};
@@ -20,6 +18,7 @@ use anyhow::{Context, bail};
 use backon::{BackoffBuilder, ExponentialBuilder};
 use charliebot_compat::http_client::{self, Settings};
 use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::fsutil;
 use charliebot_core::headers::bearer_value;
 use charliebot_core::oauth::{
   ACCESS_TOKEN_FIELD, CLIENT_ID_FIELD, EXPIRES_IN_FIELD, GRANT_TYPE_FIELD, REFRESH_TOKEN_FIELD, REFRESH_TOKEN_GRANT,
@@ -633,26 +632,8 @@ fn write_renewed_credentials(
     oauth.insert("expiresAt".to_string(), json!(expires_at));
   }
   let text = serde_json::to_string_pretty(&data).context("serializing the renewed credentials")?;
-  write_private_atomically(path, &text)
-}
-
-/// Writes `text` to `path` through a uniquely named sibling that is created 0600 and swapped in by `rename`.
-/// The token never appears at its final path readable by anyone but the owner. The sibling is removed when a
-/// step fails.
-fn write_private_atomically(path: &Path, text: &str) -> anyhow::Result<()> {
-  let name = path.file_name().context("a credentials path names a file")?.to_string_lossy();
-  let directory = path.parent().context("a credentials path names a file in a directory")?;
-  let mut temporary = tempfile::Builder::new()
-    .prefix(&format!(".{name}."))
-    .suffix(".tmp")
-    .permissions(std::fs::Permissions::from_mode(0o600))
-    .tempfile_in(directory)
-    .with_context(|| format!("creating a temporary credentials file beside {}", path.display()))?;
-  temporary
-    .write_all(text.as_bytes())
-    .with_context(|| format!("writing the temporary credentials for {}", path.display()))?;
-  temporary.persist(path).map_err(|error| anyhow::anyhow!("writing {}: {}", path.display(), error.error))?;
-  Ok(())
+  // The token never sits at its final path readable by anyone but the owner.
+  fsutil::atomic_write_mode(path, text.as_bytes(), 0o600).with_context(|| format!("writing {}", path.display()))
 }
 
 /// The window length of a plan window, or of a scoped one, with the scope label it sorts by (empty for a plan window).
@@ -835,6 +816,8 @@ fn now_seconds() -> f64 {
 
 #[cfg(test)]
 mod tests {
+  use std::os::unix::fs::PermissionsExt;
+
   use charliebot_registry::usage::PANEL_EXPIRED;
 
   use super::*;

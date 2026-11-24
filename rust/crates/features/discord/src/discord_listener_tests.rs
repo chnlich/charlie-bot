@@ -193,7 +193,13 @@ fn discord_client(home: &Home) -> Arc<DiscordClient> {
 }
 
 fn options() -> Options {
-  Options { max_size: None, close_timeout: Some(Duration::from_secs(1)), ..ws_client::WEBSOCKETS_16_DEFAULTS }
+  Options {
+    open_timeout: ws_client::WEBSOCKETS_16_DEFAULTS.open_timeout,
+    close_timeout: Some(Duration::from_secs(1)),
+    max_size: None,
+    ping_interval: ws_client::WEBSOCKETS_16_DEFAULTS.ping_interval,
+    ping_timeout: ws_client::WEBSOCKETS_16_DEFAULTS.ping_timeout,
+  }
 }
 
 fn ready(sequence: u64) -> Value {

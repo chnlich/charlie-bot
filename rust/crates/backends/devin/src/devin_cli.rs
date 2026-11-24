@@ -403,8 +403,18 @@ mod tests {
     let root = tempfile::tempdir().unwrap();
     let prompt_file = root.path().join(PROMPT_FILE_NAME);
 
-    let mut instructed =
-      backend(LaunchArgs { instructions_content: Some("Build stuff.".to_string()), ..launch(None, None) });
+    let mut instructed = backend(LaunchArgs {
+      extra_flags: Vec::new(),
+      buffer_limit: None,
+      instructions_content: Some("Build stuff.".to_string()),
+      instructions_file: None,
+      resume_session_id: None,
+      log_dir: None,
+      cgroup_session_id: None,
+      remote_launch: None,
+      backend_kwargs: Map::new(),
+      manager_turn: false,
+    });
     instructed.prepare_transport(root.path()).unwrap();
     let argv = instructed.build_command("do the work").unwrap();
     assert_eq!(fs::read_to_string(&prompt_file).unwrap(), frame_system_prompt("Build stuff.", "do the work"));
@@ -567,10 +577,27 @@ mod tests {
     {
       fs::write(session_cgroup.join(name), "").unwrap();
     }
-    let config = SessionCgroupConfig { base_dir: base, memory_max_mb: 64, ..SessionCgroupConfig::disabled() };
+    let config = SessionCgroupConfig {
+      base_dir: base,
+      memory_max_mb: 64,
+      swap_max_mb: 0,
+      tasks_max: 0,
+      enable_cpu_weight: false,
+      enable_io_weight: false,
+    };
     let logs = root.path().join("logs");
-    let cgroup_launch =
-      LaunchArgs { cgroup_session_id: Some("devincgr-session".to_string()), ..launch(Some(&logs), None) };
+    let cgroup_launch = LaunchArgs {
+      extra_flags: Vec::new(),
+      buffer_limit: None,
+      instructions_content: None,
+      instructions_file: None,
+      resume_session_id: None,
+      log_dir: Some(logs),
+      cgroup_session_id: Some("devincgr-session".to_string()),
+      remote_launch: None,
+      backend_kwargs: Map::new(),
+      manager_turn: false,
+    };
     let run = run_turn(root.path(), cgroup_launch, config).await;
     run.result.unwrap();
     let pid = run.pid.expect("the spawn recorded the spawned process");

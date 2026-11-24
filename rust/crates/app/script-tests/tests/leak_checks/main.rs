@@ -388,9 +388,18 @@ fn a_code_style_pr_create_refuses_each_rule_line_that_does_not_quote_its_cited_l
       r#"Rule: code.md:3 "Keep one idea per sentence and prefer ordinary words to metaphor.""#.to_string(),
       "is not the rule line form",
     ),
+    (format!("* {}", rule_citation(4, "Keep one idea per sentence.")), "is not the rule line form"),
+    (format!("1. {}", rule_citation(4, "Keep one idea per sentence.")), "is not the rule line form"),
   ];
   for (index, (line, named)) in refusals.iter().enumerate() {
-    let body = body_file(&sandbox, &format!("refused-{index}.md"), &format!("{CLEAN_BODY}{line}\n"));
+    let body = body_file(
+      &sandbox,
+      &format!("refused-{index}.md"),
+      &format!(
+        "{CLEAN_BODY}{}\n{line}\n",
+        rule_citation(3, "Keep one idea per sentence and prefer ordinary words to metaphor.")
+      ),
+    );
     let run = pr_create(&env, &clone, &body);
     assert_eq!(run.code, 2, "{}", run.describe());
     assert!(run.stderr.contains(named), "the refusal does not name {named}:\n{}", run.stderr);

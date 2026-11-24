@@ -16,7 +16,7 @@
 code_style_check_body() {
   local skills=$1 body=$2 line rule_file
   local rule_re='^Rule: writing-style/genres/code\.md:([1-9][0-9]*) "(.+)"$'
-  local detect_re='^[[:space:]]*(-[[:space:]]+)?Rule:'
+  local detect_re='^[[:space:]]*(([-*+][[:space:]]+|[0-9]+[.)][[:space:]]+))?Rule:'
   local -a file_lines=()
   local count=0 status=0 n quote cited
   [[ -n $skills ]] || {

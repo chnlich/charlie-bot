@@ -8,8 +8,10 @@
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const vm = require('node:vm');
 
 const {loadWebsocketContext, CONNECT_DEADLINE_MS} = require('./websocket_context_stub');
+const {readStatic} = require('./read_static');
 
 function buildContext(sessionId) {
   const messages = [];
@@ -28,8 +30,9 @@ function buildContext(sessionId) {
     appendMessageObject: (msg) => messages.push(msg.content || ''),
     showStreaming: () => {},
     hideStreaming: () => {},
-    // session-view.js's failure path; the transport calls it on a refused subscribe.
-    sessionSubscribeFailed: (request) => subscribeFailures.push({...request}),
+    // session-view.js's failure path, reached as Sidebar.sessionSubscribeFailed; the transport calls it on a refused
+    // subscribe. The cases below that need the real path load session-view.js instead.
+    Sidebar: {sessionSubscribeFailed: (request) => subscribeFailures.push({...request})},
     document: {
       getElementById: () => null,
       dispatchEvent: (event) => {
@@ -136,6 +139,47 @@ test('a refused subscribe reports the failure and keeps dropping frames', () => 
   ]);
   socket.emitMessage({type: 'message', message: {role: 'user', content: 'late frame', event_index: 9}});
   assert.deepEqual(h.messages, [], 'the view binds no subscription after the refusal');
+});
+
+test('a refused subscribe reaches the real session view failure path', () => {
+  const announced = [];
+  const messagesContainer = {children: [], appendChild(el) { this.children.push(el); }};
+  const elements = new Map([['messages', messagesContainer]]);
+  const context = loadWebsocketContext({
+    SESSION_ID: 'session-a',
+    document: {
+      getElementById: (id) => elements.get(id) || null,
+      createElement: () => ({id: '', className: '', textContent: ''}),
+      addEventListener: () => {},
+      dispatchEvent: (event) => {
+        announced.push({type: event.type, detail: {...event.detail}});
+        return true;
+      },
+    },
+    window: {addEventListener: () => {}},
+    Chat: {
+      activeTurnEngineFor: () => null,
+      setStreamDraftModeSupplier: () => {},
+      registerProjectionCheck: () => {},
+    },
+  });
+  // The page's sidebar namespace and session view load for real: nothing stands in for sessionSubscribeFailed.
+  vm.runInContext(readStatic('sidebar/namespace.js'), context.context, {filename: 'sidebar/namespace.js'});
+  vm.runInContext(readStatic('sidebar/session-view.js'), context.context, {filename: 'sidebar/session-view.js'});
+  context.context.connectWS();
+  const socket = lastSocket(context);
+  socket.emitOpen();
+
+  context.context.holdSessionFrames('session-b');
+  context.context.SESSION_ID = 'session-b';
+  context.context.requestSessionSubscription('session-b', 6, {from_session: 'session-a', generation: 1});
+  socket.emitMessage({type: 'error', subscription: 1});
+
+  const failed = announced.filter((event) => event.type === 'charliebot:session-switch-phase'
+    && event.detail.phase === 'failed');
+  assert.equal(failed.length, 1, 'the switch reports its failure once');
+  assert.equal(failed[0].detail.error, 'subscribe_refused');
+  assert.equal(messagesContainer.children.length, 1, 'the switch placeholder replaces the stale view');
 });
 
 test('a reconnect bound to the left session is taken over by the subscribe', () => {

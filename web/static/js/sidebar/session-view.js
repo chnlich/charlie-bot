@@ -1485,6 +1485,7 @@ Sidebar.wire(API, {
   switchBackend,
   loadOlderIfNeeded,
   createSessionNode,
+  sessionSubscribeFailed,
 });
 
 })();

@@ -345,7 +345,7 @@ function connectWS() {
       const request = pendingSubscribe;
       pendingSubscribe = null;
       switchWaitSession = null;
-      sessionSubscribeFailed(request);
+      Sidebar.sessionSubscribeFailed(request);
       return;
     }
     if (type === 'catchup_complete') {

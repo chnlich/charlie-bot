@@ -7,7 +7,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 use std::sync::LazyLock;
 
 use anyhow::{Context as _, Result};
@@ -210,7 +210,7 @@ fn sorted_directories(path: &Path) -> std::io::Result<Vec<PathBuf>> {
 
 /// One git command in the repository. A spawn failure is an error. A command's own failure is the caller's.
 fn git(repo: &Path, args: &[&str]) -> Result<Output> {
-  Command::new("git").arg("-C").arg(repo).args(args).output().with_context(|| format!("run git {args:?}"))
+  charliebot_core::git::output(repo, args).with_context(|| format!("run git {args:?}"))
 }
 
 /// One backend in a build: the files that may hold its registration, and the other files that may declare its const

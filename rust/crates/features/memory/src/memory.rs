@@ -6,7 +6,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Mutex;
 
 use anyhow::{Context, bail};
@@ -150,10 +149,7 @@ pub fn ensure_store(memory_dir: &Path) -> anyhow::Result<()> {
 }
 
 fn git_init(memory_dir: &Path) -> anyhow::Result<()> {
-  let output = Command::new("git")
-    .arg("init")
-    .current_dir(memory_dir)
-    .output()
+  let output = charliebot_core::git::output(memory_dir, &["init"])
     .with_context(|| format!("run git init in {}", memory_dir.display()))?;
   if !output.status.success() {
     let mut text = String::from_utf8_lossy(&output.stdout).into_owned();

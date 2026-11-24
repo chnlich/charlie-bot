@@ -11,7 +11,6 @@
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::process::Command as ProcessCommand;
 
 use charliebot_agents::backend_run::{self, RunIdentity, RunStart};
 use charliebot_agents::call_resolve::RESOLVE_PATH;
@@ -145,9 +144,9 @@ fn check_command(args: CheckArgs) -> Result<(), CliExit> {
 
 /// The root of the git repository that the working directory is in, or `None` outside one.
 fn git_toplevel() -> Result<Option<PathBuf>, CliExit> {
-  let output = ProcessCommand::new("git")
-    .args(["rev-parse", "--show-toplevel"])
-    .output()
+  let cwd =
+    std::env::current_dir().map_err(|error| CliExit::error(format!("cannot read the working directory: {error}")))?;
+  let output = charliebot_core::git::output(&cwd, &["rev-parse", "--show-toplevel"])
     .map_err(|error| CliExit::error(format!("cannot run git: {error}")))?;
   if !output.status.success() {
     return Ok(None);

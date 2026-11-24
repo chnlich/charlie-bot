@@ -148,8 +148,8 @@ const SEND_BODY: BodyModel = BodyModel::required(SEND_FIELDS).forbid_extra();
 /// reconnect to the replay's `catchup_complete`. An episode the page leaves before its replay
 /// finished sends nulls for the reconnect and catch-up fields. A subscription record reports one
 /// replay's completion — the subscription number, the session it served and its bytes — and sends
-/// nulls for the disconnect fields. The only close cause left is `network`: a switch keeps the
-/// socket and rides a subscribe frame instead of closing it.
+/// nulls for the disconnect fields. The only close cause is `network`: a switch keeps the
+/// socket and rides a subscribe frame.
 const SOCKET_FIELDS: &[Field] = &[
   Field::required("kind", FieldType::Literal(&[EventKind::Socket.as_str()])),
   Field::optional("disconnect_at", FieldType::NullableString).max_length(MAX_TIMESTAMP_CHARS),
@@ -632,8 +632,8 @@ mod tests {
     assert_eq!(loc(&errors[0]), ["body", "cause"]);
     assert!(matches!(errors[0].kind, Kind::Literal(_)));
 
-    // A switch no longer closes the socket — it rides a subscribe frame — so the close cause is
-    // refused with the rest.
+    // A switch keeps the socket and rides a subscribe frame, so the `switch` close cause is refused
+    // with the rest.
     let mut socket = base_body(EventKind::Socket);
     socket["cause"] = json!("switch");
     let errors = validate_event(socket).expect_err("the switch close cause is retired");
@@ -921,7 +921,7 @@ mod tests {
   }
 
   // ---------------------------------------------------------------------------
-  // The route: one path, one method, the old switch-events path gone
+  // The route: one path, one method.
   // ---------------------------------------------------------------------------
 
   #[test]

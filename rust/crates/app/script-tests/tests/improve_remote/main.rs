@@ -2086,7 +2086,7 @@ fn a_failing_pull_request_files_api_call_stops_the_list_with_an_error() {
 
 #[test]
 #[ignore = "integration"]
-fn a_squash_merged_branch_of_an_unowned_worktree_stays_claimed() {
+fn a_squash_merged_branch_of_an_unowned_worktree_names_no_landed_path() {
   let world = World::new();
   // A leftover branch of a round that already landed, checked out in its worktree as the host leaves it.
   let checkout = world.sandbox.root().join("stale-checkout");
@@ -2109,7 +2109,9 @@ fn a_squash_merged_branch_of_an_unowned_worktree_stays_claimed() {
 
   assert_eq!(run.code, 0, "{}", run.describe());
   let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
-  assert!(list.lines().any(|line| line == "stale.md"), "the unowned worktree drops its landed branch file:\n{list}");
+  // The branch stays live through its commit ahead of origin/main, but main carries that commit's patch, so its
+  // path is landed work and the list names it in no form.
+  assert!(!lists_path(&list, "stale.md"), "the in-flight list names a landed path of an unowned worktree:\n{list}");
 }
 
 #[test]
@@ -2894,25 +2896,27 @@ fn an_open_pull_request_keeps_a_closed_tasks_worktree_paths_claimed() {
 
 #[test]
 #[ignore = "integration"]
-fn a_worktree_without_a_task_name_keeps_its_committed_and_uncommitted_paths() {
+fn a_worktree_without_a_task_name_keeps_its_uncommitted_paths_and_drops_its_landed_commit() {
   let world = World::new();
   landed_worktree_with_uncommitted_state(&world, "no-task");
 
   let run = run_inflight_list(&world);
 
   assert_eq!(run.code, 0, "{}", run.describe());
-  // The topic commit is patch-equivalent on main, so the committed path prints bare. The same
-  // path's uncommitted change, the staged path and the untracked path print with the branch that
-  // carries them.
-  for listed in
-    ["topic.md", "topic.md\tcharliebot/no-task", "staged.md\tcharliebot/no-task", "untracked.md\tcharliebot/no-task"]
-  {
+  // The topic commit is patch-equivalent on main, so its committed path names nothing. The same path's
+  // uncommitted change, the staged path and the untracked path print with the branch that carries them.
+  for listed in ["topic.md\tcharliebot/no-task", "staged.md\tcharliebot/no-task", "untracked.md\tcharliebot/no-task"] {
     assert!(
       run.stdout.lines().any(|line| line == listed),
       "the in-flight list drops the unowned worktree path {listed}:\n{}",
       run.describe()
     );
   }
+  assert!(
+    !run.stdout.lines().any(|line| line == "topic.md"),
+    "the in-flight list prints the landed committed path bare:\n{}",
+    run.describe()
+  );
 }
 
 #[test]

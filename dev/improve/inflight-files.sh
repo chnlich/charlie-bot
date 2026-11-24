@@ -3,14 +3,13 @@
 #
 #   dev/improve/inflight-files.sh <own branch prefix>
 #
-# Print one repository-relative path per line: open pull request files, and the
-# committed and uncommitted paths of each worktree branch with a live claimant.
-# Work a branch carries prints `path<TAB>branch`: uncommitted work prints with
-# the branch of its dirty worktree, work with an unmerged commit prints with
-# that commit's branch, and an open pull request's files print with its head
-# branch. A path whose only branch commits are patch-equivalent on main prints
-# bare when the fetched main tree holds it, so a squash-landed or rebased path
-# reads as landed work, not as that branch's live work. An open pull request
+# Print one `path<TAB>branch` line per claimed path: open pull request files, and the
+# committed and uncommitted paths of each worktree branch with a live claimant. The
+# branch is the one that carries the path: uncommitted work prints with the branch of
+# its dirty worktree, a path that an unmerged commit changes prints with that commit's
+# branch, and an open pull request's files print with its head branch. A path whose
+# only branch commits are patch-equivalent on main prints nothing, so a squash-landed
+# path, or a rebased one whose patch main carries, is not listed as live work. An open pull request
 # for the branch, a process in its worktree, or an open owning task keeps those
 # paths claimed. A worktree no task names claims its paths only while its branch
 # has a commit ahead of origin/main, or one of its changed, uncommitted or
@@ -64,32 +63,18 @@ read_main_patch_ids() {
   done <<<"$ids"
 }
 
-# Print one path in the list's form for work no unmerged commit carries: bare when the fetched
-# main tree holds it, with the branch when the tree does not. The caller fetched the main ref into
-# $main_ref.
-print_path_claim() {
-  local root=$1
-  local path=$2
-  local branch=$3
-  if git -C "$root" rev-parse --verify --quiet "$main_ref:$path" >/dev/null; then
-    printf '%s\n' "$path"
-  else
-    printf '%s\t%s\n' "$path" "$branch"
-  fi
-}
-
-# Print every path changed by one branch since its merge base, in the list's form. A commit whose
+# Print every path changed by one branch since its merge base, as `path<TAB>branch`. A commit whose
 # patch id the shared main map holds is patch-equivalent on main; a commit whose id the map does
-# not hold is an unmerged commit, and every path it touches prints with the branch. A path whose
-# only branch commits are patch-equivalent prints bare when the fetched main tree holds it, and
-# with the branch when a later main commit removed it. read_main_patch_ids must have run for a
-# base at or before this branch's merge base.
+# not hold is an unmerged commit, and every path it touches prints with the branch. A path that only
+# patch-equivalent commits touch prints nothing. A changed path that no listed commit touches, such as
+# a merge's own resolution, prints with the branch, because no commit on main explains it.
+# read_main_patch_ids must have run for a base at or before this branch's merge base.
 list_committed_paths() {
   local root=$1
   local merge_base=$2
   local branch=$3
   local line sha path id patch_ids log changed_paths
-  local -A carried=() commit_patch_id=()
+  local -A carried=() landed=() commit_patch_id=()
 
   if ! changed_paths=$(git -C "$root" diff --name-only "$merge_base" "$branch"); then
     printf 'cannot read changed paths of %s in %s\n' "$branch" "$root" >&2
@@ -113,16 +98,16 @@ list_committed_paths() {
     elif [[ -n $line && -n $sha ]]; then
       if [[ -z ${main_patch_ids[${commit_patch_id["$sha"]:-}]:-} ]]; then
         carried["$line"]=1
+      else
+        landed["$line"]=1
       fi
     fi
   done <<<"$log"
 
   while IFS= read -r path; do
     [[ -n $path ]] || continue
-    if [[ -n ${carried["$path"]:-} ]]; then
+    if [[ -n ${carried["$path"]:-} || -z ${landed["$path"]:-} ]]; then
       printf '%s\t%s\n' "$path" "$branch"
-    else
-      print_path_claim "$root" "$path" "$branch"
     fi
   done <<<"$changed_paths"
 }
@@ -498,12 +483,12 @@ list_open_pull_requests() {
   done <<<"$pull_requests"
 }
 
-# Print the committed and uncommitted paths of each worktree whose claimant keeps it live, in the
-# list's form: carried work with the branch that carries it, landed work bare.
+# Print the committed and uncommitted paths of each worktree whose claimant keeps it live, in the list's form: each
+# path with the branch that carries it, and no path whose branch commits all landed on main.
 #
 # Run metadata maps a worktree path to its task session. The session's current event history owns its state; when no
-# task names a worktree, its claims remain. An open pull request, an open task, or a process keeps every branch path
-# and every dirty path claimed, including paths whose branch version has landed on main.
+# task names a worktree, its claims remain. An open pull request, an open task, or a process keeps the worktree's
+# unmerged and dirty paths claimed; a path whose branch commits all landed on main prints under no claimant.
 #
 # The first pass resolves each live branch's merge base, and their common ancestor bounds the one
 # shared read of main's patch ids; the second pass classifies each branch's paths against it.

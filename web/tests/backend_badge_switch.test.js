@@ -64,6 +64,8 @@ function loadSessionContext({elements, BACKEND_OPTIONS, BACKEND_POOLS, ACTIVE_PO
   };
   context.window = { addEventListener() {} };
   context.document.addEventListener = () => {};
+  // websocket.js's refused-subscribe registration, which session-view.js makes at load; this harness loads no socket.
+  context.registerSubscribeRefusedHandler = () => {};
   vm.createContext(context);
   runIconModule(context);
   vm.runInContext(readStatic('sidebar/namespace.js'), context, { filename: 'sidebar/namespace.js' });

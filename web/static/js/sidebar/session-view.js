@@ -638,6 +638,7 @@ function sessionSubscribeFailed(request) {
   }
   failSwitchPlaceholder(request.session_id);
 }
+registerSubscribeRefusedHandler(sessionSubscribeFailed);
 
 // Click-time immediate feedback: the placeholder row (thinking pulse-dot
 // style) replaces the stale session DOM before any network wait. The
@@ -1485,7 +1486,6 @@ Sidebar.wire(API, {
   switchBackend,
   loadOlderIfNeeded,
   createSessionNode,
-  sessionSubscribeFailed,
 });
 
 })();

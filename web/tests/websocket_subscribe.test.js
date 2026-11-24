@@ -30,9 +30,6 @@ function buildContext(sessionId) {
     appendMessageObject: (msg) => messages.push(msg.content || ''),
     showStreaming: () => {},
     hideStreaming: () => {},
-    // session-view.js's failure path, reached as Sidebar.sessionSubscribeFailed; the transport calls it on a refused
-    // subscribe. The cases below that need the real path load session-view.js instead.
-    Sidebar: {sessionSubscribeFailed: (request) => subscribeFailures.push({...request})},
     document: {
       getElementById: () => null,
       dispatchEvent: (event) => {
@@ -41,6 +38,8 @@ function buildContext(sessionId) {
       },
     },
   });
+  // The session view's failure path stands in here; the cases that need the real path load session-view.js instead.
+  context.registerSubscribeRefusedHandler((request) => subscribeFailures.push({...request}));
   return {context, FakeWebSocket, messages, announced, timers, subscribeFailures};
 }
 

@@ -109,6 +109,16 @@ function registerWsConnectHandler(handler) {
   wsConnectHandlers.push(handler);
 }
 
+// The handler a refused subscribe calls. The session view registers it when it loads, after this file, so this file
+// names no view function.
+let subscribeRefusedHandler = null;
+
+function registerSubscribeRefusedHandler(handler) {
+  if (typeof handler !== 'function') throw new Error('Invalid subscribe refusal handler registration');
+  if (subscribeRefusedHandler) throw new Error('Duplicate subscribe refusal handler registration');
+  subscribeRefusedHandler = handler;
+}
+
 function isStaleSocket(socket, generation) {
   return socket !== ws || generation !== wsGeneration;
 }
@@ -345,7 +355,7 @@ function connectWS() {
       const request = pendingSubscribe;
       pendingSubscribe = null;
       switchWaitSession = null;
-      Sidebar.sessionSubscribeFailed(request);
+      subscribeRefusedHandler(request);
       return;
     }
     if (type === 'catchup_complete') {

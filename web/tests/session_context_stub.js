@@ -208,9 +208,11 @@ function standInForOfflineShell(context) {
 
 // usage.js loads between the chat and the sidebar modules on the page. These
 // harnesses stub its paint globals (showStreaming, hideStreaming), and this
-// stands in for the registration session-view.js makes at load.
+// stands in for the registration session-view.js makes at load. The harnesses
+// load no websocket.js, so its refused-subscribe registration is stood in here too.
 function standInForUsageJs(context) {
   context.Chat.setStreamDraftModeSupplier = () => {};
+  context.registerSubscribeRefusedHandler = () => {};
 }
 
 // The cron script: a harness whose rows, menus or Workspace badge show the

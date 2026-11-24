@@ -1151,7 +1151,9 @@ mod tests {
   /// one per finished manager turn and work run, the workers' work runs among them.
   #[test]
   fn a_scaled_plan_deals_each_keep_reason_its_scaled_count() {
-    let sessions = 1_200;
+    // The follow-up total is calibrated at production scale: at 1,200 sessions one seed's total moves by a third with
+    // the stream of keep-reason draws, so the quarter-of-reference bound needs the production count.
+    let sessions = crate::PRODUCTION_SESSIONS;
     let (_, _, sizes) = session::planned_home(sessions, 1, Language::Mixed);
     let plan = HomePlan::new(&sizes, 1, Language::Mixed);
     for (reason, reference) in REFERENCE_KEEPS {

@@ -284,7 +284,7 @@ fn write_home(home: &Path, sessions: usize, seed: u64, shape: Shape, language: L
       web_status: None,
     };
     listed.push(metadata);
-    manifest_sessions.push(ManifestSession { id, event_log_bytes: log_bytes, last_message: final_text });
+    manifest_sessions.push(ManifestSession { id, event_log_bytes: log_bytes, last_message: Some(final_text) });
     total += log_bytes;
   }
   if shape == Shape::Default {

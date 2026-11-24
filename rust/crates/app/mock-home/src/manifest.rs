@@ -56,7 +56,9 @@ pub struct Manifest {
 pub struct ManifestSession {
   pub id: String,
   pub event_log_bytes: u64,
-  pub last_message: String,
+  /// The checkpoint that the session's newest chat message holds. A worker's transcript is built from its run files,
+  /// and a worker without a run serves no message, so a worker's entry holds `None` and the check does not read it.
+  pub last_message: Option<String>,
 }
 
 /// One scheduled task of `.cron.d`, and the manager session that its file binds.

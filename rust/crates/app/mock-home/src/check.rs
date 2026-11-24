@@ -1,9 +1,9 @@
 //! Reads a served session home back against its manifest.
 //!
-//! The session list must hold the manifest's sessions and the sessions that the default scheduled tasks bind (see
-//! `session_count_mismatches`). That route reads only `metadata.json`, so the newest message is read from the events
-//! route of the largest session and of two sessions that the manifest seed picks. Each scheduled task of the manifest
-//! must be listed by the task route, unbroken and bound to the manifest's session.
+//! The task-tree route lists every session, roots and children alike. The listed sessions must hold the manifest's
+//! sessions and the sessions that the default scheduled tasks bind (see `session_count_mismatches`). The newest chat
+//! message is read from the events route of the largest manager session and of two that the manifest seed picks. Each
+//! scheduled task of the manifest must be listed by the task route, unbroken and bound to the manifest's session.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -25,8 +25,10 @@ const NEWEST_PAGE_BEFORE: u64 = (1 << 31) - 1;
 const HTTP_TIMEOUT: Duration = Duration::from_secs(120);
 /// The variable that carries the access key as one `Name: value` header.
 const AUTH_HEADER_VAR: &str = "CHARLIEBOT_SERVE_AUTH_HEADER";
-/// The sessions that are read besides the largest one.
+/// The manager sessions that are read besides the largest one.
 const PICKED_SESSIONS: usize = 2;
+/// The largest page that the task-tree route serves.
+const TREE_PAGE_LIMIT: u64 = 500;
 
 /// Whether a served home matched its manifest.
 pub enum CheckOutcome {
@@ -102,19 +104,66 @@ fn session_count_mismatches(manifest: &Manifest, listed_ids: &[String], tasks: &
   failures
 }
 
-/// The largest session, then `PICKED_SESSIONS` of the others, which the manifest seed picks.
+/// The largest session with a newest message, then `PICKED_SESSIONS` of the others, which the manifest seed picks.
 fn checked_sessions(manifest: &Manifest) -> Vec<&ManifestSession> {
-  let largest = manifest
-    .sessions
+  let mut readable: Vec<&ManifestSession> =
+    manifest.sessions.iter().filter(|session| session.last_message.is_some()).collect();
+  let largest = readable
     .iter()
+    .copied()
     .max_by_key(|session| session.event_log_bytes)
-    .expect("the manifest lists at least one session");
-  let mut others: Vec<&ManifestSession> = manifest.sessions.iter().filter(|session| session.id != largest.id).collect();
-  others.sort_by(|left, right| left.id.cmp(&right.id));
-  Rng::new(manifest.seed).shuffle(&mut others);
+    .expect("the manifest lists a session with a newest message");
+  readable.retain(|session| session.id != largest.id);
+  readable.sort_by(|left, right| left.id.cmp(&right.id));
+  Rng::new(manifest.seed).shuffle(&mut readable);
   let mut checked = vec![largest];
-  checked.extend(others.into_iter().take(PICKED_SESSIONS));
+  checked.extend(readable.into_iter().take(PICKED_SESSIONS));
   checked
+}
+
+/// The content of the newest user or assistant message in a served page. Control events, such as a closed task's close
+/// event, and separators come after such a message or between them, and are skipped.
+fn newest_chat_message(messages: &Value) -> Option<&str> {
+  let chat =
+    messages.as_array()?.iter().rev().find(|message| matches!(message["role"].as_str(), Some("user" | "assistant")))?;
+  chat["content"].as_str()
+}
+
+/// The ids of every session the server lists, read through the task-tree route: the root sessions, then each parent's
+/// children. The sidebar list shows only some roots, so it cannot count a task-tree home.
+async fn listed_session_ids(client: &reqwest::Client, base: &str, headers: &HeaderMap) -> Result<Vec<String>> {
+  let mut ids = Vec::new();
+  let mut parents: Vec<Option<String>> = vec![None];
+  while let Some(parent) = parents.pop() {
+    let mut cursor: Option<String> = None;
+    loop {
+      // Session ids and page cursors are URL-safe, so they go into the query without escaping.
+      let mut url = format!(
+        "{base}{}?{}=true&limit={TREE_PAGE_LIMIT}",
+        session_routes::SESSION_TREE_PATH,
+        session_routes::SESSION_TREE_INCLUDE_ARCHIVED_QUERY
+      );
+      if let Some(parent) = &parent {
+        url.push_str(&format!("&{}={parent}", session_routes::SESSION_TREE_PARENT_ID_QUERY));
+      }
+      if let Some(cursor) = &cursor {
+        url.push_str(&format!("&{}={cursor}", session_routes::SESSION_TREE_CURSOR_QUERY));
+      }
+      let page = get_json(client, &url, headers).await?;
+      for row in page["items"].as_array().context("the task-tree page holds no item list")? {
+        let id = row["id"].as_str().context("a session row names no id")?;
+        if row["child_count"].as_u64().is_some_and(|count| count > 0) {
+          parents.push(Some(id.to_string()));
+        }
+        ids.push(id.to_string());
+      }
+      match page["next_cursor"].as_str() {
+        Some(next) => cursor = Some(next.to_string()),
+        None => break,
+      }
+    }
+  }
+  Ok(ids)
 }
 
 /// Compares the served session count and each checked session's newest message. Returns one line per mismatch.
@@ -130,18 +179,13 @@ async fn read_back(
     reqwest::Client::builder().no_proxy().timeout(HTTP_TIMEOUT).build().context("cannot build the HTTP client")?;
   let mut failures = Vec::new();
 
-  let listing = get_json(&client, &format!("{base}{}", session_routes::SESSIONS_PATH), headers).await?;
-  let listed_ids = listing
-    .as_array()
-    .context("the session list is not a JSON array")?
-    .iter()
-    .map(|row| row["id"].as_str().map(str::to_string).context("a session row names no id"))
-    .collect::<Result<Vec<String>>>()?;
+  let listed_ids = listed_session_ids(&client, base, headers).await?;
   let tasks = get_json(&client, &format!("{base}{TASKS_PATH}"), headers).await?;
   let listed_tasks = tasks.as_array().context("the scheduled task list is not a JSON array")?;
   failures.extend(session_count_mismatches(manifest, &listed_ids, listed_tasks));
 
   for session in checked {
+    let expected = session.last_message.as_deref().expect("a checked session holds its newest message");
     let events_path = route::fill(session_routes::SESSION_EVENTS_PATH, &[session.id.as_str()]);
     let url = format!("{base}{events_path}?before={NEWEST_PAGE_BEFORE}");
     let page = match get_json(&client, &url, headers).await {
@@ -151,12 +195,11 @@ async fn read_back(
         continue;
       }
     };
-    let served =
-      page["messages"].as_array().and_then(|messages| messages.last()).and_then(|message| message["content"].as_str());
-    if served != Some(session.last_message.as_str()) {
+    let served = newest_chat_message(&page["messages"]);
+    if served != Some(expected) {
       failures.push(format!(
-        "session {}: manifest newest message {:?}, server newest message {served:?}",
-        session.id, session.last_message
+        "session {}: manifest newest message {expected:?}, server newest message {served:?}",
+        session.id
       ));
     }
   }
@@ -217,7 +260,7 @@ mod tests {
 
   /// A manifest of two sessions, `a` and `b`, that binds the fixture task `fixture` to `a`.
   fn manifest() -> Manifest {
-    let session = |id: &str| ManifestSession { id: id.to_string(), event_log_bytes: 1, last_message: String::new() };
+    let session = |id: &str| ManifestSession { id: id.to_string(), event_log_bytes: 1, last_message: None };
     Manifest {
       seed: 1,
       session_count: 2,
@@ -274,5 +317,38 @@ mod tests {
     let failures = session_count_mismatches(&manifest(), &ids(&["a"]), &tasks);
     assert_eq!(failures.len(), 2, "{failures:?}");
     assert!(failures[0].contains("session b"), "{failures:?}");
+  }
+
+  #[test]
+  fn the_newest_chat_message_skips_the_control_events_after_it() {
+    // A closed task's close event is the page's last message, and the checkpoint is the newest chat message.
+    let messages = json!([
+      {"role": "user", "content": "checkpoint"},
+      {"role": "separator"},
+      {"role": "system", "content": "Task archived: done"}
+    ]);
+    assert_eq!(newest_chat_message(&messages), Some("checkpoint"));
+  }
+
+  #[test]
+  fn a_page_with_no_chat_message_has_no_newest_message() {
+    assert_eq!(newest_chat_message(&json!([{"role": "system", "content": "Task archived: done"}])), None);
+    assert_eq!(newest_chat_message(&json!([])), None);
+  }
+
+  #[test]
+  fn the_checked_sessions_leave_out_a_session_whose_newest_message_is_not_read() {
+    let session = |id: &str, bytes: u64, message: Option<&str>| ManifestSession {
+      id: id.to_string(),
+      event_log_bytes: bytes,
+      last_message: message.map(str::to_string),
+    };
+    let manifest = Manifest {
+      sessions: vec![session("worker", 900, None), session("a", 10, Some("x")), session("b", 5, Some("y"))],
+      ..manifest()
+    };
+    let checked: Vec<&str> = checked_sessions(&manifest).iter().map(|session| session.id.as_str()).collect();
+    assert_eq!(checked[0], "a", "{checked:?}");
+    assert!(!checked.contains(&"worker"), "{checked:?}");
   }
 }

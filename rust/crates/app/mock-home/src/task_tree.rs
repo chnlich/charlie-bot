@@ -966,7 +966,8 @@ pub(crate) fn write_home(staging: &Path, home: &Path, sessions: usize, seed: u64
       trigger_files::write_trigger(&session_dir, &trigger(&id, session, status, &mut rng, language))?;
     }
     set_session_times(&session_dir, session.modified_at)?;
-    manifest_sessions.push(ManifestSession { id, event_log_bytes: live_bytes, last_message: final_text });
+    let last_message = (session.profile == TaskProfile::Manager).then_some(final_text);
+    manifest_sessions.push(ManifestSession { id, event_log_bytes: live_bytes, last_message });
     total += log.bytes;
   }
   let cron_tasks = cron::write_fixture(staging, &cron_bound_sessions(&plan)?)?;

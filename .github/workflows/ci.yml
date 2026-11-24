@@ -28,6 +28,14 @@ jobs:
       - name: Check generic host leaks
         run: dev/check-skills-host-leak.sh
 
+      # The session-origin guard: a core capability branched on a session's origin fails the job. The self-test proves
+      # on a copy of the tracked sources that the guard still fails a re-added predicate. It needs git alone, so it runs
+      # before the installs.
+      - name: Check session origin
+        run: |
+          dev/check-session-origin.sh
+          dev/check-session-origin.sh --self-test
+
       - name: Install integration selector dependencies
         run: npm ci --prefix dev/integration-selection --ignore-scripts --no-audit --no-fund
 

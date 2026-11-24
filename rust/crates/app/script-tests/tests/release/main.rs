@@ -9,7 +9,7 @@ mod release_lock;
 mod world;
 
 use std::collections::HashSet;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -1507,6 +1507,129 @@ fn test_trial_serve_ends_within_a_minute_when_its_server_stops_as_the_command_ex
   assert!(run.stdout.lines().any(|line| line.starts_with(&cause)), "{}", run.describe());
   assert!(!run.stdout.contains("SERVE PASS RunWait"), "{}", run.describe());
   assert_eq!(fs::read_dir(tree_root).expect("the tree root").count(), 0, "{}", run.describe());
+}
+
+/// Stubs for a serve trial whose server starts in a scope. `systemd-run` logs its arguments to the returned file and
+/// starts the command with no scope of its own; `systemctl` reports the scope's Result as `result`, the way systemd
+/// reports a unit whose processes the OOM killer ended (`oom-kill`) or another signal ended (`signal`).
+fn stub_serve_scope(world: &ServeWorld, result: &str) -> PathBuf {
+  let log = world.sandbox.dir("scope").join("systemd-run.log");
+  world.sandbox.stub(
+    "systemd-run",
+    &format!(
+      "printf '%s\\n' \"$*\" >> '{}'\nwhile (( $# > 0 )); do\n  if [[ $1 == --unit=* ]]; then shift; break; fi\n  shift\ndone\n\
+       exec \"$@\"\n",
+      log.display()
+    ),
+  );
+  world.sandbox.stub(
+    "systemctl",
+    &format!(
+      "case \"$*\" in\n  *\"show -p Result\"*) echo '{result}' ;;\n  *\"show -p ControlGroup\"*) echo ;;\n  *\"is-active\"*) \
+       echo inactive ;;\n  *) exit 0 ;;\nesac\n"
+    ),
+  );
+  log
+}
+
+/// The environment of a serve trial whose server starts in a scope: the world's, with a runtime directory for the
+/// scope preflight.
+fn serve_scope_env(world: &ServeWorld) -> Env {
+  let mut env = world.env.clone();
+  env.insert("XDG_RUNTIME_DIR".to_string(), world.sandbox.dir("run").display().to_string());
+  env
+}
+
+/// The arguments of a serve trial that starts its server in a scope: the world's serve arguments without
+/// `--in-caller-scope`.
+fn serve_scope_arguments(world: &ServeWorld, seed: &Path, command: &[&str]) -> Vec<OsString> {
+  let server = world.release.join("charliebot-server");
+  let mut arguments = world.serve_arguments(world.tree_root(), seed, &server, command);
+  arguments.retain(|argument| argument.as_os_str() != OsStr::new("--in-caller-scope"));
+  arguments
+}
+
+/// This test process's unified cgroup path. A server that a test starts without a scope inherits it.
+fn own_cgroup_path() -> String {
+  let text = fs::read_to_string("/proc/self/cgroup").expect("the process cgroup");
+  text.lines().find_map(|line| line.strip_prefix("0::")).expect("a unified cgroup line").to_string()
+}
+
+/// A serve trial whose scope OOM killer ends the server: the command SIGKILLs the server after systemd has recorded the
+/// scope's result as oom-kill. The trial fails naming the memory cap, the peak and the scope, and it does not report a
+/// generic RunWait failure.
+#[test]
+#[ignore = "integration"]
+fn test_trial_serve_names_the_memory_cap_when_the_scope_oom_kill_ends_the_server() {
+  let _serial = TRIAL_RUNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+  let world = ServeWorld::new();
+  let seed = world.seed_home("seed", "1");
+  let log = stub_serve_scope(&world, "oom-kill");
+  let env = serve_scope_env(&world);
+  let mut trial = harness::command("bash", &env);
+  trial.args(serve_scope_arguments(&world, &seed, &["sh", "-c", "kill -KILL \"$CHARLIEBOT_SERVE_PID\""]));
+
+  let run = run_within(&mut trial, Duration::from_secs(120));
+
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(
+    run.stdout.contains("FAIL serve MemoryCap: the memory cap of scope charliebot-release-trial-serve-"),
+    "{}",
+    run.describe()
+  );
+  let cause = "CAUSE serve: MemoryMax=17179869184 bytes, peak 17179869184 bytes (at the cap), scope charliebot-release-trial-serve-";
+  assert!(run.stdout.lines().any(|line| line.starts_with(cause) && line.ends_with(".scope")), "{}", run.describe());
+  assert!(!run.stdout.contains("FAIL serve RunWait"), "{}", run.describe());
+  assert!(fs::read_to_string(&log).expect("the scope log").contains("-p MemoryMax=16G"), "{}", run.describe());
+}
+
+/// A serve trial whose server a signal ends, not the OOM killer: the trial reports the generic RunWait failure, since
+/// the scope's result is not oom-kill, and it names no memory cap.
+#[test]
+#[ignore = "integration"]
+fn test_trial_serve_names_a_server_killed_by_a_signal_as_a_run_wait_failure_not_a_memory_cap() {
+  let _serial = TRIAL_RUNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+  let world = ServeWorld::new();
+  let seed = world.seed_home("seed", "1");
+  stub_serve_scope(&world, "signal");
+  let env = serve_scope_env(&world);
+  let mut trial = harness::command("bash", &env);
+  trial.args(serve_scope_arguments(&world, &seed, &["sh", "-c", "kill -KILL \"$CHARLIEBOT_SERVE_PID\""]));
+
+  let run = run_within(&mut trial, Duration::from_secs(120));
+
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(run.stdout.contains("FAIL serve RunWait:"), "{}", run.describe());
+  assert!(!run.stdout.contains("MemoryCap"), "{}", run.describe());
+}
+
+/// A serve trial whose scope starts with the cap the script sets. The trial reads the scope's memory peak and cap while
+/// its server still runs, and it prints both on the MemoryPeak line. The counters sit under the sandbox at this test's
+/// cgroup path, which the trial's server inherits.
+#[test]
+#[ignore = "integration"]
+fn test_trial_serve_reads_its_scope_memory_peak() {
+  let _serial = TRIAL_RUNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+  let world = ServeWorld::new();
+  let seed = world.seed_home("seed", "1");
+  let log = stub_serve_scope(&world, "success");
+  let cgroup = world.sandbox.dir(&format!("cgroup{}", own_cgroup_path()));
+  fs::write(cgroup.join("memory.peak"), "1048576\n").expect("the peak counter");
+  fs::write(cgroup.join("memory.max"), "17179869184\n").expect("the cap counter");
+  let mut env = serve_scope_env(&world);
+  env.insert("CHARLIEBOT_TRIAL_CGROUP_ROOT".to_string(), world.sandbox.root().join("cgroup").display().to_string());
+  let mut trial = harness::command("bash", &env);
+  trial.args(serve_scope_arguments(&world, &seed, &["true"]));
+
+  let run = run_within(&mut trial, Duration::from_secs(120));
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(run.stdout.contains("memory_max=17179869184"), "{}", run.describe());
+  let peak =
+    run.stdout.lines().find(|line| line.starts_with("SERVE PASS MemoryPeak: scope=charliebot-release-trial-serve-"));
+  assert!(peak.is_some_and(|line| line.ends_with(" peak=1048576 max=17179869184")), "{}", run.describe());
+  assert!(run.stdout.contains("SERVE PASS RunWait"), "{}", run.describe());
+  assert!(fs::read_to_string(&log).expect("the scope log").contains("-p MemoryMax=16G"), "{}", run.describe());
 }
 
 /// A serve trial whose server ignores SIGTERM. The trial waits its bounded time, sends SIGKILL and fails the side,

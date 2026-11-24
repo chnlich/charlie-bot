@@ -6,11 +6,14 @@
 # The commit is extracted from this repository into an isolated tree with its own home, private tmux server and a port
 # in 18650-18669, and the server starts on it. The command then runs with CHARLIEBOT_SERVE_URL,
 # CHARLIEBOT_SERVE_AUTH_HEADER (one line `Authorization: Bearer <key>`) and CHARLIEBOT_SERVE_PID in its environment.
-# The server runs inside a systemd user scope with MemoryMax=2G, so a measurement cannot push the live server into
-# swap. After the command ends the trial waits until every run of the trial home has ended, stops the server, asserts
-# that no process of the trial tree remains, cleans up and runs sweep-check on the server log. A server that stops
-# before the wait ends fails the trial at once, and a server that does not exit on SIGTERM within SERVER_STOP_WAIT_MS
-# fails the side; the FAIL and CAUSE lines of either name its pid.
+# The server runs inside a systemd user scope with MemoryMax=16G, so a measurement cannot push the live server into
+# swap. A server that the scope's OOM killer
+# ends fails the trial with a MemoryCap line that names the cap, the peak and the scope. A trial whose server still runs
+# at the end of its wait prints the scope's memory peak as SERVE PASS MemoryPeak. After the command ends the trial waits
+# until every run of the trial home has ended, stops the server, asserts that no process of the trial tree remains,
+# cleans up and runs sweep-check on the server log. A server that stops before the wait ends fails the trial at once,
+# and a server that does not exit on SIGTERM within SERVER_STOP_WAIT_MS fails the side; the FAIL and CAUSE lines of
+# either name its pid.
 #
 # A side is ready only when the port's listener is this trial's server (or a process it started) and that server
 # answers its auth status with 200 after it logged server_ready. free-port picks the port before the server binds it,
@@ -51,7 +54,7 @@
 #
 # Exit: the command's exit code; 1 a foreign cgroup removal, a remaining child process, a cleanup failure, a server
 # that did not become ready on its own port, a server that stopped before the wait for its runs ended, or a server that
-# did not exit on SIGTERM; 2 the preflight failed, nothing started.
+# did not exit on SIGTERM, or a server that its scope's memory cap ended; 2 the preflight failed, nothing started.
 # Evidence goes to $CHARLIEBOT_RELEASE_RUN_DIR/trial-<UTC>/ (or a directory under $CHARLIEBOT_RELEASE_LOG_DIR) and is
 # kept after a failure.
 set -uo pipefail
@@ -69,6 +72,11 @@ readonly CGROUP_BASE="$USER_SERVICE_CGROUP/charliebot.slice/charliebot-agents.sl
 # The port range a trial picks from. A caller that runs trials beside another trial names its own range.
 readonly PORT_MIN=${TRIAL_PORT_MIN:-18650}
 readonly PORT_MAX=${TRIAL_PORT_MAX:-18669}
+# The serve scope's MemoryMax. It holds an 11 GiB mock home and the server's working set in the scope's page cache: the
+# largest measured ux side peaked at 12.98 GB (12.09 GiB) in this scope, so 16 GiB leaves 32% above it while a runaway
+# server still cannot take more than 16 GiB from the host.
+readonly SERVE_MEMORY_MAX=16G
+readonly SERVE_MEMORY_MAX_BYTES=$(( ${SERVE_MEMORY_MAX%G} * 1024 * 1024 * 1024 ))
 # start_server polls the server's auth status at 0.25 s intervals this many times before it fails the trial. A serve
 # server walks every session of its home at boot before it binds: on the 7,160-session mock home that took about a
 # minute, so a serve trial waits 10 minutes.
@@ -176,9 +184,9 @@ if (( IN_CALLER_SCOPE == 0 )); then
   if ! command -v systemd-run >/dev/null 2>&1; then
     preflight_fail 'systemd-run resolves on PATH for the serve scope'
   fi
-  if ! systemd-run --user --scope -p MemoryMax=2G \
+  if ! systemd-run --user --scope -p "MemoryMax=$SERVE_MEMORY_MAX" \
     --unit="charliebot-release-trial-serve-probe-$$" true >/dev/null 2>&1; then
-    preflight_fail 'systemd-run starts a MemoryMax=2G user scope for the serve server'
+    preflight_fail "systemd-run starts a MemoryMax=$SERVE_MEMORY_MAX user scope for the serve server"
   fi
 fi
 
@@ -491,6 +499,7 @@ EVIDENCE_CAPTURED=0
 CLEANUP_DONE=0
 SERVE_UNIT_STARTED=0
 SERVER_PID=
+SERVER_CGROUP_DIR=
 SERVER_PIDS=()
 OWNED_CGROUP_PATHS=()
 
@@ -865,6 +874,48 @@ startup_failed() {
   printf 'CAUSE serve: %s\n' "$1"
 }
 
+# server_cgroup_dir PID: the cgroup directory, under CGROUP_ROOT, of a live process of the trial's own server. Under
+# --scope the systemd-run process sits in the scope's cgroup, so its pid names the scope.
+server_cgroup_dir() {
+  local cgroup
+  cgroup=$(sed -n 's/^0:://p' "/proc/$1/cgroup") || return 1
+  [[ -n $cgroup ]] || return 1
+  printf '%s%s' "$CGROUP_ROOT" "$cgroup"
+}
+
+# server_memory_cap_killed: succeeds when systemd records the serve scope's result as oom-kill, the result of a scope
+# whose OOM killer ended one of its processes. The scope stays loaded in the failed state until stop_serve_scope resets
+# it, so a caller reads the result before the stop. A host-wide OOM kill of a scope process leaves the same result, and
+# the trial does not tell the two apart. In --in-caller-scope mode the caller's scope holds the cap, so this reads
+# nothing.
+server_memory_cap_killed() {
+  local result
+  (( IN_CALLER_SCOPE == 0 )) || return 1
+  result=$(systemctl --user show -p Result --value "$SERVE_UNIT.scope") \
+    || { printf 'trial serve scope result read failed: %s\n' "$SERVE_UNIT.scope" >&2; return 1; }
+  [[ $result == oom-kill ]]
+}
+
+# memory_cap_failed: the FAIL and CAUSE lines of a serve whose memory cap ended the server. The kernel keeps no peak
+# once a scope ends, and an OOM kill happens when the scope reaches its cap, so the peak named is the cap.
+memory_cap_failed() {
+  printf 'FAIL serve MemoryCap: the memory cap of scope %s ended the trial server pid %s by an OOM kill\n' \
+    "$SERVE_UNIT.scope" "$SERVER_PID"
+  printf 'CAUSE serve: MemoryMax=%s bytes, peak %s bytes (at the cap), scope %s\n' \
+    "$SERVE_MEMORY_MAX_BYTES" "$SERVE_MEMORY_MAX_BYTES" "$SERVE_UNIT.scope"
+}
+
+# report_server_peak: prints the serve scope's memory peak and cap while the server still runs. A read that fails fails
+# the side.
+report_server_peak() {
+  local peak max
+  peak=$(cat -- "$SERVER_CGROUP_DIR/memory.peak") \
+    || { printf 'FAIL serve MemoryPeak: the memory peak of scope %s cannot be read\n' "$SERVE_UNIT.scope"; return 1; }
+  max=$(cat -- "$SERVER_CGROUP_DIR/memory.max") \
+    || { printf 'FAIL serve MemoryPeak: the memory cap of scope %s cannot be read\n' "$SERVE_UNIT.scope"; return 1; }
+  printf 'SERVE PASS MemoryPeak: scope=%s peak=%s max=%s\n' "$SERVE_UNIT.scope" "$peak" "$max"
+}
+
 # port_listeners prints the `ss` line of each listening socket on the trial's port, with its socket inode (-e). The
 # lines name no owner, and the check does not ask ss for one: `ss -p` reads the fds of every process before it dumps
 # the sockets, so a listener bound during that read is listed without its owner. Ownership comes from the fd tables
@@ -951,7 +1002,7 @@ start_server() {
     # The server runs inside a scope whose MemoryMax keeps a measurement beside the live server from pressing the host
     # into swap.
     SERVE_UNIT_STARTED=1
-    systemd-run --user --scope -p MemoryMax=2G --unit="$SERVE_UNIT" "$BINARY" >>"$SERVER_LOG" 2>&1 &
+    systemd-run --user --scope -p "MemoryMax=$SERVE_MEMORY_MAX" --unit="$SERVE_UNIT" "$BINARY" >>"$SERVER_LOG" 2>&1 &
   fi
   SERVER_PID=$!
   SERVER_PIDS+=("$SERVER_PID")
@@ -985,6 +1036,10 @@ start_server() {
     fi
     state=$(process_state "$SERVER_PID")
     if [[ -z $state || $state == *Z* ]]; then
+      if server_memory_cap_killed; then
+        memory_cap_failed
+        return 1
+      fi
       if ! listeners=$(port_listeners); then
         startup_failed "the trial server exited before it became ready; ss cannot list the listeners"
         return 1
@@ -1168,7 +1223,8 @@ run_serve_mode() {
   if (( IN_CALLER_SCOPE == 1 )); then
     printf 'SERVE PASS Startup url=http://127.0.0.1:%s pid=%s scope=caller\n' "$CHOSEN_PORT" "$SERVER_PID"
   else
-    printf 'SERVE PASS Startup url=http://127.0.0.1:%s pid=%s unit=%s memory_max=2147483648\n' "$CHOSEN_PORT" "$SERVER_PID" "$SERVE_UNIT"
+    printf 'SERVE PASS Startup url=http://127.0.0.1:%s pid=%s unit=%s memory_max=%s\n' "$CHOSEN_PORT" "$SERVER_PID" \
+      "$SERVE_UNIT" "$SERVE_MEMORY_MAX_BYTES"
   fi
   check_sweep_names 'start 1' || sweep_failed=1
 
@@ -1187,8 +1243,12 @@ run_serve_mode() {
     server_state=$(process_state "$SERVER_PID")
     if [[ -z $server_state || $server_state == *Z* ]]; then
       cleanup_failed=1
-      printf 'FAIL serve RunWait: the trial server stopped before every run of the trial home had ended\n'
-      printf 'CAUSE serve: server pid %s exited while the trial waited for its runs\n' "$SERVER_PID"
+      if server_memory_cap_killed; then
+        memory_cap_failed
+      else
+        printf 'FAIL serve RunWait: the trial server stopped before every run of the trial home had ended\n'
+        printf 'CAUSE serve: server pid %s exited while the trial waited for its runs\n' "$SERVER_PID"
+      fi
       break
     fi
     if ! serve_home_has_active_run; then
@@ -1210,6 +1270,17 @@ run_serve_mode() {
   done
   if (( cleanup_failed == 0 )); then
     printf 'SERVE PASS RunWait: every run of the trial home has ended\n'
+  fi
+  # The peak is read while the server still runs, whatever the wait's result: a wait that ran out still leaves its peak.
+  # A cgroup read that fails is a cleanup failure, so the trial ends through its cleanup before it exits.
+  server_state=$(process_state "$SERVER_PID")
+  if (( IN_CALLER_SCOPE == 0 )) && [[ -n $server_state && $server_state != *Z* ]]; then
+    if SERVER_CGROUP_DIR=$(server_cgroup_dir "$SERVER_PID"); then
+      report_server_peak || cleanup_failed=1
+    else
+      printf 'FAIL serve Cgroup: the cgroup of the trial server pid %s is not readable\n' "$SERVER_PID"
+      cleanup_failed=1
+    fi
   fi
 
   if ! stop_current_server 6; then

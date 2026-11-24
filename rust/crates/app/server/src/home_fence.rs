@@ -2,8 +2,8 @@
 //!
 //! The exclusion is an exclusive non-blocking `flock` on `<home>/state/home_writer.lock`, held for the
 //! holder's lifetime; the kernel drops it when the holder dies. `<home>/state/writer_identity.json`
-//! names the holder for a refused caller and is evidence only. A migration apply and
-//! this server take the same lock file the same way, so each refuses while another holds the home.
+//! names the holder for a refused caller and is evidence only. A second server that takes the same lock file
+//! refuses while this one holds the home.
 //! A symlinked state directory or fence file refuses acquisition.
 
 use std::fmt;
@@ -11,11 +11,10 @@ use std::fs::{File, OpenOptions};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
+use charliebot_core::home::STATE_DIR_NAME;
+use charliebot_core::{fsutil, paths, proc_identity, text_repr, timefmt};
 use nix::fcntl::{Flock, FlockArg, OFlag};
 use serde_json::{Map, Value, json};
-
-use crate::home::STATE_DIR_NAME;
-use crate::{fsutil, paths, proc_identity, text_repr, timefmt};
 
 pub const FENCE_LOCK_NAME: &str = "home_writer.lock";
 pub const FENCE_IDENTITY_NAME: &str = "writer_identity.json";

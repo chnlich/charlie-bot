@@ -171,3 +171,80 @@ test('opening a tab sets the access key cookie on the page origin', async () => 
     params: {cookies: [{name: 'charliebot_access_key', value: 'key-123', url: 'https://front.test'}]},
   }]);
 });
+
+test('waitIdle skips requests matched by ignore while waiting on others', async () => {
+  const browser = {
+    send: async () => ({}),
+    onMessage: () => {},
+    newPage: async () => ({targetId: 'page-1', send: async () => ({})}),
+  };
+  const tabs = new Tabs({browser, assets: new Map(), accessKey: 'k', origin: 'https://front.test', cdn: 'link'});
+  const tab = await tabs.open('shot');
+  const req = (requestId, url) => ({
+    method: 'Network.requestWillBeSent',
+    params: {requestId, request: {url}},
+  });
+  tab.handle(req('poll', 'https://front.test/api/ext-usage'));
+  tab.handle(req('asset', 'https://front.test/static/app.js'));
+  setTimeout(() => {
+    tab.handle({method: 'Network.loadingFinished', params: {requestId: 'asset', encodedDataLength: 10}});
+  }, 40);
+  await tabs.waitIdle(500, {ignore: (request) => request.url.includes('/api/ext-usage')});
+  assert.equal(tab.requests.get('poll').finishAt, null);
+  assert.notEqual(tab.requests.get('asset').finishAt, null);
+});
+
+// A browser whose tabs report their document's visibility. The activation reaches the other documents after
+// `hideDelayMs`, as Chrome's does: Target.activateTarget returns before the other tabs report hidden.
+function visibilityBrowser(hideDelayMs) {
+  const pages = [];
+  return {
+    pages,
+    activate: async (page) => {
+      setTimeout(() => {
+        for (const other of pages) {
+          if (other !== page) other.state = 'hidden';
+        }
+      }, hideDelayMs);
+    },
+    send: async () => ({}),
+    onMessage: () => {},
+    newPage: async () => {
+      const page = {
+        targetId: `page-${pages.length + 1}`,
+        state: 'visible',
+        send: async () => ({}),
+        evaluate: async () => page.state,
+      };
+      pages.push(page);
+      return page;
+    },
+  };
+}
+
+test('show waits for a background tab whose hidden state follows the activation', async () => {
+  const browser = visibilityBrowser(80);
+  const tabs = new Tabs({browser, assets: new Map(), accessKey: 'k', origin: 'https://front.test', cdn: 'link'});
+  const shown = await tabs.open('visible');
+  await tabs.open('hidden-1');
+  await tabs.open('hidden-2');
+  await tabs.show(shown);
+  assert.equal(browser.pages[0].state, 'visible');
+  assert.deepEqual(browser.pages.slice(1).map((page) => page.state), ['hidden', 'hidden']);
+});
+
+test('a background tab opens hidden, and the first tab of a link opens visible', async () => {
+  const options = [];
+  const browser = {
+    send: async () => ({}),
+    onMessage: () => {},
+    newPage: async (given) => {
+      options.push(given);
+      return {targetId: `page-${options.length}`, send: async () => ({})};
+    },
+  };
+  const tabs = new Tabs({browser, assets: new Map(), accessKey: 'k', origin: 'https://front.test', cdn: 'link'});
+  await tabs.open('visible');
+  await tabs.open('hidden', null, {background: true});
+  assert.deepEqual(options, [{background: false}, {background: true}]);
+});

@@ -20,7 +20,7 @@ const BUILD_ENV = Object.assign({}, process.env, {
   PATH: `${NODE_BIN_DIR}:${process.env.PATH || ''}`,
 });
 
-const { readStatic, runIconModule } = require('./read_static');
+const { readStatic, runIconModule, FOR_YOU_RULE } = require('./read_static');
 const { loadArtifactsScript } = require('./artifacts_context_stub');
 const { makeChatRenderContext } = require('./chat_rendering_context_stub');
 
@@ -35,6 +35,7 @@ function loadChatContext(elements) {
   vm.runInContext(readStatic('utils.js'), context, { filename: 'utils.js' });
   runIconModule(context);
   vm.runInContext(readStatic('chat/namespace.js'), context, { filename: 'chat/namespace.js' });
+  context.FOR_YOU_RULE = FOR_YOU_RULE;
   vm.runInContext(readStatic('chat/shared.js'), context, { filename: 'chat/shared.js' });
   vm.runInContext(readStatic('chat/attachments.js'), context, { filename: 'chat/attachments.js' });
   context.Chat.renderRoundRatingButtons = () => '<button class="round-rating-btn text-slate-500 hover:text-green-400"></button>';

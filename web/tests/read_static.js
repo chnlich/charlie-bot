@@ -44,6 +44,12 @@ function scopedModules(prefix) {
 
 const UTILS_JS = readStatic('utils.js');
 
+// The page's FOR_YOU_RULE, as the server's store for_you module renders it into index.html.
+const FOR_YOU_RULE = {
+  roles: ['user', 'web_reply', 'web_reply_notice', 'draft'],
+  error: {role: 'system', prefix: 'Error: '},
+};
+
 // Run each file into the vm context in list order, labelling stack traces with
 // the real file name. The page loads utils.js ahead of every chat and sidebar
 // module, and a module that reads its column-form or time helpers fails to load
@@ -51,6 +57,8 @@ const UTILS_JS = readStatic('utils.js');
 // harness's own globals keep their values: its time forms and feature loaders
 // stand in for the ones utils.js defines.
 function runStaticModules(context, files) {
+  // The page's FOR_YOU_RULE, which index.html renders from the store's for_you rule.
+  if (context.FOR_YOU_RULE === undefined) context.FOR_YOU_RULE = FOR_YOU_RULE;
   if (typeof context.expandSessionColumns !== 'function') {
     const stubs = Object.entries(context);
     vm.runInContext(UTILS_JS, context, {filename: 'utils.js'});
@@ -108,5 +116,6 @@ module.exports = {
   runStaticModules,
   runIconModule,
   iconTable,
+  FOR_YOU_RULE,
   iconTableScript,
 };

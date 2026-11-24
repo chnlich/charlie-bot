@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const { readStatic, runIconModule } = require('./read_static');
+const { readStatic, runIconModule, FOR_YOU_RULE } = require('./read_static');
 
 // ---------------------------------------------------------------------------
 // A DOM node that counts every write to `class`/`title`, mirroring the real
@@ -92,6 +92,7 @@ function loadScrollContext(elements) {
   vm.createContext(context);
   runIconModule(context);
   vm.runInContext(readStatic('chat/namespace.js'), context, { filename: 'chat/namespace.js' });
+  context.FOR_YOU_RULE = FOR_YOU_RULE;
   vm.runInContext(readStatic('chat/shared.js'), context, { filename: 'chat/shared.js' });
   vm.runInContext(readStatic('chat/scroll.js'), context, { filename: 'chat/scroll.js' });
   return context;

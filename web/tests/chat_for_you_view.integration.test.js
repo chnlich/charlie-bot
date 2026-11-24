@@ -100,7 +100,11 @@ function loadRoundActionModules(context, wsHandlers) {
 }
 
 function forYouRig(
-    messages, {view = 'foryou', clientHeight = 900, profile = null, workerSummary = null, hasMore = false} = {}) {
+    messages,
+    {
+      view = 'foryou', clientHeight = 900, profile = null, workerSummary = null, hasMore = false, forYouHead,
+      onForYouFirstRow = null,
+    } = {}) {
   const root = new FakeElement('DIV', {id: 'messages', className: 'space-y-3'});
   root.clientHeight = clientHeight;
   const sentinel = hasMore ? new FakeElement('DIV', {id: 'load-more-sentinel'}) : null;
@@ -170,7 +174,7 @@ function forYouRig(
     }
     return node;
   };
-  const engine = context.Chat.TurnEngine.mountIfAvailable(root, messages, 'sess-fy', {view});
+  const engine = context.Chat.TurnEngine.mountIfAvailable(root, messages, 'sess-fy', {view, forYouHead, onForYouFirstRow});
   assert.ok(engine && engine.alive, 'the engine mounts the chat container');
   // A worker page hands its sentinel to the engine after the mount, as
   // session-view.js renderSessionView does.
@@ -993,3 +997,52 @@ function domSnapshot(el) {
   return `<${el.tagName} class="${el.className}" data=${JSON.stringify(el.dataset)}${style}>${kids.join('')}`
     + `</${el.tagName}>`;
 }
+
+// The For-you rows the bootstrap carries before the first screen. They show above the store's rows, Everything never
+// shows them, and an older page that carries one moves its row into the store with the row's node.
+test('older For-you rows show above the store rows and stay out of Everything', () => {
+  const head = [eMsg('user', 'h1', 'older question'), eMsg('web_reply', 'hr1', 'older reply')];
+  const rig = forYouRig(fixture(), {forYouHead: head});
+  assert.deepEqual(rowsOf(rig.root), ['user', 'web_reply', ...FIXTURE_ROWS]);
+
+  const plain = forYouRig(fixture(), {view: 'everything'});
+  rig.engine.setView('everything');
+  assert.deepEqual(rowsOf(rig.root), rowsOf(plain.root), 'Everything shows the store alone');
+});
+
+// A stored first screen from before older_for_you carries no field, and the page passes the field as undefined. The view
+// paints the rows the copy holds, the same as an empty head.
+test('a copy with no older_for_you field paints the rows it holds, as an empty head', () => {
+  const absent = forYouRig(fixture());
+  const empty = forYouRig(fixture(), {forYouHead: []});
+  assert.deepEqual(rowsOf(absent.root), FIXTURE_ROWS);
+  assert.deepEqual(rowsOf(absent.root), rowsOf(empty.root));
+});
+
+test('an older page that carries a For-you row moves its node into the store, and the row shows once', () => {
+  const head = [eMsg('user', 'h1', 'older question'), eMsg('web_reply', 'hr1', 'older reply')];
+  const rig = forYouRig(fixture(), {forYouHead: head});
+  const before = rowsOf(rig.root);
+  const replyNode = rig.root.children.find((el) => el.dataset.messageId === 'hr1');
+  assert.ok(replyNode, 'the newest head row has a node');
+
+  // The page holds the newest head row and one message the store lacks.
+  rig.engine.prependMessages([eMsg('web_reply', 'hr1', 'older reply'), eMsg('assistant', 'ha', 'older answer')]);
+
+  assert.deepEqual(rowsOf(rig.root), before, 'For you lists the same rows, the moved one once');
+  assert.equal(rig.engine.forYouHead.length, 1, 'the older head row waits for its own page');
+  assert.ok(rig.root.children.includes(replyNode), 'the moved row keeps its node');
+});
+
+// The switch's timing reads the first For-you row the view paints, once per mounted view.
+test('the first For-you row reports once to the mount, and an empty For you reports nothing', () => {
+  let reports = 0;
+  forYouRig([eMsg('assistant', 'a0', 'hidden only')], {onForYouFirstRow: () => { reports++; }});
+  assert.equal(reports, 0, 'a For you with no row paints nothing to report');
+
+  const rig = forYouRig(fixture(), {onForYouFirstRow: () => { reports++; }});
+  assert.equal(reports, 1);
+  rig.engine.setView('everything');
+  rig.engine.setView('foryou');
+  assert.equal(reports, 1, 'a later projection reports nothing new');
+});

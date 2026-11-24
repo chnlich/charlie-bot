@@ -21,13 +21,18 @@ export const REPLY_BYTES = 8192;
 // The text of each streamed event of a stream, tool or open reply. The server keeps each event as one chat message.
 // A reply of 8 KB makes about three or four stream updates.
 const EVENT_BYTES = 2200;
-// A sizing turn's reply: SEED_PIECE_BYTES of the same text, cut into SEED_EVENTS events of equal text. A sized
-// session's untrimmed bootstrap is the gzip of its last messages, mostly events, so its size follows the event text.
-// Events of about 2.75 KB make that tail reach VIEW.bootstrapUntrimmedWireBytes. Seed-only checks on both sides:
-// 6,950-byte pieces reached 23,879 bytes in 30 turns, 7,740-byte pieces 25,558, and 8,250-byte pieces put every sized
-// session within 5 %. The reply pieces above keep their 8 KB and EVENT_BYTES.
-export const SEED_PIECE_BYTES = 8250;
-const SEED_EVENTS = 3;
+// A sizing turn's reply: one SEED_PIECE_BYTES piece of the same text, one event. A sized session's untrimmed bootstrap
+// is the gzip of its last messages, mostly events, so its size follows the event text. The bootstrap's window is its
+// last 40 messages: a turn with a reply, a continuation run's acknowledgement and the turn-end checks' reasons and
+// notices folds to about 11 messages, so a 40-message window held about 3.6 turns. At 8,250-byte pieces the window
+// reached only 17,494 bytes, short of VIEW.bootstrapUntrimmedWireBytes (26,592). One 12,000-byte event a turn folds to
+// 9 messages, so the window holds 4.4 turns, and the sized session reached 26,592 in its fourth turn. The reply pieces
+// above keep their 8 KB and EVENT_BYTES.
+export const SEED_PIECE_BYTES = 12000;
+// The fixture holds 13 whole seed pieces (159,982 bytes): the sized rotation takes its pieces from these, not from the
+// REPLY_PIECES, which need 16 × 8 KB.
+export const SEED_PIECES = 13;
+const SEED_EVENTS = 1;
 
 // The fixed file holding the reply text: the REPLY_SOURCES files, joined with newlines, with every non-ASCII character
 // replaced by spaces, copied byte for byte when this file was added. The bench reads this copy, so a change to the
@@ -39,16 +44,16 @@ function replyText() {
   return fs.readFileSync(REPLY_FIXTURE, 'utf8');
 }
 
-// REPLY_PIECES pieces of `bytes` each, in order; every piece has the same byte count.
-function slicePieces(text, bytes) {
-  if (text.length < REPLY_PIECES * bytes) {
-    throw new Error(`the reply fixture holds ${text.length} bytes, short of ${REPLY_PIECES * bytes}`);
+// `count` pieces of `bytes` each, in order; every piece has the same byte count.
+function slicePieces(text, bytes, count) {
+  if (text.length < count * bytes) {
+    throw new Error(`the reply fixture holds ${text.length} bytes, short of ${count * bytes}`);
   }
-  return Array.from({ length: REPLY_PIECES }, (_, index) => text.slice(index * bytes, (index + 1) * bytes));
+  return Array.from({ length: count }, (_, index) => text.slice(index * bytes, (index + 1) * bytes));
 }
 
 export function loadReplyPieces() {
-  return slicePieces(replyText(), REPLY_BYTES);
+  return slicePieces(replyText(), REPLY_BYTES, REPLY_PIECES);
 }
 
 // The charlie-code NDJSON of a list of events: one `thought` event per string.
@@ -142,10 +147,10 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   }
   fs.mkdirSync(outDir, { recursive: true });
   const text = replyText();
-  slicePieces(text, REPLY_BYTES).forEach((piece, index) => {
+  slicePieces(text, REPLY_BYTES, REPLY_PIECES).forEach((piece, index) => {
     fs.writeFileSync(path.join(outDir, `reply-${index}.ndjson`), ndjsonOf(greedyEvents(piece, EVENT_BYTES)));
   });
-  slicePieces(text, SEED_PIECE_BYTES).forEach((piece, index) => {
+  slicePieces(text, SEED_PIECE_BYTES, SEED_PIECES).forEach((piece, index) => {
     fs.writeFileSync(path.join(outDir, `seed-${index}.ndjson`), ndjsonOf(evenEvents(piece, SEED_EVENTS)));
   });
   fs.writeFileSync(path.join(outDir, 'tools-0.ndjson'), toolNdjson());

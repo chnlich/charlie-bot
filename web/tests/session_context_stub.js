@@ -5,6 +5,7 @@
 // createChatSidebarContext(context). Fork mutations must land before that call,
 // because the loaded chat/sidebar modules bind or shadow globals at load time.
 const vm = require('node:vm');
+const {TextDecoder} = require('node:util');
 
 const {readStatic, readPackageStatic, chatModules, sidebarModules, runStaticModules, runIconModule} =
   require('./read_static');
@@ -81,6 +82,7 @@ function baseSessionContext(overrides = {}) {
     history: {pushState: () => {}},
     console: {error: () => {}, log: () => {}},
     URLSearchParams,
+    TextDecoder,
     AbortController,
     AbortSignal,
     document: {

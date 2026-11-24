@@ -6,6 +6,9 @@
 import { INTERCEPT_PATTERNS } from './assets.mjs';
 
 const POLL_MS = 25;
+// The wait for a background tab to report hidden after the visible tab is activated: Chrome's visibility change
+// follows the activation command by a frame or more, and later while the host is loaded.
+const VISIBILITY_TIMEOUT_MS = 30000;
 // The localStorage key the web client reads its access key from (web/static/js/config.js).
 const ACCESS_KEY_NAME = 'charliebot_access_key';
 // The wait for a row that a group's "Show all" fetches: the full listing crosses the link beside the background load.
@@ -667,9 +670,10 @@ export class Tabs {
   }
 
   // Opens a tab, with the access key on every request and, for `local` CDN files, the intercepted CDN patterns.
-  // `initScript`, when given, runs in each document of the tab before the page's own scripts.
-  async open(name, initScript = null) {
-    const page = await this.#browser.newPage();
+  // `initScript`, when given, runs in each document of the tab before the page's own scripts. A background tab opens
+  // hidden, so a scenario's other tabs never take the active state from the tab it shows.
+  async open(name, initScript = null, { background = false } = {}) {
+    const page = await this.#browser.newPage({ background });
     const tab = new Tab(name, page);
     this.#tabs.push(tab);
     if (this.#cdn === 'local') {
@@ -704,26 +708,39 @@ export class Tabs {
     this.#tabs = this.#tabs.filter((candidate) => candidate !== tab);
   }
 
-  // Shows `tab` and hides every other tab, as the window does for the tab a person looks at.
+  // Shows `tab` and hides every other tab, as the window does for the tab a person looks at. The activation reaches
+  // the other tabs' documents after the DevTools command returns, later while the host is loaded, so this waits for
+  // their hidden state; a tab that never reports it fails the step.
   async show(tab) {
     await this.#browser.activate(tab.page);
-    for (const other of this.#tabs) {
-      if (other !== tab) {
+    const others = this.#tabs.filter((other) => other !== tab);
+    const deadline = Date.now() + VISIBILITY_TIMEOUT_MS;
+    for (;;) {
+      const visible = [];
+      for (const other of others) {
         const state = await other.evaluate('document.visibilityState');
         if (state !== 'hidden') {
-          throw new Error(`${other.name} is ${state} while ${tab.name} is shown`);
+          visible.push(`${other.name} is ${state}`);
         }
       }
+      if (visible.length === 0) {
+        return;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(`${visible.join(', ')} while ${tab.name} is shown`);
+      }
+      await sleep(POLL_MS);
     }
   }
 
   // Waits until every request that is in flight now has finished. The page's own polls keep starting and finishing
   // while it runs, and over the shaped link some are always in flight; a request that starts after this call does not
-  // hold the settle, so the wait ends with the load that was under way when it began.
-  async waitIdle(timeoutMs) {
+  // hold the settle, so the wait ends with the load that was under way when it began. When `ignore` is passed, requests
+  // matching `ignore(request)` are left out of the wait.
+  async waitIdle(timeoutMs, { ignore = null } = {}) {
     const pending = this.#tabs.flatMap((tab) =>
       [...tab.requests.entries()]
-        .filter(([, request]) => request.finishAt === null && request.failed === null)
+        .filter(([, request]) => request.finishAt === null && request.failed === null && (!ignore || !ignore(request)))
         .map(([requestId]) => ({ tab, requestId })),
     );
     await waitFor(

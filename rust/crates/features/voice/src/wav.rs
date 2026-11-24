@@ -4,9 +4,7 @@
 //! chunk, with PCM or extensible PCM samples. Frames are the data chunk's bytes up to its declared size, cut to whole
 //! frames. The writer lays the same container out from the PCM16 mono frames the upload route stores.
 
-use std::fs;
 use std::io::{self, Write};
-use std::path::Path;
 
 use crate::audio::SAMPLE_RATE;
 
@@ -85,28 +83,33 @@ pub(crate) fn read(body: &[u8]) -> Result<WaveData<'_>, String> {
   Err("fmt chunk and/or data chunk missing".to_string())
 }
 
-/// Write `pcm_bytes` as the 16-bit mono WAV the upload route stores: a `fmt ` chunk and a `data` chunk.
-pub(crate) fn write(path: &Path, pcm_bytes: &[u8]) -> io::Result<()> {
+/// Write `pcm_bytes` as the 16-bit mono WAV the upload route stores, a `fmt ` chunk and a `data` chunk, into `out`.
+pub(crate) fn write_to<W: Write>(out: &mut W, pcm_bytes: &[u8]) -> io::Result<()> {
   let data_length = u32::try_from(pcm_bytes.len()).map_err(|_| io::Error::other("voice recording is too large"))?;
   let riff_length =
     HEADER_BYTES.checked_add(data_length).ok_or_else(|| io::Error::other("voice recording is too large"))?;
   let block_align = CHANNELS * SAMPLE_WIDTH;
   let byte_rate = SAMPLE_RATE as u32 * u32::from(block_align);
-  let mut wav = fs::File::create(path)?;
-  wav.write_all(RIFF_ID)?;
-  wav.write_all(&riff_length.to_le_bytes())?;
-  wav.write_all(WAVE_ID)?;
-  wav.write_all(FMT_ID)?;
-  wav.write_all(&FMT_CHUNK_BYTES.to_le_bytes())?;
-  wav.write_all(&WAVE_FORMAT_PCM.to_le_bytes())?;
-  wav.write_all(&CHANNELS.to_le_bytes())?;
-  wav.write_all(&(SAMPLE_RATE as u32).to_le_bytes())?;
-  wav.write_all(&byte_rate.to_le_bytes())?;
-  wav.write_all(&block_align.to_le_bytes())?;
-  wav.write_all(&(SAMPLE_WIDTH * 8).to_le_bytes())?;
-  wav.write_all(DATA_ID)?;
-  wav.write_all(&data_length.to_le_bytes())?;
-  wav.write_all(pcm_bytes)
+  out.write_all(RIFF_ID)?;
+  out.write_all(&riff_length.to_le_bytes())?;
+  out.write_all(WAVE_ID)?;
+  out.write_all(FMT_ID)?;
+  out.write_all(&FMT_CHUNK_BYTES.to_le_bytes())?;
+  out.write_all(&WAVE_FORMAT_PCM.to_le_bytes())?;
+  out.write_all(&CHANNELS.to_le_bytes())?;
+  out.write_all(&(SAMPLE_RATE as u32).to_le_bytes())?;
+  out.write_all(&byte_rate.to_le_bytes())?;
+  out.write_all(&block_align.to_le_bytes())?;
+  out.write_all(&(SAMPLE_WIDTH * 8).to_le_bytes())?;
+  out.write_all(DATA_ID)?;
+  out.write_all(&data_length.to_le_bytes())?;
+  out.write_all(pcm_bytes)
+}
+
+/// [`write_to`] into a new file at `path`, for the tests that need a WAV on disk.
+#[cfg(test)]
+pub(crate) fn write(path: &std::path::Path, pcm_bytes: &[u8]) -> io::Result<()> {
+  write_to(&mut std::fs::File::create(path)?, pcm_bytes)
 }
 
 /// The `fmt ` chunk's channel count, sample width in bytes and frame rate.
@@ -142,6 +145,7 @@ fn le_u16(chunk: &[u8], at: usize) -> Result<u16, String> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use std::fs;
 
   /// The bytes `write` lays down for `pcm_bytes`, read back from a scratch file.
   fn wav_bytes(pcm_bytes: &[u8]) -> Vec<u8> {

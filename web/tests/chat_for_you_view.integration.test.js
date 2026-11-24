@@ -478,7 +478,8 @@ test('For you shows thread replies and the summons that started them, each under
   const html = (msg) => rig.context.renderMessage(msg, 'sess-fy');
   const summonHtml = html(summon);
   assert.match(summonHtml, />Slack<\/span>/);
-  assert.match(summonHtml, /Slack thread summon/);
+  assert.match(summonHtml, /Thread summon/);
+  assert.doesNotMatch(summonHtml, /Slack thread summon/);
   assert.match(summonHtml, /What drives the LIST traffic\?/);
   const slackHtml = html(slackReply);
   assert.match(slackHtml, />Slack<\/span>/, 'the reply carries the Slack badge');

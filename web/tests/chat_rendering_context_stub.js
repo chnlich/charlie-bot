@@ -1,5 +1,5 @@
 // Load core shared by the chat/rendering.js unit harnesses: namespace.js,
-// shared.js, no-op stubs for rendering.js's two cross-module dependencies,
+// shared.js, and no-op stubs for rendering.js's cross-module dependencies,
 // then rendering.js. The stubs must land before rendering.js loads.
 // rendering.js is an IIFE that binds Chat.renderRoundRatingButtons
 // (chat/ratings.js) and Chat.markFileLinks (chat/file-links.js) into
@@ -38,6 +38,7 @@ function loadChatRenderingModules(context) {
   vm.runInContext(NAMESPACE_JS, context, {filename: 'chat/namespace.js'});
   context.FOR_YOU_RULE = FOR_YOU_RULE;
   vm.runInContext(SHARED_JS, context, {filename: 'chat/shared.js'});
+  if (context.getDisplayedSessionPlatform === undefined) context.getDisplayedSessionPlatform = () => null;
   // The page loads markdown-renderer.js ahead of rendering.js; a context that
   // loaded its own renderer keeps that copy.
   if (context.wc2chIsWide === undefined) context.wc2chIsWide = REAL_WC2CH_IS_WIDE;
@@ -97,6 +98,7 @@ function makeChatRenderContext(elements = new Map()) {
     renderProseMarkdown: (v) => '<p>' + String(v || '') + '</p>',
     renderChatMath: () => {},
     scheduleCodeHighlightFlush: () => {},
+    getDisplayedSessionPlatform: () => null,
     // Stand-in for markdown-renderer.js's wrapWideChars (not loaded here):
     // these harnesses' fixtures carry no wide chars, so identity reproduces
     // the real function's bytes on them. Wide-char behavior is covered in

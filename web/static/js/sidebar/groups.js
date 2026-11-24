@@ -340,7 +340,7 @@ function renderSessionRowShell(s, {filter, title, activeClass, options, indicato
      onclick="event.preventDefault(); sidebarControl('switchSession', '${s.id}')"
      id="session-${s.id}"${extraAttrs}>
     ${indicators}
-    <span class="flex-1 min-w-0">
+    <span class="session-row-name flex-1 min-w-0">
       <span class="flex items-center gap-2">
         <span class="truncate block session-name" title="${escapeHtmlAttr(s.name)}">${escapeHtml(title)}</span>
         ${nameTag}

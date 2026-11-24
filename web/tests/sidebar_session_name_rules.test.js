@@ -147,15 +147,20 @@ test('a live rename outside Threads, and outside any group, writes the full name
 // The chat header is the other writer of the session name. displayed-session.js paints the displayed session's name
 // into #header-session-name and keeps the full name as the heading's hover text. The template truncates that heading
 // to one line, so a long name costs one header line instead of the screen.
-test('the chat header paints the session name in one line and keeps the full name as its hover text', () => {
+test('the chat header paints the session name and thread platform badge', () => {
   const headerEl = {textContent: ''};
+  const platformEl = {className: 'hidden flex-shrink-0', innerHTML: ''};
   const context = {
     PAGE_HOSTNAME: 'localhost:8000',
     SESSION_ID: 's1',
     SESSION_NAME: 'Short name',
+    Chat: {platformBadgeHtml: (platform) => '<span>' + platform + '</span>'},
     document: {
       title: '',
-      getElementById: (id) => (id === 'header-session-name' ? headerEl : null),
+      getElementById: (id) => ({
+        'header-session-name': headerEl,
+        'header-session-platform': platformEl,
+      })[id] || null,
     },
   };
   vm.createContext(context);
@@ -165,6 +170,12 @@ test('the chat header paints the session name in one line and keeps the full nam
   context.refreshDisplayedSessionName('s1', longName);
   assert.equal(headerEl.textContent, longName);
   assert.equal(headerEl.title, longName, 'the heading carries the full name as its hover text');
+  context.setDisplayedSessionPlatform('slack');
+  assert.equal(platformEl.innerHTML, '<span>slack</span>');
+  assert.equal(platformEl.className, 'flex-shrink-0');
+  context.setDisplayedSession('s2', 'Other session');
+  assert.equal(platformEl.innerHTML, '');
+  assert.equal(platformEl.className, 'hidden flex-shrink-0');
 
   const html = fs.readFileSync(path.join(__dirname, '..', 'templates', 'index.html'), 'utf8');
   const header = html.match(/<h2 class="([^"]*)"\s+id="header-session-name">/);

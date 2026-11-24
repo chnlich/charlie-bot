@@ -12,6 +12,7 @@
   const summonPlatformOf = Chat.summonPlatformOf;
   const platformBadgeHtml = Chat.platformBadgeHtml;
   const platformLabel = Chat.platformLabel;
+  const webBadgeHtml = Chat.webBadgeHtml;
 
 // The one branch glyph: the clone_start banner's "Cloned from" marker below
 // and the separator's "Clone to here" button (sidebar/modals.js).
@@ -1027,7 +1028,7 @@ function renderMessage(msg, sessionId) {
     return openMessageWrapper("flex justify-start", msg) + "<div class=\"max-w-[90%] overflow-hidden bg-slate-800 border border-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-200\">"
       + "<div class=\"flex items-center gap-2 mb-1 text-xs text-slate-400\">"
       + platformBadgeHtml(summonPlatform)
-      + "<span>" + escapeHtml(platformLabel(summonPlatform)) + " thread summon</span></div>"
+      + "<span>Thread summon</span></div>"
       + "<div class=\"whitespace-pre-wrap break-words\">" + escapeHtml(msg.content) + "</div>" + timeDiv() + "</div></div>";
   }
   // A web_status change and a cold read of a waiting item read as a system line. The For you view folds both instead.
@@ -1150,8 +1151,13 @@ function renderMessage(msg, sessionId) {
     // body. The bubble's time row is the flex line the For-you projection
     // hangs the round's button group on (time left, buttons right). It renders
     // even when the reply carries no timestamp.
+    const threadPlatform = globalThis.getDisplayedSessionPlatform();
+    const replyHeader = threadPlatform !== null
+      ? "<div class=\"flex items-center gap-2 text-[10px] font-semibold tracking-wider text-slate-400 mb-1\">"
+        + webBadgeHtml() + "<span>web reply · 私有，未发到 " + escapeHtml(platformLabel(threadPlatform)) + "</span></div>"
+      : "<div class=\"text-[10px] font-semibold tracking-wider text-slate-400 mb-1\">Reply</div>";
     return openMessageWrapper("flex justify-start", msg) + "<div class=\"max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm\">"
-      + "<div class=\"text-[10px] font-semibold tracking-wider text-slate-400 mb-1\">Reply</div>"
+      + replyHeader
       + mdDiv(msg.content) + webReplyTimeRow() + "</div></div>";
   }
   if (msg.role === "web_reply_notice") {

@@ -22,6 +22,7 @@ const DISPLAYED_WELCOME_TITLE = 'CharlieBot@' + PAGE_HOSTNAME;
 
 let displayedSessionId = SESSION_ID;
 let displayedSessionName = SESSION_NAME;
+let displayedSessionPlatform = null;
 
 // The composer actions waiting for their session's switch to land. Each
 // carries the session it binds. Kind says how a switch that never lands
@@ -36,6 +37,13 @@ function paintDisplayedSession() {
     // as the events heading and the sidebar rows do.
     headerName.title = displayedSessionName || '';
   }
+  const headerPlatform = document.getElementById('header-session-platform');
+  if (headerPlatform) {
+    headerPlatform.className = displayedSessionPlatform !== null ? 'flex-shrink-0' : 'hidden flex-shrink-0';
+    headerPlatform.innerHTML = displayedSessionPlatform !== null
+      ? globalThis.Chat.platformBadgeHtml(displayedSessionPlatform)
+      : '';
+  }
   document.title = displayedSessionName
     ? displayedSessionName + ' · CharlieBot@' + PAGE_HOSTNAME
     : DISPLAYED_WELCOME_TITLE;
@@ -49,7 +57,17 @@ function setDisplayedSession(sessionId, sessionName) {
   if (sessionId !== displayedSessionId) abandonHeldComposerActions(displayedSessionId);
   displayedSessionId = sessionId;
   displayedSessionName = sessionName;
+  displayedSessionPlatform = null;
   paintDisplayedSession();
+}
+
+function setDisplayedSessionPlatform(platform) {
+  displayedSessionPlatform = platform ?? null;
+  paintDisplayedSession();
+}
+
+function getDisplayedSessionPlatform() {
+  return displayedSessionPlatform;
 }
 
 // A render refreshes the displayed session's name. The two rename writers

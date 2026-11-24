@@ -248,10 +248,17 @@ const PLATFORM_BADGE_TONE = {
   feishu: 'bg-teal-900/40 text-teal-100 border-teal-400/55',
 };
 
-function platformBadgeHtml(platform, extraClass = '') {
-  const label = platformLabel(platform);
+function badgeHtml(label, tone, extraClass = '') {
   return `<span class="inline-flex items-center h-[18px] px-1.5 rounded-[5px] border text-[10.5px] font-bold `
-    + `tracking-wide whitespace-nowrap flex-shrink-0 ${PLATFORM_BADGE_TONE[platform]} ${extraClass}">${label}</span>`;
+    + `tracking-wide whitespace-nowrap flex-shrink-0 ${tone} ${extraClass}">${escapeHtml(label)}</span>`;
+}
+
+function platformBadgeHtml(platform, extraClass = '') {
+  return badgeHtml(platformLabel(platform), PLATFORM_BADGE_TONE[platform], extraClass);
+}
+
+function webBadgeHtml() {
+  return badgeHtml('Web', 'bg-slate-700 text-slate-100 border-slate-600');
 }
 
 // The legacy line a thread reply wrote before the `thread_reply` role. A cached history still holds it, so the reader
@@ -361,6 +368,7 @@ const CHAT_ONLY = {
   PENDING_TRIGGER_BELL_SVG_PATH,
   platformLabel,
   platformBadgeHtml,
+  webBadgeHtml,
   threadReplyOf,
   summonPlatformOf,
   disclosureIcon,

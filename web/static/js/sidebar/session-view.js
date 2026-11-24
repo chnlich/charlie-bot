@@ -911,6 +911,7 @@ function renderSessionView(data) {
   // engine mounts: the worker's default view and its card depend on it. Only
   // a worker's bootstrap carries worker_summary.
   Chat.ForYou.setSession(session);
+  setDisplayedSessionPlatform(session.channel_platform ?? null);
   Chat.mountWorkerSummary(data.worker_summary || null);
   const isWorker = session.profile === 'worker';
 

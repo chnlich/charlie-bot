@@ -22,6 +22,15 @@ test('a web reply renders as an agent-side bubble around its markdown body', () 
   assert.ok(html.includes('class="prose-msg" data-raw="**done**, see the page"'), 'the markdown body');
 });
 
+test('a web reply in a thread session names its private destination beside the Web badge', () => {
+  const context = loadChatRendering();
+  context.getDisplayedSessionPlatform = () => 'slack';
+  const html = context.renderMessage(
+      {role: 'web_reply', id: 'r2', content: 'Private update.', timestamp: null}, 'sess-1');
+  assert.match(html, />Web<\/span>/);
+  assert.match(html, /web reply · 私有，未发到 Slack/);
+});
+
 test('a web reply notice renders centered, with its text escaped as plain text', () => {
   const context = loadChatRendering();
   const html = context.renderMessage(

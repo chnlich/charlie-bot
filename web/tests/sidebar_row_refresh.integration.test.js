@@ -8,10 +8,11 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const {readStatic, chatModules, sidebarModules, runStaticModules} = require('./read_static');
+const {readStatic, readPackageStatic, chatModules, sidebarModules, runStaticModules} = require('./read_static');
 const {createFakeWebSocketClass} = require('./fake_websocket');
 const {standInForUsageJs, standInForOfflineShell} = require('./session_context_stub');
 const {createElement} = require('./dom_element_stub');
+const {escapeHtmlText} = require('./escape_html_stub');
 
 // A network answer: no stored-copy header (view-requests.js isStoredResponse reads it).
 const NO_STORED_COPY = {get: () => null};
@@ -54,7 +55,18 @@ function buildPage({painted = [], filter = 'all', partial = true} = {}) {
       if (selector === 'a[id^="session-"]') return painted.map((sid) => ({id: 'session-' + sid}));
       return [];
     },
-    createElement,
+    createElement: (tagName) => {
+      const element = createElement({tagName: String(tagName).toUpperCase()});
+      let textContent = '';
+      Object.defineProperty(element, 'textContent', {
+        get: () => textContent,
+        set: (value) => {
+          textContent = String(value ?? '');
+          element.innerHTML = escapeHtmlText(textContent);
+        },
+      });
+      return element;
+    },
     body: {appendChild() {}, style: {}},
   };
   const context = {
@@ -118,6 +130,8 @@ function buildPage({painted = [], filter = 'all', partial = true} = {}) {
   standInForOfflineShell(context);
   runStaticModules(context, sidebarModules());
   vm.runInContext(RELOAD_GUARD_JS, context, {filename: 'reload-guard.js'});
+  vm.runInContext(readPackageStatic('features', 'chat_threads', 'threads-filter.js'), context,
+                  {filename: 'threads-filter.js'});
   vm.runInContext(WEBSOCKET_JS, context, {filename: 'websocket.js'});
   vm.runInContext(WEBSOCKET_HANDLERS_JS, context, {filename: 'websocket-handlers.js'});
   context.registerWorkspaceBadge(() => {
@@ -173,6 +187,22 @@ function row(id, overrides = {}) {
     ...overrides,
   };
 }
+
+test('a row refresh keeps the platform badge on a thread-bound manager', async () => {
+  const page = buildPage();
+  const thread = row('thread-a', {profile: 'manager', channel_platform: 'slack'});
+  page.context.renderSessionList([thread], 'all');
+  assert.match(page.nav.innerHTML, />Slack<\/span>/, 'the first Workspace paint has the platform badge');
+
+  page.connect();
+  page.socket().emitOpen();
+  page.frame({type: 'task_tree_changed', session_id: thread.id});
+  assert.deepEqual(page.rowUrls(), ['/api/sessions/?compact=1&screen=1&ids=thread-a']);
+  page.requests.at(-1).respond({sessions: [thread], gone: []});
+  await flush();
+
+  assert.match(page.nav.innerHTML, />Slack<\/span>/, 'the refreshed Workspace row keeps the platform badge');
+});
 
 // A worker whose task closed is archived by the server, and the page learns it from the task_tree_changed frame
 // broadcast for it. Only a network close closes the page's socket now, so the reopen path is the network one; the
@@ -349,8 +379,6 @@ test('a starred-view row change fetches that row alone from the starred view', a
 
 test('a threads-view row change fetches that row alone from the threads view', async () => {
   const page = buildPage({filter: 'threads'});
-  page.context.registerSidebarFilter(
-      {name: 'threads', label: 'Threads', url: '/api/sessions/chat-threads', before: 'starred'});
   page.context.currentFilter = 'threads';
   page.connect();
   page.socket().emitOpen();

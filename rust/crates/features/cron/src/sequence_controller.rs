@@ -128,7 +128,7 @@ impl SequenceBinding for CronBinding {
       let names = self.names.clone();
       tokio::task::spawn_blocking(move || {
         for name in &names {
-          write_task_key(&home, name, "enabled", Value::Bool(false))?;
+          loader::write_task_key(&home, name, "enabled", Value::Bool(false))?;
         }
         Ok::<(), anyhow::Error>(())
       })
@@ -503,7 +503,7 @@ impl SequenceController for CronSequenceController {
       let writes = names.clone();
       tokio::task::spawn_blocking(move || {
         for name in &writes {
-          write_task_key(&home, name, "session_id", Value::String(moved_to.clone()))?;
+          loader::write_task_key(&home, name, "session_id", Value::String(moved_to.clone()))?;
           tracing::info!(task = %name, source, session = %moved_to, "scheduled_task_moved");
         }
         Ok::<(), anyhow::Error>(())
@@ -1013,14 +1013,6 @@ fn bound_configs_for_listing(home: &Path) -> Vec<ScheduledTaskConfig> {
       serde_json::from_value(Value::Object(body)).ok()
     })
     .collect()
-}
-
-fn write_task_key(home: &Path, name: &str, key: &str, value: Value) -> anyhow::Result<()> {
-  let path = loader::cron_path_for_home(home, name);
-  let mut data = loader::read_task_file(&path).map_err(|error| anyhow::anyhow!(error.message_without_path()))?;
-  data.insert(key.to_string(), value);
-  loader::write_task_file(&path, &Value::Object(data))?;
-  Ok(())
 }
 
 #[cfg(test)]

@@ -168,6 +168,46 @@ pub fn write_task_file(path: &Path, value: &Value) -> Result<(), TaskFileWriteEr
   std::fs::write(path, contents).map_err(TaskFileWriteError::Write)
 }
 
+/// Why updating one key in a cron task file failed.
+#[derive(Debug)]
+pub enum TaskFileKeyError {
+  /// The existing file could not be read or decoded as a mapping.
+  Read { path: PathBuf, error: TaskFileReadError },
+  /// The updated mapping could not be encoded or written.
+  Write { path: PathBuf, error: TaskFileWriteError },
+}
+
+impl std::fmt::Display for TaskFileKeyError {
+  fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      Self::Read { path, error } => write!(formatter, "{}: {}", path.display(), error.message_without_path()),
+      Self::Write { path, error } => write!(formatter, "{}: {error}", path.display()),
+    }
+  }
+}
+
+impl std::error::Error for TaskFileKeyError {
+  fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+    match self {
+      Self::Read { error, .. } => Some(error),
+      Self::Write { error, .. } => Some(error),
+    }
+  }
+}
+
+/// Set one top-level key in a cron task's YAML file on disk while keeping all other keys.
+pub fn write_task_key_at(path: &Path, key: &str, value: Value) -> Result<(), TaskFileKeyError> {
+  let mut data = read_task_file(path).map_err(|error| TaskFileKeyError::Read { path: path.to_path_buf(), error })?;
+  data.insert(key.to_string(), value);
+  write_task_file(path, &Value::Object(data))
+    .map_err(|error| TaskFileKeyError::Write { path: path.to_path_buf(), error })
+}
+
+/// Set one top-level key in the named cron task's YAML file under `home` while keeping all other keys.
+pub fn write_task_key(home: &Path, name: &str, key: &str, value: Value) -> Result<(), TaskFileKeyError> {
+  write_task_key_at(&cron_path_for_home(home, name), key, value)
+}
+
 /// The check a task name passes before it forms a host file path.
 pub fn valid_name(name: &str) -> bool {
   let mut chars = name.chars();
@@ -610,8 +650,9 @@ mod tests {
   use serde_json::{Value, json};
 
   use super::{
-    TaskFileReadError, TaskFileWriteError, cron_files_problems, dispatch_alert_if_fingerprint_changed,
-    fire_error_alert, load_snapshot, read_task_file, validate_body, write_task_file,
+    TaskFileKeyError, TaskFileReadError, TaskFileWriteError, cron_files_problems,
+    dispatch_alert_if_fingerprint_changed, fire_error_alert, load_snapshot, read_task_file, validate_body,
+    write_task_file, write_task_key, write_task_key_at,
   };
   use crate::test_support::{feature_context, feature_context_with_login_hosts};
 
@@ -636,7 +677,7 @@ mod tests {
     let error = read_task_file(&missing).unwrap_err();
     assert!(matches!(error, TaskFileReadError::Read { .. }));
     let io = std::fs::read_to_string(&missing).unwrap_err();
-    // The loaders that name the file fold the path into the message; the API and the key writers already name it.
+    // The loaders that name the file fold the path into the message; the API calls message_without_path.
     assert_eq!(error.to_string(), format!("{}: {io}", missing.display()));
     assert_eq!(error.message_without_path(), io.to_string());
 
@@ -678,13 +719,38 @@ mod tests {
     assert!(matches!(error, TaskFileWriteError::Write(_)));
     let io = std::fs::write(&absent, "").unwrap_err();
     assert_eq!(error.to_string(), io.to_string());
-    // The API and the seed fold the path into a failed write; the task-key writers already name the file.
+    // The API, the seed, and the task-key writer fold the path into a failed write.
     assert_eq!(format!("{}: {error}", absent.display()), format!("{}: {io}", absent.display()));
 
     let encode =
       TaskFileWriteError::Encode(serde_yaml::from_str::<serde_yaml::Value>("cron: [unclosed\n").unwrap_err());
     let yaml = serde_yaml::from_str::<serde_yaml::Value>("cron: [unclosed\n").unwrap_err();
     assert_eq!(encode.to_string(), yaml.to_string());
+  }
+
+  #[test]
+  fn task_key_writer_updates_one_key_in_place_and_folds_the_path_into_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let cron_dir = dir.path().join("config.d/cron.d");
+    std::fs::create_dir_all(&cron_dir).unwrap();
+    let path = cron_dir.join("synthetic.yaml");
+    std::fs::write(&path, "cron: 0 8 * * *\nhandler: synthetic_handler\nenabled: true\n").unwrap();
+
+    write_task_key(dir.path(), "synthetic", "enabled", json!(false)).unwrap();
+    write_task_key(dir.path(), "synthetic", "session_id", json!("s-1")).unwrap();
+    let updated = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(updated, "cron: 0 8 * * *\nhandler: synthetic_handler\nenabled: false\nsession_id: s-1\n");
+
+    let missing = cron_dir.join("missing.yaml");
+    let read_err = write_task_key_at(&missing, "enabled", json!(false)).unwrap_err();
+    assert!(matches!(read_err, TaskFileKeyError::Read { .. }));
+    assert!(read_err.to_string().starts_with(&format!("{}: ", missing.display())), "{read_err}");
+
+    let invalid = cron_dir.join("invalid.yaml");
+    std::fs::write(&invalid, "cron: [unclosed\n").unwrap();
+    let decode_err = write_task_key_at(&invalid, "enabled", json!(false)).unwrap_err();
+    assert!(matches!(decode_err, TaskFileKeyError::Read { .. }));
+    assert!(decode_err.to_string().starts_with(&format!("{}: ", invalid.display())), "{decode_err}");
   }
 
   #[test]

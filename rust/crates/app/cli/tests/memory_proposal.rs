@@ -115,6 +115,8 @@ impl Sandbox {
     run_bounded(command)
   }
 
+  /// A child process with the developer's environment cleared. Only the temporary directory passes through, the one
+  /// the test process itself uses, so the child's temporary files land where the test's own do.
   fn command(&self, program: &str, cwd: &Path) -> Command {
     let mut command = Command::new(program);
     command
@@ -128,7 +130,8 @@ impl Sandbox {
       .env("GIT_COMMITTER_EMAIL", AUTHOR_EMAIL)
       .env("GIT_AUTHOR_DATE", FIXED_DATE)
       .env("GIT_COMMITTER_DATE", FIXED_DATE)
-      .env("PATH", TEST_PATH);
+      .env("PATH", TEST_PATH)
+      .env("TMPDIR", std::env::temp_dir());
     command
   }
 

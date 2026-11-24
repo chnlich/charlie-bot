@@ -26,8 +26,9 @@
 # (classic) lookup. It reads the PR's URL with gh pr view, then sends the
 # checked title and body with gh api -X PATCH on the REST pull endpoint.
 #
-# pr-create and pr-merge check the side records that the body cites against the round's evidence directory
-# (dev/improve/side-record.sh) when they receive --evidence-dir, and refuse a body that cites a record without it.
+# pr-create and pr-merge check the side record citations of the body (dev/improve/side-record.sh): a line that
+# contains `Side record:` outside the accepted form is refused. The cited records are checked against the round's
+# evidence directory when they receive --evidence-dir, and a body that cites a record without it is refused.
 # pr-create catches a bad citation before the pull request exists. pr-merge runs the check on the body as it will
 # merge, so an edit made after creation is checked too; pr-edit does not check.
 #

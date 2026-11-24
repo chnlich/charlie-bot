@@ -74,16 +74,22 @@ side_record_check_one() {
 }
 
 # side_record_check_body <evidence dir> <body file> <draft>: check the side records that one pull request body cites.
-# Each `Side record:` line names one record file in the evidence directory, and each named record must pass
-# side_record_check_one. The body must name a record when the pull request is ready (draft 0) and the evidence
-# directory holds side records. draft is 1 for a draft pull request, 0 for a ready one. An empty evidence directory
-# means the caller gave none: the body passes only when it cites no record, since no record can be checked without one.
+# A citation is a line that starts with `Side record:` and ends with one record file name. Any other line that contains
+# `Side record:` is refused, not skipped, because a skipped line would pass a body whose author meant to cite a record.
+# Each citation names one record file in the evidence directory, and each named record must pass side_record_check_one.
+# The body must name a record when the pull request is ready (draft 0) and the evidence directory holds side records.
+# draft is 1 for a draft pull request, 0 for a ready one. An empty evidence directory means the caller gave none: the
+# body passes only when it cites no record, since no record can be checked without one.
 side_record_check_body() {
   local dir=$1 body=$2 draft=$3 line name status=0
   local -a cited=()
   while IFS= read -r line; do
-    if [[ $line =~ ^Side\ record:[[:space:]]+(.+)$ ]]; then
+    if [[ $line =~ ^Side\ record:[[:space:]]+([^[:space:]]+)$ ]]; then
       cited+=("${BASH_REMATCH[1]}")
+    elif [[ $line == *"Side record:"* ]]; then
+      printf 'side record check: "%s" is not the accepted citation form, %s\n' "$line" \
+        '"Side record: <record file name>", with nothing before "Side record:" or after the file name.' >&2
+      status=1
     fi
   done <"$body"
   if [[ -z $dir ]]; then
@@ -91,7 +97,7 @@ side_record_check_body() {
       printf 'side record check: the body cites a side record, which needs --evidence-dir.\n' >&2
       return 1
     fi
-    return 0
+    return "$status"
   fi
   [[ -d $dir ]] || { printf 'side record check: the evidence directory is missing: %s\n' "$dir" >&2; return 1; }
   if (( ${#cited[@]} == 0 )) && (( draft == 0 )) && compgen -G "$dir/side-record-*" >/dev/null; then

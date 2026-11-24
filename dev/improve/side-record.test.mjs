@@ -124,15 +124,23 @@ function recordFields(file) {
   return fields;
 }
 
-// checkBody: run the record check on a body that cites the named records. draft is 1 for a draft pull request.
-function checkBody(run, citations, draft) {
-  const body = writeFile(`body-${crypto.randomUUID()}.md`, citations.map((name) => `Side record: ${name}\n`).join(''));
+// checkBodyText: run the record check on a body with the given text. draft is 1 for a draft pull request.
+function checkBodyText(run, text, draft) {
+  const body = writeFile(`body-${crypto.randomUUID()}.md`, text);
   return spawnSync(
     'bash',
     ['-c', 'source "$1"; side_record_check_body "$2" "$3" "$4"', 'bash', SIDE_RECORD, run, body, String(draft)],
     { encoding: 'utf8' },
   );
 }
+
+// checkBody: run the record check on a body that cites the named records. draft is 1 for a draft pull request.
+function checkBody(run, citations, draft) {
+  return checkBodyText(run, citations.map((name) => `Side record: ${name}\n`).join(''), draft);
+}
+
+// The accepted citation form, which each refusal of a near-miss citation names.
+const ACCEPTED_FORM = 'Side record: <record file name>';
 
 // post: run the posting script under the stub gh. It returns the exit status, the stderr and the stub's gh calls.
 function post(args, body = '') {
@@ -394,6 +402,25 @@ test('the record check refuses a cited name that is a path rather than a record 
   assert.match(side.stderr, /a side-record file name in the evidence directory/);
 });
 
+test('the record check refuses each near-miss citation in draft and ready bodies, and names the form', () => {
+  const run = newRound('near-miss');
+  const binary = binaryOf('server-near-miss', 'server build\n');
+  assert.equal(runSide({ run, binary, label: 'near', status: 0 }).status, 0);
+  const [name] = sideRecords(run).map((file) => path.basename(file));
+  const nearMisses = [`- Side record: ${name}`, `Side record: ${name} (after, touch)`, 'Side record:'];
+  for (const line of nearMisses) {
+    for (const draft of [0, 1]) {
+      const side = checkBodyText(run, `${line}\n`, draft);
+      assert.equal(side.status, 1, `${line} with draft ${draft}`);
+      assert.ok(side.stderr.includes(`"${line}"`), side.stderr);
+      assert.ok(side.stderr.includes(ACCEPTED_FORM), side.stderr);
+    }
+    const withoutDir = checkBodyText('', `${line}\n`, 0);
+    assert.equal(withoutDir.status, 1, `${line} without --evidence-dir`);
+    assert.ok(withoutDir.stderr.includes(ACCEPTED_FORM), withoutDir.stderr);
+  }
+});
+
 test('pr-create refuses a body that cites an incomplete record, and gh is not called', () => {
   const run = newRound('post-refuse');
   const binary = binaryOf('server-post-refuse', 'server build\n');
@@ -434,6 +461,21 @@ test('a draft pr-create sends without a cited record', () => {
   const result = post([...args, '--base', 'main', '--head', 'b']);
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.calls.filter((call) => call.includes('--draft')).length, 1);
+});
+
+test('pr-create refuses a draft body whose citation has a list marker, and gh is not called', () => {
+  const run = newRound('post-list-marked');
+  const binary = binaryOf('server-post-list-marked', 'server build\n');
+  assert.equal(runSide({ run, binary, label: 'listed', status: 0 }).status, 0);
+  const [record] = sideRecords(run);
+  const body = writeFile('pr-body-list-marked.md', `## Evidence\n\n- Side record: ${path.basename(record)}\n`);
+  const args = [
+    'pr-create', '--title', 'change', '--body-file', body, '--evidence-dir', run, '--base', 'main', '--head', 'b',
+  ];
+  const result = post([...args, '--draft']);
+  assert.equal(result.status, 2);
+  assert.ok(result.stderr.includes(ACCEPTED_FORM), result.stderr);
+  assert.deepEqual(result.calls, []);
 });
 
 test('pr-merge refuses a ready body that names no record while the round directory holds one', () => {

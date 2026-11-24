@@ -25,6 +25,7 @@ mod connection;
 mod cookies;
 mod etag;
 mod gzip;
+mod home_fence;
 mod packages;
 mod request_log;
 mod request_path;
@@ -44,7 +45,6 @@ use charliebot_agents::gh_wrapper;
 use charliebot_agents::local_work_guard;
 use charliebot_agents::ssh_guard;
 use charliebot_compat::mimetypes::MimeTypes;
-use charliebot_core::fence::{self, FenceError};
 use charliebot_core::repo_root::{REPO_ROOT_ENV, RepoRoot};
 use charliebot_core::timefmt::duration_millis;
 use charliebot_core::{config, event_types, home, logging, paths};
@@ -60,6 +60,7 @@ use tokio::signal::unix::{SignalKind, signal};
 
 use crate::buildinfo::BuildInfo;
 use crate::connection::ConnectionInfo;
+use crate::home_fence::FenceError;
 use crate::state::AppState;
 use crate::state::StaticMount;
 
@@ -226,7 +227,7 @@ async fn run(repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode 
   if startup_stop.is_cancelled() {
     return finish_boot_stop(None, None, signal_receiver).await;
   }
-  let mut writer_fence = match fence::acquire_home_writer_fence(&cfg.charliebot_home, "server startup") {
+  let mut writer_fence = match home_fence::acquire_home_writer_fence(&cfg.charliebot_home, "server startup") {
     Ok(writer_fence) => writer_fence,
     Err(error @ FenceError::Active { .. }) => {
       tracing::error!(
@@ -377,7 +378,7 @@ async fn run(repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode 
 
 async fn finish_stop(
   lifespan: &mut Lifespan,
-  writer_fence: &mut fence::HomeWriterFence,
+  writer_fence: &mut home_fence::HomeWriterFence,
   shutdown_started: Instant,
   reason: StopReason,
 ) -> ExitCode {
@@ -403,7 +404,7 @@ async fn finish_stop(
 
 async fn finish_boot_stop(
   lifespan: Option<&mut Lifespan>,
-  writer_fence: Option<&mut fence::HomeWriterFence>,
+  writer_fence: Option<&mut home_fence::HomeWriterFence>,
   signal_receiver: tokio::sync::oneshot::Receiver<Signal>,
 ) -> ExitCode {
   let received = signal_receiver.await.expect("the signal monitor sends the first stop signal");

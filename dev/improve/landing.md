@@ -116,9 +116,9 @@ The clone is not the kit's source: the clone holds the round's own edits, so eve
 Step 9 names the kit revision.
 
 The skills are the `skills/` tree of that same revision, and `$IMPROVE_SKILLS_DIR` holds them.
-When this protocol or a direction file names a `skills/` path, read that file from `$IMPROVE_SKILLS_DIR`, dropping the `skills/` prefix.
-Do not read a skill from the clone's `skills/` tree, which is at origin/main and may differ from this revision.
-Do not read a skill from `~/.claude/skills`, which resolves into a host checkout that may differ from this revision.
+Every skill file the round reads comes from `$IMPROVE_SKILLS_DIR`, whatever text names it and whatever path that text gives.
+Any other copy of a skill, in a host's skill directory, a checkout or the clone, may differ from this revision.
+A pull request does not merge while the round's event log or its review record reads a skill file from any other copy, and pr-merge names each such path.
 
 Before the round's agent starts, the runner sets the clone to `origin/main`, the base of the round's topic: it fetches `origin` and detaches the clone's HEAD there.
 Git runs the clone's own `dev/git-hooks`, so the hooks come from that checkout and not from the kit.

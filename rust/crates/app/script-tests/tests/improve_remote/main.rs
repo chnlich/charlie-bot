@@ -470,6 +470,10 @@ if [[ -n ${FAKE_SCOPE_LEFT_REVIEW:-} ]]; then
     sleep 0.1
   done
 fi
+# The agent's stream, when a test names one: the runner tees it into the round's event log.
+if [[ -n ${FAKE_SCOPE_STREAM:-} ]]; then
+  cat -- "$FAKE_SCOPE_STREAM"
+fi
 exit 0
 "#;
 
@@ -529,6 +533,130 @@ fn run_in_scope_for(
     kind,
   ]);
   harness::run(&mut command)
+}
+
+/// The skills directory that the round's runner exports as `IMPROVE_SKILLS_DIR`.
+fn round_skills_dir(world: &World) -> PathBuf {
+  world.remote_home.join("improve/runner/bin").join(&world.commit).join("skills")
+}
+
+/// One stream-json line of a tool call, as the round's agent writes it.
+fn tool_call(name: &str, input: Value) -> String {
+  json!({"type": "assistant", "message": {"content": [
+    {"type": "tool_use", "id": "toolu_1", "name": name, "input": input}
+  ]}})
+  .to_string()
+}
+
+/// Writes `lines` as one event log in the sandbox and returns its path.
+fn write_event_log(world: &World, name: &str, lines: &[String]) -> PathBuf {
+  let path = world.sandbox.root().join(name);
+  fs::write(&path, lines.join("\n") + "\n").expect("the event log");
+  path
+}
+
+/// Runs the skill check of `dev/improve/skill-reads.sh` over each of `events`, against the round's `skills` directory.
+fn skill_check(skills: &Path, events: &[&Path]) -> harness::Run {
+  let mut env = harness::Env::new();
+  env.insert("PATH".to_string(), "/usr/local/bin:/usr/bin:/bin".to_string());
+  let mut command = harness::command("bash", &env);
+  command.arg(harness::repo_root().join("dev/improve/skill-reads.sh")).arg(skills).args(events);
+  harness::run(&mut command)
+}
+
+#[test]
+#[ignore = "integration"]
+fn the_skill_check_names_each_skill_read_of_a_traced_round_and_passes_its_kit_reads() {
+  let world = World::new();
+  let skills = round_skills_dir(&world);
+  let kit_rule = skills.join("writing-style/genres/code.md").display().to_string();
+  // The two reads that the traced round made from host paths, as its event log holds them.
+  let improve_worker = "/synthetic/checkout/skills/improve-worker/SKILL.md";
+  let commits = "/synthetic/home/.claude/skills/writing-style/genres/commits-and-prs.md";
+  let listing = "ls -la ~/.claude/skills/ ~/.agents/skills/ 2>/dev/null || true";
+  let traced = write_event_log(
+    &world,
+    "traced-round.ndjson",
+    &[
+      tool_call("Bash", json!({"command": listing})),
+      tool_call("Read", json!({"file_path": improve_worker})),
+      tool_call("Read", json!({"file_path": commits})),
+      tool_call("Read", json!({"file_path": kit_rule})),
+    ],
+  );
+
+  let run = skill_check(&skills, &[&traced]);
+
+  assert_eq!(run.code, 1, "{}", run.describe());
+  let stderr = stderr(&run);
+  assert!(stderr.contains(&format!("skill read outside {}: {improve_worker}", skills.display())), "{}", run.describe());
+  assert!(stderr.contains(&format!("skill read outside {}: {commits}", skills.display())), "{}", run.describe());
+  assert!(!stderr.contains(&kit_rule), "the kit's own read is refused:\n{}", run.describe());
+
+  let clean = write_event_log(
+    &world,
+    "clean-round.ndjson",
+    &[tool_call("Read", json!({"file_path": kit_rule})), tool_call("Bash", json!({"command": listing}))],
+  );
+  let run = skill_check(&skills, &[&clean]);
+  assert_eq!(run.code, 0, "a round that reads only its skills dir is refused:\n{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn the_skill_check_passes_a_relative_citation_and_names_each_rooted_command_read() {
+  let world = World::new();
+  let skills = round_skills_dir(&world);
+  // A commit message and a heredoc body cite skills by their relative paths: they read nothing.
+  let commit = "git commit -m \"docs: cite skills/writing-style/genres/code.md\n\n\
+    See skills/writing-style/genres/commits-and-prs.md\"";
+  let heredoc = "cat > notes.md <<'EOF'\nRead skills/writing-style/genres/code.md first.\nEOF";
+  let citing = write_event_log(
+    &world,
+    "citing-round.ndjson",
+    &[tool_call("Bash", json!({"command": commit})), tool_call("Bash", json!({"command": heredoc}))],
+  );
+  let run = skill_check(&skills, &[&citing]);
+  assert_eq!(run.code, 0, "a citation was refused:\n{}", run.describe());
+
+  // Each of these reads a skill file from a copy other than the round's: git's ref form, a variable's path, a home
+  // path behind a flag.
+  let rooted = [
+    "git show origin/main:skills/writing-style/genres/code.md",
+    "cat $CHARLIEBOT_HOME/skills/llm-context-guideline/SKILL.md",
+    "tool --file=~/.claude/skills/writing-style/genres/code.md",
+  ];
+  let lines: Vec<String> = rooted.iter().map(|command| tool_call("Bash", json!({"command": command}))).collect();
+  let reads = write_event_log(&world, "rooted-round.ndjson", &lines);
+  let run = skill_check(&skills, &[&reads]);
+  assert_eq!(run.code, 1, "{}", run.describe());
+  for token in [
+    "origin/main:skills/writing-style/genres/code.md",
+    "$CHARLIEBOT_HOME/skills/llm-context-guideline/SKILL.md",
+    "~/.claude/skills/writing-style/genres/code.md",
+  ] {
+    assert!(stderr(&run).contains(&format!("skill read outside {}: {token}", skills.display())), "{}", run.describe());
+  }
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_scope_keeps_the_agent_stream_as_the_round_event_log() {
+  let world = World::new();
+  let launch_id = "20261124T080000Z-1-302";
+  let stream_file = write_event_log(
+    &world,
+    "stream.ndjson",
+    &[tool_call("Read", json!({"file_path": "/synthetic/evidence/shot.png"}))],
+  );
+
+  let run = run_in_scope_with(&world, launch_id, "claude", &[("FAKE_SCOPE_STREAM", stream_file.display().to_string())]);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  let logged = fs::read_to_string(world.remote_home.join("improve/launch").join(launch_id).join("round-events.ndjson"))
+    .expect("the round's event log");
+  assert_eq!(logged, fs::read_to_string(&stream_file).expect("the stream"));
+  assert_eq!(run.stdout, logged, "the agent's stream did not reach the runner's standard output");
 }
 
 #[test]

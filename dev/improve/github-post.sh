@@ -23,6 +23,8 @@
 # as review-events.ndjson in the round's evidence directory) must show a read of each screenshot the body names.
 # It also refuses a merge unless the newest verdict comment names the pull request's head sha and reports no
 # issues. pr-comment --verdict-head writes that comment: its first line names the head the review read.
+# pr-merge also refuses a merge whose round event log ($IMPROVE_LAUNCH_DIR/round-events.ndjson) or review record
+# reads a skill file outside $IMPROVE_SKILLS_DIR; dev/improve/skill-reads.sh names each such path.
 #
 # pr-edit does not call gh pr edit: on gh 2.45 that fails on the Projects
 # (classic) lookup. It reads the PR's URL with gh pr view, then sends the
@@ -475,6 +477,22 @@ case "$subcommand" in
       else
         printf 'PR %s did not pass the screenshot check; nothing was merged.\n' "$pr_selector" >&2
       fi
+      exit 2
+    fi
+    # A round reads each skill file from its skills directory. The round's event log and the review record must hold no
+    # skill read from any other copy; the check names each path it refuses.
+    [[ -n ${IMPROVE_LAUNCH_DIR-} && -n ${IMPROVE_SKILLS_DIR-} ]] || {
+      printf 'Refused pr-merge: IMPROVE_LAUNCH_DIR and IMPROVE_SKILLS_DIR name the round; nothing was merged.\n' >&2
+      exit 2
+    }
+    skill_logs=("$IMPROVE_LAUNCH_DIR/round-events.ndjson")
+    [[ -z "$review_record" ]] || skill_logs+=("$review_record")
+    skill_status=0
+    "$repo_root/dev/improve/skill-reads.sh" "$IMPROVE_SKILLS_DIR" "${skill_logs[@]}" || skill_status=$?
+    if [[ "$skill_status" -ne 0 ]]; then
+      printf 'PR %s: the skill check of the round refused its event logs (status %s, named above);' \
+        "$pr_selector" "$skill_status" >&2
+      printf ' nothing was merged.\n' >&2
       exit 2
     fi
     merge_args=(pr merge --squash "$pr_selector" "${repo_args[@]}")

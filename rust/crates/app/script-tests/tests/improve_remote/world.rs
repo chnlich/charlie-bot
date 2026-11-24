@@ -694,6 +694,7 @@ impl World {
       "gh-shim.sh",
       "github-post.sh",
       "side-record.sh",
+      "skill-reads.sh",
     ] {
       harness::copy_file(&harness::repo_root().join("dev/improve").join(name), &scripts.join(name));
     }

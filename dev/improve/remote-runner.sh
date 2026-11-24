@@ -32,7 +32,8 @@
 #
 # The skills are the skills/ tree of that same commit, archived beside the kit as IMPROVE_SKILLS_DIR, so the rule text a
 # round reads matches its kit. The launch names the skills revision, and the start refuses a launch whose skills
-# revision differs from the commit, as it does for the kit.
+# revision differs from the commit, as it does for the kit. The agent's stream-json is also written to the launch's
+# round-events.ndjson, which github-post.sh pr-merge reads for skill reads.
 #
 # Exit codes: the agent's exit code; 1 a local failure, such as a missing input file or a refused
 # scope, or a round whose review still runs in the scope after its agent exited (stderr names the
@@ -167,8 +168,11 @@ readonly SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 readonly HOME_DIR=${HOME:-}
 [[ $HOME_DIR == /* ]] || fail 1 'HOME must be an absolute path'
 readonly LAUNCH_DIR="$HOME_DIR/improve/launch/$launch_id"
+readonly LAUNCH_DIR="$HOME_DIR/improve/launch/$launch_id"
 readonly RESULTS_ROOT="$HOME_DIR/improve/results"
 readonly RESULT_DIR="$RESULTS_ROOT/$launch_id"
+# The round's event log: the stream-json its agent writes, which the scope keeps beside the launch's other files.
+readonly ROUND_EVENTS="$LAUNCH_DIR/round-events.ndjson"
 if [[ $mode == run || $mode == in_scope ]]; then
   member_kinds_file="$LAUNCH_DIR/member_kinds.txt"
   [[ -r $member_kinds_file ]] || fail 1 "the member kind list is missing or unreadable: $member_kinds_file"
@@ -1030,7 +1034,10 @@ run_in_scope() {
   export_round_credentials
   write_review_login
   local status=0 review
-  "$RUNNER_ROOT/bin/improve-sandbox" "$direction" -- "$kind" "${REWRITTEN[@]}" || status=$?
+  # The agent's stream goes to the event log as well as to the runner's stdout: pr-merge reads the round's tool calls
+  # from it. The log exists even when the agent writes nothing.
+  : >>"$ROUND_EVENTS"
+  "$RUNNER_ROOT/bin/improve-sandbox" "$direction" -- "$kind" "${REWRITTEN[@]}" | tee -a "$ROUND_EVENTS" || status=$?
   record_memory_peak
   # A review that outlives its agent never reaches the pull request, so the round fails by name. Other leftovers keep
   # the handling of a stale scope at the start (above).

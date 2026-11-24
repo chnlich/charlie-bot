@@ -835,6 +835,25 @@ fn verdict_comment(sha: &str, review: &str) -> String {
   format!("Review verdict on {sha}\n\n{review}")
 }
 
+/// The skills directory that the round's runner exports as `IMPROVE_SKILLS_DIR`.
+const ROUND_SKILLS: &str = "/synthetic/improve/runner/bin/0123456789abcdef/skills";
+
+/// One `Read` call of `path`, as a round's or a review's event log holds it.
+fn read_call(path: &str) -> String {
+  serde_json::json!({"type": "assistant", "message": {"content": [
+    {"type": "tool_use", "id": "toolu_read", "name": "Read", "input": {"file_path": path}}
+  ]}})
+  .to_string()
+}
+
+/// One `Bash` call of `command`, as a round's or a review's event log holds it.
+fn bash_call(command: &str) -> String {
+  serde_json::json!({"type": "assistant", "message": {"content": [
+    {"type": "tool_use", "id": "toolu_bash", "name": "Bash", "input": {"command": command}}
+  ]}})
+  .to_string()
+}
+
 /// The screenshot names that `MergeWorld::write_screenshots(count)` writes, in its order.
 fn shot_names(count: usize) -> Vec<String> {
   charliebot_tasks::web_screenshots::WINDOW_SIZES
@@ -860,6 +879,7 @@ struct MergeWorld {
   comments: PathBuf,
   evidence: PathBuf,
   pr_draft: PathBuf,
+  round_events: PathBuf,
 }
 
 impl MergeWorld {
@@ -895,7 +915,14 @@ impl MergeWorld {
     env.insert("GH_HEAD_SHA".to_string(), HEAD_SHA.to_string());
     env.insert("GH_HEAD_BRANCH".to_string(), HEAD_BRANCH.to_string());
     let evidence = sandbox.dir("evidence");
-    let world = MergeWorld { sandbox, env, gh_log, merge_body, comment_body, comments, evidence, pr_draft };
+    // The round's launch directory already holds its in-flight list; add an empty event log until a test writes its
+    // tool calls.
+    let launch = PathBuf::from(env.get("IMPROVE_LAUNCH_DIR").expect("post_env sets IMPROVE_LAUNCH_DIR"));
+    let round_events = launch.join("round-events.ndjson");
+    std::fs::write(&round_events, "").unwrap();
+    env.insert("IMPROVE_SKILLS_DIR".to_string(), ROUND_SKILLS.to_string());
+    let world =
+      MergeWorld { sandbox, env, gh_log, merge_body, comment_body, comments, evidence, pr_draft, round_events };
     world.set_comments(&[verdict_comment(HEAD_SHA, CLEAN_REVIEW)]);
     world
   }
@@ -941,6 +968,18 @@ impl MergeWorld {
       );
     }
     let path = self.sandbox.root().join("events.ndjson");
+    std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+    path
+  }
+
+  /// Writes the round's event log from `lines`: the stream-json of its tool calls, as the round's runner keeps it.
+  fn round(&self, lines: &[String]) {
+    std::fs::write(&self.round_events, lines.join("\n") + "\n").unwrap();
+  }
+
+  /// Writes a review's event log from `lines` in the sandbox and returns its path, for `--review-record`.
+  fn review_events(&self, lines: &[String]) -> PathBuf {
+    let path = self.sandbox.root().join("review-events.ndjson");
     std::fs::write(&path, lines.join("\n") + "\n").unwrap();
     path
   }
@@ -1205,6 +1244,66 @@ fn a_pr_merge_reads_the_newest_verdict_after_a_fix_and_its_rerun() {
 
   assert_eq!(run.code, 0, "{}", run.describe());
   assert_eq!(world.merge_calls(), ["pr merge --squash 5046"], "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_refuses_a_round_whose_event_log_reads_a_skill_outside_its_skills_dir() {
+  let world = MergeWorld::new("rust/crates/x/src/lib.rs\n", "## Evidence\nno screenshot needed.\n");
+  let stale = "/synthetic/checkout/skills/improve-worker/SKILL.md";
+  world.round(&[read_call(stale), read_call(&format!("{ROUND_SKILLS}/writing-style/genres/code.md"))]);
+
+  let run = world.merge(&["5046"]);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains(&format!("skill read outside {ROUND_SKILLS}: {stale}")), "{}", run.describe());
+  assert!(world.merge_calls().is_empty(), "nothing may merge:\n{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_refuses_a_review_record_that_reads_a_skill_outside_its_skills_dir() {
+  // The path that `skills/charliebot/SKILL.md` names for the commit genre: a review that follows it reads a copy that
+  // is not the round's.
+  let world = MergeWorld::new("rust/crates/x/src/lib.rs\n", "## Evidence\nno screenshot needed.\n");
+  world.round(&[read_call(&format!("{ROUND_SKILLS}/writing-style/genres/code.md"))]);
+  let stale = "~/.claude/skills/writing-style/genres/commits-and-prs.md";
+  let review = world.review_events(&[bash_call(&format!("cat {stale}"))]);
+
+  let run = world.merge(&["--review-record", review.to_str().unwrap(), "5046"]);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains(&format!("skill read outside {ROUND_SKILLS}: {stale}")), "{}", run.describe());
+  assert!(world.merge_calls().is_empty(), "nothing may merge:\n{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_passes_a_round_and_review_that_read_only_their_skills_dir_and_cite_skills_in_a_commit() {
+  let world = MergeWorld::new("rust/crates/x/src/lib.rs\n", "## Evidence\nno screenshot needed.\n");
+  let kit_rule = format!("{ROUND_SKILLS}/writing-style/genres/code.md");
+  world.round(&[
+    read_call(&kit_rule),
+    bash_call("git commit -m \"docs: cite skills/writing-style/genres/commits-and-prs.md\""),
+  ]);
+  let review = world.review_events(&[read_call(&kit_rule)]);
+
+  let run = world.merge(&["--review-record", review.to_str().unwrap(), "5046"]);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert_eq!(world.merge_calls(), ["pr merge --squash 5046"], "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_refuses_a_round_whose_event_log_is_missing() {
+  let world = MergeWorld::new("rust/crates/x/src/lib.rs\n", "## Evidence\nno screenshot needed.\n");
+  std::fs::remove_file(&world.round_events).unwrap();
+
+  let run = world.merge(&["5046"]);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(world.merge_calls().is_empty(), "nothing may merge without the round's event log:\n{}", run.describe());
 }
 
 #[test]

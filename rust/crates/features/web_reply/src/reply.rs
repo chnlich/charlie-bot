@@ -20,6 +20,7 @@ use charliebot_registry::{FeatureContext, StateError};
 #[cfg(test)]
 use charliebot_store::ChatEvent;
 use charliebot_store::compact::CompactValue;
+use charliebot_store::for_you;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
 use charliebot_store::reply_order::{self, Receipt};
 use charliebot_store::{SESSION_NOT_FOUND_DETAIL, SharedChatEvent, Store, StoreError};
@@ -79,9 +80,6 @@ static PATH_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(^|[^\p{L}\p{N}_
 static MARKDOWN_LINK_RE: LazyLock<Regex> = LazyLock::new(|| compile_automata_regex(r"\[([^\]]*)\]\([^)]*\)"));
 static HAN_RE: LazyLock<Regex> = LazyLock::new(|| compile_automata_regex(r"[㐀-䶿一-鿿]"));
 static LATIN_RE: LazyLock<Regex> = LazyLock::new(|| compile_automata_regex(r"[A-Za-z]"));
-
-/// The roles the For-you layer shows: the user's messages, the replies and the notices.
-const FOR_YOU_ROLES: [&str; 3] = [USER, WEB_REPLY, WEB_REPLY_NOTICE];
 
 /// A refused web reply or status write, or a failure the route answers as an unhandled exception.
 #[derive(Debug)]
@@ -550,7 +548,7 @@ pub fn for_you_entries(store: &Store, events: &[Value]) -> Result<Vec<Value>, We
   Ok(
     messages
       .into_iter()
-      .filter(|message| message.get("role").and_then(Value::as_str).is_some_and(|role| FOR_YOU_ROLES.contains(&role)))
+      .filter(for_you::is_reply_row)
       .map(|message| json!({"role": message["role"].clone(), "content": message["content"].clone()}))
       .collect(),
   )
@@ -562,7 +560,7 @@ pub fn for_you_entries_shared(store: &Store, events: &[SharedChatEvent]) -> Resu
   Ok(
     messages
       .into_iter()
-      .filter(|message| message.get("role").and_then(Value::as_str).is_some_and(|role| FOR_YOU_ROLES.contains(&role)))
+      .filter(for_you::is_reply_row)
       .map(|message| json!({"role": message["role"].clone(), "content": message["content"].clone()}))
       .collect(),
   )

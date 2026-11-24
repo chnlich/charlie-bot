@@ -59,7 +59,7 @@ const WARM_REPORT_INIT =
 const COPY_REFRESH_INIT =
   "document.addEventListener('charliebot:offline-shell-copies-refreshed', (event) => { " +
   "window.__copyRefresh = event.detail; });";
-const PREP_INIT = `${WARM_REPORT_INIT}\n${COPY_REFRESH_INIT}`;
+export const PREP_INIT = `${WARM_REPORT_INIT}\n${COPY_REFRESH_INIT}`;
 // The request a browser makes before a repetition to open a connection that stays idle in its pool. A and B have
 // opened CharlieBot before, so their browsers hold such a connection; C's does not, so it holds none.
 const PRECONNECT_PATH = '/api/concurrency/now';
@@ -408,16 +408,39 @@ export function failIfNavigatedAfter(tab, sentAt) {
   }
 }
 
+// Waits until the page's warm report says the worker stored the release's shell: the warm stores the page's
+// first-screen copies in the same step (`storePageCopies`, offline-shell-worker.js), so the session's copy exists
+// when this returns.
+async function waitForWarmStoredCopy(tab) {
+  const deadline = Date.now() + WARM_REPORT_TIMEOUT_MS;
+  for (;;) {
+    const report = await tab.evaluate('window.__warmReport ?? null');
+    if (report !== null && report.stored === true) {
+      return;
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`the online open's warm reported ${JSON.stringify(report)}, not a stored shell and copies`);
+    }
+    await sleep(500);
+  }
+}
+
 // One reply the socket delivered, sent from a page of the measured browser's profile: the page shows the reply
 // streaming, and the stored-copy refresh it asks for completes. The reply is the session's newest message when the
 // measured open fetches its first screen, so the offline open must show it from the stored copy.
-async function deliverReplyOnline(tabs, session, repetition) {
+//
+// `waitForStoredCopy` waits for the page's warm report before sending. A fresh profile's warm is what stores the
+// session's first-screen copy, and the refresh after the reply only re-stores a copy the cache already holds
+// (`refreshCopies` skips a URL with no copy). The open scenario's reply runs on a profile copied from a warm browser,
+// where the copy is already there; the For-you offline cell starts fresh and passes the flag.
+export async function deliverReplyOnline(tabs, session, repetition, {waitForStoredCopy = false} = {}) {
   const tab = await tabs.open('reply-send', PREP_INIT);
   try {
     await tabs.navigate(tab, `/?session=${session.id}`);
     await tab.ready();
     await tabs.show(tab);
     await tabs.waitIdle(SETTLE_MS);
+    if (waitForStoredCopy) await waitForWarmStoredCopy(tab);
     const echo = `pn-reply ${repetition} ${randomTag()}`;
     const sentAt = await tab.sendText(`${echo} answer with the reply`);
     const deadline = Date.now() + REPLY_TIMEOUT_MS;
@@ -469,7 +492,13 @@ function countersAt(timeline, at) {
 }
 
 // One measured open: the browser, the link's conditions and the page's timings.
-async function measureOnce(ctx, cell, repetition) {
+export function assertOpenTarget(ctx, cell, repetition, newestMessage, { checkTarget = true } = {}) {
+  if (checkTarget && !STORED_COPY_CONDITIONS.includes(cell.condition)) {
+    assertSameTargetAsBefore(ctx.expectedTargets, cell.id, repetition, targetIdentity(newestMessage));
+  }
+}
+
+async function measureOnce(ctx, cell, repetition, { checkTarget = true } = {}) {
   const session = ctx.sessions.switchTarget;
   const profile = path.join(ctx.runDir, `open-${cell.id.replace(/\W+/g, '-')}-${repetition}-${randomTag()}`);
   fs.cpSync(cell.warmDir, profile, { recursive: true });
@@ -533,10 +562,8 @@ async function measureOnce(ctx, cell, repetition) {
     if (newestMessage === null) {
       throw new Error(`the open target's first screen (${firstScreen.messages.length} messages) paints no For you row`);
     }
-    // The two stored-copy setups exist only on the after side, so they have no before-side target to compare.
-    if (!STORED_COPY_CONDITIONS.includes(cell.condition)) {
-      assertSameTargetAsBefore(ctx.expectedTargets, cell.id, repetition, targetIdentity(newestMessage));
-    }
+    // The segment probe runs before background work; openScenario's reference runs after it.
+    assertOpenTarget(ctx, cell, repetition, newestMessage, { checkTarget });
     const tab = await openMeasuredTab(tabs, newestMessage.id);
     await tab.page.send('Emulation.setCPUThrottlingRate', { rate: cell.rate });
     await tabs.show(tab);
@@ -789,7 +816,7 @@ export async function openPrepare(ctx, result) {
 // openProbe(ctx, reference): one repetition of the reference cell, the CPU probe a bench segment starts with. It runs
 // at the reference rate, so its tail reads the host's CPU speed (open.mjs cpuRateFrom).
 export async function openProbe(ctx, reference) {
-  return measureOnce(ctx, reference, 1);
+  return measureOnce(ctx, reference, 1, { checkTarget: false });
 }
 
 // The open scenario. Fills `result`, the object the JSON keeps, cell by cell: a failure part-way leaves the cells

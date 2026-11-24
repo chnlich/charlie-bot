@@ -23,11 +23,14 @@ dev/remote-run/run.sh dev/poor-network/run.sh --side both --before-clone "$CLONE
 | `--side both` | Measure the before side, then the after side. Without `--before-rev` the before side is the stored reference R (see "Stored reference"). If the before side is the reference commit (`CALIBRATION_REFERENCE`) and its calibration does not reproduce, stop with exit 3 and do not run the after side. |
 | `--before-clone DIR` | The clone that holds the before side's commit; required for `before` and `both`. |
 | `--before-rev REV` | With `--side both`, the before side is `REV`, measured now (the explicit mode). |
+| `--before-run DIR` | With `--side after`, reuse the stored `before.json` and `seed.sha256` in `DIR` and pass `--expect-targets` from `DIR/before.json`. Refuses unless seed checksum, Chrome version, and non-launcher/test/README bench code match `--before-bench-rev`. |
+| `--before-bench-rev REV` | With `--before-run`, the git commit whose `dev/poor-network` measurement code the stored before side ran. |
 | `--change-patch FILE` | With `--side both` and no `--before-rev`: the change as `git diff <merge-base> HEAD --binary` (an empty file for none). The after side is R with the patch applied. A patch that does not apply to R exits 2 and names the merge-base to pass as `--before-rev`, which measures the change on its own base. |
 | `--change-files FILE` | The changed paths, one per line; `--scenarios auto` reads them with `--before-rev`. |
 | `--out-dir DIR` | Where the run's files go, outside the tree. |
 | `--repetitions N` | Repetitions per scenario (default 5). |
-| `--scenarios LIST` | Any of `background,held,reset,stream,tools,starred,threads,open,search` (default the first four), or `auto`: the rows the changed files can move, with the default four always included (`scenario-map.mjs`). `open` runs its own cells, see below. `search` runs its own repetitions and variants, see "Search view". |
+| `--scenario-repetitions NAME=N,...` | Repetitions for the named scenarios, each selected by `--scenarios`; the others take `--repetitions`. Within `foryou`, a cell runs only in the repetitions its count in `FOR_YOU_CELL_REPS` (`foryou.mjs`) covers. |
+| `--scenarios LIST` | Any of `background,held,reset,stream,tools,starred,threads,foryou,open,search` (default the first four), or `auto`: the rows the changed files can move, with the default four always included (`scenario-map.mjs`). `foryou` runs its own cells, see "For-you scenario". `open` runs its own cells, see below. `search` runs its own repetitions and variants, see "Search view". |
 | `--open-conditions LIST` | Open cells: any of `link,held,reset,flaps,offline,release,release-offline,replied-offline`; default all. |
 | `--open-cpu-rate RATE` | Run every side's open cells at `RATE` instead of a derived rate (see CPU rate below). |
 | `--assets-dir DIR` | Where the CDN copies are kept (default `DIR/assets`). |
@@ -35,6 +38,7 @@ dev/remote-run/run.sh dev/poor-network/run.sh --side both --before-clone "$CLONE
 | `--seed-home DIR` | The view home that the run copies as its seed (default: the shared home under `~/improve/mock-home`). A run with a pinned home names it here; each side still checks the copy's content hash. |
 | `--detach` | Start a transient systemd user unit and return; the log is `DIR/pn-<id>.log`. |
 | `--seed-only` | Size the sessions on each side the run names, write each side's sizes to its JSON, and stop: no scenario, no store update, no report. |
+| `--foryou-shots` | After the after side's measurement, write the For-you screenshots (switch, retry and offline reopen, at the three CSS sizes) to `DIR/<run>/foryou-shots`. Needs the `foryou` scenario. |
 
 Exit codes: 0 both sides measured; 1 a measurement or build failed (the side's JSON still names the error); 2 a
 precondition failed and nothing started, or the change does not apply to R; 3 the baseline calibration did not
@@ -121,6 +125,13 @@ The link is in `LINK` and the targets are in `TARGETS` of `profile.mjs`. No othe
 | 5 reset blackout | restore to `catchup_complete`, over the catch-up bytes / 12.5 KB/s | <= 2000 ms over the byte time |
 | 6 long stream | socket bytes of one reply, per reply text byte | <= 1.20 |
 | 7 tool stream | stream frames' tool-row bytes, per final row byte; the turn's socket bytes per minute | <= 2.0; <= 75 KB/min |
+| 8 For-you switch, large target | click to the first For-you row | <= 2000 ms |
+| 8 For-you switch, typical target | click to the first For-you row | <= 1200 ms |
+| 8 For-you switch, sparse target | click to the first For-you row (its only For-you row is the marker) | reported, not scored |
+| 8 For-you failed older page | click to the first row, with one older page failing | <= 2000 ms |
+| 8 For-you older-page requests before the first row | older-page requests started before the first row, on the switch and failed-page cells | 0 |
+| 8 For-you first open, large and typical targets | navigation to the first For-you row | reported, not scored |
+| 8 For-you offline reopen | first For-you row after an online open, with the network down | <= 1000 ms; document bytes 0 |
 
 The switch to real-time connection number is the before value of the one-socket-per-tab fix: today's page opens a new
 socket for the target after the first screen renders, and the fix keeps the page's socket and subscribes the session on
@@ -239,7 +250,9 @@ three default cron tasks' sessions are the rows that the server's first schedule
 bench counts them as the mock's rows and waits for that tick before it measures the view. Each carries a task spec of
 synthetic acceptance criteria and context references, sized so the rows' median matches the live view's; the default
 shape writes no task spec. The mock's sessions carry no task boundary, so the server refuses a message to them. The bench therefore creates its sessions through `POST /api/sessions/`, on the trial's backend
-option. Those sessions are rows of the default view too, so the view holds `VIEW.rows` rows.
+option. Those sessions are rows of the default view too, so the view holds `VIEW.rows` rows. The trial resolves its
+probe endpoint from a stand-in answer file that `run.sh` names in `CHARLIEBOT_TRIAL_PROBE_ANSWER`, because the bench host
+runs no server to answer `backends.calls.probe`.
 
 The view's shape comes from a live release's default "all" view: 124 rows, a raw median row of 3,260 bytes, and a switch
 target whose bootstrap content takes a median 26,592 bytes on the wire. The bench checks the row count before any
@@ -295,6 +308,15 @@ browser's cache and Resource Timing read, and the decoded body's SHA-256, which 
 (`marked`), so a changed copy shows as a changed hash. The scenarios other than `open` serve those copies from the
 browser's request interception, so the CDN bytes never cross the shaped link and the bench measures the application's
 own traffic. Any other external host fails at once, so nothing outside the trial reaches the link.
+
+## For-you scenario (`--scenarios foryou`)
+
+The For-you view's switch, failed older page, first open and offline reopen, each cell one step of the bench (the lock is
+taken and given up between cells). The targets are seeded once per side (`seedForYouTargets`, `foryou.mjs`): the large
+and typical targets carry a trigger tail, and the sparse target's only For-you row is its marker. A switch cell and the
+failed-page cell run under scenarios 1 to 3's background load in their own window. Repetitions per cell follow plan 5 v4
+section 4.2: the large switch, the large first open and the typical first open take five, the other cells two
+(`FOR_YOU_CELL_REPS`); `--scenario-repetitions foryou=5` runs the scenario for the five repetitions those cells need.
 
 ## Open scenario (`--scenarios open`)
 
@@ -619,11 +641,7 @@ them when a change touches this directory. To reproduce them through the remote 
 
 ```sh
 dev/remote-run/run.sh env POOR_NETWORK_CHROME=/path/to/chrome node --test \
-  dev/poor-network/proxy.integration.test.mjs dev/poor-network/report.test.mjs \
-  dev/poor-network/front.integration.test.mjs dev/poor-network/chrome.test.mjs \
-  dev/poor-network/scenarios.test.mjs dev/poor-network/tabs.test.mjs dev/poor-network/open.test.mjs \
-  dev/poor-network/lock.test.mjs dev/poor-network/search.test.mjs dev/poor-network/step-gate.test.mjs \
-  dev/poor-network/segments.test.mjs dev/poor-network/before-store.test.mjs dev/poor-network/scenario-map.test.mjs
+  dev/poor-network/*.test.mjs
 ```
 
 They check the relay's tunnel transfer time at the link, its stop on SIGTERM, and its refusal of a target without a
@@ -636,10 +654,13 @@ holds, and only the reference before side's line carries a verdict. The chrome t
 closed browser fails its unanswered DevTools calls and drops its pipe handles. The scenario tests check the status
 counting against synthetic poll records of both answer shapes: the baseline's whole row map and the change's `{token,
 rows, gone}`. A poll that finishes after the window is not counted, and its unread body does not fail the window; a
-poll that finishes inside the window with no body read does. The tab tests check the switch's row handling against a stub sidebar that keeps rows back: a row absent
-from the document or hidden in it is clicked only after its group's Show all paints it, and a row that no toggle reaches
-fails the step. The open tests check the CPU rate's sharing (a shared rate stands, beside the one the side's own
-reference derives), the reference's document (a reference repetition whose document crossed the link gives no rate) and
+poll that finishes inside the window with no body read does. The tab tests check the switch's row handling against a
+stub sidebar that keeps rows back: a row absent from the document or hidden in it is clicked only after its group's
+Show all paints it, and a row that no toggle reaches fails the step. They also check that showing a tab waits for the
+other tabs to report hidden, that an idle wait leaves out the requests its caller matches, and that a background tab
+opens hidden. The open tests check the
+CPU rate's sharing (a shared rate stands, beside the one the side's own reference derives), the reference's document (a
+reference repetition whose document crossed the link gives no rate) and
 the host interference (a dropped request, a failed navigation or a release open the host pushed past `OPEN.openByMs`
 names the interference; any other load failure stays the repetition's own record; a repetition the host spoiled is
 rerun, bounded, and its reruns recorded). The open record's tests check that a reload inside an open keeps the first
@@ -656,7 +677,7 @@ search view's arithmetic (see "Search view").
 The step-gate tests check the yield rule (a process queued behind the lock gets it after the step it waits for, and
 nothing yields when nothing waits), the cap kill (a capped step's browsers and proxies stop, and the step runs once
 more), the descriptor's close-on-exec, and that closing the gate releases the lock. The segment tests check the rate
-gate: a probe outside 3.0 to 4.5, or outside the 10 % band of the cells' rate, is discarded and rerun once, and a second
+gate: a probe outside 3.0 to 10.0, or outside the 10 % band of the cells' rate, is discarded and rerun once; a second
 failure is exit 5 with the discarded segments kept in `units[]`. They also check which unit starts each segment. The
 store tests check the reuse rule (R, Chrome, seed and tree all equal, and load-safe), the stale rule, the open group,
 the 24 h window, the saving of load-safe rows only, and the assembly of a before side from stored and measured rows.

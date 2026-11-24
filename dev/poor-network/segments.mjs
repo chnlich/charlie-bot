@@ -7,11 +7,12 @@
 import { cpuRateFrom, hostInterference, referenceTail } from './open.mjs';
 import { LIVE_CPU_TAIL } from './profile.mjs';
 
-// The CPU rate gate (design values). A probe's rate must be inside RATE_MIN..RATE_MAX, which is the range the CPU check
-// of the bench's chain script enforces (bench_chain.sh:129-148), and within RATE_BAND of the rate the segment's cells
-// run at.
+// The CPU rate gate. A probe's rate must be inside RATE_MIN..RATE_MAX and within RATE_BAND of the rate the segment's
+// cells run at. The derived rate rises as the host's CPU gets faster or its load falls, so RATE_MAX sits above the
+// rates a host reads at moderate load. It still refuses a broken calibration: a reference document that crosses the
+// link in full reads 21.68 to 30.31 (README "CPU rate").
 export const RATE_MIN = 3.0;
-export const RATE_MAX = 4.5;
+export const RATE_MAX = 10.0;
 export const RATE_BAND = 0.1;
 // A segment is re-probed at most this long after its probe, so each measurement stays close to the rate that describes
 // it (design value: about ten minutes).

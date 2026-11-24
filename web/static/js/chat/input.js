@@ -38,7 +38,7 @@ function reportSendStep(step, requestId, detail) {
 }
 
 async function postChatMessageWithRetry(sessionId, content, extra, requestId) {
-  let retryDelay = 1000;
+  let retryDelay = PAGE_REQUEST_RETRY_BASE_MS;
   while (true) {
     let response;
     try {
@@ -46,13 +46,13 @@ async function postChatMessageWithRetry(sessionId, content, extra, requestId) {
     } catch (_error) {
       reportSendStep('retry', requestId);
       await waitForSendRetry(retryDelay);
-      retryDelay = Math.min(retryDelay * 2, 30000);
+      retryDelay = Math.min(retryDelay * 2, PAGE_REQUEST_RETRY_MAX_MS);
       continue;
     }
     if (response.status >= 500) {
       reportSendStep('retry', requestId);
       await waitForSendRetry(retryDelay);
-      retryDelay = Math.min(retryDelay * 2, 30000);
+      retryDelay = Math.min(retryDelay * 2, PAGE_REQUEST_RETRY_MAX_MS);
       continue;
     }
     if (response.status >= 400 && response.status < 500) {

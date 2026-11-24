@@ -7,7 +7,7 @@
 const vm = require('node:vm');
 const https = require('node:https');
 
-const { readStatic, runIconModule } = require('./read_static');
+const { readStatic, runIconModule, FOR_YOU_RULE } = require('./read_static');
 const { buildRendererContext } = require('./renderer_vm_context');
 
 // Fetch the exact marked build the browser serves (web/templates/index.html).
@@ -132,6 +132,7 @@ async function loadStreamPaintContext(opts) {
   vm.runInContext(readStatic('markdown-renderer.js'), context, { filename: 'markdown-renderer.js' });
   runIconModule(context);
   vm.runInContext(readStatic('chat/namespace.js'), context, { filename: 'chat/namespace.js' });
+  context.FOR_YOU_RULE = FOR_YOU_RULE;
   vm.runInContext(readStatic('chat/shared.js'), context, { filename: 'chat/shared.js' });
   vm.runInContext(readStatic('chat/scroll.js'), context, { filename: 'chat/scroll.js' });
   vm.runInContext(readStatic('usage.js'), context, { filename: 'usage.js' });

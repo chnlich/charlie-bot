@@ -61,6 +61,9 @@ function loadSessionContext({elements, BACKEND_OPTIONS, BACKEND_POOLS, ACTIVE_PO
     // projection check with the turn engine at load; this harness loads neither
     // usage.js nor the chat modules.
     Chat: { setStreamDraftModeSupplier() {}, registerProjectionCheck() {} },
+    // The page-request backoff chat/shared.js publishes; this harness loads no chat module.
+    PAGE_REQUEST_RETRY_BASE_MS: 1000,
+    PAGE_REQUEST_RETRY_MAX_MS: 30000,
   };
   context.window = { addEventListener() {} };
   context.document.addEventListener = () => {};

@@ -44,7 +44,7 @@ fn config(args: &[OsString]) -> Result<(), CliExit> {
   let [home] = exact::<1>(args)?;
   let home = Path::new(&home);
   let document = read_config(home).map_err(failed)?;
-  let port = match document.get("server").and_then(|server| server.get("port")) {
+  let port = match document.get(config::SERVER_KEY).and_then(|server| server.get("port")) {
     Some(port) => text_repr::value_str(port),
     None => default_port().to_string(),
   };

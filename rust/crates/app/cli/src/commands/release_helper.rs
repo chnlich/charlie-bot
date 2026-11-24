@@ -1029,7 +1029,8 @@ fn stand_in_records(cron_defaults: &str, config_example: &str) -> Result<Vec<Val
   if ids.is_empty() {
     return Err(format!("the {STAND_IN_TASK} task in {cron_defaults} names no step backend"));
   }
-  let options: &[Value] = example["backends"]["options"].as_array().map_or(&[], Vec::as_slice);
+  let options: &[Value] =
+    example[config::BACKENDS_KEY][config::BACKENDS_OPTIONS_KEY].as_array().map_or(&[], Vec::as_slice);
   ids
     .iter()
     .map(|id| {

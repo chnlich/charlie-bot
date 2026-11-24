@@ -72,7 +72,7 @@ Both sides read the same data, and the round does not change it. This keeps the 
 The shared mock home binds scheduled tasks to some of its manager sessions, so a served round shows cron-bound session
 pages and their Task & context dialogs. Its sessions are task-tree nodes with a boot marker, so a serve trial's start
 logs no node failure. Each default cron task that the trial seeds adds the session it binds, so a served round's
-session list holds the home's sessions and those.
+task tree holds the home's sessions and those. The sidebar lists only some roots of that tree.
 
 ## Servers
 

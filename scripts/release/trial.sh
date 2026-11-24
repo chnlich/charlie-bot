@@ -1107,7 +1107,7 @@ trial_holder_text() {
 # server before it ends, so a server that still holds the port outlived its trial. When the trial still runs, the holder
 # is a side that serves at the same time. A holder no trial started keeps the generic text.
 holder_cause() {
-  local line=$1 inode=$2 pid trial holder
+  local line=$1 inode=$2 pid trial holder trial_state
   pid=$(holder_pid "$line" "$inode") || pid=
   trial=
   if [[ -n $pid ]]; then
@@ -1119,7 +1119,8 @@ holder_cause() {
     return 0
   fi
   holder=$(trial_holder_text "$pid")
-  if kill -0 "$trial" 2>/dev/null; then
+  trial_state=$(process_state "$trial")
+  if [[ -n $trial_state && $trial_state != *Z* ]]; then
     printf '%s' "port $CHOSEN_PORT is held by another process, so this trial's server cannot bind it: $holder, " \
       "the server of trial pid $trial, which still runs: a side serving at the same time holds the port"
   else

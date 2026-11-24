@@ -27,11 +27,8 @@
 # exits with the command's exit code. The lock and its flock call belong to dev/poor-network/lock.sh; the poor-network
 # bench's own sides take the same lock with their own wait.
 #
-# A side with IMPROVE_TRIAL_USE_LOCK=0 takes no lock, so two such sides can run at once. Each side's server takes the
-# port only when it binds, a boot later than the port pick, so the second side can pick the port the first side's
-# server has not bound yet. The second side then fails at start and names the first side's server by its trial pid
-# (trial.sh's holder check). A round whose sides must not overlap starts each side after the previous side's record
-# closes.
+# Lock-free serve sides in one round share a lock in the round's record directory. A side holds it through the trial
+# command, so the next side starts after the previous trial has stopped its server and scope.
 #
 # The side's marker lives in /tmp/improve-<IMPROVE_DIRECTION>, the round's own scratch directory, which the round runner
 # exports as IMPROVE_DIRECTION. The marker is not under TMPDIR: the round's TMPDIR lost a side's marker while the side
@@ -148,7 +145,10 @@ if (( IMPROVE_TRIAL_USE_LOCK == 0 )); then
   if [[ -n $SIDE_RECORD ]]; then
     side_record_take_binary "$SIDE_RECORD" "$SIDE_BINARY" || status=$?
     if (( status == 0 )); then
-      CHARLIEBOT_RELEASE_RUN_DIR=$SIDE_OUTPUT "$@" || status=$?
+      # Keep the lock in flock so a server left by failed cleanup cannot hold it from an inherited descriptor; the next
+      # side must reach trial.sh's port-holder check and name the teardown defect.
+      CHARLIEBOT_RELEASE_RUN_DIR=$SIDE_OUTPUT \
+        flock -o -x "$CHARLIEBOT_RELEASE_RUN_DIR/.serve-side.lock" "$@" || status=$?
     fi
   else
     "$@" || status=$?

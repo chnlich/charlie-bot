@@ -199,7 +199,7 @@ async function waitFor(check) {
     }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  throw new Error('the lock holder did not take the lock');
+  throw new Error('the condition did not become true');
 }
 
 // holdLock: take the scratch bench lock in a child process until the returned release is called. Each holder names its
@@ -241,6 +241,102 @@ test('two serve trial sides write two records, each with its own output location
   assert.deepEqual(raw.sort(), ['after', 'before']);
   const trialRaw = outputs.map((output) => fs.readFileSync(path.join(output, 'trial-raw.txt'), 'utf8').trim());
   assert.deepEqual(trialRaw, ['trial output', 'trial output']);
+});
+
+test('lock-free serve sides stop one trial before the next one starts', async () => {
+  const run = newRound('serialized');
+  const binary = binaryOf('server-serialized', 'server build\n');
+  const firstRelease = path.join(ROOT, 'first-release');
+  const secondRelease = path.join(ROOT, 'second-release');
+  const blockingMeasure = path.join(ROOT, 'blocking-measure.sh');
+  const blockingTrial = path.join(ROOT, 'blocking-trial.sh');
+  fs.writeFileSync(
+    blockingMeasure,
+    '#!/usr/bin/env bash\n: >"$IMPROVE_SIDE_OUTPUT/started"\n' +
+      'while [[ ! -e "$2" ]]; do sleep 0.02; done\n',
+    { mode: 0o755 },
+  );
+  fs.writeFileSync(
+    blockingTrial,
+    '#!/usr/bin/env bash\nwhile [[ $1 != -- ]]; do shift; done\nshift\n' +
+      '"$@"\nstatus=$?\n: >"$CHARLIEBOT_RELEASE_RUN_DIR/trial-stopped"\nexit "$status"\n',
+    { mode: 0o755 },
+  );
+  const flockBin = path.join(ROOT, 'serialized-flock-bin');
+  const realFlock = spawnSync('bash', ['-c', 'command -v flock'], { encoding: 'utf8' }).stdout.trim();
+  const serveLock = path.join(run, '.serve-side.lock');
+  fs.mkdirSync(flockBin);
+  fs.writeFileSync(
+    path.join(flockBin, 'flock'),
+    '#!/usr/bin/env bash\n' +
+      'for argument in "$@"; do\n' +
+      '  if [[ $argument == "$SERVE_SIDE_LOCK" ]]; then\n' +
+      '    : >"$CHARLIEBOT_RELEASE_RUN_DIR/serve-lock-attempted"\n' +
+      '    break\n' +
+      '  fi\n' +
+      'done\n' +
+      'exec "$REAL_FLOCK" "$@"\n',
+    { mode: 0o755 },
+  );
+  const env = sideEnv({
+    CHARLIEBOT_RELEASE_RUN_DIR: run,
+    IMPROVE_DIRECTION: 'ux',
+    IMPROVE_TRIAL_USE_LOCK: '0',
+    PATH: `${flockBin}:${process.env.PATH}`,
+    REAL_FLOCK: realFlock,
+    SERVE_SIDE_LOCK: serveLock,
+  });
+  const sideArgs = (release) => [
+    TRIAL_SIDE,
+    'bash',
+    blockingTrial,
+    '--serve',
+    COMMIT,
+    binary,
+    '--',
+    blockingMeasure,
+    'label',
+    release,
+  ];
+  const first = spawn('bash', sideArgs(firstRelease), { env, stdio: 'ignore' });
+  const firstExit = new Promise((resolve) => first.once('exit', resolve));
+  let second;
+  let secondExit;
+  try {
+    await waitFor(() => sideRecords(run).length === 1 && Boolean(recordFields(sideRecords(run)[0]).output));
+    const [firstRecord] = sideRecords(run).map(recordFields);
+    await waitFor(() => fs.existsSync(path.join(firstRecord.output, 'started')));
+
+    second = spawn('bash', sideArgs(secondRelease), { env, stdio: 'ignore' });
+    secondExit = new Promise((resolve) => second.once('exit', resolve));
+    await waitFor(() => sideRecords(run).length === 2 && sideRecords(run).every((file) => recordFields(file).output));
+
+    const records = sideRecords(run).map(recordFields);
+    const secondRecord = records.find((record) => record.output !== firstRecord.output);
+    assert.ok(secondRecord, 'the second side record was not written');
+    const lockAttempted = path.join(secondRecord.output, 'serve-lock-attempted');
+    const secondStarted = path.join(secondRecord.output, 'started');
+    await waitFor(() => fs.existsSync(lockAttempted) || fs.existsSync(secondStarted));
+    assert.equal(fs.existsSync(lockAttempted), true, 'the second serve side did not attempt the round lock');
+    assert.equal(fs.existsSync(secondStarted), false);
+
+    fs.writeFileSync(firstRelease, 'release');
+    await waitFor(() => fs.existsSync(path.join(firstRecord.output, 'trial-stopped')));
+    await waitFor(() => fs.existsSync(secondStarted));
+    assert.equal(fs.existsSync(path.join(firstRecord.output, 'trial-stopped')), true);
+
+    fs.writeFileSync(secondRelease, 'release');
+    assert.equal(await firstExit, 0);
+    assert.equal(await secondExit, 0);
+    assert.equal(fs.existsSync(path.join(secondRecord.output, 'trial-stopped')), true);
+  } finally {
+    fs.writeFileSync(firstRelease, 'release');
+    fs.writeFileSync(secondRelease, 'release');
+    await firstExit;
+    if (secondExit) {
+      await secondExit;
+    }
+  }
 });
 
 test('a binary that changes between two sides gives two different digests', () => {

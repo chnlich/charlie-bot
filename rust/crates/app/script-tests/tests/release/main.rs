@@ -1971,13 +1971,18 @@ fn test_trial_serve_names_a_port_holder_of_an_ended_trial_as_a_teardown_defect()
   let _serial = TRIAL_RUNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
   let world = ServeWorld::new();
   let tree_root = world.tree_root();
-  let ended = {
-    let mut child = Command::new("true").spawn().expect("a process that ends");
-    child.wait().expect("the process ends");
-    child.id()
-  };
+  let mut ended_child = Command::new("true").spawn().expect("a process that ends");
+  let ended = ended_child.id();
+  let deadline = Instant::now() + Duration::from_secs(5);
+  while process_is_running(ended as i32) && Instant::now() < deadline {
+    thread::sleep(Duration::from_millis(10));
+  }
+  let stat = fs::read_to_string(format!("/proc/{ended}/stat")).expect("the ended trial remains a zombie");
+  let state = stat.rsplit_once(')').and_then(|(_, rest)| rest.split_whitespace().next());
+  assert_eq!(state, Some("Z"), "the ended trial did not remain a zombie: {stat}");
 
   let (run, holder, port, marker) = serve_trial_against_trial_holder(&world, ended);
+  ended_child.wait().expect("the ended trial is reaped");
 
   assert_eq!(run.code, 1, "{}", run.describe());
   assert!(run.stdout.contains("FAIL serve Startup"), "{}", run.describe());

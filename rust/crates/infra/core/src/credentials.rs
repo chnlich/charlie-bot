@@ -1,16 +1,13 @@
 //! `credentials.yaml`: the profile's secrets, `section -> key -> scalar`.
 
 use std::collections::BTreeMap;
-use std::io::Write;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_yaml::Value;
 
 use crate::config::{self, CREDENTIALS_FILENAME, ConfigError};
-use crate::paths;
+use crate::{fsutil, paths};
 
 /// The text a redacted secret becomes. Every crate that replaces a secret before it reaches a log, a transcript or an
 /// error message writes this marker.
@@ -150,31 +147,12 @@ pub fn load_credentials(home: &Path) -> Result<Credentials, ConfigError> {
   Ok(Credentials { path, sections })
 }
 
-/// Write `bytes` over `<home>/credentials.yaml`: a temporary file in the same directory takes the
-/// original mode, then one rename puts it in place.
+/// Write `bytes` over `<home>/credentials.yaml` in one rename. The file keeps its original mode; a new file is `0600`.
 pub fn write_credentials(home: &Path, bytes: &[u8]) -> Result<(), ConfigError> {
-  static COUNTER: AtomicU64 = AtomicU64::new(0);
   let path = home.join(CREDENTIALS_FILENAME);
-  let path_text = paths::display(&path);
-  let directory = path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
   let mode = std::fs::metadata(&path).map(|metadata| metadata.permissions().mode() & 0o7777).unwrap_or(0o600);
-  let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map(|elapsed| elapsed.as_nanos()).unwrap_or(0);
-  let temp = directory.join(format!(
-    ".{CREDENTIALS_FILENAME}.{}.{stamp}.{}.tmp",
-    std::process::id(),
-    COUNTER.fetch_add(1, Ordering::Relaxed)
-  ));
-  let write = || -> std::io::Result<()> {
-    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&temp)?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    file.set_permissions(std::fs::Permissions::from_mode(mode))?;
-    std::fs::rename(&temp, &path)
-  };
-  write().map_err(|error| {
-    let _ = std::fs::remove_file(&temp);
-    ConfigError(format!("{path_text}: {error}"))
-  })
+  fsutil::atomic_write_mode(&path, bytes, mode)
+    .map_err(|error| ConfigError(format!("{}: {error}", paths::display(&path))))
 }
 
 /// The YAML text with `section`'s `key` value lines replaced by `values`, keeping every other byte:

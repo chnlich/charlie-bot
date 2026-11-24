@@ -3,11 +3,12 @@
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, bail};
+use charliebot_core::fsutil;
 use charliebot_core::home;
 use futures_util::StreamExt;
 use reqwest::{Client, StatusCode};
@@ -107,13 +108,7 @@ pub fn write_turn_record(path: &Path, record: &TurnRecord) -> anyhow::Result<()>
 fn write_atomic_json(path: &Path, value: &impl Serialize, mode: u32) -> anyhow::Result<()> {
   let parent = path.parent().context("OpenCode record has no parent directory")?;
   fs::create_dir_all(parent)?;
-  let temporary = path.with_extension(format!("json.{}.tmp", std::process::id()));
-  let mut file = OpenOptions::new().write(true).create_new(true).mode(mode).open(&temporary)?;
-  serde_json::to_writer(&mut file, value)?;
-  file.sync_all()?;
-  fs::rename(&temporary, path)?;
-  fs::set_permissions(path, fs::Permissions::from_mode(mode))?;
-  fs::File::open(parent)?.sync_all()?;
+  fsutil::atomic_write_mode(path, &serde_json::to_vec(value)?, mode)?;
   Ok(())
 }
 

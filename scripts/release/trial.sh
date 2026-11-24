@@ -13,7 +13,7 @@
 # until every run of the trial home has ended, stops the server, asserts that no process of the trial tree remains,
 # cleans up and runs sweep-check on the server log. A server that stops before the wait ends fails the trial at once,
 # and a server that does not exit on SIGTERM within SERVER_STOP_WAIT_MS fails the side; the FAIL and CAUSE lines of
-# either name its pid.
+# either name its pid, binary and scope.
 #
 # A side is ready only when the port's listener is this trial's server (or a process it started) and that server
 # answers its auth status with 200 after it logged server_ready. free-port picks the port before the server binds it,
@@ -534,10 +534,15 @@ process_state() {
   ps -p "$1" -o stat= 2>/dev/null | tr -d '[:space:]'
 }
 
-# stop_failed CAUSE: the FAIL line of a serve stop, then the cause, which names the server's pid.
+# stop_failed CAUSE: the FAIL line of a serve stop, then the cause, which names the server's pid, its binary and its
+# scope: the systemd unit, or the caller's cgroup with --in-caller-scope.
 stop_failed() {
+  local scope=$SERVE_UNIT
+  if (( IN_CALLER_SCOPE == 1 )); then
+    scope=caller
+  fi
   printf 'FAIL serve Stop: the trial server did not stop cleanly\n'
-  printf 'CAUSE serve: %s\n' "$1"
+  printf 'CAUSE serve: %s (server binary %s, scope %s)\n' "$1" "$BINARY" "$scope"
 }
 
 # stop_server_pid PID LOG CHECK: stops the server PID with SIGTERM and waits at most SERVER_STOP_WAIT_MS for it to exit.
@@ -1090,13 +1095,44 @@ SERVE_WAIT_RUNS_SECONDS=600
 # RUN_CAUSE to the session that holds the run or to the read that failed.
 RUN_ACTIVE=0
 RUN_CAUSE=
+# RUN_WAIT_STARTED is the SECONDS value when the run wait began. Every read of the wait shares its bound.
+RUN_WAIT_STARTED=0
+
+# read_session_runs SESSION_ID CURSOR: reads one runs page of a trial-home session into serve-runs.json. A read the
+# server does not answer within http_get's limit is retried while the server runs: a loaded host, or a lazy fact scan
+# of a large log, can hold a read past any fixed limit. The judges are the server's exit and SERVE_WAIT_RUNS_SECONDS
+# from the start of the wait. Any other status fails the read at once. It returns 1 with RUN_CAUSE set.
+read_session_runs() {
+  local session_id=$1 cursor=$2 status state
+  while :; do
+    status=$(http_get "/api/sessions/$session_id/runs?order=asc&limit=500${cursor:+&cursor=$cursor}" \
+      "$HTTP_ROOT/serve-runs.json")
+    case $status in
+      200) return 0 ;;
+      000) ;;
+      *)
+        RUN_CAUSE="server pid $SERVER_PID gave status $status for the runs of session $session_id"
+        return 1
+        ;;
+    esac
+    state=$(process_state "$SERVER_PID")
+    if [[ -z $state || $state == *Z* ]]; then
+      RUN_CAUSE="server pid $SERVER_PID exited before it answered the runs of session $session_id"
+      return 1
+    fi
+    if (( SECONDS - RUN_WAIT_STARTED >= SERVE_WAIT_RUNS_SECONDS )); then
+      RUN_CAUSE="server pid $SERVER_PID did not answer the runs of session $session_id within ${SERVE_WAIT_RUNS_SECONDS}s"
+      return 1
+    fi
+    sleep 1
+  done
+}
 
 # serve_home_has_active_run reads the runs of every trial-home session. A stopped, withheld or input-blocked run
 # consumes no server process, so the active set is queued and running only. Every page of a session's runs is read,
-# because the newest run is on the last page. It returns 1 when a page cannot be read: a server that does not answer a
-# session's runs proves no run ended, so the wait fails at once instead of counting the unanswered page as a live run.
+# because the newest run is on the last page. It returns 1 when a page cannot be read, and read_session_runs names why.
 serve_home_has_active_run() {
-  local trial_session_id trial_session_ids runs_status cursor page_output
+  local trial_session_id trial_session_ids cursor page_output
   local -a page=()
   RUN_ACTIVE=0
   if [[ ! -d $SESSIONS_DIR ]]; then
@@ -1110,12 +1146,7 @@ serve_home_has_active_run() {
     [[ -n $trial_session_id ]] || continue
     cursor=
     while :; do
-      runs_status=$(http_get "/api/sessions/$trial_session_id/runs?order=asc&limit=500${cursor:+&cursor=$cursor}" \
-        "$HTTP_ROOT/serve-runs.json")
-      if [[ $runs_status != 200 ]]; then
-        RUN_CAUSE="server pid $SERVER_PID gave status $runs_status for the runs of session $trial_session_id"
-        return 1
-      fi
+      read_session_runs "$trial_session_id" "$cursor" || return 1
       if ! page_output=$("$TRIAL_CLI" release-helper run-page "$HTTP_ROOT/serve-runs.json"); then
         RUN_CAUSE="the runs page of session $trial_session_id does not parse"
         return 1
@@ -1239,6 +1270,7 @@ run_serve_mode() {
 
   # The wait stops the moment the server is gone, or a runs page cannot be read, and it runs out at the bound.
   wait_started=$SECONDS
+  RUN_WAIT_STARTED=$wait_started
   while :; do
     server_state=$(process_state "$SERVER_PID")
     if [[ -z $server_state || $server_state == *Z* ]]; then

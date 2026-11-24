@@ -203,8 +203,8 @@ no_record_worktree_is_live() {
     fi
     when=$(date -u -d "@$newest" +%Y-%m-%dT%H:%M:%SZ)
   fi
-  printf 'inflight-files: dropped worktree %s (branch %s): no task record names it, ' "$worktree" "$branch" >&2
-  printf 'no commit is ahead of origin/main, newest change: %s\n' "$when" >&2
+  printf 'inflight-files: dropped worktree %s (branch %s): no task record names it, no commit is ahead of origin/main, newest change: %s\n' \
+    "$worktree" "$branch" "$when" >&2
   return 1
 }
 

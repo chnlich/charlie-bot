@@ -193,6 +193,10 @@ fi
 if [[ -n ${FAKE_CLAUDE_INFLIGHT:-} && -e $IMPROVE_LAUNCH_DIR/inflight-files.txt ]]; then
   cp -- "$IMPROVE_LAUNCH_DIR/inflight-files.txt" "$FAKE_CLAUDE_INFLIGHT"
 fi
+# The in-flight notice the round's final report must carry.
+if [[ -n ${FAKE_CLAUDE_INFLIGHT_NOTICES:-} && -e $IMPROVE_LAUNCH_DIR/inflight-files-notices.txt ]]; then
+  cp -- "$IMPROVE_LAUNCH_DIR/inflight-files-notices.txt" "$FAKE_CLAUDE_INFLIGHT_NOTICES"
+fi
 # The probe answer that the round's environment names, copied as the serve trial reads it.
 if [[ -n ${CHARLIEBOT_TRIAL_PROBE_ANSWER-} ]]; then
   cp -- "$CHARLIEBOT_TRIAL_PROBE_ANSWER" "$FAKE_CLAUDE_PROBE"
@@ -587,6 +591,8 @@ pub struct World {
   pub claude_env: PathBuf,
   /// Where the fake claude copies the round's in-flight files list, inside the round's boundary.
   pub claude_inflight: PathBuf,
+  /// Where the fake claude copies the dropped worktree notices, inside the round's boundary.
+  pub claude_inflight_notices: PathBuf,
   /// Where the fake claude copies its standard input when a test asks for it, inside the round's boundary.
   pub claude_stdin: PathBuf,
   /// Where the improve host's fake `charliebot backend run` writes its arguments, its directory and each variable's
@@ -745,6 +751,7 @@ impl World {
       claude_argv: evidence.join("claude-argv.txt"),
       claude_env: evidence.join("claude-env.txt"),
       claude_inflight: evidence.join("claude-inflight.txt"),
+      claude_inflight_notices: evidence.join("claude-inflight-notices.txt"),
       claude_stdin: evidence.join("claude-stdin.txt"),
       review_argv: evidence.join("review-argv.txt"),
       review_cwd: evidence.join("review-cwd.txt"),
@@ -971,6 +978,7 @@ impl World {
     env.insert("FAKE_CLAUDE_ARGV".to_string(), self.claude_argv.display().to_string());
     env.insert("FAKE_CLAUDE_ENV".to_string(), self.claude_env.display().to_string());
     env.insert("FAKE_CLAUDE_INFLIGHT".to_string(), self.claude_inflight.display().to_string());
+    env.insert("FAKE_CLAUDE_INFLIGHT_NOTICES".to_string(), self.claude_inflight_notices.display().to_string());
     env.insert("FAKE_CODEX_ENV".to_string(), self.codex_env.display().to_string());
     env.insert("FAKE_CODEX_ARGV".to_string(), self.codex_argv.display().to_string());
     env.insert("FAKE_CODEX_AUTH".to_string(), self.codex_auth.display().to_string());

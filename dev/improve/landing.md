@@ -423,6 +423,7 @@ Write one final message at the end of the round.
 It names:
 
 - the topic;
+- each dropped worktree and its newest change time from `"$IMPROVE_LAUNCH_DIR/inflight-files-notices.txt"`;
 - the pull-request link;
 - the evidence summary;
 - for a pull request that names screenshots, each named screenshot and whether the review read it, as its review record shows;

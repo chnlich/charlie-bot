@@ -465,9 +465,16 @@ runtime_origin=$(git -C "$SCRIPT_DIR/../.." remote get-url origin 2>/dev/null) |
 printf '%s\n' "$runtime_origin" >"$payload/origin"
 
 # The in-flight list comes from this host: the worktrees of other lines exist only here.
-if ! "$SCRIPT_DIR/inflight-files.sh" "improve/$direction/" >"$payload/inflight-files.txt"; then
+inflight_stderr="$failure_dir/inflight-files.stderr"
+if ! "$SCRIPT_DIR/inflight-files.sh" "improve/$direction/" >"$payload/inflight-files.txt" 2>"$inflight_stderr"; then
+  cat -- "$inflight_stderr" >&2
   fail 1 'cannot list the in-flight files on this host'
 fi
+if ! sed -n '/^inflight-files: dropped worktree /p' "$inflight_stderr" >"$payload/inflight-files-notices.txt"; then
+  cat -- "$inflight_stderr" >&2
+  fail 1 'cannot collect dropped worktree notices'
+fi
+cat -- "$inflight_stderr" >&2
 
 # The forwarded variables: the gateway and model settings of this backend, which start with
 # ANTHROPIC_ or CLAUDE_, and the two Bash timeouts the round needs. CLAUDE_CONFIG_DIR is the

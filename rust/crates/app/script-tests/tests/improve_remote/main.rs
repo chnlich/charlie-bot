@@ -3080,6 +3080,37 @@ fn utc_timestamp(when: std::time::SystemTime) -> String {
 
 #[test]
 #[ignore = "integration"]
+fn dropped_worktree_notices_reach_the_remote_round() {
+  let world = World::new();
+  let checkout = world.sandbox.root().join("old-edits");
+  world.git(&world.repo, &["worktree", "add", "-q", &checkout.display().to_string(), "-b", "charliebot/old-edits"]);
+  let tracked = checkout.join("dev/improve/remote-launch.sh");
+  let contents = fs::read_to_string(&tracked).expect("the tracked launcher script");
+  fs::write(&tracked, format!("{contents}# stale edit\n")).expect("the tracked stale edit");
+  let untracked = checkout.join("old-untracked.md");
+  fs::write(&untracked, "stale untracked edit\n").expect("the untracked stale edit");
+  let when = days_ago(8);
+  set_change_time(&tracked, when);
+  set_change_time(&untracked, when);
+
+  let run = world.run(&world.env());
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(world.claude_ran(), "the fake claude did not run:\n{}", run.describe());
+  let files = fs::read_to_string(&world.claude_inflight).expect("the round's in-flight files list");
+  assert!(!lists_path(&files, "dev/improve/remote-launch.sh"), "the stale path remained claimed:\n{files}");
+  let notices = fs::read_to_string(&world.claude_inflight_notices).expect("the round's dropped worktree notices");
+  assert!(
+    notices.contains(&checkout.display().to_string())
+      && notices.contains("charliebot/old-edits")
+      && notices.contains(&utc_timestamp(when)),
+    "the remote round did not receive the dropped worktree and its newest change time:\n{notices}\n{}",
+    run.describe()
+  );
+}
+
+#[test]
+#[ignore = "integration"]
 fn a_no_record_worktree_with_only_old_edits_and_no_commit_ahead_names_no_path_and_a_notice() {
   let world = World::new();
   let checkout = worktree_at_main_with_uncommitted_edits(&world, "old-edits");

@@ -30,9 +30,7 @@
 
 use std::collections::HashSet;
 use std::ffi::OsString;
-use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
-use std::os::fd::AsRawFd;
 use std::path::Path;
 
 use charliebot_claude_code::claude_launch;
@@ -42,6 +40,7 @@ use charliebot_core::config;
 use charliebot_core::event_types::{
   self, EDIT_TOOL, MULTI_EDIT_TOOL, NOTEBOOK_EDIT_TOOL, READ_TOOL, SKILL_TOOL, TOOL_INPUT_FILE_PATH, WRITE_TOOL,
 };
+use charliebot_core::fsutil::{self, ExclusiveLock};
 use charliebot_core::home;
 use charliebot_core::posix_path;
 use charliebot_core::subagent::SUBAGENT_TOOL_NAMES;
@@ -855,7 +854,7 @@ fn leaves(value: &Value, key: Option<&str>) -> usize {
 
 /// Read the state, apply one update under the exclusive lock, and write it back when it changed.
 fn update_state(run_dir: &Path, update: impl FnOnce(&mut BudgetState)) -> Result<BudgetState, CliExit> {
-  let _lock = StateLock::acquire(run_dir)?;
+  let _lock = lock_state(run_dir)?;
   let path = run_dir.join(STATE_FILE_NAME);
   let mut state = read_state(&path)?;
   update(&mut state);
@@ -877,29 +876,11 @@ fn read_state(path: &Path) -> Result<BudgetState, CliExit> {
   }
 }
 
-/// The exclusive state lock: an advisory `flock` on a file beside the state file, held to the end
-/// of the read-modify-write. Parallel tool calls' hooks run concurrently, and each one's update is
-/// then atomic.
-struct StateLock {
-  _file: File,
-}
-
-impl StateLock {
-  fn acquire(run_dir: &Path) -> Result<Self, CliExit> {
-    let path = run_dir.join(LOCK_FILE_NAME);
-    let file = OpenOptions::new()
-      .create(true)
-      .read(true)
-      .write(true)
-      .truncate(false)
-      .open(&path)
-      .map_err(|error| CliExit::usage(format!("could not open {}: {error}", path.display())))?;
-    // SAFETY: `file` owns a valid descriptor for the duration of the lock.
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
-      return Err(CliExit::usage(format!("could not lock {}: {}", path.display(), std::io::Error::last_os_error())));
-    }
-    Ok(Self { _file: file })
-  }
+/// The exclusive state lock, held to the end of the read-modify-write. Parallel tool calls' hooks run concurrently, and
+/// each one's update is then atomic.
+fn lock_state(run_dir: &Path) -> Result<ExclusiveLock, CliExit> {
+  let path = run_dir.join(LOCK_FILE_NAME);
+  fsutil::lock_exclusive(&path).map_err(|error| CliExit::usage(format!("could not lock {}: {error}", path.display())))
 }
 
 macro_rules! hook_pattern {

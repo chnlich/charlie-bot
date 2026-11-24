@@ -6,7 +6,7 @@
 //! process writes is visible to the next read of every other process. No write drops another process's row.
 
 use std::collections::HashMap;
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, anyhow};
@@ -16,7 +16,6 @@ use charliebot_registry::Registry;
 use charliebot_registry::backend::QuotaOutlook;
 use charliebot_registry::context::FeatureContext;
 use charliebot_store::metadata::UtcDateTime;
-use nix::fcntl::{Flock, FlockArg};
 use serde::{Deserialize, Serialize};
 use time::{Duration, OffsetDateTime, UtcOffset};
 
@@ -221,20 +220,12 @@ impl BackendAvailability {
   }
 
   /// Take the exclusive lock that serializes every process's read-merge-write of the state file.
-  fn lock(&self) -> anyhow::Result<Flock<fs::File>> {
+  fn lock(&self) -> anyhow::Result<fsutil::ExclusiveLock> {
     let file_name =
       self.path.file_name().expect("the availability path has a file name").to_string_lossy().into_owned();
     let lock_path = self.path.with_file_name(format!("{file_name}{LOCK_SUFFIX}"));
     fs::create_dir_all(self.path.parent().expect("the availability path has a parent"))?;
-    let file = OpenOptions::new()
-      .create(true)
-      .read(true)
-      .write(true)
-      .truncate(false)
-      .open(&lock_path)
-      .with_context(|| format!("could not lock {}", display_state_path()))?;
-    Flock::lock(file, FlockArg::LockExclusive)
-      .map_err(|(_, error)| anyhow!("could not lock {}: {error}", display_state_path()))
+    fsutil::lock_exclusive(&lock_path).map_err(|error| anyhow!("could not lock {}: {error}", display_state_path()))
   }
 
   /// Read the file's current rows. A missing file is empty. Anything else unreadable names the file.

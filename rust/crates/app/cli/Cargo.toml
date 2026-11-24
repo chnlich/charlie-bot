@@ -44,7 +44,6 @@ chrono.workspace = true
 clap.workspace = true
 fancy-regex.workspace = true
 getrandom.workspace = true
-libc.workspace = true
 nix.workspace = true
 percent-encoding.workspace = true
 regex.workspace = true

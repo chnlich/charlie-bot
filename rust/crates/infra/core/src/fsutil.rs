@@ -1,6 +1,6 @@
-//! Atomic file publication and the read-only mapping that the log walkers scan backward.
+//! Atomic file publication, the exclusive file lock, and the read-only mapping that the log walkers scan backward.
 
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Read, Write};
 use std::num::NonZeroU64;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -8,6 +8,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 use memmap2::Mmap;
+use nix::fcntl::{Flock, FlockArg};
 
 /// `path` written with `text` through a uniquely named sibling `.<name>.<uuid hex>.tmp` swapped in by
 /// `rename`. A reader then sees the old content or the new, never a partial write. The sibling is
@@ -131,6 +132,20 @@ pub fn atomic_write_mode(path: &Path, bytes: &[u8], mode: u32) -> std::io::Resul
   result
 }
 
+/// An exclusive advisory lock on a file, held until the guard drops.
+pub struct ExclusiveLock {
+  _file: Flock<File>,
+}
+
+/// Open `path`, creating it when absent, and take an exclusive `flock` on it, blocking until the lock is granted. The
+/// caller holds the guard to the end of its read-modify-write, so the writers of one file run one at a time. The lock
+/// belongs to the open file description, so a second call on the same path waits in this process too.
+pub fn lock_exclusive(path: &Path) -> io::Result<ExclusiveLock> {
+  let file = OpenOptions::new().create(true).read(true).write(true).truncate(false).open(path)?;
+  let file = Flock::lock(file, FlockArg::LockExclusive).map_err(|(_, errno)| io::Error::from(errno))?;
+  Ok(ExclusiveLock { _file: file })
+}
+
 /// The OS page size in bytes: the granularity at which a mapped-file walk faults a file in. A backward walk that
 /// reads page-aligned spans therefore touches those same pages.
 pub fn page_bytes() -> u64 {
@@ -199,4 +214,23 @@ pub fn read_or_map_file(path: &Path) -> io::Result<Option<FileBytes>> {
   // SAFETY: the log is append-only while mapped, as the doc comment above requires; no writer truncates it in place.
   let map = unsafe { Mmap::map(&file)? };
   Ok(Some(FileBytes::Mapped(map)))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn a_held_exclusive_lock_refuses_a_second_lock_until_it_drops() {
+    let directory = tempfile::tempdir().expect("the test directory is created");
+    let path = directory.path().join("state.lock");
+    let held = lock_exclusive(&path).expect("the first lock is granted");
+    let second = OpenOptions::new().read(true).write(true).open(&path).expect("the lock file opens again");
+    assert!(
+      Flock::lock(second, FlockArg::LockExclusiveNonblock).is_err(),
+      "a second non-blocking lock is refused while the first is held"
+    );
+    drop(held);
+    lock_exclusive(&path).expect("the lock is granted once the first drops");
+  }
 }

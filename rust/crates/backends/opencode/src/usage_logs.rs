@@ -219,7 +219,7 @@ mod tests {
   use super::*;
   use crate::test_store::{Message, clear_messages, create_store, touch, write_message};
 
-  /// A created time: 2026-10-14T17:46:40 UTC.
+  /// A `time.created` value in Unix milliseconds, for the instant that the expected record's `ts` names.
   const CREATED_MS: i64 = 1_792_000_000_000;
 
   fn blob(model: &str, provider: &str, input: i64, output: i64) -> String {

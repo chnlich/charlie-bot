@@ -23,6 +23,10 @@
 //! reads the width and height from the PNG's IHDR chunk, so a file's name does not decide its size. Overlap,
 //! clipping and missing controls stay with the reviewer.
 //!
+//! An improve round's merge also needs a review record that shows the review read each screenshot the PR body names
+//! by its file name (`check_review_reads`). The record is the `events.ndjson` that `charliebot backend run` writes in
+//! the review's working directory; a read counts when its `Read` call's result was not an error.
+//!
 //! A landing's PR body also names the approved demo (`Demo: <absolute path>`, whose file must exist) and a
 //! `View: <URL>` line naming the full URL, path and query, that opens the changed state. A landing carries each View
 //! line into the landed commit as a trailer, which `scripts/switch-server.sh` reads back to capture the live page
@@ -32,12 +36,17 @@
 //! knows the session, any other view on a 2xx answer. The landing refuses a session view the server does not know.
 //! The switch refuses each view that does not resolve, before it captures that view.
 
+use std::collections::BTreeSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
 use charliebot_cli_common::{client, route};
+use charliebot_core::event_types::{
+  IS_ERROR, MESSAGE_CONTENT_POINTER, READ_TOOL, TOOL_INPUT_FILE_PATH, TOOL_RESULT, TOOL_USE, TOOL_USE_ID,
+};
 use charliebot_registry::pages::is_served_path;
+use serde_json::Value;
 
 /// The CSS window sizes, at device pixel ratio 1, that a screenshot of a changed page shows: a 1920 wide
 /// screen at 125% zoom (`1536`), a narrower desktop window, and a phone. A capture at another scale, such as
@@ -213,6 +222,62 @@ pub fn check_screenshot_dir(dir: &Path, count_per_size: usize) -> anyhow::Result
   check_size_coverage(&sizes, count_per_size, &format!("screenshot directory {}", dir.display()))
 }
 
+/// Refuses a review record that shows no successful `Read` of a screenshot that the PR body names, and a PR body that
+/// names no screenshot, because the review then has no screenshot it must read (`check_review_reads`).
+pub fn check_review_reads(record: &Path, named: &[String]) -> anyhow::Result<()> {
+  if named.is_empty() {
+    bail!(
+      "the PR body names no screenshot file, so the review has no screenshot to read; name each screenshot by its file \
+       name"
+    );
+  }
+  let reads = review_read_names(record)?;
+  let unread: Vec<&str> = named.iter().map(String::as_str).filter(|name| !reads.contains(*name)).collect();
+  if unread.is_empty() {
+    return Ok(());
+  }
+  bail!(
+    "the review record {} shows no read of {}; the review must read each screenshot the PR body names",
+    record.display(),
+    unread.join(", ")
+  )
+}
+
+/// The file names that a review record shows the review read: each `Read` call whose result was not an error. The
+/// record is the raw event stream of a Claude run. Its assistant events carry the `tool_use` blocks, and its user
+/// events carry the `tool_result` block that answers each one by its `tool_use_id` (`review_read_names`).
+fn review_read_names(record: &Path) -> anyhow::Result<BTreeSet<String>> {
+  let text =
+    std::fs::read_to_string(record).with_context(|| format!("cannot read the review record {}", record.display()))?;
+  let mut reads: Vec<(String, String)> = Vec::new();
+  let mut succeeded: BTreeSet<String> = BTreeSet::new();
+  for (index, line) in text.lines().enumerate().filter(|(_, line)| !line.trim().is_empty()) {
+    let event: Value = serde_json::from_str(line)
+      .with_context(|| format!("line {} of the review record {} is not JSON", index + 1, record.display()))?;
+    let Some(blocks) = event.pointer(MESSAGE_CONTENT_POINTER).and_then(Value::as_array) else {
+      continue;
+    };
+    for block in blocks {
+      match block.get("type").and_then(Value::as_str) {
+        Some(TOOL_USE) if block.get("name").and_then(Value::as_str) == Some(READ_TOOL) => {
+          let id = block.get("id").and_then(Value::as_str);
+          let file = block.get("input").and_then(|input| input.get(TOOL_INPUT_FILE_PATH)).and_then(Value::as_str);
+          if let (Some(id), Some(file)) = (id, file) {
+            reads.push((id.to_string(), file_name(file).to_string()));
+          }
+        }
+        Some(TOOL_RESULT) if block.get(IS_ERROR).and_then(Value::as_bool) != Some(true) => {
+          if let Some(id) = block.get(TOOL_USE_ID).and_then(Value::as_str) {
+            succeeded.insert(id.to_string());
+          }
+        }
+        _ => {}
+      }
+    }
+  }
+  Ok(reads.into_iter().filter(|(id, _)| succeeded.contains(id)).map(|(_, name)| name).collect())
+}
+
 /// Refuses sizes that do not cover each window size `count_per_size` times, and names each size the files
 /// hold outside the window sizes and each window size that falls short (`check_size_coverage`).
 fn check_size_coverage(sizes: &[(PathBuf, (u32, u32))], count_per_size: usize, what: &str) -> anyhow::Result<()> {
@@ -276,6 +341,25 @@ fn named_png_paths(body: &str) -> Vec<&str> {
     .map(|token| token.trim_matches(PATH_WRAPPERS))
     .filter(|token| token.starts_with('/') && token.ends_with(".png"))
     .collect()
+}
+
+/// The screenshot file names that a PR body names: each token that ends in `.png`, by its file name, sorted and without
+/// repeats. A round's body names each screenshot by its file name, where a landing names the absolute path
+/// (`named_png_paths`).
+pub fn named_screenshots(pr_body: &str) -> Vec<String> {
+  pr_body
+    .split(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/')))
+    .map(|token| token.trim_end_matches('.'))
+    .filter(|token| token.ends_with(".png"))
+    .map(|token| file_name(token).to_string())
+    .collect::<BTreeSet<String>>()
+    .into_iter()
+    .collect()
+}
+
+/// The part of a path after its last `/`, or the whole text when it holds no `/` (`file_name`).
+fn file_name(path: &str) -> &str {
+  path.rsplit_once('/').map_or(path, |(_, name)| name)
 }
 
 /// One window size's label, e.g. `1536x900` (`size_label`).
@@ -503,5 +587,77 @@ mod tests {
   #[test]
   fn the_window_sizes_text_names_every_size() {
     assert_eq!(window_sizes_text(), "1536x900, 1400x1000, 390x844");
+  }
+
+  /// A review record that reads each file in `reads`: a `Read` call on an assistant event, answered on the next user
+  /// event by a `tool_result` that is an error when the file is in `errors`.
+  fn review_record(dir: &Path, reads: &[&str], errors: &[&str]) -> PathBuf {
+    let mut lines = Vec::new();
+    for (index, name) in reads.iter().enumerate() {
+      let id = format!("toolu_{index}");
+      lines.push(
+        serde_json::json!({"type": "assistant", "message": {"content": [
+          {"type": "tool_use", "id": id.clone(), "name": "Read", "input": {"file_path": format!("/evidence/{name}")}}
+        ]}})
+        .to_string(),
+      );
+      lines.push(
+        serde_json::json!({"type": "user", "message": {"content": [
+          {"type": "tool_result", "tool_use_id": id, "is_error": errors.contains(name), "content": "ok"}
+        ]}})
+        .to_string(),
+      );
+    }
+    let path = dir.join("events.ndjson");
+    std::fs::write(&path, lines.join("\n") + "\n").expect("the record is written");
+    path
+  }
+
+  #[test]
+  fn the_body_names_each_screenshot_by_its_file_name_once() {
+    let body = "- Before, 1536x900: `voice-before-idle-1536x900.png`\n\
+                - After, 1536x900: voice-after-idle-1536x900.png.\n\
+                - Again: evidence/voice-before-idle-1536x900.png\n\
+                Demo: /tmp/demo.html\n";
+
+    assert_eq!(named_screenshots(body), ["voice-after-idle-1536x900.png", "voice-before-idle-1536x900.png"]);
+  }
+
+  #[test]
+  fn a_review_that_read_every_named_screenshot_passes() {
+    let dir = tempfile::tempdir().expect("temporary directory is available");
+    let record = review_record(dir.path(), &["a.png", "b.png"], &[]);
+
+    check_review_reads(&record, &["a.png".to_string(), "b.png".to_string()]).expect("both screenshots were read");
+  }
+
+  #[test]
+  fn a_review_that_missed_a_named_screenshot_is_refused_by_name() {
+    let dir = tempfile::tempdir().expect("temporary directory is available");
+    let record = review_record(dir.path(), &["a.png"], &[]);
+
+    let refusal = check_review_reads(&record, &["a.png".to_string(), "b.png".to_string()])
+      .expect_err("b.png was never read")
+      .to_string();
+
+    assert!(refusal.contains("shows no read of b.png"), "{refusal}");
+  }
+
+  #[test]
+  fn a_read_whose_result_is_an_error_is_not_a_read() {
+    let dir = tempfile::tempdir().expect("temporary directory is available");
+    let record = review_record(dir.path(), &["a.png"], &["a.png"]);
+
+    assert!(check_review_reads(&record, &["a.png".to_string()]).is_err());
+  }
+
+  #[test]
+  fn a_body_naming_no_screenshot_refuses_the_review_record() {
+    let dir = tempfile::tempdir().expect("temporary directory is available");
+    let record = review_record(dir.path(), &["a.png"], &[]);
+
+    let refusal = check_review_reads(&record, &[]).expect_err("no screenshot is named").to_string();
+
+    assert!(refusal.contains("names no screenshot file"), "{refusal}");
   }
 }

@@ -787,6 +787,20 @@ fn verdict_comment(sha: &str, review: &str) -> String {
   format!("Review verdict on {sha}\n\n{review}")
 }
 
+/// The screenshot names that `MergeWorld::write_screenshots(count)` writes, in its order.
+fn shot_names(count: usize) -> Vec<String> {
+  charliebot_tasks::web_screenshots::WINDOW_SIZES
+    .iter()
+    .flat_map(|(width, height)| (0..count).map(move |copy| format!("shot-{width}-{height}-{copy}.png")))
+    .collect()
+}
+
+/// A pull request body that names each of `names` by its file name, then carries `rest`.
+fn body_naming(names: &[String], rest: &str) -> String {
+  let list: String = names.iter().map(|name| format!("- {name}\n")).collect();
+  format!("## Evidence\n{list}{rest}")
+}
+
 /// One synthetic pull request for `pr-merge`: the changed paths, the title and body, the draft state, the call log and
 /// the copied squash message, plus an evidence directory the caller fills with screenshots.
 struct MergeWorld {
@@ -858,6 +872,30 @@ impl MergeWorld {
     }
   }
 
+  /// Writes the review record of a review that read each of `reads`, as `charliebot backend run` writes its
+  /// `events.ndjson`: a `Read` call on an assistant event, answered on the next user event by its result.
+  fn review_record(&self, reads: &[String]) -> PathBuf {
+    let mut lines = Vec::new();
+    for (index, name) in reads.iter().enumerate() {
+      let id = format!("toolu_{index}");
+      lines.push(
+        serde_json::json!({"type": "assistant", "message": {"content": [
+          {"type": "tool_use", "id": id.clone(), "name": "Read", "input": {"file_path": format!("/evidence/{name}")}}
+        ]}})
+        .to_string(),
+      );
+      lines.push(
+        serde_json::json!({"type": "user", "message": {"content": [
+          {"type": "tool_result", "tool_use_id": id, "is_error": false, "content": "ok"}
+        ]}})
+        .to_string(),
+      );
+    }
+    let path = self.sandbox.root().join("events.ndjson");
+    std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+    path
+  }
+
   fn merge(&self, args: &[&str]) -> Run {
     let mut command = harness::command("bash", &self.env);
     command.arg(github_post()).arg("pr-merge").args(args);
@@ -892,10 +930,18 @@ fn a_pr_merge_refuses_a_web_page_change_whose_evidence_lacks_a_window_size() {
 #[test]
 #[ignore = "integration"]
 fn a_pr_merge_refuses_a_web_page_change_without_a_view_line() {
-  let world = MergeWorld::new("web/static/ui.js\n", "## Evidence\nbefore and after.\n");
+  let names = shot_names(2);
+  let world = MergeWorld::new("web/static/ui.js\n", &body_naming(&names, "before and after.\n"));
   world.write_screenshots(2);
+  let record = world.review_record(&names);
 
-  let run = world.merge(&["--evidence-dir", world.evidence.to_str().unwrap(), "5046"]);
+  let run = world.merge(&[
+    "--evidence-dir",
+    world.evidence.to_str().unwrap(),
+    "--review-record",
+    record.to_str().unwrap(),
+    "5046",
+  ]);
 
   assert_eq!(run.code, 2, "{}", run.describe());
   assert!(
@@ -909,16 +955,60 @@ fn a_pr_merge_refuses_a_web_page_change_without_a_view_line() {
 #[test]
 #[ignore = "integration"]
 fn a_pr_merge_refuses_a_view_without_a_leading_slash() {
-  let world = MergeWorld::new("web/static/ui.js\n", "## Evidence\nbefore and after.\n\nView: diff\n");
+  let names = shot_names(2);
+  let world = MergeWorld::new("web/static/ui.js\n", &body_naming(&names, "\nView: diff\n"));
   world.write_screenshots(2);
+  let record = world.review_record(&names);
 
-  let run = world.merge(&["--evidence-dir", world.evidence.to_str().unwrap(), "5046"]);
+  let run = world.merge(&[
+    "--evidence-dir",
+    world.evidence.to_str().unwrap(),
+    "--review-record",
+    record.to_str().unwrap(),
+    "5046",
+  ]);
 
   assert_eq!(run.code, 2, "{}", run.describe());
   assert!(run.stderr.contains("PR 5046"), "{}", run.stderr);
   assert!(run.stderr.contains("must start with `/`"), "{}", run.stderr);
   assert!(world.merge_calls().is_empty(), "nothing may merge: {}", run.describe());
   assert!(!world.merge_body.exists(), "no squash message was written");
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_refuses_a_web_page_change_whose_review_record_lacks_a_read_of_a_named_screenshot() {
+  let names = shot_names(2);
+  let world = MergeWorld::new("web/static/ui.js\n", &body_naming(&names, "\nView: /?session=abc\n"));
+  world.write_screenshots(2);
+  let record = world.review_record(&names[1..]);
+
+  let run = world.merge(&[
+    "--evidence-dir",
+    world.evidence.to_str().unwrap(),
+    "--review-record",
+    record.to_str().unwrap(),
+    "5046",
+  ]);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("shows no read of shot-1536-900-0.png"), "{}", run.describe());
+  assert!(world.merge_calls().is_empty(), "nothing may merge: {}", run.describe());
+  assert!(!world.merge_body.exists(), "no squash message was written");
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_refuses_a_web_page_change_without_a_review_record() {
+  let names = shot_names(2);
+  let world = MergeWorld::new("web/static/ui.js\n", &body_naming(&names, "\nView: /?session=abc\n"));
+  world.write_screenshots(2);
+
+  let run = world.merge(&["--evidence-dir", world.evidence.to_str().unwrap(), "5046"]);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("--review-record"), "{}", run.describe());
+  assert!(world.merge_calls().is_empty(), "nothing may merge: {}", run.describe());
 }
 
 #[test]
@@ -935,10 +1025,18 @@ fn a_pr_merge_of_a_non_web_change_needs_no_evidence_directory() {
 #[test]
 #[ignore = "integration"]
 fn a_pr_merge_carries_the_view_line_into_the_squash_message() {
-  let world = MergeWorld::new("web/static/ui.js\n", "## Evidence\nbefore and after.\n\nView: /?session=abc\n");
+  let names = shot_names(2);
+  let world = MergeWorld::new("web/static/ui.js\n", &body_naming(&names, "\nView: /?session=abc\n"));
   world.write_screenshots(2);
+  let record = world.review_record(&names);
 
-  let run = world.merge(&["--evidence-dir", world.evidence.to_str().unwrap(), "5046"]);
+  let run = world.merge(&[
+    "--evidence-dir",
+    world.evidence.to_str().unwrap(),
+    "--review-record",
+    record.to_str().unwrap(),
+    "5046",
+  ]);
 
   assert_eq!(run.code, 0, "{}", run.describe());
   let calls = world.merge_calls();

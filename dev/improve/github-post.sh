@@ -19,6 +19,8 @@
 # refuses a draft pull request, a web page change whose evidence directory fails
 # the screenshot check, whose body lacks a full-URL View line, or whose View value
 # does not start with `/`, and carries the View lines into the squash commit message.
+# For a web page change, the review record (--review-record, the review's events.ndjson)
+# must show a read of each screenshot the body names.
 # It also refuses a merge unless the newest verdict comment names the pull request's head sha and reports no
 # issues. pr-comment --verdict-head writes that comment: its first line names the head the review read.
 #
@@ -37,7 +39,7 @@
 #   github-post.sh pr-comment --body-file <file> [--verdict-head <sha>] [gh pr comment args...]
 #   github-post.sh pr-close --comment-file <file> [--delete-branch] [gh pr close args...]
 #   github-post.sh pr-edit [--title <title>] [--body-file <file>] [--repo <owner/repo>] [<PR>]
-#   github-post.sh pr-merge [--evidence-dir <dir>] <PR> [--repo <owner/repo>]
+#   github-post.sh pr-merge [--evidence-dir <dir>] [--review-record <file>] <PR> [--repo <owner/repo>]
 #   github-post.sh push [git push args...]
 #
 # Exit codes: 0 sent, 1 leak hit (nothing sent), 2 setup refusal (nothing sent),
@@ -277,10 +279,11 @@ case "$subcommand" in
     # `charliebot screenshots check`, which reads the changed paths on stdin, and
     # its pull request body must carry a full-URL View line starting with `/`. The check prints a
     # `web page change:` line exactly when the change alters a web page, so this
-    # script keeps no second copy of the rule. The View lines go into the squash
+    # script keeps no second copy of the rule. The check also reads the review record, which must
+    # show a read of each screenshot the body names. The View lines go into the squash
     # commit message as trailers, which the release switch reads back to capture
     # the live page.
-    evidence_dir='' pr_selector='' pr_repo=''
+    evidence_dir='' review_record='' pr_selector='' pr_repo=''
     set -- "${orig_args[@]}"
     while [[ $# -gt 0 ]]; do
       case "$1" in
@@ -294,6 +297,16 @@ case "$subcommand" in
           [[ -n "$evidence_dir" ]] || { printf 'Refused --evidence-dir without a directory.\n' >&2; exit 2; }
           shift
           ;;
+        --review-record)
+          [[ $# -ge 2 && -n "$2" ]] || { printf 'Refused --review-record without a file.\n' >&2; exit 2; }
+          review_record=$2
+          shift 2
+          ;;
+        --review-record=*)
+          review_record=${1#--review-record=}
+          [[ -n "$review_record" ]] || { printf 'Refused --review-record without a file.\n' >&2; exit 2; }
+          shift
+          ;;
         --repo|-R)
           [[ $# -ge 2 && -n "$2" ]] || { printf 'Refused %s without a repo value.\n' "$1" >&2; exit 2; }
           pr_repo=$2
@@ -305,7 +318,8 @@ case "$subcommand" in
           shift
           ;;
         -*)
-          printf 'Refused %s: pr-merge takes --evidence-dir, --repo and one PR selector.\n' "${1%%=*}" >&2
+          printf 'Refused %s: pr-merge takes --evidence-dir, --review-record, --repo and one PR selector.\n' \
+            "${1%%=*}" >&2
           exit 2
           ;;
         *)
@@ -379,8 +393,9 @@ case "$subcommand" in
     }
     # `charliebot` is the round's own build (dev/improve/remote-runner.sh builds it), so it carries
     # the window sizes this check reads.
-    check_args=(screenshots check)
+    check_args=(screenshots check --pr-body "$tmp_dir/pr-body")
     [[ -z "$evidence_dir" ]] || check_args+=(--dir "$evidence_dir")
+    [[ -z "$review_record" ]] || check_args+=(--review-record "$review_record")
     set +e
     web_change=$(printf '%s\n' "$changed" | charliebot "${check_args[@]}")
     check_status=$?

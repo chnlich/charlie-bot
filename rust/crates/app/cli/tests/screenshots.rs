@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 use charliebot_tasks::web_screenshots::WINDOW_SIZES;
+use serde_json::json;
 use tempfile::TempDir;
 
 #[path = "common/stand_in.rs"]
@@ -32,10 +33,41 @@ fn evidence_dir(count: usize) -> TempDir {
   dir
 }
 
-fn check(dir: &Path, changed: &str) -> Output {
-  let mut child = Command::new(env!("CARGO_BIN_EXE_charliebot"))
-    .args(["screenshots", "check", "--dir"])
-    .arg(dir)
+/// The names `evidence_dir(count)` writes, in its order.
+fn shot_names(count: usize) -> Vec<String> {
+  (0..WINDOW_SIZES.len()).flat_map(|index| (0..count).map(move |copy| format!("shot-{index}-{copy}.png"))).collect()
+}
+
+/// A review directory that holds a PR body naming each of `named` and a review record whose review read each of
+/// `reads`. The record's reads are the `Read` calls that the check counts.
+fn review_of(named: &[String], reads: &[String]) -> TempDir {
+  let dir = tempfile::tempdir().expect("a temporary directory");
+  let body: String = named.iter().map(|name| format!("- {name}\n")).collect();
+  fs::write(dir.path().join("pr-body.md"), body).expect("the PR body is written");
+  let mut lines = Vec::new();
+  for (index, name) in reads.iter().enumerate() {
+    let id = format!("toolu_{index}");
+    let call = json!({"type": "assistant", "message": {"content": [
+      {"type": "tool_use", "id": id.clone(), "name": "Read", "input": {"file_path": format!("/evidence/{name}")}}
+    ]}});
+    let result = json!({"type": "user", "message": {"content": [
+      {"type": "tool_result", "tool_use_id": id, "is_error": false, "content": "ok"}
+    ]}});
+    lines.push(call.to_string());
+    lines.push(result.to_string());
+  }
+  fs::write(dir.path().join("events.ndjson"), lines.join("\n") + "\n").expect("the review record is written");
+  dir
+}
+
+/// Runs `screenshots check` on the changed paths; with `review`, it names that directory's PR body and review record.
+fn check(dir: &Path, changed: &str, review: Option<&Path>) -> Output {
+  let mut command = Command::new(env!("CARGO_BIN_EXE_charliebot"));
+  command.args(["screenshots", "check", "--dir"]).arg(dir);
+  if let Some(review) = review {
+    command.arg("--pr-body").arg(review.join("pr-body.md")).arg("--review-record").arg(review.join("events.ndjson"));
+  }
+  let mut child = command
     .stdin(Stdio::piped())
     .stdout(Stdio::piped())
     .stderr(Stdio::piped())
@@ -54,7 +86,8 @@ fn text(output: &Output) -> String {
 #[ignore = "integration"]
 fn a_change_that_touches_no_web_page_passes_without_a_directory() {
   let missing = PathBuf::from("/nonexistent/evidence");
-  let output = check(&missing, "rust/crates/x/src/lib.rs\nprompts/master.md\nweb/tests/a.test.js\nweb/package.json\n");
+  let output =
+    check(&missing, "rust/crates/x/src/lib.rs\nprompts/master.md\nweb/tests/a.test.js\nweb/package.json\n", None);
 
   assert_eq!(output.status.code(), Some(0), "{}", text(&output));
   assert!(String::from_utf8_lossy(&output.stdout).is_empty());
@@ -62,9 +95,11 @@ fn a_change_that_touches_no_web_page_passes_without_a_directory() {
 
 #[test]
 #[ignore = "integration"]
-fn a_web_page_change_with_two_screenshots_of_each_size_passes_and_names_the_change() {
+fn a_web_page_change_whose_review_read_every_named_screenshot_passes_and_names_the_change() {
   let dir = evidence_dir(2);
-  let output = check(dir.path(), "web/static/app.js\n");
+  let names = shot_names(2);
+  let review = review_of(&names, &names);
+  let output = check(dir.path(), "web/static/app.js\n", Some(review.path()));
 
   assert_eq!(output.status.code(), Some(0), "{}", text(&output));
   assert!(String::from_utf8_lossy(&output.stdout).contains("web page change: 1 path(s)"), "{}", text(&output));
@@ -72,9 +107,21 @@ fn a_web_page_change_with_two_screenshots_of_each_size_passes_and_names_the_chan
 
 #[test]
 #[ignore = "integration"]
+fn a_web_page_change_whose_review_missed_a_named_screenshot_exits_1() {
+  let dir = evidence_dir(2);
+  let names = shot_names(2);
+  let review = review_of(&names, &names[1..]);
+  let output = check(dir.path(), "web/static/app.js\n", Some(review.path()));
+
+  assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+  assert!(text(&output).contains("shows no read of shot-0-0.png"), "{}", text(&output));
+}
+
+#[test]
+#[ignore = "integration"]
 fn a_web_page_change_with_one_screenshot_of_each_size_exits_1() {
   let dir = evidence_dir(1);
-  let output = check(dir.path(), "web/static/app.js\n");
+  let output = check(dir.path(), "web/static/app.js\n", None);
 
   assert_eq!(output.status.code(), Some(1), "{}", text(&output));
   assert!(text(&output).contains("1536x900"), "{}", text(&output));
@@ -87,7 +134,7 @@ fn a_web_page_change_with_a_screenshot_of_the_wrong_height_exits_1() {
   let (width, height) = WINDOW_SIZES[2];
   write_png(dir.path(), "wrong.png", width, height * 2);
   fs::remove_file(dir.path().join("shot-2-0.png")).expect("one real phone screenshot is removed");
-  let output = check(dir.path(), "prompts/plan_template.html\n");
+  let output = check(dir.path(), "prompts/plan_template.html\n", None);
 
   assert_eq!(output.status.code(), Some(1), "{}", text(&output));
   let printed = text(&output);

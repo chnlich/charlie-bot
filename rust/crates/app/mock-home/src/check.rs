@@ -53,7 +53,7 @@ pub fn check(output: &Path, base_url: &str) -> Result<CheckOutcome> {
     return Ok(CheckOutcome::Mismatches);
   }
   println!(
-    "check passed: {} manifest sessions; newest messages of {} sessions match {MANIFEST_NAME}; {} scheduled tasks are bound",
+    "check passed: {} sessions; newest messages of {} sessions match {MANIFEST_NAME}; {} scheduled tasks are bound",
     manifest.session_count,
     checked.len(),
     manifest.cron_tasks.len()

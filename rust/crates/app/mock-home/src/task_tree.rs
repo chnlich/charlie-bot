@@ -980,6 +980,7 @@ pub(crate) fn write_home(
     manifest_sessions.push(ManifestSession { id, event_log_bytes: live_bytes, last_message });
     total += log.bytes;
   }
+  write_imported_chat(staging, shape)?;
   let cron_tasks = cron::write_fixture(staging, &cron_bound_sessions(&plan)?)?;
   write_marker_seed(staging, &plan)?;
   write_live_runs(staging, &plan)?;
@@ -994,6 +995,43 @@ pub(crate) fn write_home(
   };
   session::write_json(&staging.join(MANIFEST_NAME), &manifest, b" ")?;
   Ok(total)
+}
+
+/// Writes the imported chat whose missing task boundary exercises the startup lab's failed-node path. The serve shape
+/// omits it so a serve trial starts without a recovery failure.
+const IMPORTED_CHAT_ID: &str = "6f0c3b8e-2d9a-4e71-8b5c-1a7e9d4f0b26";
+
+fn write_imported_chat(staging: &Path, shape: Shape) -> Result<()> {
+  if shape != Shape::TaskTree {
+    return Ok(());
+  }
+  let session_dir = staging.join(IMPORTED_CHAT_ID);
+  fs::create_dir_all(layout::data_dir(&session_dir))
+    .with_context(|| format!("cannot create {}", session_dir.display()))?;
+  let stamp = session::stamp(marker_time());
+  let metadata = NodeMetadata {
+    session: SessionMetadata {
+      id: IMPORTED_CHAT_ID.to_string(),
+      name: "Imported chat".to_string(),
+      status: "active",
+      profile: "manager",
+      backend: "mock-backend",
+      created_at: stamp.clone(),
+      updated_at: stamp,
+      schema_version: 2,
+      has_unread: false,
+      starred: false,
+      task: None,
+      web_status: None,
+    },
+    task_parent_id: None,
+    task: None,
+    archive_offset: 0,
+  };
+  session::write_json(&layout::metadata_path(&session_dir), &metadata, b"  ")?;
+  let path = layout::chat_events_path(&session_dir);
+  let line = json!({"id": "imported-1", "type": "user", "content": "hello from an imported chat"});
+  fs::write(&path, format!("{line}\n")).with_context(|| format!("cannot write {}", path.display()))
 }
 
 /// The manager sessions that the task-tree shape's cron fixture binds: the first `BOUND_SESSIONS` managers of the plan. A
@@ -1144,6 +1182,16 @@ mod tests {
   /// The reference start's follow-up totals, scaled to `sessions`.
   fn scaled(reference: f64, sessions: usize) -> f64 {
     reference * sessions as f64 / REFERENCE_NODES
+  }
+
+  #[test]
+  fn imported_chat_is_only_in_the_startup_lab_shape() {
+    for (shape, present) in [(Shape::TaskTree, true), (Shape::ServeTaskTree, false)] {
+      let home = tempfile::tempdir().unwrap();
+      write_imported_chat(home.path(), shape).unwrap();
+      let path = layout::chat_events_path(&home.path().join(IMPORTED_CHAT_ID));
+      assert_eq!(path.exists(), present, "{shape:?}");
+    }
   }
 
   /// A kept session takes a full pass, and a pass on a session with no task boundary, run or prompt reports a node

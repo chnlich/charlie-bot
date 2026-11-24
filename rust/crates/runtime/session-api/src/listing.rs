@@ -15,7 +15,7 @@ use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_core::event_types::POOL;
 use charliebot_core::headers::ACCEPT_ENCODING;
 use charliebot_registry::Registry;
-use charliebot_registry::thread_origin::{is_thread_session, platform_of};
+use charliebot_registry::thread_origin::platform_of;
 use charliebot_store::metadata::{
   CREATED_AT_FIELD, HAS_PENDING_TRIGGER, HAS_RUNNING_TASKS, HAS_UNREAD, NATIVE_MODEL, NEXT_TRIGGER_AT,
   PENDING_TRIGGER_COUNT, ROUND_RATINGS, RUN_BACKEND, SCHEDULE_ALLOW_FAILURE, SCHEDULE_CRON, SCHEDULE_ENABLED,
@@ -24,7 +24,7 @@ use charliebot_store::metadata::{
   WORK_STATE,
 };
 use charliebot_store::sidebar_state::{HAS_PENDING_PLAN_APPROVAL, HAS_WAITING_ITEMS};
-use charliebot_store::{SharedSubtreeRoots, Store, StoreResult};
+use charliebot_store::{Store, StoreResult};
 use http::HeaderValue;
 use serde_json::{Map, Value, json};
 
@@ -297,10 +297,11 @@ impl PageRows {
 /// The page corpus one request built, reused while every input that shapes it still holds.
 ///
 /// Building the corpus walks every active session: the store filters the corpus, the sidebar resolves each row's
-/// overlay, and the page drops the rows that an owned subtree holds. A repeat page request reads the same corpus, so
+/// overlay, and the page drops the rows that a sequence subtree holds. A repeat page request reads the same corpus, so
 /// the memo answers it from the identities that would move if any of it changed. The listing generation names the
 /// metadata corpus: the store numbers every rebuild, so the same number is the same rows in the same order. The
-/// derived archive ids and the subtree roots name the two filters, and the sidebar generation names the overlays.
+/// derived archive ids and the sequence subtree roots name the two filters, and the sidebar generation names the
+/// overlays.
 /// The repository identities name the store and registry the corpus came from. Both are held weakly: a dropped
 /// store's corpus never answers another store's request.
 static PAGE_CORPUS_MEMO: LazyLock<Mutex<Option<PageCorpusEntry>>> = LazyLock::new(|| Mutex::new(None));
@@ -312,7 +313,6 @@ struct PageCorpusEntry {
   generation: u64,
   archived: Arc<Vec<String>>,
   sequence_roots: Arc<HashMap<String, String>>,
-  view_roots: Arc<HashMap<String, HashMap<String, String>>>,
   sidebar_generation: u64,
   rows: Arc<Vec<Arc<SessionMetadata>>>,
   index: Arc<HashMap<String, u32>>,
@@ -327,7 +327,7 @@ impl PageCorpusEntry {
     registry: &Arc<Registry>,
     generation: u64,
     archived: &Arc<Vec<String>>,
-    roots: &SharedSubtreeRoots,
+    sequence_roots: &Arc<HashMap<String, String>>,
     sidebar_generation: u64,
   ) -> bool {
     Weak::ptr_eq(&self.store, &Arc::downgrade(store))
@@ -336,8 +336,7 @@ impl PageCorpusEntry {
       // The same index answers the common request, so the shared list's pointer is the whole comparison. A rebuilt
       // index holds an equal list in a new allocation, and the value comparison keeps the corpus it answered for.
       && (Arc::ptr_eq(&self.archived, archived) || self.archived.as_slice() == archived.as_slice())
-      && Arc::ptr_eq(&self.sequence_roots, &roots.sequence)
-      && Arc::ptr_eq(&self.view_roots, &roots.views)
+      && Arc::ptr_eq(&self.sequence_roots, sequence_roots)
       && self.sidebar_generation == sidebar_generation
   }
 }
@@ -396,13 +395,13 @@ fn page_row_index(rows: &[Arc<SessionMetadata>]) -> Arc<HashMap<String, u32>> {
 fn page_corpus(store: &Arc<Store>, registry: &Arc<Registry>, register: bool) -> StoreResult<PageCorpus> {
   let (_, generation) = store.load_session_metas_snapshot_versioned(Some(SessionStatus::Active))?;
   let archived = store.derived_archived_ids()?;
-  let roots = store.subtree_roots_shared()?;
+  let sequence_roots = store.sequence_subtree_roots()?;
   let sidebar_generation = charliebot_store::sidebar_state::derived_generation();
   let cached = {
     let memo = PAGE_CORPUS_MEMO.lock().expect("the page corpus memo mutex is not poisoned");
     memo
       .as_ref()
-      .filter(|entry| entry.holds(store, registry, generation, &archived, &roots, sidebar_generation))
+      .filter(|entry| entry.holds(store, registry, generation, &archived, &sequence_roots, sidebar_generation))
       .map(|entry| (Arc::clone(&entry.rows), Arc::clone(&entry.index), Arc::clone(&entry.derived)))
   };
   if let Some((rows, index, derived)) = cached {
@@ -412,7 +411,7 @@ fn page_corpus(store: &Arc<Store>, registry: &Arc<Registry>, register: bool) -> 
     return Ok(PageCorpus { rows, index, derived });
   }
   let ListingCorpus { mut rows, derived, .. } = active_listing_corpus(store, registry)?;
-  rows.retain(|row| outside_owned_subtrees(row, &roots));
+  rows.retain(|row| outside_sequence_subtrees(row, &sequence_roots));
   let rows = Arc::new(rows);
   let index = page_row_index(&rows);
   // Resolving the overlays probes the sessions that moved, and one probe bumps the sidebar generation, so the build
@@ -424,8 +423,7 @@ fn page_corpus(store: &Arc<Store>, registry: &Arc<Registry>, register: bool) -> 
       registry: Arc::downgrade(registry),
       generation,
       archived,
-      sequence_roots: roots.sequence,
-      view_roots: roots.views,
+      sequence_roots,
       sidebar_generation,
       rows: Arc::clone(&rows),
       index: Arc::clone(&index),
@@ -467,13 +465,14 @@ pub fn status_filter_ids(
 /// rendered page needs.
 pub fn first_page_row_id(store: &Arc<Store>) -> StoreResult<Option<String>> {
   let rows = store.list_session_rows(Some(SessionStatus::Active), None, Some(false))?;
-  let roots = store.subtree_roots_shared()?;
-  Ok(rows.iter().find(|row| outside_owned_subtrees(row, &roots)).map(|row| row.id.clone()))
+  let sequence_roots = store.sequence_subtree_roots()?;
+  Ok(rows.iter().find(|row| outside_sequence_subtrees(row, &sequence_roots)).map(|row| row.id.clone()))
 }
 
-/// Whether a row stands outside every sequence subtree and every view subtree.
-fn outside_owned_subtrees(row: &SessionMetadata, roots: &SharedSubtreeRoots) -> bool {
-  !roots.sequence.contains_key(&row.id) && !roots.views.values().any(|members| members.contains_key(&row.id))
+/// Whether a row stands outside every sequence subtree. A sidebar view is an overlay filter over the Workspace, so it
+/// drops no row here.
+fn outside_sequence_subtrees(row: &SessionMetadata, sequence_roots: &HashMap<String, String>) -> bool {
+  !sequence_roots.contains_key(&row.id)
 }
 
 /// The chat page's row projection: running, trigger and waiting state, the run backend, and no plan badge.
@@ -1435,7 +1434,7 @@ pub fn row_refresh_text_for(
 
 /// The fields one search row carries, in the order its columns are written. Each one is read by the sidebar's row
 /// renderer, so a search row paints as the same session's listing row does.
-pub const SEARCH_FIELDS: [&str; 28] = [
+pub const SEARCH_FIELDS: [&str; 29] = [
   ID_FIELD,
   "name",
   "status",
@@ -1464,6 +1463,7 @@ pub const SEARCH_FIELDS: [&str; 28] = [
   SCHEDULE_NEXT_RUN,
   SCHEDULE_ALLOW_FAILURE,
   TASK_SCHEDULE_SLOTS,
+  CHANNEL_PLATFORM,
 ];
 
 /// The search answer's rows in the sidebar's column form, with exactly [`SEARCH_FIELDS`] as its columns.
@@ -1491,20 +1491,16 @@ pub(crate) fn search_columns_text(
   Ok(page_columns_text(&texts, None, Some(&SEARCH_FIELDS)))
 }
 
-/// The response key of the chat-thread flag: true for a session whose metadata names a chat thread.
-pub const THREAD_SESSION: &str = "thread_session";
 /// The response key of the chat platform a session is bound to (`slack`, `discord`, `feishu`). It is absent for a session
 /// bound to no chat thread.
 pub const CHANNEL_PLATFORM: &str = "channel_platform";
 
-/// The metadata rendered as the response model does, excluding `task.goal`. The `thread_session` flag names a chat
-/// thread session, and `channel_platform` names its platform, so the web client never reads the platform origin fields
-/// itself.
+/// The metadata rendered as the response model does, excluding `task.goal`. `channel_platform` names the platform of a
+/// chat-thread session, so the web client never reads the platform origin fields itself.
 pub(crate) fn metadata_value(store: &Store, meta: &SessionMetadata) -> StoreResult<Value> {
   let mut value = store.session_metadata_value(meta);
   remove_task_goal(&mut value);
   let object = value.as_object_mut().expect("session metadata serializes to an object");
-  object.insert(THREAD_SESSION.to_string(), Value::Bool(is_thread_session(meta)));
   if let Some(platform) = platform_of(meta) {
     object.insert(CHANNEL_PLATFORM.to_string(), Value::String(platform.to_string()));
   }

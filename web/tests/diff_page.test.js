@@ -40,7 +40,7 @@ class FakeNode {
   set className(value) { this.classList = createClassList(value); }
 
   // The text a node was given, then the text of the text nodes appended to it. Element children add no text to this
-  // read, and the text nodes stay out of `children`, which the tests read as the node's elements.
+  // read. appendChild keeps text nodes in `children` too, so the element walk in querySelectorAll skips them.
   get textContent() {
     const textNodes = this.children.filter((node) => !(node instanceof FakeNode));
     return this.ownText + textNodes.map((node) => node.textContent).join('');
@@ -116,6 +116,7 @@ class FakeNode {
   querySelectorAll(selector) {
     const found = [];
     const walk = (node) => node.children.forEach((child) => {
+      if (!(child instanceof FakeNode)) return;
       if (child.matches(selector)) found.push(child);
       walk(child);
     });

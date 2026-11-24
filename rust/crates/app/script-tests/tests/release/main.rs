@@ -18,7 +18,7 @@ use std::os::unix::io::AsRawFd;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -1591,12 +1591,117 @@ fn assert_memory_cap_failure(run: &Run, log: &Path) {
   assert!(fs::read_to_string(log).expect("the scope log").contains("-p MemoryMax=16G"), "{}", run.describe());
 }
 
-/// The command of a serve trial that stops its server, then SIGKILLs it `seconds` later from a background shell. A
-/// stopped server accepts connections but answers none, so a runs read blocks until the kill ends the server.
-fn stop_then_kill_server_after(seconds: u32) -> String {
-  format!(
-    "kill -STOP \"$CHARLIEBOT_SERVE_PID\"; (sleep {seconds}; kill -KILL \"$CHARLIEBOT_SERVE_PID\") </dev/null >/dev/null 2>&1 &"
-  )
+/// Stubs a runs request that fails only after the test releases it, so the tests can order the read failure and server
+/// exit without relying on a delay.
+fn stub_serve_runs_read_failure(world: &ServeWorld, failure_kind: &str) -> Env {
+  let mut env = serve_scope_env(world);
+  env.insert(
+    "CHARLIEBOT_TRIAL_RUN_REQUEST".to_string(),
+    world.sandbox.dir("scope").join("runs-request").display().to_string(),
+  );
+  env.insert(
+    "CHARLIEBOT_TRIAL_RUN_RELEASE".to_string(),
+    world.sandbox.dir("scope").join("runs-release").display().to_string(),
+  );
+  env.insert(
+    "CHARLIEBOT_TRIAL_RUN_FAILURE".to_string(),
+    world.sandbox.dir("scope").join("runs-failure").display().to_string(),
+  );
+  env.insert(
+    "CHARLIEBOT_TRIAL_SERVER_PID_FILE".to_string(),
+    world.sandbox.dir("scope").join("server-pid").display().to_string(),
+  );
+  env.insert("CHARLIEBOT_TRIAL_RUN_FAILURE_KIND".to_string(), failure_kind.to_string());
+  env.insert("CHARLIEBOT_TRIAL_REAL_CURL".to_string(), system_tool_path("curl"));
+  world.sandbox.stub(
+    "curl",
+    r#"url=
+for argument in "$@"; do url=$argument; done
+case "$url" in
+  */api/sessions/*/runs\?*)
+    : > "$CHARLIEBOT_TRIAL_RUN_REQUEST" || exit $?
+    while [[ ! -e $CHARLIEBOT_TRIAL_RUN_RELEASE ]]; do sleep 0.01; done
+    : > "$CHARLIEBOT_TRIAL_RUN_FAILURE" || exit $?
+    case "$CHARLIEBOT_TRIAL_RUN_FAILURE_KIND" in
+      connection) exit 7 ;;
+      http) printf '500' ;;
+      *) exit 2 ;;
+    esac ;;
+  *) exec "$CHARLIEBOT_TRIAL_REAL_CURL" "$@" ;;
+esac
+"#,
+  );
+  env
+}
+
+/// Makes the process-state probe kill the server after curl has returned its failed runs read.
+fn stub_serve_ps_killing_server_after_runs_read_failure(world: &ServeWorld, env: &mut Env) {
+  env.insert("CHARLIEBOT_TRIAL_REAL_PS".to_string(), system_tool_path("ps"));
+  env.insert(
+    "CHARLIEBOT_TRIAL_SERVER_KILLED".to_string(),
+    world.sandbox.dir("scope").join("server-killed").display().to_string(),
+  );
+  world.sandbox.stub(
+    "ps",
+    r#"if [[ -e "$CHARLIEBOT_TRIAL_RUN_FAILURE" && ! -e "$CHARLIEBOT_TRIAL_SERVER_KILLED" ]]; then
+  pid=$(cat -- "$CHARLIEBOT_TRIAL_SERVER_PID_FILE") || exit $?
+  [[ $pid =~ ^[0-9]+$ ]] || exit 1
+  kill -KILL "$pid" || exit $?
+  : > "$CHARLIEBOT_TRIAL_SERVER_KILLED" || exit $?
+fi
+exec "$CHARLIEBOT_TRIAL_REAL_PS" "$@"
+"#,
+  );
+}
+
+/// The canonical path of a host command used by a test stub that delegates unrelated calls.
+fn system_tool_path(name: &str) -> String {
+  std::env::split_paths(&std::env::var_os("PATH").expect("PATH is set"))
+    .map(|directory| directory.join(name))
+    .find(|path| path.is_file())
+    .expect("the host command is on PATH")
+    .canonicalize()
+    .expect("the host command path is canonical")
+    .display()
+    .to_string()
+}
+
+/// Kills the server once the trial's runs request is in flight, then releases the curl stub.
+fn kill_serve_server_after_runs_request(
+  world: &ServeWorld,
+  env: &Env,
+) -> (PathBuf, mpsc::Sender<()>, thread::JoinHandle<bool>) {
+  let request_path = PathBuf::from(env.get("CHARLIEBOT_TRIAL_RUN_REQUEST").expect("the runs request path"));
+  let release_path = PathBuf::from(env.get("CHARLIEBOT_TRIAL_RUN_RELEASE").expect("the runs release path"));
+  let pid_path = PathBuf::from(env.get("CHARLIEBOT_TRIAL_SERVER_PID_FILE").expect("the server pid path"));
+  let error_path = world.sandbox.dir("scope").join("controller-error");
+  let controller_error_path = error_path.clone();
+  let (cancel_sender, cancel_receiver) = mpsc::channel();
+  let controller = thread::spawn(move || {
+    while !request_path.exists() {
+      match cancel_receiver.recv_timeout(Duration::from_millis(10)) {
+        Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => return false,
+        Err(mpsc::RecvTimeoutError::Timeout) => {}
+      }
+    }
+
+    let pid_text = fs::read_to_string(pid_path).expect("the controller's server pid");
+    let pid: libc::pid_t = pid_text.trim().parse().expect("a numeric server pid");
+    if unsafe { libc::kill(pid, libc::SIGKILL) } != 0 {
+      fs::write(&controller_error_path, std::io::Error::last_os_error().to_string()).expect("the controller error");
+    } else {
+      let deadline = Instant::now() + Duration::from_secs(10);
+      while process_is_running(pid) && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+      }
+      if process_is_running(pid) {
+        fs::write(&controller_error_path, "the server stayed alive after SIGKILL").expect("the controller error");
+      }
+    }
+    fs::write(release_path, "").expect("release the curl stub");
+    true
+  });
+  (error_path, cancel_sender, controller)
 }
 
 /// A serve trial whose scope OOM killer ends the server: the command SIGKILLs the server, and the scope reports itself
@@ -1618,9 +1723,8 @@ fn test_trial_serve_names_the_memory_cap_when_the_scope_oom_kill_ends_the_server
   assert_memory_cap_failure(&run, &log);
 }
 
-/// A serve trial whose server dies while the trial reads its runs. The command stops the server, so the trial's state
-/// check finds it running and its runs read blocks; a second later the server is SIGKILLed, so the read fails with the
-/// server gone. The trial classifies that exit as the memory cap of the scope, as it does when the server dies first.
+/// A serve trial whose server dies while the trial reads its runs. The curl stub holds the read until the test controller
+/// sees its request marker, kills the server and releases curl. The trial then classifies the exit as the memory cap.
 #[test]
 #[ignore = "integration"]
 fn test_trial_serve_names_the_memory_cap_when_the_server_dies_during_its_runs_read() {
@@ -1628,19 +1732,34 @@ fn test_trial_serve_names_the_memory_cap_when_the_server_dies_during_its_runs_re
   let world = ServeWorld::new();
   let seed = world.seed_home("seed", "1");
   let log = stub_serve_scope(&world, "oom-kill", 2);
-  let env = serve_scope_env(&world);
+  let env = stub_serve_runs_read_failure(&world, "connection");
   let mut trial = harness::command("bash", &env);
-  let command = stop_then_kill_server_after(2);
-  trial.args(serve_scope_arguments(&world, &seed, &["sh", "-c", command.as_str()]));
+  let command = r#"printf '%s\n' "$CHARLIEBOT_SERVE_PID" > "$CHARLIEBOT_TRIAL_SERVER_PID_FILE""#;
+  let (controller_error, cancel_controller, controller) = kill_serve_server_after_runs_request(&world, &env);
+  trial.args(serve_scope_arguments(&world, &seed, &["sh", "-c", command]));
 
   let run = run_within(&mut trial, Duration::from_secs(120));
+  drop(cancel_controller);
+  let controller_saw_request = controller.join().expect("the server-exit controller");
 
   assert_memory_cap_failure(&run, &log);
+  assert!(run.stdout.contains("SERVE command exit=0"), "{}", run.describe());
+  let server_pid = started_server_pid(&run);
+  assert_eq!(
+    fs::read_to_string(env.get("CHARLIEBOT_TRIAL_SERVER_PID_FILE").expect("the server pid path"))
+      .expect("the controller's server pid")
+      .trim(),
+    server_pid
+  );
+  assert!(controller_saw_request, "the trial ended before the runs request started");
+  for marker in ["CHARLIEBOT_TRIAL_RUN_REQUEST", "CHARLIEBOT_TRIAL_RUN_RELEASE", "CHARLIEBOT_TRIAL_RUN_FAILURE"] {
+    assert!(Path::new(env.get(marker).expect("a run-read marker path")).exists(), "the marker {marker} is missing");
+  }
+  assert!(!controller_error.exists(), "the server did not die before the runs read failed");
 }
 
-/// A serve trial whose runs read fails while its server still runs, and whose server dies after that failure. The
-/// command stops the server, so the read blocks until curl's 10 s limit fails it, and the server is SIGKILLed at 12 s.
-/// The trial waits for the exit inside its bound, and the scope's oom-kill then names the memory cap.
+/// A serve trial whose runs read fails while its server still runs. The process-state stub kills the server on the check
+/// that follows the failed read, so the trial reports the memory cap without ordering the events by a timed delay.
 #[test]
 #[ignore = "integration"]
 fn test_trial_serve_names_the_memory_cap_when_the_runs_read_fails_before_the_server_dies() {
@@ -1648,14 +1767,32 @@ fn test_trial_serve_names_the_memory_cap_when_the_runs_read_fails_before_the_ser
   let world = ServeWorld::new();
   let seed = world.seed_home("seed", "1");
   let log = stub_serve_scope(&world, "oom-kill", 2);
-  let env = serve_scope_env(&world);
+  let mut env = stub_serve_runs_read_failure(&world, "http");
+  stub_serve_ps_killing_server_after_runs_read_failure(&world, &mut env);
   let mut trial = harness::command("bash", &env);
-  let command = stop_then_kill_server_after(12);
-  trial.args(serve_scope_arguments(&world, &seed, &["sh", "-c", command.as_str()]));
+  let command = r#"printf '%s\n' "$CHARLIEBOT_SERVE_PID" > "$CHARLIEBOT_TRIAL_SERVER_PID_FILE";
+: > "$CHARLIEBOT_TRIAL_RUN_RELEASE""#;
+  trial.args(serve_scope_arguments(&world, &seed, &["sh", "-c", command]));
 
   let run = run_within(&mut trial, Duration::from_secs(120));
 
   assert_memory_cap_failure(&run, &log);
+  assert!(run.stdout.contains("SERVE command exit=0"), "{}", run.describe());
+  let server_pid = started_server_pid(&run);
+  assert_eq!(
+    fs::read_to_string(env.get("CHARLIEBOT_TRIAL_SERVER_PID_FILE").expect("the server pid path"))
+      .expect("the controller's server pid")
+      .trim(),
+    server_pid
+  );
+  for marker in [
+    "CHARLIEBOT_TRIAL_RUN_REQUEST",
+    "CHARLIEBOT_TRIAL_RUN_RELEASE",
+    "CHARLIEBOT_TRIAL_RUN_FAILURE",
+    "CHARLIEBOT_TRIAL_SERVER_KILLED",
+  ] {
+    assert!(Path::new(env.get(marker).expect("a run-read marker path")).exists(), "the marker {marker} is missing");
+  }
 }
 
 /// A serve trial whose scope stays active after its server is gone. The command SIGKILLs the server, and the scope

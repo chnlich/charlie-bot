@@ -16,7 +16,7 @@
 # runs-read error first waits up to the same bound for the server to exit. If either wait cannot establish the state,
 # the trial does not report a memory cap. In --in-caller-scope mode, memory-cap classification stays disabled and a
 # runs-read error is reported as before. A server that does not exit on SIGTERM within SERVER_STOP_WAIT_MS fails the
-# side.
+# side; its CAUSE line names its pid, binary and scope.
 #
 # A side is ready only when the port's listener is this trial's server (or a process it started) and that server
 # answers its auth status with 200 after it logged server_ready. free-port picks the port before the server binds it,
@@ -1391,7 +1391,7 @@ run_serve_mode() {
         continue
       fi
       cleanup_failed=1
-      if wait_server_gone; then
+      if (( IN_CALLER_SCOPE == 0 )) && wait_server_gone; then
         report_server_exit
       else
         printf 'FAIL serve RunWait: a run of the trial home could not be read\n'

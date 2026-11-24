@@ -10,7 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 
-use charliebot_core::{RepoRoot, fsutil, posix_path, str_methods, text_repr, timefmt};
+use charliebot_core::{RepoRoot, posix_path, str_methods, text_repr, timefmt};
 use charliebot_registry::FeatureContext;
 use charliebot_store::sidebar_state;
 use serde_json::{Map, Value, json};
@@ -237,8 +237,7 @@ fn load(path: &Path) -> Result<Value, VerbError> {
 /// directory, so a session directory that is gone fails the save.
 fn save(path: &Path, session_id: &str, registry: &Value) -> Result<(), VerbError> {
   let projected = plans::project_registry(plans_of(registry)?).map_err(VerbError::Refused)?;
-  fsutil::atomic_write_text(path, &plans::registry_text(&projected))
-    .map_err(|error| escaped(plans::os_escape(&error, path)))?;
+  plans::publish_registry(path, &projected).map_err(|error| escaped(plans::os_escape(&error, path)))?;
   sidebar_state::mark_sidebar_dirty(session_id);
   Ok(())
 }

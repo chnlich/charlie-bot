@@ -1,9 +1,10 @@
 //! The plan registry's read side holds the derived state of a plan and the projection of a
 //! registry to the schema it persists and emits. It also holds the tolerant read of a session's `plans.json`.
 //!
-//! The tolerant read is the one reader of `plans.json` for the plan listing and the sidebar. A corrupt file becomes
-//! error entries. A few failures escape the read as exceptions: a `plans` value that is not iterable, and a
-//! number the JSON reader cannot hold. Those come back as [`EscapedError`], and each caller fails with them.
+//! The tolerant read is the one reader of `plans.json` for the plan listing and the sidebar, and `publish_registry`
+//! is its one writer. A corrupt file becomes error entries. A few failures escape the read as exceptions: a `plans`
+//! value that is not iterable, and a number the JSON reader cannot hold. Those come back as [`EscapedError`], and
+//! each caller fails with them.
 
 use std::fmt;
 use std::fs;
@@ -11,6 +12,7 @@ use std::io;
 use std::path::Path;
 
 use anyhow::anyhow;
+use charliebot_core::fsutil;
 use charliebot_core::json_loads;
 use charliebot_core::str_methods;
 pub(crate) use charliebot_core::text_repr::type_name;
@@ -262,10 +264,14 @@ pub(crate) fn project_registry(plans: &[Value]) -> Result<Value, String> {
   Ok(json!({"plans": projected}))
 }
 
-/// The bytes of a registry file. The fork copy and the
-/// plan verbs both write through it, so a registry has one spelling on disk.
+/// The bytes of a registry file, which `publish_registry` publishes, so a registry has one spelling on disk.
 pub(crate) fn registry_text(registry: &Value) -> String {
   text_repr::json_dumps(registry, &REGISTRY_JSON)
+}
+
+/// Publishes `registry` as the `plans.json` at `path`, in one rename. Every writer of the file goes through here.
+pub(crate) fn publish_registry(path: &Path, registry: &Value) -> io::Result<()> {
+  fsutil::atomic_write_text(path, &registry_text(registry))
 }
 
 /// The registry's JSON style: non-ASCII text stays literal, keys keep their order, and the output indents by two.

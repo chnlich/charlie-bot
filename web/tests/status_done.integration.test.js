@@ -250,7 +250,10 @@ test('at desktop width the Waiting on you label sits in the Now label column, le
       const heading = row.firstElementChild;
       const label = heading.firstElementChild;
       const first = row.querySelector('[data-waiting-item]');
-      const nowLabel = document.querySelector('[data-status-row="now"]').firstElementChild;
+      const nowRow = document.querySelector('[data-status-row="now"]');
+      const nowLabel = nowRow.firstElementChild;
+      const nowValue = nowRow.lastElementChild;
+      const nowUpdated = nowRow.querySelector('[data-status-updated]');
       const box = (el) => el.getBoundingClientRect();
       return {
         labelDrawn: getComputedStyle(label).visibility === 'visible' && label.textContent.trim().length > 0,
@@ -260,6 +263,8 @@ test('at desktop width the Waiting on you label sits in the Now label column, le
         labelTop: box(label).top,
         nowLabelLeft: box(nowLabel).left,
         nowLabelWidth: box(nowLabel).width,
+        nowValueLeft: box(nowValue).left,
+        nowUpdatedLeft: box(nowUpdated).left,
         precedesFirst: Boolean(label.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING),
         firstTop: box(first).top,
         headingHeight: box(heading).height,
@@ -270,6 +275,8 @@ test('at desktop width the Waiting on you label sits in the Now label column, le
     assert.ok(layout.labelWidth > 0 && layout.labelHeight > 0, 'the label takes a box');
     assert.equal(layout.labelLeft, layout.nowLabelLeft, "the label starts in the Now row's label column");
     assert.equal(layout.labelWidth, layout.nowLabelWidth, "the label is as wide as the Now row's label column");
+    assert.equal(layout.nowUpdatedLeft, layout.nowValueLeft,
+      'an empty Now keeps its update time flush with the value column');
     assert.ok(layout.precedesFirst, 'the label precedes the first item in the document');
     assert.ok(Math.abs(layout.labelTop - layout.firstTop) <= 4,
       `the label's top ${layout.labelTop}px is level with the first item's top ${layout.firstTop}px`);
@@ -286,6 +293,7 @@ test('at mobile width the Waiting on you label is drawn above the first item', a
       const row = document.querySelector('[data-status-row="waiting"]');
       const label = row.firstElementChild.firstElementChild;
       const first = row.querySelector('[data-waiting-item]');
+      const nowUpdated = document.querySelector('[data-status-row="now"] [data-status-updated]');
       const box = (el) => el.getBoundingClientRect();
       return {
         labelDrawn: getComputedStyle(label).visibility === 'visible' && label.textContent.trim().length > 0
@@ -293,6 +301,7 @@ test('at mobile width the Waiting on you label is drawn above the first item', a
         labelLeft: box(label).left,
         labelBottom: box(label).bottom,
         rowLeft: box(row).left,
+        nowUpdatedLeft: box(nowUpdated).left,
         firstTop: box(first).top,
         precedesFirst: Boolean(label.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING),
       };
@@ -302,5 +311,7 @@ test('at mobile width the Waiting on you label is drawn above the first item', a
     assert.ok(layout.labelBottom <= layout.firstTop,
       `the label's bottom ${layout.labelBottom}px sits above the first item's top ${layout.firstTop}px`);
     assert.equal(layout.labelLeft, layout.rowLeft, "the label starts at the row's left edge");
+    assert.equal(layout.nowUpdatedLeft, layout.rowLeft,
+      "an empty Now keeps its update time flush at the row's left edge");
   }, {mobile: true});
 });

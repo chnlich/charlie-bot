@@ -216,6 +216,14 @@ done >>"$FAKE_CLAUDE_ENV"
 if [[ -n ${FAKE_CLAUDE_STDIN:-} ]]; then
   cat >"$FAKE_CLAUDE_STDIN"
 fi
+# The instructions file that the round received, copied as the runner left it in the launch directory.
+if [[ -n ${FAKE_CLAUDE_INSTRUCTIONS:-} ]]; then
+  previous=
+  for argument in "$@"; do
+    [[ $previous != --append-system-prompt-file ]] || cp -- "$argument" "$FAKE_CLAUDE_INSTRUCTIONS"
+    previous=$argument
+  done
+fi
 if [[ -n ${FAKE_CLAUDE_INFLIGHT:-} && -e $IMPROVE_LAUNCH_DIR/inflight-files.txt ]]; then
   cp -- "$IMPROVE_LAUNCH_DIR/inflight-files.txt" "$FAKE_CLAUDE_INFLIGHT"
 fi

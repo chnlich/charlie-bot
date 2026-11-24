@@ -110,6 +110,81 @@ fn the_prompt_on_the_launchers_standard_input_reaches_the_remote_claude() {
   assert_eq!(text, PROMPT, "the remote claude did not receive the prompt:\n{}", run.describe());
 }
 
+/// The Skills Discovery section of the instructions a round receives (prompts/task_base.md renders it).
+const SKILLS_DISCOVERY: &str = "- Look in `~/.claude/skills/` or `~/.agents/skills/`: both symlink the two canonical \
+  sources, the charlie-bot checkout's `skills/` (general, writing-style included) and `$CHARLIEBOT_HOME/skills/`.\n";
+/// The genre paths of the worker workflow (prompts/worker.md renders them).
+const WORKER_GENRES: &str = concat!(
+  "2. Commit with the commits-and-prs genre\n",
+  "   (~/.claude/skills/writing-style/genres/commits-and-prs.md)\n",
+  "   Comments follow the code genre\n",
+  "   (~/.claude/skills/writing-style/genres/code.md).\n",
+);
+/// A direction's prompt on standard input: its skill path is relative, and a git ref names a commit's tree.
+const TASK_BODY: &str =
+  "Take one rule from `skills/writing-style/genres/code.md`, and read origin/main:skills/x too.\n";
+
+/// Launches one round with `instructions` as its instructions file and `prompt` on its standard input, and returns the
+/// instructions and the prompt that the round's claude received.
+fn launch_with_skill_roots(world: &World, instructions: &str, prompt: &str) -> (String, String) {
+  fs::write(&world.instructions, instructions).expect("the instructions file");
+  let prompt_file = world.sandbox.root().join("prompt.txt");
+  fs::write(&prompt_file, prompt).expect("the prompt");
+  let recorded = world.sandbox.root().join("claude-instructions.md");
+  let mut env = world.env();
+  env.insert("FAKE_CLAUDE_INSTRUCTIONS".to_string(), recorded.display().to_string());
+  env.insert("FAKE_CLAUDE_STDIN".to_string(), world.claude_stdin.display().to_string());
+  let stdin = fs::File::open(&prompt_file).expect("open the prompt");
+  let mut command = world.launcher_command(&env);
+  let run = harness::run_with_stdin(&mut command, Stdio::from(stdin));
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(world.claude_ran(), "the fake claude did not run:\n{}", run.describe());
+  let received_instructions = fs::read_to_string(&recorded).expect("the instructions that claude received");
+  let received_prompt = fs::read_to_string(&world.claude_stdin).expect("the prompt that claude received");
+  (received_instructions, received_prompt)
+}
+
+/// The host's skill roots that a round's instructions name, which the launch no longer lets a round read.
+const STALE_ROOTS: [&str; 3] = ["~/.claude/skills", "~/.agents/skills", "$CHARLIEBOT_HOME/skills"];
+
+#[test]
+#[ignore = "integration"]
+fn the_launch_maps_the_skills_discovery_roots_to_the_round_skills_dir() {
+  let world = World::new();
+  let (instructions, _) = launch_with_skill_roots(&world, SKILLS_DISCOVERY, PROMPT);
+  assert!(instructions.contains("`$IMPROVE_SKILLS_DIR/`"), "the discovery root did not map:\n{instructions}");
+  for root in STALE_ROOTS {
+    assert!(!instructions.contains(root), "the launch left {root} in the instructions:\n{instructions}");
+  }
+}
+
+#[test]
+#[ignore = "integration"]
+fn the_launch_maps_the_worker_genre_paths_to_the_round_skills_dir() {
+  let world = World::new();
+  let (instructions, _) = launch_with_skill_roots(&world, WORKER_GENRES, PROMPT);
+  for path in
+    ["$IMPROVE_SKILLS_DIR/writing-style/genres/commits-and-prs.md", "$IMPROVE_SKILLS_DIR/writing-style/genres/code.md"]
+  {
+    assert!(instructions.contains(path), "the genre path did not map to {path}:\n{instructions}");
+  }
+  for root in STALE_ROOTS {
+    assert!(!instructions.contains(root), "the launch left {root} in the instructions:\n{instructions}");
+  }
+}
+
+#[test]
+#[ignore = "integration"]
+fn the_launch_maps_the_task_body_skill_path_and_keeps_a_git_ref() {
+  let world = World::new();
+  let (_, prompt) = launch_with_skill_roots(&world, SKILLS_DISCOVERY, TASK_BODY);
+  assert!(
+    prompt.contains("`$IMPROVE_SKILLS_DIR/writing-style/genres/code.md`"),
+    "the task body's skill path did not map:\n{prompt}"
+  );
+  assert!(prompt.contains("origin/main:skills/x"), "the launch rewrote a git ref:\n{prompt}");
+}
+
 #[test]
 #[ignore = "integration"]
 fn a_round_worker_whose_parent_is_a_cron_session_still_runs_over_ssh() {

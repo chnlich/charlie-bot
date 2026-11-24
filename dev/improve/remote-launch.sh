@@ -8,10 +8,10 @@
 # anything is sent.
 #
 # A round runs on the host named by IMPROVE_REMOTE_HOST (host config only, because the repository is public). The
-# script connects there, sends the round's inputs, runs dev/improve/remote-runner.sh and passes the agent's stdin and
-# stdout through unchanged. No command of the round runs on this host, so a round that forgets a variable, sets a wrong
-# path or runs rm cannot reach this host's profile home or runtime clone: on 2026-10-04 a round's own probe deleted the
-# whole profile home.
+# script connects there, sends the round's inputs, runs dev/improve/remote-runner.sh and passes the agent's stdout
+# through unchanged; the prompt on its stdin reaches the host with its skill roots mapped (map_skill_roots). No command
+# of the round runs on this host, so a round that forgets a variable, sets a wrong path or runs rm cannot reach this
+# host's profile home or runtime clone: on 2026-10-04 a round's own probe deleted the whole profile home.
 #
 # The round path reads these inputs on this host and writes one directory:
 #   - for claude, the instructions file that --append-system-prompt-file names (codex carries its instructions in its
@@ -522,6 +522,17 @@ if ! direction=$(resolve_direction); then
   exit 6
 fi
 
+# The skill roots that a round's instructions file and prompt name map to $IMPROVE_SKILLS_DIR, the skills of the round's
+# kit, which the runner exports. These are a host's `~/.claude/skills` and `~/.agents/skills`, its
+# `$CHARLIEBOT_HOME/skills`, and a relative `skills/` at the start of a word. Git's `<ref>:skills/...` names a commit's
+# tree, so its text stays. It reads standard input and writes standard output, so a file and a stream both pass through.
+map_skill_roots() {
+  sed -E \
+    -e 's#~/\.(claude|agents)/skills#$IMPROVE_SKILLS_DIR#g' \
+    -e 's#\$CHARLIEBOT_HOME/skills#$IMPROVE_SKILLS_DIR#g' \
+    -e 's#(^|[[:space:]`"(])skills/#\1$IMPROVE_SKILLS_DIR/#g'
+}
+
 # ---------- 4. Send ----------
 launch_id=$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM
 payload_parent=$TEMP_ROOT
@@ -543,7 +554,7 @@ trap cleanup_payload EXIT
 # launch directory, so this host never needs the remote home path.
 : >"$payload/paths"
 if [[ $kind == claude ]]; then
-  cp -- "$instructions" "$payload/instructions.md"
+  map_skill_roots <"$instructions" >"$payload/instructions.md"
   printf '%s\t%s\n' "$instructions" instructions.md >"$payload/paths"
 fi
 printf '%s\0' "$@" >"$payload/args"
@@ -663,13 +674,15 @@ if (( prepare_status != 0 )); then
 fi
 
 # ---------- 5. Start ----------
-# The start's output passes through the stream file, so the launch knows the bytes it has passed on when a connection drops.
+# The round's prompt is on this launcher's standard input, and the main run sends it to the agent with the skill roots
+# mapped. The start's output passes through the stream file, so the launch knows the bytes it has passed on when a
+# connection drops.
 : >"$round_stream"
 set +e
-"${SSH[@]}" "$REMOTE_HOST" \
+map_skill_roots | "${SSH[@]}" "$REMOTE_HOST" \
   "bash \$HOME/improve/launch/$launch_id/remote-runner.sh $launch_id $direction $cli_commit $kind $member_version $review_kind $review_version" \
   3>&- | tee -a -- "$round_stream"
-run_status=${PIPESTATUS[0]}
+run_status=${PIPESTATUS[1]}
 set -e
 # A dropped connection leaves the round running on the host, so the launch reattaches to the round's record. A start that
 # returned its status leaves nothing to reattach to.

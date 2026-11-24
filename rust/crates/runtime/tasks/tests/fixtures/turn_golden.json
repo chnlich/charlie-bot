@@ -690,9 +690,7 @@
           "native_backend": "fake"
         }
       ],
-      "mark_unread": [
-        "golden-12"
-      ]
+      "mark_unread": []
     }
   ]
 }

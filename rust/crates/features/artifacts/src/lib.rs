@@ -6,6 +6,7 @@ mod api;
 pub mod artifact_check;
 mod artifact_view;
 pub mod cli;
+mod entry;
 mod headless_render;
 pub mod plan_diff;
 mod plan_paths;
@@ -16,86 +17,4 @@ mod sidebar;
 #[cfg(test)]
 mod test_support;
 
-use std::sync::Arc;
-
-use charliebot_core::config::{ConfigSection, SectionValue};
-use charliebot_registry::{Registry, RegistryError};
-use futures_util::future::BoxFuture;
-
-/// The package label the composition list registers this crate's package under.
-pub const PACKAGE: &str = "features.artifacts";
-
-/// `register`: the file view, the sessions router, the `publish:` section, then
-/// the sidebar contribution.
-pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
-  registry.file_view("artifacts", Arc::new(artifact_view::ArtifactView))?;
-  registry.router_patterns(api::routes, api::ROUTE_PATTERNS)?;
-  registry.config_section(ConfigSection {
-    key: "publish",
-    legacy_keys: &[("publish_dir", "publish.dir"), ("public_base_url", "publish.public_base_url")],
-    parse: raw_section,
-    dump: dump_section,
-  })?;
-  registry.sidebar_contribution("artifacts", Arc::new(sidebar::ArtifactsSidebar))?;
-  registry.plan_registry(plans::read_session_plans)?;
-  registry.recovery_step("headless_renderer_orphans", sweep_headless_renderer_orphans_at_startup)?;
-  registry.fork_assertions(registered_fork_assertions)?;
-  registry.let_go_step("headless_renderer", close_headless_renderer_at_shutdown)
-}
-
-/// The fork-assertion runner the registry hands `web_reply`'s status gate: each failing page line as a pair.
-fn registered_fork_assertions(
-  page: &std::path::Path,
-  home: &std::path::Path,
-) -> anyhow::Result<Option<Vec<(String, String)>>> {
-  Ok(artifact_check::run_fork_assertions(page, home)?.map(|outcomes| {
-    outcomes.into_iter().filter(|outcome| !outcome.passed).map(|outcome| (outcome.name, outcome.detail)).collect()
-  }))
-}
-
-/// The close of the process-wide headless renderer.
-pub fn close_renderer() -> anyhow::Result<()> {
-  headless_render::close_renderer()
-}
-
-fn close_headless_renderer_at_shutdown(
-  _features: Arc<charliebot_registry::FeatureContext>,
-) -> BoxFuture<'static, anyhow::Result<()>> {
-  Box::pin(async move {
-    tokio::task::spawn_blocking(close_renderer).await??;
-    Ok(())
-  })
-}
-
-/// The startup sweep that ends the renderer browsers an ended server or CLI left behind, on the blocking pool.
-fn sweep_headless_renderer_orphans_at_startup(
-  _features: Arc<charliebot_registry::FeatureContext>,
-) -> BoxFuture<'static, anyhow::Result<()>> {
-  Box::pin(async move {
-    tokio::task::spawn_blocking(headless_render::end_orphaned_renderers).await?;
-    Ok(())
-  })
-}
-
-/// A config section kept as its YAML value until the owning package's reader types it.
-fn raw_section(value: &serde_yaml::Value) -> Result<SectionValue, String> {
-  Ok(Arc::new(value.clone()))
-}
-
-/// The raw section rendered the way `charliebot config get publish` prints it: the entry's
-/// keys plus the model's three defaults, with `dir`'s `~` expanded as its validator does.
-fn dump_section(value: &SectionValue) -> Result<serde_json::Value, String> {
-  let raw = value.downcast_ref::<serde_yaml::Value>().ok_or("the publish section holds an unexpected value")?;
-  let mut object = match charliebot_core::config::yaml_to_json(raw)? {
-    serde_json::Value::Object(object) => object,
-    serde_json::Value::Null => serde_json::Map::new(),
-    other => return Err(format!("publish must be a mapping, got {other}")),
-  };
-  for key in ["command", "dir", "public_base_url"] {
-    object.entry(key.to_string()).or_insert(serde_json::Value::Null);
-  }
-  if let Some(serde_json::Value::String(dir)) = object.get("dir").cloned() {
-    object.insert("dir".to_string(), serde_json::Value::String(charliebot_core::paths::expanduser(&dir)));
-  }
-  Ok(serde_json::Value::Object(object))
-}
+pub use entry::{PACKAGE, close_renderer, register};

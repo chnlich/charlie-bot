@@ -4,10 +4,12 @@ use std::ffi::OsString;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 
 use charliebot_agents::cli_host::{CliHost, LazyHost};
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::CliExit;
+use charliebot_core::config::SectionValue;
 use charliebot_core::paths;
 use charliebot_core::proc_status;
 use charliebot_core::str_methods;
@@ -70,6 +72,29 @@ fn parse_args(args: &[OsString]) -> Result<PublishArgs, CliExit> {
 fn publish_parsed(args: &PublishArgs, host: &CliHost) -> Result<String, CliExit> {
   let config = parse_config(host.cfg.section::<Value>("publish"))?;
   publish_artifact(&args.artifact, &config, &args.lane_options)
+}
+
+/// A config section kept as its YAML value until the owning package's reader types it.
+pub(crate) fn raw_section(value: &Value) -> Result<SectionValue, String> {
+  Ok(Arc::new(value.clone()))
+}
+
+/// The raw section rendered the way `charliebot config get publish` prints it: the entry's
+/// keys plus the model's three defaults, with `dir`'s `~` expanded as its validator does.
+pub(crate) fn dump_section(value: &SectionValue) -> Result<serde_json::Value, String> {
+  let raw = value.downcast_ref::<Value>().ok_or("the publish section holds an unexpected value")?;
+  let mut object = match charliebot_core::config::yaml_to_json(raw)? {
+    serde_json::Value::Object(object) => object,
+    serde_json::Value::Null => serde_json::Map::new(),
+    other => return Err(format!("publish must be a mapping, got {other}")),
+  };
+  for key in ["command", "dir", "public_base_url"] {
+    object.entry(key.to_string()).or_insert(serde_json::Value::Null);
+  }
+  if let Some(serde_json::Value::String(dir)) = object.get("dir").cloned() {
+    object.insert("dir".to_string(), serde_json::Value::String(paths::expanduser(&dir)));
+  }
+  Ok(serde_json::Value::Object(object))
 }
 
 fn parse_config(raw: &Value) -> Result<PublishConfig, CliExit> {

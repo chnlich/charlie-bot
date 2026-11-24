@@ -770,7 +770,9 @@ member_cli_probe() {
     "$kind" "$member_version" "$binary" "$(installed_member_version "$binary")"
 }
 
-# mock-home writes manifest.json last and renames its staging directory into place only when the home is complete.
+# mock-home writes manifest.json last and renames its staging directory into place only when the home is complete. The
+# shared home is the task-tree shape, whose boot marker lets a serve trial's start skip each session that holds no open
+# task, run or worktree, so the start logs no node failure.
 ensure_mock_home() {
   local commit=$1
   local mock_home_bin="$RUNNER_ROOT/bin/mock-home-$commit"
@@ -794,7 +796,7 @@ ensure_mock_home() {
     return
   fi
 
-  if ! output=$("$mock_home_bin" generate "$mock_home_dir" 2>&1); then
+  if ! output=$("$mock_home_bin" generate "$mock_home_dir" --shape task-tree 2>&1); then
     fail 1 "cannot generate the shared mock home $mock_home_dir: ${output:-mock-home generate returned no diagnostic}"
   fi
   [[ -s $mock_home_dir/manifest.json ]] \

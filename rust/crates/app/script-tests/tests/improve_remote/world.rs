@@ -412,7 +412,7 @@ case ${1-} in
     printf '%s\n' '2'
     ;;
   generate)
-    printf 'generate %s\n' "$2" >>"$FAKE_MOCK_HOME_LOG"
+    printf 'generate %s %s %s\n' "$2" "${3-}" "${4-}" >>"$FAKE_MOCK_HOME_LOG"
     if [[ ${FAKE_MOCK_HOME_FAIL:-0} == 1 ]]; then
       printf 'synthetic mock-home generation failure: disk full\n' >&2
       exit 23

@@ -120,6 +120,26 @@ test('the Threads view hides the group-header create button, in-place repaints i
   assert.equal(nav.innerHTML.includes('createSessionInGroup'), false, 'still no create button after the repaint');
 });
 
+// A thread-bound session lists in the Workspace under its platform badge: the Threads filter narrows the Workspace and
+// removes no row from it.
+test('the Workspace lists a thread-bound session under its platform badge', () => {
+  const rows = [
+    makeSessionMeta('web-1', {name: 'Web · plan notes'}),
+    {...makeSessionMeta('slack-1', {name: 'Slack #infra-savings thread', group: 'Slack #infra-savings'}),
+      channel_platform: 'slack'},
+  ];
+  const {context, nav, fetchRequests} = buildContext();
+  context.INITIAL_SESSIONS = sessionColumns(rows);
+
+  context.restoreSidebarFromUrl();
+
+  assert.deepEqual(fetchRequests, []);
+  assert.match(nav.innerHTML, /id="session-slack-1"/, 'the thread-bound row lists in the Workspace');
+  assert.match(nav.innerHTML, /<span class="[^"]*">Slack<\/span>/, 'the row carries the Slack badge');
+  const webRow = nav.innerHTML.split('id="session-').find((part) => part.startsWith('web-1'));
+  assert.ok(webRow && !/>Slack<\/span>/.test(webRow), 'a web row carries no platform badge');
+});
+
 test('the Workspace view keeps the group-header create button', () => {
   const {context, nav, fetchRequests} = buildContext();
   context.INITIAL_SESSIONS = sessionColumns(threadRows());

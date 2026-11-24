@@ -97,16 +97,19 @@ function row(id, profile, parent = null, name = `Session ${id}`) {
   return {id, name, profile, task_parent_id: parent, updated_at: '2026-11-15T10:00:00Z'};
 }
 
-// The Workspace list and the Threads list. B is the moved session, under P. D and G are its descendants: G sits in the
-// Threads list, so only a walk over both lists finds it. C is a worker, and T is a manager only the Threads list holds.
+// The Workspace list, which holds the thread sessions too. B is the moved session, under P. D and G are its
+// descendants: G is a thread session under D, and a walk over the rows finds it. C is a worker. T and E are a thread
+// session and its child.
 const WORKSPACE_ROWS = [
   row('P', 'manager'),
   row('B', 'manager', 'P'),
   row('D', 'manager', 'B'),
   row('C', 'worker', 'P'),
   row('A', 'manager'),
+  row('T', 'manager'),
+  row('E', 'manager', 'T'),
+  row('G', 'manager', 'D'),
 ];
-const THREADS_ROWS = [row('T', 'manager'), row('E', 'manager', 'T'), row('G', 'manager', 'D')];
 
 // The Workspace answer in the route's `compact=move` column form: one cell array per field, in row order. The ids are
 // not canonical UUIDs, so each id cell is `~` and its text, which is the form the route writes for such a home.
@@ -122,7 +125,6 @@ function columnForm(rows) {
 
 const LIST_ANSWERS = {
   'GET /api/sessions/?compact=move': {status: 200, body: columnForm(WORKSPACE_ROWS)},
-  'GET /api/sessions/chat-threads': {status: 200, body: THREADS_ROWS},
 };
 
 function buildContext(answers) {
@@ -200,15 +202,16 @@ test('acceptance 1: a manager row offers Move under… in every view; worker and
   assert.ok(!archivedLabels.includes(MOVE_LABEL), 'an archived row does not offer the move');
 });
 
-test('acceptance 2: candidates come from both lists, less the moved session, its descendants and parent', async () => {
+test('acceptance 2: candidates come from the Workspace list, less the moved session, its descendants and parent', async () => {
   const {context, document, calls} = buildContext(LIST_ANSWERS);
   const expected = ['Top level', 'Session A', 'Session T', 'Session E'];
   for (const view of ['all', 'starred', 'threads', 'search']) {
     context.currentFilter = view;
     await context.openSessionMovePicker('B');
     assert.deepEqual(choiceLabels(document), expected, `the candidates opened from ${view}`);
-    assert.ok(calls.some((call) => call.url === '/api/sessions/chat-threads'), 'the Threads list is read');
   }
+  assert.ok(calls.length > 0 && calls.every((call) => call.url === '/api/sessions/?compact=move'),
+      'the Workspace list is the one list the picker reads');
 
   await context.openSessionMovePicker('B');
   const parts = pickerParts(document);

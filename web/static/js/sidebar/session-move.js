@@ -3,9 +3,8 @@
 // Settings menu opens it (session-menus.js). The picker lists the manager
 // sessions the moved session can go under. A pick sends one PATCH that sets the
 // moved session's task parent; "Top level" sends null. Each open reads both
-// session lists, because a sidebar view loads only some rows: the Workspace's
-// GET /api/sessions/?compact=move column form and the Threads view's
-// GET /api/sessions/chat-threads. A 200 closes the dialog, and the moved row
+// session list, the Workspace's GET /api/sessions/?compact=move column form, which
+// holds every thread session too. A 200 closes the dialog, and the moved row
 // reaches every open tab through the task_tree_changed push. A 409 keeps the
 // dialog open and lists the server's blockers.
 // ---------------------------------------------------------------------------
@@ -51,21 +50,13 @@ async function fetchSessionRows(url) {
   return res.json();
 }
 
-// The Workspace list and the Threads view's list, merged by id. A session is in one of them, so a row listed in both
-// keeps the later copy.
-//
-// The Workspace list travels in `compact=move`'s column form, which carries the four fields this picker reads and no
-// other. The column form is about a fifth of the row array's bytes for the same rows, and the picker is the only
-// caller that needs the parent and profile fields the sidebar's own list leaves out.
+// The Workspace list, which holds every active row the picker can move, thread sessions included. It travels in
+// `compact=move`'s column form, which carries the four fields this picker reads and no other. The column form is about
+// a fifth of the row array's bytes for the same rows, and the picker is the only caller that needs the parent and
+// profile fields the sidebar's own list leaves out.
 async function fetchMoveRows() {
-  const [columns, threads] = await Promise.all([
-    fetchSessionRows('/api/sessions/?compact=move'),
-    fetchSessionRows('/api/sessions/chat-threads'),
-  ]);
-  const workspace = Sidebar.expandSessionColumns(columns);
-  const byId = new Map();
-  for (const row of [...workspace, ...threads]) byId.set(row.id, row);
-  return [...byId.values()];
+  const columns = await fetchSessionRows('/api/sessions/?compact=move');
+  return Sidebar.expandSessionColumns(columns);
 }
 
 // The manager rows the moved session can go under. The moved session, its descendants and its current parent are out.
@@ -209,7 +200,7 @@ async function openSessionMovePicker(sessionId) {
   try {
     const rows = await fetchMoveRows();
     const moved = rows.find((row) => row.id === sessionId);
-    if (!moved) throw new Error(`Session ${sessionId} is in neither session list`);
+    if (!moved) throw new Error(`Session ${sessionId} is not in the Workspace list`);
     dialog.subject.textContent = `“${moved.name}”`;
     dialog.subject.title = moved.name;
     const candidates = moveCandidates(rows, moved);

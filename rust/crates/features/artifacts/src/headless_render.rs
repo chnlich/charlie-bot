@@ -4,7 +4,7 @@ use std::net::TcpStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -12,6 +12,8 @@ use anyhow::{Context, anyhow};
 use charliebot_core::proc_identity::{read_stat_text, stat_fields_after_command};
 use charliebot_core::str_methods;
 use charliebot_core::text_repr;
+use charliebot_registry::FeatureContext;
+use futures_util::future::BoxFuture;
 use nix::errno::Errno;
 use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
@@ -428,6 +430,26 @@ pub(crate) fn close_renderer() -> anyhow::Result<()> {
     current.close()?;
   }
   Ok(())
+}
+
+/// The close of the renderer at shutdown, on the blocking pool.
+pub(crate) fn close_headless_renderer_at_shutdown(
+  _features: Arc<FeatureContext>,
+) -> BoxFuture<'static, anyhow::Result<()>> {
+  Box::pin(async move {
+    tokio::task::spawn_blocking(close_renderer).await??;
+    Ok(())
+  })
+}
+
+/// The startup sweep that ends the renderer browsers an ended server or CLI left behind, on the blocking pool.
+pub(crate) fn sweep_headless_renderer_orphans_at_startup(
+  _features: Arc<FeatureContext>,
+) -> BoxFuture<'static, anyhow::Result<()>> {
+  Box::pin(async move {
+    tokio::task::spawn_blocking(end_orphaned_renderers).await?;
+    Ok(())
+  })
 }
 
 /// One process the orphan sweep reads from `/proc`.

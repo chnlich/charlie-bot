@@ -312,6 +312,13 @@ pub fn run_fork_assertions(page: &Path, home: &Path) -> anyhow::Result<Option<Ve
   Ok(Some(outcomes))
 }
 
+/// The fork-assertion runner the registry hands `web_reply`'s status gate: each failing page line as a pair.
+pub(crate) fn registered_fork_assertions(page: &Path, home: &Path) -> anyhow::Result<Option<Vec<(String, String)>>> {
+  Ok(run_fork_assertions(page, home)?.map(|outcomes| {
+    outcomes.into_iter().filter(|outcome| !outcome.passed).map(|outcome| (outcome.name, outcome.detail)).collect()
+  }))
+}
+
 static GOAL_SECTION_RE: LazyLock<Regex> = LazyLock::new(|| compile_regex(r"(?s)Problem / Goal</h2>.*?</section>"));
 static ORD: LazyLock<Regex> = LazyLock::new(|| compile_regex(ORDINAL_PATTERN));
 static INTERNAL_UNLESS_QUALIFIED: LazyLock<Regex> = LazyLock::new(|| compile_regex(INTERNAL_UNLESS_QUALIFIED_PATTERN));

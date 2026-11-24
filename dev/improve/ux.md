@@ -47,18 +47,32 @@ A click defect is a control whose click has one of these results:
 A click that the control's design leaves without effect, such as a send with no text, is not a click defect.
 For a control that starts a delayed write, the round also clicks it and leaves the screen during the delay.
 
-The clicks run only against a serve trial on the shared mock home. The trial copy is the write boundary: its server
-starts no agent run, fires no cron task and sends nothing outside its copy, for a write over HTTP, a WebSocket frame
-(chat input, terminal input) or a seeded task. A click's writes therefore land in the copy, and the screen shows what
-it shows after a write that lands there. A WebSocket is not answered with a stub, because a stub that stops the
-socket's reads freezes the page under test.
+The clicks run only against a serve trial on the shared mock home. Each write a click makes lands in that trial copy,
+which has its own home, port and process tree, so the screen shows what it shows after a write there. Two rules decide
+which writes start work, and each names what enforces it:
+
+- A WebSocket write is dropped at send time by the kit's frame guard (`dev/improve/ux-frame-guard.mjs`), which the
+  driver installs before the page's first navigation. Every frame a page sends is dropped except a session socket's
+  `subscribe` frame, so chat input and terminal input never reach the server. Server frames and the page's handlers
+  keep receiving, so the page's reads keep flowing. The click result names each dropped frame.
+- An HTTP write is one non-GET request. The round's driver intercepts each one a click issues and records it in the
+  evidence. The kit does not check that intercept.
+
+The kit does not keep a terminal socket from opening. A terminal connection starts a tmux session and a login shell in
+the trial's own tmux server. The trial stops that server at teardown and fails the side when a process of its tree
+remains. A seeded cron task is disabled before the trial's server starts and read back as disabled after it. The
+scheduler still binds a session to each such task, and the mock-home check counts those sessions.
+
+A WebSocket is not answered with a stub, because a stub that stops the socket's reads freezes the page under test.
 
 ## Mock home
 
 The runner supplies the complete shared mock home before the round, and the round names the DATA_VERSION of that home.
 Both sides read the same data, and the round does not change it. This keeps the before and after views comparable.
 The shared mock home binds scheduled tasks to some of its manager sessions, so a served round shows cron-bound session
-pages and their Task & context dialogs.
+pages and their Task & context dialogs. Its sessions are task-tree nodes with a boot marker, so a serve trial's start
+logs no node failure. Each default cron task that the trial seeds adds the session it binds, so a served round's
+session list holds the home's sessions and those.
 
 ## Servers
 

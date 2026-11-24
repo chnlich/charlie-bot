@@ -145,7 +145,7 @@ pub fn now_or(now: Option<UtcDateTime>) -> UtcDateTime {
 }
 
 pub fn pool(cfg: &CharlieBotConfig) -> anyhow::Result<Vec<claude_config::ClaudeAccount>> {
-  let accounts = cfg.section::<claude_config::AccountsConfig>("accounts");
+  let accounts = cfg.section::<claude_config::AccountsConfig>(claude_config::ACCOUNTS_SECTION_KEY);
   accounts
     .claude
     .iter()
@@ -165,7 +165,7 @@ fn expand_account_path(value: &str) -> anyhow::Result<PathBuf> {
 
 pub fn is_pooled(option: &BackendOption, cfg: &CharlieBotConfig) -> bool {
   option.backend_type == backend_types::CC_CLAUDE
-    && !cfg.section::<claude_config::AccountsConfig>("accounts").claude.is_empty()
+    && !cfg.section::<claude_config::AccountsConfig>(claude_config::ACCOUNTS_SECTION_KEY).claude.is_empty()
 }
 
 pub fn option_pool(option: &BackendOption) -> Option<String> {
@@ -185,7 +185,7 @@ pub fn pool_accounts(
     return Ok(accounts);
   };
   let members = cfg
-    .section::<claude_config::AccountsConfig>("accounts")
+    .section::<claude_config::AccountsConfig>(claude_config::ACCOUNTS_SECTION_KEY)
     .claude_pools
     .get(name)
     .ok_or_else(|| anyhow!("account pool {name:?} is not defined"))?
@@ -199,7 +199,7 @@ pub fn in_pool(cfg: &CharlieBotConfig, label: &str, account_pool: Option<&str>) 
   let Some(name) = account_pool else {
     return Ok(true);
   };
-  let pools = &cfg.section::<claude_config::AccountsConfig>("accounts").claude_pools;
+  let pools = &cfg.section::<claude_config::AccountsConfig>(claude_config::ACCOUNTS_SECTION_KEY).claude_pools;
   let members = pools.get(name).ok_or_else(|| anyhow!("account pool {name:?} is not defined"))?;
   Ok(members.iter().any(|member| member == label))
 }

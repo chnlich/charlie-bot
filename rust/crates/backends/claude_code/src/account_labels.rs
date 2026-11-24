@@ -3,12 +3,12 @@
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::ui_text::check_label;
 
-use crate::claude_config::AccountsConfig;
+use crate::claude_config::{ACCOUNTS_SECTION_KEY, AccountsConfig};
 
 /// Refuse an account whose label holds a character that product UI text rejects. The config load runs this check,
 /// so a rejected label keeps the previous config.
 pub fn check_labels(cfg: &CharlieBotConfig) -> Result<(), String> {
-  for account in &cfg.section::<AccountsConfig>("accounts").claude {
+  for account in &cfg.section::<AccountsConfig>(ACCOUNTS_SECTION_KEY).claude {
     check_label(&format!("accounts.claude[{}].label", account.label), &account.label)?;
   }
   Ok(())

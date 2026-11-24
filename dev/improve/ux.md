@@ -32,7 +32,7 @@ A defect is one of two kinds:
 The round clicks each control on the screen it examines.
 
 The round records each click's result in the evidence. A result names whether the click gives a visible effect on that
-screen (a state change, a message or a navigation), and the non-GET requests the click issues.
+screen (a state change, a message or a navigation), and the non-GET requests and the WebSocket frames the click sends.
 
 A control that the mock home cannot exercise, or that the screen shows as disabled, is recorded as not clicked, with
 its reason.
@@ -47,9 +47,11 @@ A click defect is a control whose click has one of these results:
 A click that the control's design leaves without effect, such as a send with no text, is not a click defect.
 For a control that starts a delayed write, the round also clicks it and leaves the screen during the delay.
 
-The clicks run only against a serve trial on the shared mock home.
-Every non-GET request a click issues is intercepted and recorded, so no click writes to a real session.
-The intercept may answer a recorded write locally, so the screen shows what it shows after a successful write.
+The clicks run only against a serve trial on the shared mock home. The trial copy is the write boundary: its server
+starts no agent run, fires no cron task and sends nothing outside its copy, for a write over HTTP, a WebSocket frame
+(chat input, terminal input) or a seeded task. A click's writes therefore land in the copy, and the screen shows what
+it shows after a write that lands there. A WebSocket is not answered with a stub, because a stub that stops the
+socket's reads freezes the page under test.
 
 ## Mock home
 

@@ -828,7 +828,7 @@ mod tests {
 
   #[test]
   fn a_plan_pool_event_carries_its_plan_type_and_metered_credits() {
-    // A rollout line of 2026-11-06, after the account moved from business to ent26.
+    // A plan-pool `token_count` line whose payload names the plan type and carries a metered credit balance.
     let event = json!({
       "timestamp": "2026-11-06T09:12:31.442Z",
       "type": "event_msg",

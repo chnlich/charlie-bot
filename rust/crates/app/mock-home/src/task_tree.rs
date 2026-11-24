@@ -1138,6 +1138,9 @@ pub fn append_growth(home: &Path, bytes: u64) -> Result<()> {
 mod tests {
   use super::*;
 
+  /// The session count of the plan tests. Each builds a full plan, and the unit-test time check allows 0.1 s per test.
+  const SCALED_SESSIONS: usize = 1_200;
+
   /// The reference start's follow-up totals, scaled to `sessions`.
   fn scaled(reference: f64, sessions: usize) -> f64 {
     reference * sessions as f64 / REFERENCE_NODES
@@ -1147,7 +1150,7 @@ mod tests {
   /// failure. Every kept session of the plan holds a task or a run, so a start of this home logs no node failure.
   #[test]
   fn every_kept_session_of_the_plan_holds_a_task_or_a_run() {
-    let (_, _, sizes) = session::planned_home(crate::PRODUCTION_SESSIONS, 1, Language::Mixed);
+    let (_, _, sizes) = session::planned_home(SCALED_SESSIONS, 1, Language::Mixed);
     for seed in [1, 2] {
       let plan = HomePlan::new(&sizes, seed, Language::Mixed, Shape::TaskTree);
       let kept = plan.sessions.iter().filter(|session| session.reason.is_some());
@@ -1161,7 +1164,7 @@ mod tests {
   /// reattaches nothing and would drain each one with a node failure. Both shapes draw the same sessions.
   #[test]
   fn only_the_lab_shape_plants_live_runs() {
-    let (_, _, sizes) = session::planned_home(crate::PRODUCTION_SESSIONS, 1, Language::Mixed);
+    let (_, _, sizes) = session::planned_home(SCALED_SESSIONS, 1, Language::Mixed);
     let live_runs = |shape| {
       HomePlan::new(&sizes, 1, Language::Mixed, shape)
         .sessions
@@ -1175,13 +1178,11 @@ mod tests {
   }
 
   /// The plan deals every keep reason at its scaled reference count, so a lab start's full-pass distribution lands
-  /// within the A1 range of the reference start. Its full passes replay about the reference start's run follow-ups:
-  /// one per finished manager turn and work run, the workers' work runs among them.
+  /// within the A1 range of the reference start. The follow-up total is checked at production scale in
+  /// `the_production_plan_follow_up_total_lands_within_the_reference`.
   #[test]
   fn a_scaled_plan_deals_each_keep_reason_its_scaled_count() {
-    // The follow-up total is calibrated at production scale: at 1,200 sessions one seed's total moves by a third with
-    // the stream of keep-reason draws, so the quarter-of-reference bound needs the production count.
-    let sessions = crate::PRODUCTION_SESSIONS;
+    let sessions = SCALED_SESSIONS;
     let (_, _, sizes) = session::planned_home(sessions, 1, Language::Mixed);
     let plan = HomePlan::new(&sizes, 1, Language::Mixed, Shape::TaskTree);
     for (reason, reference) in REFERENCE_KEEPS {
@@ -1192,17 +1193,6 @@ mod tests {
     assert_eq!(with_runs, (RUNS_SHARE * sessions as f64).round() as usize);
     let with_task = plan.sessions.iter().filter(|session| session.has_task).count();
     assert_eq!(with_task, (TASK_SHARE * sessions as f64).round() as usize);
-
-    let followups = plan
-      .sessions
-      .iter()
-      .filter(|session| session.reason.is_some_and(|reason| reason != KeepReason::SequenceRef))
-      .flat_map(|session| &session.runs)
-      .filter(|run| run.end == RunEnd::Finished)
-      .count() as f64;
-    // The 09:06Z start's walk counted 7,938 follow-ups over 8,930 nodes. The run knots spread the finished runs over
-    // this home's kept nodes, and the sum lands within a quarter of that reference.
-    assert!((followups / scaled(7938.0, sessions) - 1.0).abs() < 0.25, "{followups} follow-ups");
 
     // A report that no finished parent run confirms is a pending input, and a lab start would dispatch it.
     let parents: Vec<usize> = plan.sessions.iter().filter_map(|session| session.parent).collect();
@@ -1224,5 +1214,27 @@ mod tests {
     let band_plan = HomePlan::new(&band_sizes, 1, Language::Mixed, Shape::TaskTree);
     let band_archived = band_plan.sessions.iter().filter(|session| session.archived).count();
     assert!(band_archived >= 5, "{band_archived} archived sessions");
+  }
+
+  /// The follow-up total of the production plan lands within a quarter of the 09:06Z reference's follow-ups, scaled to
+  /// the production count. At 1,200 sessions one seed's total moves by a third with the keep-reason draws, so this bound
+  /// needs the production count. It is ignored by default: a production-scale plan takes longer than the unit-test time
+  /// check allows, and the Integration job runs it whenever this crate changes.
+  #[test]
+  #[ignore = "integration"]
+  fn the_production_plan_follow_up_total_lands_within_the_reference() {
+    let sessions = crate::PRODUCTION_SESSIONS;
+    let (_, _, sizes) = session::planned_home(sessions, 1, Language::Mixed);
+    let plan = HomePlan::new(&sizes, 1, Language::Mixed, Shape::TaskTree);
+    let followups = plan
+      .sessions
+      .iter()
+      .filter(|session| session.reason.is_some_and(|reason| reason != KeepReason::SequenceRef))
+      .flat_map(|session| &session.runs)
+      .filter(|run| run.end == RunEnd::Finished)
+      .count() as f64;
+    // The 09:06Z start's walk counted 7,938 follow-ups over 8,930 nodes. The run knots spread the finished runs over
+    // this home's kept nodes, and the sum lands within a quarter of that reference.
+    assert!((followups / scaled(7938.0, sessions) - 1.0).abs() < 0.25, "{followups} follow-ups");
   }
 }

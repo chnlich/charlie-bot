@@ -2,7 +2,8 @@
 //!
 //! `dev/improve/remote-runner.sh` starts each round with its launch directory in `IMPROVE_LAUNCH_DIR` and its profile
 //! home at `$HOME/improve/home`. A round's host runs no CharlieBot server, so the commands that need one refuse at
-//! once and the round waits inside its run. A trial server moves `HOME` and `CHARLIEBOT_HOME`, so it is not a round.
+//! once and name the round's state sources, which the runner exports beside the launch directory in `IMPROVE_DIRECTION`
+//! and `IMPROVE_KIT_DIR`. A trial server moves `HOME` and `CHARLIEBOT_HOME`, so it is not a round.
 
 use std::path::Path;
 
@@ -11,7 +12,7 @@ use charliebot_core::{home, paths};
 use crate::exit::CliExit;
 
 /// The variable that names the round's launch directory. Only the runner sets it.
-const LAUNCH_DIR_ENV: &str = "IMPROVE_LAUNCH_DIR";
+pub const LAUNCH_DIR_ENV: &str = "IMPROVE_LAUNCH_DIR";
 /// The round home beneath the user's home, as the runner names it.
 const ROUND_HOME_SUFFIX: &str = "improve/home";
 

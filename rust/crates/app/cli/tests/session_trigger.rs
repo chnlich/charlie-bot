@@ -4,6 +4,7 @@
 //! a wrapper kills its process group before it returns. Only the ssh localhost test runs the real ssh.
 
 use std::collections::BTreeSet;
+use std::ffi::OsStr;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -14,7 +15,6 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use charliebot_cli_common::base_url;
 use nix::errno::Errno;
 use nix::sys::signal::{Signal, kill, killpg};
 use nix::unistd::Pid;
@@ -223,7 +223,7 @@ impl Sandbox {
 
   /// Run `charliebot session trigger ARGS` with the given HOME: the environment holds only these three variables.
   fn run_as(&self, args: &[&str], home: &Path) -> Run {
-    self.run_with(args, &[("CHARLIEBOT_HOME", self.home.as_path()), ("HOME", home)])
+    self.run_with(args, &[("CHARLIEBOT_HOME", self.home.as_os_str()), ("HOME", home.as_os_str())])
   }
 
   /// Run `charliebot session trigger ARGS` inside a Run of session `s1`: the server writes that session's id into
@@ -232,20 +232,20 @@ impl Sandbox {
     self.run_with(
       args,
       &[
-        ("CHARLIEBOT_HOME", self.home.as_path()),
-        ("HOME", self.root.path()),
-        ("CHARLIEBOT_SESSION_ID", Path::new("s1")),
+        ("CHARLIEBOT_HOME", self.home.as_os_str()),
+        ("HOME", self.root.path().as_os_str()),
+        ("CHARLIEBOT_SESSION_ID", OsStr::new("s1")),
       ],
     )
   }
 
   /// Run `charliebot session trigger ARGS` with exactly `vars` set beyond PATH, whose stub `ssh` directory comes first.
-  fn run_with(&self, args: &[&str], vars: &[(&str, &Path)]) -> Run {
+  fn run_with(&self, args: &[&str], vars: &[(&str, &OsStr)]) -> Run {
     self.run_cli_with(&["session", "trigger"], args, vars)
   }
 
   /// Run the named `charliebot` command with exactly `vars` set beyond PATH.
-  fn run_cli_with(&self, command_args: &[&str], args: &[&str], vars: &[(&str, &Path)]) -> Run {
+  fn run_cli_with(&self, command_args: &[&str], args: &[&str], vars: &[(&str, &OsStr)]) -> Run {
     let path = format!("{}:/usr/bin:/bin", self.bin.display());
     let mut command = Command::new(env!("CARGO_BIN_EXE_charliebot"));
     command.args(command_args).args(args).current_dir(self.root.path()).env_clear().env("PATH", path);
@@ -711,15 +711,53 @@ fn test_help_names_the_wait_cap() {
   assert!(run.stdout.contains("14400"), "--help names the cap: {}", run.stdout);
 }
 
-/// The round's environment: the runner's launch directory, and CHARLIEBOT_HOME at the round home beneath HOME. The
-/// round home's config names a live stub API, so a refusal can only come from the round test, not from a dead port.
-fn round_sandbox(sandbox: &Sandbox, stub: &StubApi) -> (PathBuf, PathBuf) {
-  let round_home = sandbox.root.path().join("improve").join("home");
+/// The direction of the round tests, whose kit holds the prompt file `dev/improve/decoupling.md`.
+const ROUND_DIRECTION: &str = "decoupling";
+
+/// The round's environment as the runner exports it: HOME, CHARLIEBOT_HOME at the round home beneath HOME, the launch
+/// directory, the direction and the kit directory. The round home's config names a live stub API, so a refusal can
+/// only come from the round test, not from a dead port.
+struct RoundEnv {
+  home: PathBuf,
+  round_home: PathBuf,
+  launch_dir: PathBuf,
+  kit_dir: PathBuf,
+}
+
+impl RoundEnv {
+  /// The variables that the runner exports to the round.
+  fn vars(&self) -> Vec<(&'static str, &OsStr)> {
+    vec![
+      ("CHARLIEBOT_HOME", self.round_home.as_os_str()),
+      ("HOME", self.home.as_os_str()),
+      ("IMPROVE_LAUNCH_DIR", self.launch_dir.as_os_str()),
+      ("IMPROVE_DIRECTION", OsStr::new(ROUND_DIRECTION)),
+      ("IMPROVE_KIT_DIR", self.kit_dir.as_os_str()),
+    ]
+  }
+}
+
+fn round_sandbox(sandbox: &Sandbox, stub: &StubApi) -> RoundEnv {
+  let home = sandbox.root.path().to_path_buf();
+  let round_home = home.join("improve").join("home");
   fs::create_dir_all(&round_home).expect("the round home is created");
   fs::write(round_home.join("config.yaml"), format!("server:\n  port: {}\n", stub.port))
     .expect("the round config is written");
-  let launch_dir = sandbox.root.path().join("improve").join("launch").join("20261119T000000Z-1-1");
-  (round_home, launch_dir)
+  let launch_dir = home.join("improve").join("launch").join("20261119T000000Z-1-1");
+  let kit_dir = home.join("kit");
+  RoundEnv { home, round_home, launch_dir, kit_dir }
+}
+
+/// The refusal names each state source of the round by its path: the launch directory, the direction prompt in the
+/// kit, and the evidence directory beneath HOME.
+fn assert_names_state_sources(run: &Run, round: &RoundEnv) {
+  let error: Value = serde_json::from_str(&run.stderr).expect("stderr is a JSON error");
+  let message = error["error"].as_str().expect("the error is a message");
+  let prompt = round.kit_dir.join("dev").join("improve").join(format!("{ROUND_DIRECTION}.md"));
+  let evidence = round.home.join("improve").join(ROUND_DIRECTION).join("evidence");
+  for path in [&round.launch_dir, &prompt, &evidence] {
+    assert!(message.contains(&path.display().to_string()), "the refusal does not name {}: {message}", path.display());
+  }
 }
 
 #[test]
@@ -727,22 +765,14 @@ fn round_sandbox(sandbox: &Sandbox, stub: &StubApi) -> (PathBuf, PathBuf) {
 fn test_round_refuses_at_once_and_calls_no_server() {
   let sandbox = Sandbox::new();
   let stub = StubApi::start(registering(sandbox.home.clone()));
-  let (round_home, launch_dir) = round_sandbox(&sandbox, &stub);
+  let round = round_sandbox(&sandbox, &stub);
   let start = Instant::now();
 
-  let run = sandbox.run_with(
-    &["--session", "s1", "--max-wait", "60", "--message", "m"],
-    &[
-      ("CHARLIEBOT_HOME", round_home.as_path()),
-      ("HOME", sandbox.root.path()),
-      ("IMPROVE_LAUNCH_DIR", launch_dir.as_path()),
-    ],
-  );
+  let run = sandbox.run_with(&["--session", "s1", "--max-wait", "60", "--message", "m"], &round.vars());
 
   assert!(start.elapsed() < Duration::from_secs(5), "the round waited {:?} before it refused", start.elapsed());
   assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
-  let error: Value = serde_json::from_str(&run.stderr).expect("stderr is a JSON error");
-  assert_eq!(error["error"], base_url::ROUND_NO_SERVER_MESSAGE);
+  assert_names_state_sources(&run, &round);
   assert!(stub.bodies().is_empty(), "the round reached the server: {:?}", stub.bodies());
 }
 
@@ -751,23 +781,14 @@ fn test_round_refuses_at_once_and_calls_no_server() {
 fn test_round_refuses_another_server_verb_at_once() {
   let sandbox = Sandbox::new();
   let stub = StubApi::start(registering(sandbox.home.clone()));
-  let (round_home, launch_dir) = round_sandbox(&sandbox, &stub);
+  let round = round_sandbox(&sandbox, &stub);
   let start = Instant::now();
 
-  let run = sandbox.run_cli_with(
-    &["session", "tree"],
-    &[],
-    &[
-      ("CHARLIEBOT_HOME", round_home.as_path()),
-      ("HOME", sandbox.root.path()),
-      ("IMPROVE_LAUNCH_DIR", launch_dir.as_path()),
-    ],
-  );
+  let run = sandbox.run_cli_with(&["session", "tree"], &[], &round.vars());
 
   assert!(start.elapsed() < Duration::from_secs(5), "the round waited {:?} before it refused", start.elapsed());
   assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
-  let error: Value = serde_json::from_str(&run.stderr).expect("stderr is a JSON error");
-  assert_eq!(error["error"], base_url::ROUND_NO_SERVER_MESSAGE);
+  assert_names_state_sources(&run, &round);
   assert_eq!(stub.request_count(), 0, "the round reached the server");
 }
 
@@ -776,21 +797,49 @@ fn test_round_refuses_another_server_verb_at_once() {
 fn test_round_refuses_cmd_before_it_starts_the_command() {
   let sandbox = Sandbox::new();
   let stub = StubApi::start(registering(sandbox.home.clone()));
-  let (round_home, launch_dir) = round_sandbox(&sandbox, &stub);
+  let round = round_sandbox(&sandbox, &stub);
 
-  let run = sandbox.run_with(
-    &["--session", "s1", "--max-wait", "60", "--message", "m", "--cmd", "touch started"],
-    &[
-      ("CHARLIEBOT_HOME", round_home.as_path()),
-      ("HOME", sandbox.root.path()),
-      ("IMPROVE_LAUNCH_DIR", launch_dir.as_path()),
-    ],
-  );
+  let run = sandbox
+    .run_with(&["--session", "s1", "--max-wait", "60", "--message", "m", "--cmd", "touch started"], &round.vars());
 
   assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
   // A launch writes its record under the session directory before it starts the command: none was written.
-  assert!(!round_home.join("sessions").exists(), "the round started its command");
+  assert!(!round.round_home.join("sessions").exists(), "the round started its command");
   assert!(stub.bodies().is_empty(), "the round reached the server: {:?}", stub.bodies());
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_round_names_the_state_source_variable_it_lacks() {
+  let sandbox = Sandbox::new();
+  let stub = StubApi::start(registering(sandbox.home.clone()));
+  let round = round_sandbox(&sandbox, &stub);
+
+  for name in ["IMPROVE_DIRECTION", "IMPROVE_KIT_DIR"] {
+    let mut vars = round.vars();
+    vars.retain(|(var, _)| *var != name);
+
+    let run = sandbox.run_with(&["--session", "s1", "--max-wait", "60", "--message", "m"], &vars);
+
+    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    let error: Value = serde_json::from_str(&run.stderr).expect("stderr is a JSON error");
+    assert!(error["error"].as_str().expect("the error is a message").contains(name), "stderr: {}", run.stderr);
+  }
+  assert!(stub.bodies().is_empty(), "the round reached the server: {:?}", stub.bodies());
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_round_runs_an_offline_command_beside_its_refusal() {
+  let sandbox = Sandbox::new();
+  let stub = StubApi::start(registering(sandbox.home.clone()));
+  let round = round_sandbox(&sandbox, &stub);
+
+  let run = sandbox.run_cli_with(&["config", "get", "server"], &[], &round.vars());
+
+  assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+  let server: Value = serde_json::from_str(&run.stdout).expect("stdout is the server section as JSON");
+  assert_eq!(server["port"], json!(stub.port));
 }
 
 #[test]
@@ -804,9 +853,9 @@ fn test_trial_home_keeps_its_server_calls_inside_a_round_environment() {
   let run = sandbox.run_with(
     &["--session", "s1", "--max-wait", "60", "--message", "m"],
     &[
-      ("CHARLIEBOT_HOME", sandbox.home.as_path()),
-      ("HOME", sandbox.root.path()),
-      ("IMPROVE_LAUNCH_DIR", launch_dir.as_path()),
+      ("CHARLIEBOT_HOME", sandbox.home.as_os_str()),
+      ("HOME", sandbox.root.path().as_os_str()),
+      ("IMPROVE_LAUNCH_DIR", launch_dir.as_os_str()),
     ],
   );
 

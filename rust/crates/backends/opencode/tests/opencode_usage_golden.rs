@@ -19,7 +19,7 @@ const GOLDEN_FIXTURE: &str = include_str!("fixtures/opencode_usage_golden.json")
 
 const ACCOUNT: &str = "default";
 
-/// 2026-10-14T17:46:40 UTC in milliseconds.
+/// A `time.created` value in Unix milliseconds, for the instant that the golden fixture's `ts` strings name.
 const CREATED_MS: i64 = 1_792_000_000_000;
 
 const SCHEMA: &str = "create table session_message(id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER, \

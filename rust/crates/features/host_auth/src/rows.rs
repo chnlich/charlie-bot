@@ -11,7 +11,7 @@ use std::io;
 use std::path::Path;
 use std::sync::{LazyLock, Mutex};
 
-use anyhow::bail;
+use anyhow::{Context, bail};
 use serde_json::{Map, Value, json};
 use time::{Duration, OffsetDateTime};
 
@@ -20,6 +20,7 @@ use crate::browser_login::{self, LiveAttempt, Readback, timeout_text};
 use crate::config::{BrowserLoginConfig, login_bound_to};
 use crate::host_auth::{self, State};
 use crate::login_state::{self, LinkMatch, LoginState, LoginStatus};
+use crate::probe::ProbeStatus;
 use crate::timestamps::{self, LocalFormat, isoformat};
 
 /// The detail of a row whose link probe found no approval link.
@@ -129,7 +130,7 @@ fn login_row<'a>(
       }
       (_, Some(entry)) => {
         if let Some(status) = host_auth::opt_str(entry, "status")? {
-          row.state = classify_row_attention(Finding::Probe(status))?;
+          row.state = probe_row_state(status)?;
           row.detail = host_auth::opt_str(entry, "detail")?.unwrap_or("").to_string();
           row.checked_at = host_auth::opt_str(entry, "last_probe_at")?.map(str::to_string);
         }
@@ -145,10 +146,17 @@ fn login_row<'a>(
     }
   }
   if row.state == RowState::NeedsUser && record.link_match == Some(LinkMatch::Fail) {
-    row.state = classify_row_attention(Finding::LinkNotFound)?;
+    row.state = classify_row_attention(Finding::LinkNotFound);
     row.detail = LINK_NOT_FOUND_DETAIL.to_string();
   }
   Ok(row)
+}
+
+/// The state of a row whose host answers with the stored `status` word. A word that no probe writes fails the read:
+/// the state file then holds a verdict this build does not know.
+fn probe_row_state(status: &str) -> anyhow::Result<RowState> {
+  let verdict = ProbeStatus::from_word(status).with_context(|| format!("no probe verdict is named {status:?}"))?;
+  Ok(classify_row_attention(Finding::Probe(verdict)))
 }
 
 /// The state of `login`'s row as its stored check and host verdict leave it now, with a stored link failure applied.
@@ -175,7 +183,7 @@ fn host_row(entry: &Map<String, Value>) -> anyhow::Result<Row<'static>> {
     live: None,
   };
   if let Some(status) = host_auth::opt_str(entry, "status")? {
-    row.state = classify_row_attention(Finding::Probe(status))?;
+    row.state = probe_row_state(status)?;
     row.detail = host_auth::opt_str(entry, "detail")?.unwrap_or("").to_string();
     row.checked_at = host_auth::opt_str(entry, "last_probe_at")?.map(str::to_string);
   }
@@ -258,7 +266,7 @@ where
             Readback::TimedOut { after_sec } => (Finding::Check { exit: None }, timeout_text(after_sec)),
             Readback::CannotRun { reason } => (Finding::CannotRun, reason),
           };
-          let state = classify_row_attention(finding)?;
+          let state = classify_row_attention(finding);
           let detail = browser_login::shown_output(&detail);
           login_state::record_check(state_path, name, state, detail, timestamps::utc_now()).await?;
         }
@@ -441,7 +449,6 @@ pub fn format_remaining(seconds: i64) -> String {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::probe::STATUS_OK;
 
   #[tokio::test]
   async fn a_row_broken_by_a_stored_link_failure_runs_no_link_probe_and_keeps_the_failure() {
@@ -589,7 +596,7 @@ mod tests {
 
   #[test]
   fn a_status_that_is_not_a_probe_verdict_is_refused() {
-    assert!(classify_row_attention(Finding::Probe(STATUS_OK)).is_ok());
-    assert!(classify_row_attention(Finding::Probe("no-such-verdict")).is_err());
+    assert_eq!(probe_row_state("ok").expect("a probe verdict"), RowState::Ok);
+    assert!(probe_row_state("no-such-verdict").is_err());
   }
 }

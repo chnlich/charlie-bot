@@ -16,7 +16,7 @@ use tokio::task::JoinHandle;
 use crate::browser_login;
 use crate::config::{HostAuthConfig, browser_logins};
 use crate::host_auth::{self, RoundSlot, State};
-use crate::probe::{awaits_approval, probe_host_fresh};
+use crate::probe::{ProbeStatus, probe_host_fresh};
 use crate::timestamps;
 
 /// The standing wake period of the poller loop.
@@ -186,7 +186,7 @@ pub async fn dm_step(features: &FeatureContext, state: &State, state_path: &Path
     let Some(status) = host_auth::opt_str(entry, "status")? else {
       continue;
     };
-    if !awaits_approval(status) {
+    if !ProbeStatus::from_word(status).is_some_and(ProbeStatus::awaits_approval) {
       continue;
     }
     let dm_status = host_auth::opt_str(entry, "dm_status")?;
@@ -253,7 +253,7 @@ mod tests {
 
   use super::*;
   use crate::host_auth::{empty_state, host_entries, load_state, save_state};
-  use crate::probe::{STATUS_NEEDS_INTERACTIVE_AUTH, STATUS_NEEDS_OKTA, STATUS_OK, STATUS_UNREACHABLE};
+  use crate::probe::ProbeStatus;
   use crate::timestamps::{self, isoformat};
 
   type TestStateMap = Mutex<HashMap<PathBuf, (Arc<Mutex<Vec<(String, String)>>>, Arc<std::sync::atomic::AtomicBool>)>>;
@@ -432,7 +432,7 @@ mod tests {
       json!([{
         "alias": "login-a",
         "hostname": "login-a.example.internal",
-        "status": STATUS_OK,
+        "status": ProbeStatus::Ok.as_str(),
         "detail": "exit 0",
         "last_probe_at": minute_ago,
         "last_change_at": minute_ago,
@@ -460,7 +460,7 @@ mod tests {
 
     let state = load_state(&env.state_path);
     let hosts = host_entries(&state).unwrap();
-    assert_eq!(hosts[0]["dm_status"], json!(STATUS_NEEDS_INTERACTIVE_AUTH));
+    assert_eq!(hosts[0]["dm_status"], json!(ProbeStatus::NeedsInteractiveAuth.as_str()));
   }
 
   #[tokio::test]
@@ -475,13 +475,13 @@ mod tests {
       json!([{
         "alias": "login-a",
         "hostname": "login-a.example.internal",
-        "status": STATUS_NEEDS_INTERACTIVE_AUTH,
+        "status": ProbeStatus::NeedsInteractiveAuth.as_str(),
         "detail": "requires check",
         "last_probe_at": minute_ago,
         "last_change_at": minute_ago,
         "last_ok_at": null,
         "enrolled_observed_at": null,
-        "dm_status": STATUS_NEEDS_INTERACTIVE_AUTH,
+        "dm_status": ProbeStatus::NeedsInteractiveAuth.as_str(),
       }]),
     );
     save_state(&seed, &env.state_path).unwrap();
@@ -508,13 +508,13 @@ mod tests {
       json!([{
         "alias": "login-a",
         "hostname": "login-a.example.internal",
-        "status": STATUS_NEEDS_OKTA,
+        "status": ProbeStatus::NeedsOkta.as_str(),
         "detail": "Okta verification required",
         "last_probe_at": hours_ago,
         "last_change_at": hours_ago,
         "last_ok_at": null,
         "enrolled_observed_at": null,
-        "dm_status": STATUS_NEEDS_OKTA,
+        "dm_status": ProbeStatus::NeedsOkta.as_str(),
       }]),
     );
     save_state(&seed, &env.state_path).unwrap();
@@ -531,7 +531,7 @@ mod tests {
 
     let state = load_state(&env.state_path);
     let hosts = host_entries(&state).unwrap();
-    assert_eq!(hosts[0]["dm_status"], json!(STATUS_NEEDS_INTERACTIVE_AUTH));
+    assert_eq!(hosts[0]["dm_status"], json!(ProbeStatus::NeedsInteractiveAuth.as_str()));
   }
 
   #[tokio::test]
@@ -546,7 +546,7 @@ mod tests {
       json!([{
         "alias": "login-a",
         "hostname": "login-a.example.internal",
-        "status": STATUS_UNREACHABLE,
+        "status": ProbeStatus::Unreachable.as_str(),
         "detail": "Connection timed out",
         "last_probe_at": minute_ago,
         "last_change_at": minute_ago,
@@ -597,13 +597,13 @@ mod tests {
       json!([{
         "alias": "login-a",
         "hostname": "login-a.example.internal",
-        "status": STATUS_NEEDS_INTERACTIVE_AUTH,
+        "status": ProbeStatus::NeedsInteractiveAuth.as_str(),
         "detail": "requires check",
         "last_probe_at": minute_ago,
         "last_change_at": minute_ago,
         "last_ok_at": null,
         "enrolled_observed_at": null,
-        "dm_status": STATUS_NEEDS_INTERACTIVE_AUTH,
+        "dm_status": ProbeStatus::NeedsInteractiveAuth.as_str(),
       }]),
     );
     save_state(&seed, &env.state_path).unwrap();
@@ -622,7 +622,7 @@ mod tests {
 
     let state = load_state(&env.state_path);
     let hosts = host_entries(&state).unwrap();
-    assert_eq!(hosts[0]["status"], json!(STATUS_OK));
+    assert_eq!(hosts[0]["status"], json!(ProbeStatus::Ok.as_str()));
     assert_eq!(hosts[0].get("dm_status"), None);
   }
 
@@ -656,8 +656,8 @@ mod tests {
 
     let state = load_state(&env.state_path);
     let hosts = host_entries(&state).unwrap();
-    assert_eq!(hosts[0]["dm_status"], json!(STATUS_NEEDS_INTERACTIVE_AUTH));
-    assert_eq!(hosts[1]["dm_status"], json!(STATUS_NEEDS_OKTA));
+    assert_eq!(hosts[0]["dm_status"], json!(ProbeStatus::NeedsInteractiveAuth.as_str()));
+    assert_eq!(hosts[1]["dm_status"], json!(ProbeStatus::NeedsOkta.as_str()));
   }
 
   #[tokio::test]
@@ -678,7 +678,7 @@ mod tests {
     assert_eq!(env.sent_dms.lock().unwrap().len(), 0);
     let state = load_state(&env.state_path);
     let hosts = host_entries(&state).unwrap();
-    assert_eq!(hosts[0]["status"], json!(STATUS_NEEDS_INTERACTIVE_AUTH));
+    assert_eq!(hosts[0]["status"], json!(ProbeStatus::NeedsInteractiveAuth.as_str()));
     assert_eq!(hosts[0].get("dm_status"), None, "dm_status left unchanged after failure");
 
     // Wake 2: Slack succeeds
@@ -692,7 +692,7 @@ mod tests {
     assert_eq!(env.sent_dms.lock().unwrap().len(), 1);
     let state = load_state(&env.state_path);
     let hosts = host_entries(&state).unwrap();
-    assert_eq!(hosts[0]["dm_status"], json!(STATUS_NEEDS_INTERACTIVE_AUTH));
+    assert_eq!(hosts[0]["dm_status"], json!(ProbeStatus::NeedsInteractiveAuth.as_str()));
   }
 
   #[tokio::test]
@@ -747,7 +747,7 @@ mod tests {
 
     assert_eq!(env.sent_dms.lock().unwrap().len(), 1, "poller wake sends the DM");
     let state = load_state(&env.state_path);
-    assert_eq!(host_entries(&state).unwrap()[0]["dm_status"], json!(STATUS_NEEDS_INTERACTIVE_AUTH));
+    assert_eq!(host_entries(&state).unwrap()[0]["dm_status"], json!(ProbeStatus::NeedsInteractiveAuth.as_str()));
   }
 
   #[test]
@@ -775,7 +775,7 @@ mod tests {
       json!([{
         "alias": "login-a",
         "hostname": "login-a.example.internal",
-        "status": STATUS_OK,
+        "status": ProbeStatus::Ok.as_str(),
         "detail": "exit 0",
         "last_probe_at": isoformat(t0),
         "last_change_at": isoformat(t0),

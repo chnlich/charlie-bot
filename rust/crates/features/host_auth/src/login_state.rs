@@ -257,11 +257,11 @@ fn attempt_check(attempt: &AttemptRecord, bound: bool) -> anyhow::Result<Option<
     Outcome::ReadbackFailed if bound => None,
     Outcome::Approved if bound => Some((None, attempt.readback_output.clone())),
     Outcome::Approved | Outcome::ReadbackFailed => {
-      let state = classify_row_attention(Finding::CheckAfterApproval { exit: attempt.readback_exit })?;
+      let state = classify_row_attention(Finding::CheckAfterApproval { exit: attempt.readback_exit });
       Some((Some(LoginStatus::of(state)?), attempt.readback_output.clone()))
     }
     Outcome::StartFailed => {
-      let state = classify_row_attention(Finding::StartFailed)?;
+      let state = classify_row_attention(Finding::StartFailed);
       let detail = if attempt.last_line.is_empty() {
         "start failed".to_string()
       } else {

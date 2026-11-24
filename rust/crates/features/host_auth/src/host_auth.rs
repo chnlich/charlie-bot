@@ -19,10 +19,7 @@ use time::OffsetDateTime;
 
 use crate::config::{BrowserLoginConfig, login_bound_to};
 use crate::login_state;
-use crate::probe::{
-  STATUS_NEEDS_INTERACTIVE_AUTH, STATUS_NEEDS_OKTA, STATUS_OK, STATUS_ROUTER_REJECTED, awaits_approval, build_detail,
-  classify, probe_host_fresh,
-};
+use crate::probe::{ProbeStatus, build_detail, classify, probe_host_fresh};
 use crate::ssh_config;
 use crate::timestamps::{self, isoformat};
 
@@ -48,6 +45,11 @@ pub fn ssh_config_path() -> PathBuf {
   PathBuf::from(paths::expanduser("~")).join(".ssh").join("config")
 }
 
+/// The verdict that the entry's stored `status` word names, or `None` when the entry holds no probe verdict.
+fn stored_verdict(entry: &Map<String, Value>) -> Option<ProbeStatus> {
+  entry.get("status").and_then(Value::as_str).and_then(ProbeStatus::from_word)
+}
+
 /// `host_due`: whether the host's backoff has run out. A host with no record, or with no probe yet, is always due.
 pub fn host_due(entry: Option<&Map<String, Value>>, now: OffsetDateTime) -> anyhow::Result<bool> {
   let Some(entry) = entry else {
@@ -56,7 +58,7 @@ pub fn host_due(entry: Option<&Map<String, Value>>, now: OffsetDateTime) -> anyh
   let Some(last) = opt_str(entry, "last_probe_at")? else {
     return Ok(true);
   };
-  let held = entry.get("status").and_then(Value::as_str) == Some(STATUS_NEEDS_OKTA);
+  let held = stored_verdict(entry) == Some(ProbeStatus::NeedsOkta);
   let period = if held { BLOCKED_BACKOFF_SEC } else { PROBE_INTERVAL_SEC };
   let last = timestamps::parse(last)?;
   Ok((now - last).whole_microseconds() >= i128::from(period) * 1_000_000)
@@ -64,19 +66,19 @@ pub fn host_due(entry: Option<&Map<String, Value>>, now: OffsetDateTime) -> anyh
 
 /// `apply_probe_result`: fold one probe into the host's entry. Returns whether the probe approves the host's login: the
 /// answer is `ok` and the host held a router rejection or an interactive check before it.
-pub fn apply_probe_result(entry: &mut Map<String, Value>, status: &str, detail: &str, probed: &str) -> bool {
-  let previous = entry.get("status").and_then(Value::as_str).map(str::to_owned);
-  entry.insert("status".to_string(), json!(status));
+pub fn apply_probe_result(entry: &mut Map<String, Value>, status: ProbeStatus, detail: &str, probed: &str) -> bool {
+  let previous = stored_verdict(entry);
+  entry.insert("status".to_string(), json!(status.as_str()));
   entry.insert("detail".to_string(), json!(detail));
   entry.insert("last_probe_at".to_string(), json!(probed));
-  if status == STATUS_OK {
+  if status == ProbeStatus::Ok {
     entry.insert("last_ok_at".to_string(), json!(probed));
     entry.remove("dm_status");
   }
-  if previous.as_deref() != Some(status) {
+  if previous != Some(status) {
     entry.insert("last_change_at".to_string(), json!(probed));
   }
-  status == STATUS_OK && matches!(previous.as_deref(), Some(STATUS_ROUTER_REJECTED | STATUS_NEEDS_INTERACTIVE_AUTH))
+  status == ProbeStatus::Ok && matches!(previous, Some(ProbeStatus::RouterRejected | ProbeStatus::NeedsInteractiveAuth))
 }
 
 /// `fold_probe`: apply one probe to the host at `index`. A probe that approves the host records the approval on the
@@ -86,7 +88,7 @@ fn fold_probe(
   state: &mut State,
   logins: &[BrowserLoginConfig],
   index: usize,
-  verdict: (&str, &str),
+  verdict: (ProbeStatus, &str),
   probed: &str,
 ) -> anyhow::Result<()> {
   let entry = host_entry_mut(state, index)?;
@@ -96,7 +98,7 @@ fn fold_probe(
     if approved {
       login_state::change_login(state, name, |record| record.last_approved_at = Some(probed.to_string()))?;
     }
-    if verdict.0 == STATUS_OK {
+    if verdict.0 == ProbeStatus::Ok {
       login_state::clear_broken(state, name)?;
       login_state::clear_link_match(state, name)?;
     }
@@ -137,7 +139,7 @@ fn host_login(entry: &Map<String, Value>) -> anyhow::Result<Option<HostLogin>> {
     status: status.to_string(),
     detail: detail.to_string(),
     last_change_at: last_change_at.to_string(),
-    awaits_approval: awaits_approval(status),
+    awaits_approval: stored_verdict(entry).is_some_and(ProbeStatus::awaits_approval),
   }))
 }
 
@@ -366,7 +368,7 @@ where
 mod tests {
   use super::*;
   use crate::login_state::{LinkMatch, LoginStatus};
-  use crate::probe::{STATUS_NEEDS_INTERACTIVE_AUTH, STATUS_UNREACHABLE, build_detail};
+  use crate::probe::{ProbeStatus, build_detail};
   use time::Duration;
 
   fn entry(alias: &str, hostname: &str, overrides: &[(&str, Value)]) -> Map<String, Value> {
@@ -384,19 +386,26 @@ mod tests {
   #[test]
   fn only_a_router_or_interactive_host_that_answers_ok_is_approved() {
     let moment = "2026-09-15T08:05:00+00:00";
-    let mut router = entry("login-a", "login-a.example.internal", &[("status", json!(STATUS_ROUTER_REJECTED))]);
-    assert!(apply_probe_result(&mut router, STATUS_OK, "exit 0", moment), "router-rejected to ok approves");
+    let mut router =
+      entry("login-a", "login-a.example.internal", &[("status", json!(ProbeStatus::RouterRejected.as_str()))]);
+    assert!(apply_probe_result(&mut router, ProbeStatus::Ok, "exit 0", moment), "router-rejected to ok approves");
     assert_eq!(router["last_ok_at"], json!(moment));
 
     let mut interactive =
-      entry("login-b", "login-b.example.internal", &[("status", json!(STATUS_NEEDS_INTERACTIVE_AUTH))]);
-    assert!(apply_probe_result(&mut interactive, STATUS_OK, "exit 0", moment), "needs-interactive-auth to ok approves");
+      entry("login-b", "login-b.example.internal", &[("status", json!(ProbeStatus::NeedsInteractiveAuth.as_str()))]);
+    assert!(
+      apply_probe_result(&mut interactive, ProbeStatus::Ok, "exit 0", moment),
+      "needs-interactive-auth to ok approves"
+    );
 
-    let mut held = entry("login-c", "login-c.example.internal", &[("status", json!(STATUS_NEEDS_OKTA))]);
-    assert!(!apply_probe_result(&mut held, STATUS_OK, "exit 0", moment), "needs-okta to ok does not approve a login");
+    let mut held = entry("login-c", "login-c.example.internal", &[("status", json!(ProbeStatus::NeedsOkta.as_str()))]);
+    assert!(
+      !apply_probe_result(&mut held, ProbeStatus::Ok, "exit 0", moment),
+      "needs-okta to ok does not approve a login"
+    );
 
-    let mut repeat = entry("login-d", "login-d.example.internal", &[("status", json!(STATUS_OK))]);
-    assert!(!apply_probe_result(&mut repeat, STATUS_OK, "exit 0", moment), "a repeated ok approves nothing");
+    let mut repeat = entry("login-d", "login-d.example.internal", &[("status", json!(ProbeStatus::Ok.as_str()))]);
+    assert!(!apply_probe_result(&mut repeat, ProbeStatus::Ok, "exit 0", moment), "a repeated ok approves nothing");
   }
 
   #[test]
@@ -417,13 +426,13 @@ mod tests {
     let mut state = empty_state();
     state.insert(
       "hosts".to_string(),
-      json!([entry("login-a", "login-a.example.internal", &[("status", json!(STATUS_ROUTER_REJECTED))])]),
+      json!([entry("login-a", "login-a.example.internal", &[("status", json!(ProbeStatus::RouterRejected.as_str()))])]),
     );
     let probed = "2026-09-15T08:05:00+00:00";
-    fold_probe(&mut state, &logins, 0, (STATUS_OK, "exit 0"), probed).expect("the probe folds");
+    fold_probe(&mut state, &logins, 0, (ProbeStatus::Ok, "exit 0"), probed).expect("the probe folds");
     let record = login_state::login_state(&state, "router-login-a").expect("the record reads");
     assert_eq!(record.last_approved_at.as_deref(), Some(probed));
-    fold_probe(&mut state, &logins, 0, (STATUS_UNREACHABLE, "exit 255"), "2026-09-15T08:35:00+00:00")
+    fold_probe(&mut state, &logins, 0, (ProbeStatus::Unreachable, "exit 255"), "2026-09-15T08:35:00+00:00")
       .expect("the probe folds");
     let record = login_state::login_state(&state, "router-login-a").expect("the record reads");
     assert_eq!(record.last_approved_at.as_deref(), Some(probed), "a failing probe leaves the approval");
@@ -447,7 +456,7 @@ mod tests {
     let mut state = empty_state();
     state.insert(
       "hosts".to_string(),
-      json!([entry("login-a", "login-a.example.internal", &[("status", json!(STATUS_ROUTER_REJECTED))])]),
+      json!([entry("login-a", "login-a.example.internal", &[("status", json!(ProbeStatus::RouterRejected.as_str()))])]),
     );
     let broken = |state: &mut State| {
       login_state::change_login(state, "router-login-a", |record| {
@@ -459,16 +468,16 @@ mod tests {
     let probed = "2026-11-19T09:54:09+00:00";
 
     broken(&mut state);
-    fold_probe(&mut state, &[], 0, (STATUS_OK, "exit 0"), probed).expect("the row check's probe folds");
+    fold_probe(&mut state, &[], 0, (ProbeStatus::Ok, "exit 0"), probed).expect("the row check's probe folds");
     let record = login_state::login_state(&state, "router-login-a").expect("the record reads");
     assert_eq!(record.status, Some(LoginStatus::Broken), "a host row check passes no login, so it clears nothing");
     assert_eq!(record.link_match, Some(LinkMatch::Fail));
 
-    fold_probe(&mut state, &logins, 0, (STATUS_UNREACHABLE, "exit 255"), probed).expect("the probe folds");
+    fold_probe(&mut state, &logins, 0, (ProbeStatus::Unreachable, "exit 255"), probed).expect("the probe folds");
     let record = login_state::login_state(&state, "router-login-a").expect("the record reads");
     assert_eq!(record.status, Some(LoginStatus::Broken), "a probe that does not answer ok keeps the broken status");
 
-    fold_probe(&mut state, &logins, 0, (STATUS_OK, "exit 0"), probed).expect("the bound probe folds");
+    fold_probe(&mut state, &logins, 0, (ProbeStatus::Ok, "exit 0"), probed).expect("the bound probe folds");
     let record = login_state::login_state(&state, "router-login-a").expect("the record reads");
     assert_eq!(record.status, None, "the bound host's ok clears the stored broken status");
     assert_eq!(record.link_match, None, "and its stored link result");
@@ -479,17 +488,17 @@ mod tests {
     let mut item = entry(
       "login-a",
       "login-a.example.internal",
-      &[("status", json!(STATUS_NEEDS_INTERACTIVE_AUTH)), ("dm_status", json!("needs-interactive-auth"))],
+      &[("status", json!(ProbeStatus::NeedsInteractiveAuth.as_str())), ("dm_status", json!("needs-interactive-auth"))],
     );
-    apply_probe_result(&mut item, STATUS_OK, "exit 0", "2026-09-15T08:00:00+00:00");
+    apply_probe_result(&mut item, ProbeStatus::Ok, "exit 0", "2026-09-15T08:00:00+00:00");
     assert_eq!(item.get("dm_status"), None);
 
     let mut awaiting = entry(
       "login-b",
       "login-b.example.internal",
-      &[("status", json!(STATUS_NEEDS_OKTA)), ("dm_status", json!("needs-okta"))],
+      &[("status", json!(ProbeStatus::NeedsOkta.as_str())), ("dm_status", json!("needs-okta"))],
     );
-    apply_probe_result(&mut awaiting, STATUS_NEEDS_INTERACTIVE_AUTH, "check required", "2026-09-15T08:00:00+00:00");
+    apply_probe_result(&mut awaiting, ProbeStatus::NeedsInteractiveAuth, "check required", "2026-09-15T08:00:00+00:00");
     assert_eq!(awaiting["dm_status"], json!("needs-okta"));
   }
 
@@ -501,12 +510,12 @@ mod tests {
     let held = entry(
       "login-a",
       "login-a.example.internal",
-      &[("status", json!(STATUS_NEEDS_OKTA)), ("last_probe_at", probed_30_min_ago.clone())],
+      &[("status", json!(ProbeStatus::NeedsOkta.as_str())), ("last_probe_at", probed_30_min_ago.clone())],
     );
     let direct = entry(
       "login-b",
       "login-b.example.internal",
-      &[("status", json!(STATUS_OK)), ("last_probe_at", probed_30_min_ago)],
+      &[("status", json!(ProbeStatus::Ok.as_str())), ("last_probe_at", probed_30_min_ago)],
     );
     assert!(!host_due(Some(&held), now).expect("the stamp parses"));
     assert!(host_due(Some(&held), now + Duration::seconds(21600)).expect("the stamp parses"));
@@ -552,7 +561,7 @@ mod tests {
       json!([entry(
         "login-a",
         "login-a.example.internal",
-        &[("status", json!(STATUS_NEEDS_OKTA)), ("last_probe_at", json!(minute_ago)),]
+        &[("status", json!(ProbeStatus::NeedsOkta.as_str())), ("last_probe_at", json!(minute_ago)),]
       )]),
     );
     fs::write(&state_path, format!("{}\n", Value::Object(seed))).expect("the seed writes");
@@ -573,8 +582,8 @@ mod tests {
     assert_eq!(*probed.lock().expect("the probe log"), ["gpu-box-1"]);
     let hosts = host_entries(&state).expect("the hosts read");
     assert_eq!(hosts[0]["alias"], json!("login-a"));
-    assert_eq!(hosts[0]["status"], json!(STATUS_NEEDS_OKTA));
-    assert_eq!(hosts[1]["status"], json!(STATUS_UNREACHABLE));
+    assert_eq!(hosts[0]["status"], json!(ProbeStatus::NeedsOkta.as_str()));
+    assert_eq!(hosts[1]["status"], json!(ProbeStatus::Unreachable.as_str()));
     assert_eq!(state["probe_running"], json!(false));
     assert_eq!(state["interval_sec"], json!(1620));
     let published = load_state(&state_path);
@@ -586,7 +595,7 @@ mod tests {
     assert_eq!(*probed.lock().expect("the probe log"), ["gpu-box-1", "login-a", "gpu-box-1"]);
     // The manual round ignores the backoff, and the held host's answer is now the host's status.
     let hosts = host_entries(&state).expect("the hosts read");
-    assert_eq!(hosts[0]["status"], json!(STATUS_OK));
+    assert_eq!(hosts[0]["status"], json!(ProbeStatus::Ok.as_str()));
     assert!(hosts[0]["last_ok_at"].is_string());
   }
 
@@ -618,7 +627,7 @@ mod tests {
     let check = |_alias: String| async { Ok::<_, io::Error>((1, CHECK_OUTPUT.to_string())) };
 
     let login = probe_alias_with(&state_path, &config, "gpu-box-2", &[], check).await.expect("the probe answers").login;
-    assert_eq!(login.status, STATUS_NEEDS_INTERACTIVE_AUTH);
+    assert_eq!(login.status, ProbeStatus::NeedsInteractiveAuth.as_str());
     assert!(login.awaits_approval);
     assert_eq!(login.detail, build_detail(1, CHECK_OUTPUT));
     // The state holds the verdict. gpu-box-1 has no record until a probe answers it, so the read lists gpu-box-2 alone.
@@ -635,7 +644,7 @@ mod tests {
     .await
     .expect("the probe answers")
     .login;
-    assert_eq!(cleared.status, STATUS_OK);
+    assert_eq!(cleared.status, ProbeStatus::Ok.as_str());
     assert!(!cleared.awaits_approval);
     assert_eq!(cleared.detail, "exit 0");
   }
@@ -677,7 +686,7 @@ mod tests {
     assert!(!state_path.exists(), "nothing is written while the slot is held");
     drop(held);
     let login = gate.await.expect("the gate task joins").expect("the gate write succeeds").login;
-    assert_eq!(login.status, STATUS_OK);
+    assert_eq!(login.status, ProbeStatus::Ok.as_str());
   }
 
   #[tokio::test]

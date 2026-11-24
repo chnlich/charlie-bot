@@ -8,6 +8,8 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::Path;
 
+use charliebot_core::config::{CONFIG_D_DIR_NAME, CRON_D_DIR_NAME};
+use charliebot_core::home::CHARLIEBOT_HOME_ENV;
 use serde_json::json;
 
 const CRON_TASKS_REQUEST: &[u8] = b"GET /api/cron/tasks ";
@@ -15,7 +17,7 @@ const CRON_TASKS_REQUEST: &[u8] = b"GET /api/cron/tasks ";
 fn main() {
   let port: u16 =
     std::env::var("TRIAL_PORT_MIN").expect("the trial's port range").parse().expect("a numeric trial port");
-  let home = std::env::var("CHARLIEBOT_HOME").expect("the trial's home");
+  let home = std::env::var(CHARLIEBOT_HOME_ENV).expect("the trial's home");
   // SAFETY: SIG_IGN takes no pointer; the call only changes SIGTERM's disposition for this process.
   unsafe {
     libc::signal(libc::SIGTERM, libc::SIG_IGN);
@@ -44,7 +46,7 @@ fn main() {
 /// The trial home's cron tasks as the started server lists them: one disabled entry per task file.
 fn cron_tasks(home: &Path) -> String {
   let mut tasks = Vec::new();
-  for entry in fs::read_dir(home.join("config.d/cron.d")).expect("the cron task directory") {
+  for entry in fs::read_dir(home.join(CONFIG_D_DIR_NAME).join(CRON_D_DIR_NAME)).expect("the cron task directory") {
     let path = entry.expect("a cron task entry").path();
     let name = path.file_stem().expect("a task name").to_string_lossy().into_owned();
     tasks.push(json!({"name": name, "enabled": false}));

@@ -72,16 +72,22 @@
     socket.onmessage = e => {
       let data;
       try { data = JSON.parse(e.data); } catch { return; }
-      if (data.type === 'ping') return;
-      if (data.type === 'pty_output') {
-        if (!term) return;
-        try {
-          term.write(decodeB64ToBytes(data.data || ''));
-        } catch (err) {
-          console.warn('terminal pty_output decode failed', err);
-        }
-      } else if (data.type === 'pty_exit') {
-        if (term) term.write('\r\n\x1b[33m[terminal detached]\x1b[0m\r\n');
+      switch (data.type) {
+        case 'ping':
+          return;
+        case 'pty_output':
+          if (!term) return;
+          try {
+            term.write(decodeB64ToBytes(data.data || ''));
+          } catch (err) {
+            console.warn('terminal pty_output decode failed', err);
+          }
+          break;
+        case 'pty_exit':
+          if (term) term.write('\r\n\x1b[33m[terminal detached]\x1b[0m\r\n');
+          break;
+        default:
+          throw new Error('unknown terminal message type: ' + data.type);
       }
     };
     socket.onclose = () => {

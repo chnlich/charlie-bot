@@ -83,7 +83,9 @@
     @media not all and (min-width: 640px) {
       .diff-file-row { display: grid; align-items: start; column-gap: 0.75rem; row-gap: 0.125rem;
         grid-template-columns: auto auto minmax(0, 1fr) auto; }
-      .diff-file-name { grid-column: 3; grid-row: 1; white-space: normal; word-break: break-all; }
+      /* The name breaks at the <wbr> points that diff_page.js puts after each dot, underscore and hyphen. Inside a
+         word it breaks only when no such point fits the line. */
+      .diff-file-name { grid-column: 3; grid-row: 1; white-space: normal; overflow-wrap: break-word; }
       .diff-file-counts { grid-column: 4; grid-row: 1; }
       .diff-file-dir { grid-column: 3 / span 2; grid-row: 2; }
       .diff-file-rename { grid-column: 3 / span 2; grid-row: 3; margin-left: 0; }

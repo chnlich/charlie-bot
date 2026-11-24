@@ -736,8 +736,14 @@
       pathEl.append(dir);
     }
     const name = document.createElement('span');
-    name.textContent = file.path.slice(slash + 1);
     name.className = 'diff-file-name shrink-0 font-semibold text-slate-900';
+    // A <wbr> after each dot, underscore and hyphen gives a phone's wrapped name its break points, so the name wraps
+    // between its words rather than inside one. Each part is a text node, and a <wbr> adds no text to the name.
+    const nameParts = file.path.slice(slash + 1).match(/[^._-]*[._-]+|[^._-]+$/g) || [];
+    nameParts.forEach((part, i) => {
+      if (i > 0) name.append(document.createElement('wbr'));
+      name.append(document.createTextNode(part));
+    });
     pathEl.append(name);
     // A move's row names the path it came from. The diff's own file header carries that pair, and the page
     // hides that header, so without this line the source path appears nowhere on the page.

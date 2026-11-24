@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use charliebot_compat::file_urls::FILE_SERVER_MOUNT;
 use charliebot_core::timefmt;
+use charliebot_html::{EscapeContext, escape};
 use charliebot_registry::icons::Icons;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use time::OffsetDateTime;
@@ -105,7 +106,7 @@ pub fn dir_listing_page(
     let folder = glyph(&icons, "folder")?;
     rows.push_str(&format!(
       r#"<tr><td class="icon">{folder}</td><td class="name"><a href="{}">..</a></td><td class="size"></td><td class="modified"></td></tr>"#,
-      escape(parent)
+      escape(parent, EscapeContext::QuotedAttribute)
     ));
     rows.push('\n');
   }
@@ -116,7 +117,7 @@ pub fn dir_listing_page(
   let display_path = dir_path
     .to_str()
     .ok_or_else(|| failed(FailureKind::UnicodeEncodeError, "the directory path is not UTF-8".into()))?;
-  Ok(Some(page(&escape(display_path), &rows)))
+  Ok(Some(page(&escape(display_path, EscapeContext::QuotedAttribute), &rows)))
 }
 
 /// The folder or file glyph at the row's 16 px size, drawn by the icon module.
@@ -127,8 +128,8 @@ fn glyph(icons: &Icons, key: &str) -> Result<String, ListingError> {
 /// One child's `<tr>`, without its newline.
 fn row(child: &Child, base: &str, icons: &Icons) -> Result<String, ListingError> {
   let icon = glyph(icons, if child.is_dir { "folder" } else { "file" })?;
-  let name = escape(&format!("{}{}", child.name, if child.is_dir { "/" } else { "" }));
-  let href = escape(&format!("{base}/{}", quote(&child.name)));
+  let name = escape(&format!("{}{}", child.name, if child.is_dir { "/" } else { "" }), EscapeContext::QuotedAttribute);
+  let href = escape(&format!("{base}/{}", quote(&child.name)), EscapeContext::QuotedAttribute);
   let size = if child.is_dir { String::new() } else { human_size::format_size(child.size) };
   let modified = modified_minute(child.modified)?;
   Ok(format!(
@@ -202,11 +203,6 @@ fn modified_minute(seconds: f64) -> Result<String, ListingError> {
     moment.hour(),
     moment.minute()
   ))
-}
-
-/// Escapes `&`, `<`, `>`, `"` and `'`: the five characters that end an attribute value or a text node.
-fn escape(text: &str) -> String {
-  html_escape::encode_quoted_attribute(text).into_owned()
 }
 
 /// Every byte but ASCII letters, digits and `_.-~` becomes `%XX`.
@@ -324,8 +320,7 @@ mod tests {
   }
 
   #[test]
-  fn html_and_file_url_escaping_match_recorded_bytes() {
-    assert_eq!(escape("&<>\"'/"), "&amp;&lt;&gt;&quot;&#x27;/");
+  fn file_url_quoting_matches_recorded_bytes() {
     assert_eq!(quote("a b/#?é~"), "a%20b%2F%23%3F%C3%A9~");
   }
 

@@ -1623,7 +1623,7 @@ fn the_runner_generates_a_missing_shared_mock_home_before_the_round_starts() {
   assert_eq!(run.code, 0, "{}", run.describe());
   assert_eq!(
     fs::read_to_string(&world.mock_home_log).expect("the mock-home calls"),
-    format!("version\ngenerate {} --shape task-tree\nround {DIRECTION}\n", mock_home.display()),
+    format!("version\ngenerate {} --shape serve-task-tree\nround {DIRECTION}\n", mock_home.display()),
     "the runner did not generate the complete mock home before starting the round"
   );
   assert_eq!(

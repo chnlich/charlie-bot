@@ -1,7 +1,7 @@
 //! The Claude Code side of live user-message delivery for web manager turns.
 //!
-//! The delivery state — the serialized stdin writes, the replay acknowledgements and the stdin close — lives in the
-//! runtime (`charliebot_registry::midturn_delivery`), which both this backend and the task queue use. This module
+//! The delivery state lives in the runtime (`charliebot_registry::midturn_delivery`). It holds the serialized stdin
+//! writes, the replay acknowledgements and the stdin close. This backend and the task queue both use it. This module
 //! holds the Claude-specific part: the stream-json launch arguments that turn the path on, which the lifecycle returns
 //! to the runtime (`BackendLifecycle::midturn_launch_kwargs`), and the replay translator.
 

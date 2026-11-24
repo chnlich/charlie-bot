@@ -168,7 +168,7 @@ impl ClaudeCodeLifecycle {
     launch_kwargs(ctx, first_process)
   }
 
-  /// The launch on `account`. `used` holds the logins the run launched on before this one; `account` joins them.
+  /// The launch on `account`. `used` holds the logins the run launched on before this one. `account` joins them.
   #[allow(clippy::too_many_arguments)]
   fn pooled_launch(
     &self,
@@ -295,8 +295,8 @@ impl ClaudeCodeLifecycle {
         .map_err(|error| refused(error, MemberFailure::Other, None));
     }
     // A keyed round ships its login's token to its host, so a login whose token lives too little for the round is
-    // left out. When that is the only reason no login is usable, the round fails as a token shortage: no member is
-    // recorded out, because its other logins may serve other rounds.
+    // left out. When that is the only reason no login is usable, the round fails as a token shortage.
+    // No member is recorded out, because its other logins may serve other rounds.
     let short = if keyed {
       claude_accounts::short_token_logins(&ctx.cfg, account_pool.as_deref(), None)
         .map_err(|error| refused(error, MemberFailure::Other, None))?
@@ -418,8 +418,9 @@ impl BackendLifecycle for ClaudeCodeLifecycle {
     Box::pin(async move { claude_idle_compaction::IdleCompaction::shared().settle_for_turn(session_id).await })
   }
 
-  /// The pool answers whether any login can serve the option's model now (a login with readings below full, or none
-  /// read yet), and the earliest reset among the logins that its rejections hold out.
+  /// The pool answers whether any login can serve the option's model now.
+  /// A login can serve it when its readings sit below full, or when none is read yet.
+  /// The pool also gives the earliest reset among the logins that its rejections hold out.
   fn quota_outlook(&self, option: &BackendOption, cfg: &CharlieBotConfig) -> anyhow::Result<Option<QuotaOutlook>> {
     if !claude_accounts::is_pooled(option, cfg) {
       return Ok(None);
@@ -1292,8 +1293,8 @@ mod tests {
     };
     assert!(refusal.failure.fails_over(), "the failed round moves to the pool's next member");
 
-    // The failover chain of a failed run: its member is recorded out for the failure's reason, and the pool's next
-    // pick leaves out every member the chain has left, `claude-haiku` among them.
+    // The failover chain of a failed run records its member out, for the failure's reason.
+    // The pool's next pick leaves out every member the chain has left, `claude-haiku` among them.
     let mut registry = Registry::new();
     registry.register_package("backends.claude_code", crate::register).unwrap();
     let availability = Arc::new(BackendAvailability::load(&home).unwrap());

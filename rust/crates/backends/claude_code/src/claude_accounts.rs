@@ -4,12 +4,15 @@
 //! under-line tier, and when that tier holds any account only it contends. An account at or above the warning line
 //! is a last resort shared with no rule of its own.
 //!
-//! Every placement of a run on a login — a launch, a relay, or a reattach after a restart — reserves a fixed share
-//! of the login's five-hour window under the reservation table's one lock, so runs placed together see one another
-//! before the readings rise. A placement picks on *unreserved* headroom, the five-hour headroom minus the login's
-//! live reservations capped by its raw headroom, and a reservation never refuses a run: the pick overflows to the
-//! login whose reservations overshoot least. The probes (`select`, `cool_destination`,
-//! `unreserved_cool_destination`) stay read-only.
+//! Every placement of a run on a login reserves a fixed share of that login's five-hour window.
+//! A placement is a launch, a relay, or a reattach after a restart.
+//! The reservation takes the reservation table's one lock, so runs placed together see one another before the
+//! readings rise.
+//! A placement picks on *unreserved* headroom: the five-hour headroom minus the login's live reservations, capped by
+//! its raw headroom.
+//! A reservation never refuses a run.
+//! The pick overflows to the login whose reservations overshoot least.
+//! The probes (`select`, `cool_destination`, `unreserved_cool_destination`) stay read-only.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
@@ -541,8 +544,9 @@ pub fn select(
   scored_pick(state, model, busy_accounts, moment, tier)
 }
 
-/// The contenders' pick: an idle login ahead of a busy one, the balancing score on `weight` with its tie group, and
-/// inside the group the most weight, then the least recently read `rate_limit_event`, then pool order.
+/// The contenders' pick puts an idle login ahead of a busy one.
+/// After that comes the balancing score on `weight`, with its tie group.
+/// Inside the group the most weight wins, then the least recently read `rate_limit_event`, then pool order.
 fn scored_pick(
   state: &ClaudeAccountState,
   model: Option<&str>,
@@ -644,9 +648,10 @@ fn unreserved_candidates(
   )
 }
 
-/// The tier a placement takes and the contenders it ranks: the under-line tier first, then the logins with any
-/// unreserved headroom, then the overflow on every healthy login with headroom. The tier names the
-/// `claude_login_reserved` outcome.
+/// The tier a placement takes and the contenders it ranks follow one order.
+/// The under-line tier comes first.
+/// Then come the logins with any unreserved headroom, and then the overflow on every healthy login with headroom.
+/// The tier names the `claude_login_reserved` outcome.
 fn unreserved_tier(
   candidates: Vec<UnreservedCandidate>,
 ) -> Option<(&'static str, Vec<(claude_config::ClaudeAccount, f64)>)> {
@@ -886,8 +891,8 @@ pub fn login_reading(
 
 /// The Auto set's reading of one Claude member. It carries the best login's windows and weekly reset, and the
 /// earliest reset among the healthy logins. It also says whether every healthy login sits at or above the 90% line
-/// with a reset beyond 45 minutes, whether no healthy login has headroom left, and whether every login that has
-/// headroom has all of it reserved by the runs placed on it.
+/// with a reset beyond 45 minutes. It also says whether no healthy login has headroom left. It also says whether every
+/// login that has headroom has all of it reserved by the runs placed on it.
 pub fn member_reading(
   state: &ClaudeAccountState,
   cfg: &CharlieBotConfig,

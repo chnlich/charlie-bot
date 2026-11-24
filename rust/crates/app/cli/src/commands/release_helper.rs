@@ -21,6 +21,7 @@ use charliebot_cli_common::client;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::route;
 use charliebot_cli_common::skew;
+use charliebot_compat::ws_client::{self, Error as WsError, Message, Options, Settings};
 use charliebot_core::cgroup::{
   self, SESSION_CGROUP_CREATED_EVENT, SESSION_CGROUP_ENABLED_EVENT, SESSION_CGROUP_SWEEP_REMOVED_EVENT,
 };
@@ -1282,36 +1283,34 @@ fn replay(
 
 /// Every frame before `catchup_complete`; `None` when the server sent no frame at all.
 fn replay_frames(url: &str) -> Result<Option<Vec<Value>>, String> {
-  use futures_util::StreamExt as _;
-  use tokio_tungstenite::tungstenite::Message;
-  use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
-
   let runtime =
     tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|error| error.to_string())?;
   runtime.block_on(async {
-    let parsed = url::Url::parse(url).map_err(|error| error.to_string())?;
-    let host = parsed.host_str().ok_or("the websocket URL names no host")?.to_string();
-    let port = parsed.port_or_known_default().ok_or("the websocket URL names no port")?;
-    let stream = tokio::time::timeout(Duration::from_secs(10), tokio::net::TcpStream::connect((host.as_str(), port)))
-      .await
-      .map_err(|_| "the websocket connection timed out".to_string())?
-      .map_err(|error| error.to_string())?;
-    let request = url.into_client_request().map_err(|error| error.to_string())?;
-    let (mut socket, _) =
-      tokio_tungstenite::client_async_with_config(request, stream, None).await.map_err(|error| error.to_string())?;
+    let options = Options {
+      open_timeout: Some(Duration::from_secs(10)),
+      close_timeout: None,
+      max_size: None,
+      ping_interval: None,
+      ping_timeout: None,
+    };
+    let (sender, mut receiver) =
+      ws_client::connect(url, &options, &Settings::default()).await.map_err(|error| error.to_string())?;
     let mut frames = Vec::new();
     loop {
-      let message = tokio::time::timeout(Duration::from_secs(15), socket.next())
+      let message = match tokio::time::timeout(Duration::from_secs(15), receiver.recv())
         .await
         .map_err(|_| "the websocket replay timed out".to_string())?
-        .ok_or("the websocket closed before catchup_complete")?
-        .map_err(|error| error.to_string())?;
+      {
+        Some(Ok(message)) => message,
+        Some(Err(WsError::ConnectionClosed { .. })) | None => {
+          return Err("the websocket closed before catchup_complete".to_string());
+        }
+        Some(Err(error)) => return Err(error.to_string()),
+      };
       let text = match message {
-        Message::Text(text) => text.to_string(),
-        Message::Binary(bytes) => String::from_utf8(bytes.to_vec()).map_err(|error| error.to_string())?,
-        Message::Ping(_) | Message::Pong(_) => continue,
+        Message::Text(text) => text,
+        Message::Binary(bytes) => String::from_utf8(bytes).map_err(|error| error.to_string())?,
         Message::Close(_) => return Err("the websocket closed before catchup_complete".to_string()),
-        Message::Frame(_) => continue,
       };
       let frame: Value = serde_json::from_str(&text).map_err(|error| error.to_string())?;
       if frame.get("type").and_then(Value::as_str) == Some(api::CATCHUP_COMPLETE_FRAME) {
@@ -1319,6 +1318,7 @@ fn replay_frames(url: &str) -> Result<Option<Vec<Value>>, String> {
       }
       frames.push(frame);
     }
+    drop(sender);
     if frames.is_empty() {
       return Ok(None);
     }
@@ -1755,5 +1755,48 @@ mod tests {
     let records = stand_in_records(cron, example).unwrap();
     assert!(!records.is_empty());
     assert!(records.iter().all(|record| record["type"] == "cc-claude"), "{records:?}");
+  }
+
+  fn spawn_ws_script(messages: Vec<String>) -> (String, std::thread::JoinHandle<()>) {
+    use futures_util::SinkExt as _;
+    use tokio_tungstenite::{accept_async, tungstenite::Message as ServerMessage};
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let handle = std::thread::spawn(move || {
+      let (stream, _) = listener.accept().unwrap();
+      let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+      runtime.block_on(async move {
+        stream.set_nonblocking(true).unwrap();
+        let stream = tokio::net::TcpStream::from_std(stream).unwrap();
+        let mut ws = accept_async(stream).await.unwrap();
+        for text in messages {
+          ws.send(ServerMessage::Text(text.into())).await.unwrap();
+        }
+        let _ = ws.close(None).await;
+      });
+    });
+    (format!("ws://{address}/ws/sessions/s?cursor=0"), handle)
+  }
+
+  #[test]
+  fn replay_frames_collects_frames_until_catchup_complete_and_fails_on_early_close() {
+    let (url, server) = spawn_ws_script(vec![
+      json!({"type": "message", "id": "m1"}).to_string(),
+      json!({"type": api::CATCHUP_COMPLETE_FRAME}).to_string(),
+    ]);
+    let frames = replay_frames(&url).unwrap().unwrap();
+    server.join().unwrap();
+    assert_eq!(frames, vec![json!({"type": "message", "id": "m1"})]);
+
+    let (empty_url, empty_server) = spawn_ws_script(vec![json!({"type": api::CATCHUP_COMPLETE_FRAME}).to_string()]);
+    let empty = replay_frames(&empty_url).unwrap();
+    empty_server.join().unwrap();
+    assert_eq!(empty, None);
+
+    let (closed_url, closed_server) = spawn_ws_script(vec![json!({"type": "message", "id": "m1"}).to_string()]);
+    let error = replay_frames(&closed_url).unwrap_err();
+    closed_server.join().unwrap();
+    assert_eq!(error, "the websocket closed before catchup_complete");
   }
 }

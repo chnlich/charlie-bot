@@ -509,7 +509,7 @@ pub const STARRED_PROJECTION: SidebarProjection = SidebarProjection {
 ///
 /// The page renders the stored metadata without `task.goal`: no page code reads the goal from a row (the task-context
 /// modal fetches the session detail and reads its web status). A listing route renders the response model's form,
-/// [`metadata_value`], which also names the chat-thread flag.
+/// [`metadata_value`], which also names the chat platform.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RowSchema {
   Page,
@@ -527,6 +527,7 @@ impl RowSchema {
       RowSchema::Page => {
         let mut value = session_metadata_shown(store, meta);
         remove_task_goal(&mut value);
+        insert_channel_platform(value.as_object_mut().expect("session metadata serializes to an object"), meta);
         Ok(value)
       }
       RowSchema::Listing => metadata_value(store, meta),
@@ -1501,11 +1502,17 @@ pub(crate) fn metadata_value(store: &Store, meta: &SessionMetadata) -> StoreResu
   let mut value = store.session_metadata_value(meta);
   remove_task_goal(&mut value);
   let object = value.as_object_mut().expect("session metadata serializes to an object");
+  insert_channel_platform(object, meta);
+  show_display_member(&store.config().backends, object);
+  Ok(value)
+}
+
+/// Adds `channel_platform` to a session row when the session is bound to a chat thread. The first paint's page rows
+/// and the refreshed listing both carry it, so a thread row shows its platform badge from the first paint.
+fn insert_channel_platform(object: &mut Map<String, Value>, meta: &SessionMetadata) {
   if let Some(platform) = platform_of(meta) {
     object.insert(CHANNEL_PLATFORM.to_string(), Value::String(platform.to_string()));
   }
-  show_display_member(&store.config().backends, object);
-  Ok(value)
 }
 
 /// Removes `task.goal` from a serialized session.
@@ -1736,6 +1743,28 @@ backends:
       rule: priority
       members: [synthetic-a, synthetic-b]
 ";
+
+  /// A thread-bound session's row carries its platform in the first paint's page form and in the refreshed listing.
+  /// A session bound to no thread carries none.
+  #[tokio::test]
+  async fn a_thread_bound_row_carries_its_platform_in_the_page_form_and_the_listing() {
+    charliebot_registry::thread_origin::register_origin_field("slack", "slack_origin");
+    let (_home, features) = crate::test_support::feature_context();
+    let mut thread = SessionMetadata::new("platform-thread", "Slack thread", TaskProfile::Manager);
+    thread.extra.insert("slack_origin".to_string(), json!({"channel_id": "C0SYNTHETIC", "thread_ts": "1.5"}));
+    let plain = SessionMetadata::new("platform-plain", "Plain", TaskProfile::Manager);
+    for meta in [&thread, &plain] {
+      let path = features.store.metadata_path(&meta.id);
+      std::fs::create_dir_all(path.parent().expect("a metadata file has a directory")).expect("a session directory");
+      std::fs::write(&path, meta.to_json_string(&[], true)).expect("a metadata file");
+    }
+    let thread_row = Arc::new(features.store.get_session(&thread.id).await.unwrap().unwrap());
+    let plain_row = Arc::new(features.store.get_session(&plain.id).await.unwrap().unwrap());
+    for schema in [RowSchema::Page, RowSchema::Listing] {
+      assert_eq!(schema.value(&features.store, &thread_row).unwrap()[CHANNEL_PLATFORM], "slack");
+      assert!(schema.value(&features.store, &plain_row).unwrap().get(CHANNEL_PLATFORM).is_none());
+    }
+  }
 
   #[tokio::test]
   async fn a_worker_row_names_its_pool_and_shows_a_recorded_member_only_inside_it() {

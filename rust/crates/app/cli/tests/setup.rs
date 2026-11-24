@@ -2,6 +2,7 @@
 //! registered step in registration order with the dry-run flag, and the packages register the cron seed before
 //! the Claude Code check.
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use charliebot_shell_harness::{self as harness, Env, Run, Sandbox};
@@ -93,6 +94,8 @@ fn the_runner_calls_each_step_in_registration_order_and_writes_the_scratch_home_
   // The layout lands in the scratch home, seeded from the checkout's templates.
   assert!(home.join("config.yaml").is_file());
   assert!(home.join("credentials.yaml").is_file());
+  let credentials = std::fs::metadata(home.join("credentials.yaml")).expect("the seeded credentials file");
+  assert_eq!(credentials.permissions().mode() & 0o7777, 0o600, "the seeded credentials file is owner-only");
   assert!(home.join("sessions").is_dir());
   assert_eq!(home_statuses(&lines), ["exists", "created", "created", "created", "created"]);
   // The cron seed created one host file per default entry, and the same run lists them as effective tasks.

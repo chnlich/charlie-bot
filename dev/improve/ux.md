@@ -51,10 +51,12 @@ The clicks run only against a serve trial on the shared mock home. Each write a 
 which has its own home, port and process tree, so the screen shows what it shows after a write there. Two rules decide
 which writes start work, and each names what enforces it:
 
-- A WebSocket write is dropped at send time by the kit's frame guard (`dev/improve/ux-frame-guard.mjs`), which the
-  driver installs before the page's first navigation. Every frame a page sends is dropped except a session socket's
-  `subscribe` frame, so chat input and terminal input never reach the server. Server frames and the page's handlers
-  keep receiving, so the page's reads keep flowing. The click result names each dropped frame.
+- A WebSocket write is dropped at send time when the driver installs the kit's frame guard
+  (`dev/improve/ux-frame-guard.mjs`, `installWriteGuard`) before the page's first navigation. The kit does not launch
+  the driver, so the install is the driver's duty. With the guard installed, every frame a page sends is dropped except
+  a session socket's `subscribe` frame, so chat input and terminal input do not reach the server. Server frames and the
+  page's handlers keep receiving, so the page's reads keep flowing. The guard records each dropped frame on the page
+  (`globalThis.__uxWriteGuard.dropped`), and the click result names those frames.
 - An HTTP write is one non-GET request. The round's driver intercepts each one a click issues and records it in the
   evidence. The kit does not check that intercept.
 

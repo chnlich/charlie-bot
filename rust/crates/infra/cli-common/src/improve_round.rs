@@ -12,7 +12,7 @@ use charliebot_core::{home, paths};
 use crate::exit::CliExit;
 
 /// The variable that names the round's launch directory. Only the runner sets it.
-pub const LAUNCH_DIR_ENV: &str = "IMPROVE_LAUNCH_DIR";
+const LAUNCH_DIR_ENV: &str = "IMPROVE_LAUNCH_DIR";
 /// The round home beneath the user's home, as the runner names it.
 const ROUND_HOME_SUFFIX: &str = "improve/home";
 

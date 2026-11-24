@@ -11,6 +11,8 @@ use serde_yaml::{Mapping, Value};
 use crate::exit::CliExit;
 use crate::improve_round;
 
+/// The variable that names the round's launch directory. The runner exports it.
+const LAUNCH_DIR_ENV: &str = "IMPROVE_LAUNCH_DIR";
 /// The variable that names the round's direction, which is also the name of its prompt file. The runner exports it.
 const DIRECTION_ENV: &str = "IMPROVE_DIRECTION";
 /// The variable that names the kit: the `dev/` tree of the revision that the round runs. The runner exports it.
@@ -20,15 +22,28 @@ const KIT_DIR_ENV: &str = "IMPROVE_KIT_DIR";
 /// side effect, and [`internal_base_url`] calls it before it reads the port. The refusal names the round's state
 /// sources, which the round reads in place of the server.
 pub fn refuse_in_round() -> Result<(), CliExit> {
-  if improve_round::in_improve_round()? {
+  if in_round_home()? {
     return Err(CliExit::error(round_no_server_message()?));
   }
   Ok(())
 }
 
+/// The CLI guard detects the reserved round home even when the launch directory is missing, so its diagnostic can
+/// name that missing variable as a kit defect.
+fn in_round_home() -> Result<bool, CliExit> {
+  if improve_round::in_improve_round()? {
+    return Ok(true);
+  }
+  let Some(charliebot_home) = home::explicit_charliebot_home().map_err(|error| CliExit::error(error.to_string()))?
+  else {
+    return Ok(false);
+  };
+  Ok(improve_round::is_round_home(&charliebot_home, Path::new(&paths::expanduser("~"))))
+}
+
 /// The refusal's message: the round has no CharlieBot server, and the round's state sources, by their paths.
 fn round_no_server_message() -> Result<String, CliExit> {
-  let launch_dir = round_variable(improve_round::LAUNCH_DIR_ENV)?;
+  let launch_dir = round_variable(LAUNCH_DIR_ENV)?;
   let direction = round_variable(DIRECTION_ENV)?;
   let kit_dir = round_variable(KIT_DIR_ENV)?;
   let user_home = paths::expanduser("~");

@@ -815,7 +815,7 @@ fn test_round_names_the_state_source_variable_it_lacks() {
   let stub = StubApi::start(registering(sandbox.home.clone()));
   let round = round_sandbox(&sandbox, &stub);
 
-  for name in ["IMPROVE_DIRECTION", "IMPROVE_KIT_DIR"] {
+  for name in ["IMPROVE_LAUNCH_DIR", "IMPROVE_DIRECTION", "IMPROVE_KIT_DIR"] {
     let mut vars = round.vars();
     vars.retain(|(var, _)| *var != name);
 

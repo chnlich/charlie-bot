@@ -2,7 +2,27 @@
   const Sidebar = globalThis.Sidebar;
 
 let renameSessionId = null;
+let renameRowEl = null;
+let renameNameEl = null;
 let sessionActionModalState = null;
+
+// While the field is open it replaces the row's name line. The row's name text is hidden, because a pointer device's
+// hover buttons start 4 px past the field's end and the name's text between the field and those buttons would
+// otherwise show. The row also takes the `renaming` class, which keeps the hover buttons' cover on that line
+// (sidebar-interactions.css), so they do not paint over the row's second line — the time and the backend.
+function hideRenameName(rowEl, nameEl) {
+  renameRowEl = rowEl;
+  renameNameEl = nameEl;
+  rowEl.classList.add('renaming');
+  nameEl.style.visibility = 'hidden';
+}
+
+function showRenameName() {
+  if (renameRowEl) renameRowEl.classList.remove('renaming');
+  if (renameNameEl) renameNameEl.style.visibility = '';
+  renameRowEl = null;
+  renameNameEl = null;
+}
 
 function startRename(e, id) {
   e.preventDefault();
@@ -20,15 +40,33 @@ function startRename(e, id) {
   const valueEl = nameEl || header;
   if (!anchor || !valueEl) return;
   renameSessionId = id;
+  showRenameName();
   const rect = anchor.getBoundingClientRect();
   const valueRect = valueEl.getBoundingClientRect();
   const input = document.getElementById('rename-input');
   // The field takes the name line's height, so the row's second line — the time and the backend — stays visible
   // below it.
   input.style.top = valueRect.top + 'px';
-  input.style.left = rect.left + 'px';
-  input.style.width = rect.width + 'px';
   input.style.height = valueRect.height + 'px';
+  if (linkUsable) {
+    // The field's text starts at the name's left edge, so the field's own left padding is taken off its box.
+    // The field ends 4 px short of the row's leftmost button that has a box (the star or the Settings gear), so it
+    // covers neither. The touch layout gives its hidden buttons no box, so they do not count.
+    const padLeft = parseFloat(getComputedStyle(input).paddingLeft);
+    const buttonBoxes = [...link.querySelectorAll(':scope > button')]
+      .map((button) => button.getBoundingClientRect())
+      .filter((box) => box.width > 0);
+    const buttonsLeft = buttonBoxes.length > 0
+      ? Math.min(...buttonBoxes.map((box) => box.left))
+      : rect.right;
+    const boxLeft = valueRect.left - padLeft;
+    input.style.left = boxLeft + 'px';
+    input.style.width = buttonsLeft - 4 - boxLeft + 'px';
+    if (nameEl) hideRenameName(link, nameEl);
+  } else {
+    input.style.left = rect.left + 'px';
+    input.style.width = rect.width + 'px';
+  }
   input.style.paddingTop = '0px';
   input.style.paddingBottom = '0px';
   // The field prefills the session's full name, not the row's rendered title:
@@ -55,6 +93,7 @@ async function commitRename() {
   if (input.classList.contains('hidden')) return;
   const newName = input.value.trim();
   input.classList.add('hidden');
+  showRenameName();
   if (!newName || !renameSessionId) return;
 
   try {
@@ -76,6 +115,7 @@ async function commitRename() {
 
 function cancelRename() {
   document.getElementById('rename-input').classList.add('hidden');
+  showRenameName();
   renameSessionId = null;
 }
 

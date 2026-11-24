@@ -17,7 +17,9 @@ const MODALS_JS = readStatic('sidebar/modals.js');
 
 // modals.js wires startRename as a bare global through Sidebar.wire; the fake
 // DOM below covers exactly what startRename touches: getElementById,
-// getBoundingClientRect, querySelector, classList, style, focus, select.
+// getBoundingClientRect, querySelector, querySelectorAll, classList, style
+// (the field's and the name's), focus, select, and the field's computed left
+// padding (px-3, 12px).
 function loadModals(dom, fetchImpl) {
   const Sidebar = {};
   const context = {
@@ -25,6 +27,7 @@ function loadModals(dom, fetchImpl) {
     Chat: {registerSeparatorButton: () => {}},
     globalThis: null,
     document: dom.document,
+    getComputedStyle: () => ({paddingLeft: '12px'}),
     console: {error: () => {}},
     setTimeout: () => 0,
     fetch: fetchImpl || (() => Promise.resolve({ok: true})),
@@ -42,13 +45,15 @@ function loadModals(dom, fetchImpl) {
 }
 
 function fakeRect(width) {
-  return {top: 100, left: 50, width, height: 28};
+  return {top: 100, left: 50, width, height: 28, right: 50 + width};
 }
 
 // The name span holds the row's title as its text and the full name as its title, the way renderSessionRowShell
-// paints it. fullName defaults to the title: a row whose title is not shortened.
+// paints it. fullName defaults to the title: a row whose title is not shortened. buttons lists the row's direct
+// buttons as {left, width}; a width of 0 is a button with no box.
 function makeDom({rowWidth = 220, rowName = 'demo session', fullName = rowName, headerName = 'demo session',
-  headerHeight = 28, withRow = true}) {
+  headerHeight = 28, withRow = true, buttons = []}) {
+  const rowClasses = new Set();
   const input = {
     value: '',
     style: {},
@@ -59,17 +64,26 @@ function makeDom({rowWidth = 220, rowName = 'demo session', fullName = rowName, 
   const nameSpan = {
     textContent: rowName,
     title: fullName,
+    style: {},
     getBoundingClientRect: () => ({top: 100, left: 50, width: rowWidth, height: 20}),
   };
   const rowEl = withRow ? {
     getBoundingClientRect: () => fakeRect(rowWidth),
     querySelector: (sel) => (sel === '.session-name' ? nameSpan : null),
+    querySelectorAll: () => buttons.map((b) => ({
+      getBoundingClientRect: () => ({top: 100, left: b.left, width: b.width, height: 24, right: b.left + b.width}),
+    })),
+    classList: {
+      add(name) { rowClasses.add(name); },
+      remove(name) { rowClasses.delete(name); },
+      contains(name) { return rowClasses.has(name); },
+    },
   } : null;
   const headerEl = {textContent: headerName, getBoundingClientRect: () => ({...fakeRect(400), height: headerHeight})};
   const elements = {'rename-input': input, 'header-session-name': headerEl};
   if (rowEl) elements['session-s1'] = rowEl;
   return {
-    input, nameSpan, rowEl, headerEl,
+    input, nameSpan, rowEl, rowClasses, headerEl,
     document: {getElementById: (id) => (id in elements ? elements[id] : null)},
   };
 }
@@ -136,6 +150,33 @@ test('Enter on an untouched shortened field commits the full name', async () => 
   assert.equal(fetches.length, 1, 'one PATCH went out');
   assert.equal(fetches[0].url, '/api/sessions/s1');
   assert.deepEqual(JSON.parse(fetches[0].opts.body), {name: 'Slack #docs-review 2026-11-10 12:17'});
+  assert.equal(dom.nameSpan.style.visibility, '', 'the commit left the row name hidden');
+  assert.ok(!dom.rowClasses.has('renaming'), 'the commit left the hover actions on the name line');
+});
+
+test('the field ends 4 px before the leftmost row button that has a box', () => {
+  // The name's box starts at 50 and its field padding is 12 px, so the field starts at 38. The first button with a
+  // box starts at 120; the zero-width button before it does not count.
+  const dom = makeDom({rowWidth: 220, buttons: [{left: 0, width: 0}, {left: 150, width: 24}, {left: 120, width: 24}]});
+  clickRename(dom);
+  assert.equal(dom.input.style.left, '38px');
+  assert.equal(dom.input.style.width, '78px');
+});
+
+test('a row with no button that has a box runs the field to its right edge less 4 px', () => {
+  const dom = makeDom({rowWidth: 220, buttons: [{left: 0, width: 0}]});
+  clickRename(dom);
+  assert.equal(dom.input.style.width, '228px');
+});
+
+test('the row name is hidden and the row is renaming while the field is open', () => {
+  const dom = makeDom({rowName: 'demo session'});
+  const context = clickRename(dom);
+  assert.equal(dom.nameSpan.style.visibility, 'hidden', 'the name text shows beside the field');
+  assert.ok(dom.rowClasses.has('renaming'), 'the hover actions keep their full-row cover over the second line');
+  context.handleRenameKey({key: 'Escape', preventDefault() {}});
+  assert.equal(dom.nameSpan.style.visibility, '');
+  assert.ok(!dom.rowClasses.has('renaming'), 'Escape left the hover actions on the name line');
 });
 
 test('hostile names round-trip exactly through the prefill', () => {

@@ -19,8 +19,9 @@ use charliebot_shell_harness as harness;
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 use world::{
-  CODEX_REFRESH_TOKEN, DIRECTION, GATEWAY_TOKEN, LOCAL_CLAUDE_VERSION, LOGIN_REFRESH_TOKEN, LOGIN_TOKEN,
-  REVIEW_CREDENTIAL, REVIEW_KEY, REVIEW_LOGIN_TOKEN, SUBSCRIPTION_REVIEW_TYPE, SYNTHETIC_PROBE_ANSWER, World,
+  CODEX_REFRESH_TOKEN, DIRECTION, GATEWAY_TOKEN, LOCAL_CLAUDE_VERSION, LOGIN_REFRESH_TOKEN, LOGIN_TOKEN, NEWER_RULE,
+  PINNED_RULE, REVIEW_CREDENTIAL, REVIEW_KEY, REVIEW_LOGIN_TOKEN, SUBSCRIPTION_REVIEW_TYPE, SYNTHETIC_PROBE_ANSWER,
+  World,
 };
 
 /// The prompt the server writes to the launcher's standard input for a plain-text run.
@@ -2482,18 +2483,13 @@ fn a_round_reads_and_runs_the_kit_of_its_charliebots_commit_when_origin_main_is_
   assert!(charliebot.ends_with(format!("charliebot-{}", world.commit)), "{}", charliebot.display());
 }
 
-#[test]
-#[ignore = "integration"]
-fn a_launch_whose_kit_names_another_revision_than_its_charliebot_stops_before_any_side_effect() {
-  let world = World::new();
-  let launch = world.stage_launch("kit-mismatch");
-  let kit_revision = "1".repeat(40);
-  fs::write(launch.join("kit-revision"), format!("{kit_revision}\n")).expect("the launch's kit revision");
+/// Runs the round's wrapper, `remote-runner.sh`, on a launch staged under `launch_id`, with the arguments the start sends.
+fn run_round_wrapper(world: &World, launch_id: &str) -> harness::Run {
   let mut env = world.env();
   env.insert("HOME".to_string(), world.remote_home.display().to_string());
   let mut command = harness::command("bash", &env);
   command.arg(world.repo.join("dev/improve/remote-runner.sh")).args([
-    "kit-mismatch",
+    launch_id,
     DIRECTION,
     world.commit.as_str(),
     "claude",
@@ -2501,8 +2497,66 @@ fn a_launch_whose_kit_names_another_revision_than_its_charliebot_stops_before_an
     "claude",
     LOCAL_CLAUDE_VERSION,
   ]);
+  harness::run(&mut command)
+}
 
-  let run = harness::run(&mut command);
+#[test]
+#[ignore = "integration"]
+fn a_round_loads_the_skills_of_its_charliebots_commit_when_origin_main_is_newer() {
+  let world = World::new();
+  // The direction's origin/main moves past the pinned commit, and its rule file gains a line the pinned one lacks.
+  let clone = world.remote_home.join("improve").join(DIRECTION).join("charlie-bot");
+  let rule = clone.join("skills/writing-style/genres/code.md");
+  let newer = format!("{PINNED_RULE}{NEWER_RULE}");
+  fs::write(&rule, &newer).expect("the newer rule file");
+  world.git(&clone, &["commit", "-qam", "newer rule file"]);
+  // The pre-push hook checks each push against the profile home's leak patterns, which this fixture does not set up.
+  world.git(&clone, &["push", "-q", "--no-verify", "origin", "HEAD:main"]);
+
+  let run = world.run(&world.env());
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(world.claude_ran(), "the round did not start:\n{}", run.describe());
+  let skills = world.remote_home.join("improve/runner/bin").join(&world.commit).join("skills");
+  let env = world.claude_environment();
+  assert_eq!(env.get("IMPROVE_SKILLS_DIR"), Some(&skills.display().to_string()));
+  assert_eq!(
+    fs::read_to_string(skills.join("writing-style/genres/code.md")).expect("the round's rule file"),
+    PINNED_RULE,
+    "the round's skills are not the skills of its charliebot's revision"
+  );
+  assert_eq!(fs::read_to_string(&rule).expect("the clone's rule file"), newer, "the clone is not at origin/main");
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_launch_whose_skills_name_another_revision_than_its_charliebot_stops_before_any_side_effect() {
+  let world = World::new();
+  let launch = world.stage_launch("skills-mismatch");
+  let skills_revision = "2".repeat(40);
+  fs::write(launch.join("skills-revision"), format!("{skills_revision}\n")).expect("the launch's skills revision");
+
+  let run = run_round_wrapper(&world, "skills-mismatch");
+
+  assert_eq!(run.code, 7, "{}", run.describe());
+  assert!(
+    stderr(&run).contains(&skills_revision) && stderr(&run).contains(&world.commit),
+    "the refusal does not name both revisions: {}",
+    run.describe()
+  );
+  assert!(!world.scope_started(), "the refused round started a scope:\n{}", world.systemctl_calls());
+  assert!(!world.claude_ran(), "the refused round started claude");
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_launch_whose_kit_names_another_revision_than_its_charliebot_stops_before_any_side_effect() {
+  let world = World::new();
+  let launch = world.stage_launch("kit-mismatch");
+  let kit_revision = "1".repeat(40);
+  fs::write(launch.join("kit-revision"), format!("{kit_revision}\n")).expect("the launch's kit revision");
+
+  let run = run_round_wrapper(&world, "kit-mismatch");
 
   assert_eq!(run.code, 7, "{}", run.describe());
   assert!(
@@ -2574,8 +2628,9 @@ fn two_concurrent_runners_build_tools_once_and_preserve_one_shared_mock_home() {
     }
     let launch_id = format!("20261102T090000Z-1-40{index}");
     let launch = world.stage_launch(&launch_id);
-    // This test's round runs the commit it built, so its launch names that commit as the kit revision.
+    // This test's round runs the commit it built, so its launch names that commit as the kit and skills revision.
     fs::write(launch.join("kit-revision"), format!("{commit}\n")).expect("the launch's kit revision");
+    fs::write(launch.join("skills-revision"), format!("{commit}\n")).expect("the launch's skills revision");
     harness::copy_file(&harness::repo_root().join("dev/improve/remote-runner.sh"), &launch.join("remote-runner.sh"));
     // The launcher sends the rule script beside the runner, so the runner's clone scan sources it.
     harness::copy_file(&harness::repo_root().join("dev/improve/inflight-files.sh"), &launch.join("inflight-files.sh"));

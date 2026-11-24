@@ -79,6 +79,9 @@ pub const REMOTE_HOST: &str = "improve.example.ts.net";
 pub const MOCK_HOME_VERSION: &str = "2";
 pub const LOCAL_CONFIG_DIR: &str = "/synthetic/local-claude-config";
 pub const INSTRUCTIONS: &str = "Improve one topic.\n";
+/// The rule file that the commit's `skills/` tree holds, and the line that only a later origin/main holds.
+pub const PINNED_RULE: &str = "A rule of the pinned commit.\n";
+pub const NEWER_RULE: &str = "A rule that only origin/main holds.\n";
 /// The gateway variables that a subscription member's launch environment does not carry.
 const GATEWAY_VARIABLES: [&str; 5] = [
   "ANTHROPIC_BASE_URL",
@@ -671,6 +674,9 @@ impl World {
     let profile_home = sandbox.dir("profile");
     let git_env: Env = IDENTITY.iter().map(|(name, value)| ((*name).to_string(), (*value).to_string())).collect();
     git(&sandbox, &git_env, &repo, &["init", "-q", "-b", "main"]);
+    // The round loads the rule files of the commit's skills/ tree, so the commit carries one of them.
+    let genres = sandbox.dir("repo/skills/writing-style/genres");
+    fs::write(genres.join("code.md"), PINNED_RULE).expect("the commit's rule file");
     git(&sandbox, &git_env, &repo, &["add", "-A"]);
     git(&sandbox, &git_env, &repo, &["commit", "-q", "-m", "synthetic launcher commit"]);
     let commit = git(&sandbox, &git_env, &repo, &["rev-parse", "HEAD"]);
@@ -1196,8 +1202,10 @@ impl World {
     harness::copy_file(&self.repo.join("dev/improve/clone-check.sh"), &launch.join("clone-check.sh"));
     harness::copy_file(&self.resolve_answer, &launch.join("review/option.json"));
     harness::copy_file(&self.probe_answer, &launch.join("probe/option.json"));
-    // The launcher names the revision of the kit the runner fetches, which is the commit its charliebot is built from.
+    // The launcher names the revision of the kit and of the skills the runner fetches, which is the commit its charliebot
+    // is built from.
     fs::write(launch.join("kit-revision"), format!("{}\n", self.commit)).expect("the launch's kit revision");
+    fs::write(launch.join("skills-revision"), format!("{}\n", self.commit)).expect("the launch's skills revision");
     launch
   }
 

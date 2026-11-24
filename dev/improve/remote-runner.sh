@@ -27,14 +27,18 @@
 # release switch like the binary does. The launch names the revision its kit files came from, and the start refuses a
 # launch whose kit revision differs from the commit: a round runs one revision throughout.
 #
+# The skills are the skills/ tree of that same commit, archived beside the kit as IMPROVE_SKILLS_DIR, so the rule text a
+# round reads matches its kit. The launch names the skills revision, and the start refuses a launch whose skills
+# revision differs from the commit, as it does for the kit.
+#
 # Exit codes: the agent's exit code; 1 a local failure, such as a missing input file or a refused
 # scope, or a round whose review still runs in the scope after its agent exited (stderr names the
 # review); 4 the direction's clone is missing, is not this protocol's clone, or holds uncommitted work
 # that blocks its checkout of origin/main; 5 the previous round of this direction still runs; 7 a round
 # dependency is missing (a login, the review's login, the round's home, the write boundary or a member or review
-# CLI) or the kit and the charliebot name different revisions, and stderr names it. A member or review CLI exits 7
-# when the vendor install or the installed `--version` check fails, and stderr names the local version and the
-# version the host runs. Nothing starts on 4, 5 and 7.
+# CLI) or the kit, the skills and the charliebot name different revisions, and stderr names it. A member or review
+# CLI exits 7 when the vendor install or the installed `--version` check fails, and stderr names the local version
+# and the version the host runs. Nothing starts on 4, 5 and 7.
 #
 # The round reads its direction from this invocation, so the scope name, the boundary and TMPDIR
 # name one direction only. Two rounds of one direction never run together: the scope name refuses
@@ -465,18 +469,20 @@ ensure_cli() {
   ln -sfn -- "../charliebot-$commit" "$commit_bin/charliebot"
   ln -sfn -- "../improve-sandbox-$commit" "$commit_bin/improve-sandbox"
   ln -sfn -- "../mock-home-$commit" "$commit_bin/mock-home"
-  # The round's gh shim and the scanner it runs come from this commit, so a round checks its writes with the code of the
-  # CLI it runs. The kit, the dev/ tree of this commit, is the code the round reads and runs. Both are copied once per
-  # commit: a later round cannot change the copy that a live round runs.
+  # The round's gh shim and the scanner it runs come from this commit, so a round checks its writes with the code of
+  # the CLI it runs. The kit, the dev/ tree of this commit, is the code the round reads and runs, and the skills, the
+  # skills/ tree of this commit, are the rule text it reads. Both are copied once per commit: a later round cannot
+  # change the copy that a live round runs.
   if [[ ! -f $commit_bin/gh || ! -f $commit_bin/check-skills-host-leak.sh || ! -f $commit_bin/leak-patterns.sh \
-    || ! -d $commit_bin/kit/dev ]]; then
+    || ! -d $commit_bin/kit/dev || ! -d $commit_bin/skills ]]; then
     ensure_runner_checkout
     git -C "$checkout" fetch --quiet "$(cat -- "$LAUNCH_DIR/origin")" "$commit" \
       || fail 1 "cannot fetch commit $commit from the launcher's origin into $checkout"
     install_commit_file "$commit" dev/improve/gh-shim.sh "$commit_bin/gh" 755
     install_commit_file "$commit" dev/check-skills-host-leak.sh "$commit_bin/check-skills-host-leak.sh" 755
     install_commit_file "$commit" dev/leak-patterns.sh "$commit_bin/leak-patterns.sh" 644
-    install_commit_kit "$commit"
+    install_commit_tree "$commit" dev "$commit_bin/kit/dev"
+    install_commit_tree "$commit" skills "$commit_bin/skills"
   fi
   prune_commit_entries "$commit"
   flock -u "$lock_fd"
@@ -500,14 +506,16 @@ install_commit_file() {  # <commit> <path in the commit> <destination> <mode>
     || { rm -f -- "$staged"; fail 1 "cannot install $2 of commit $1 as $3"; }
 }
 
-# Copy the dev/ tree of one commit into the commit's tool directory as its kit, read from the commit's objects. The tree
-# is staged beside its destination and renamed over it, so an interrupted copy never passes for a finished kit.
-install_commit_kit() {  # <commit>
-  local kit="$RUNNER_ROOT/bin/$1/kit" staged
-  staged=$(mktemp -d -- "$RUNNER_ROOT/bin/$1/.kit.XXXXXXXX") || fail 1 "cannot make a staged kit beside $kit"
-  git -C "$RUNNER_ROOT/charlie-bot" archive --format=tar "$1" dev | tar -x -C "$staged" \
-    && rm -rf -- "$kit" && mv -T -- "$staged" "$kit" \
-    || { rm -rf -- "$staged"; fail 1 "cannot install the dev tree of commit $1 as the kit $kit"; }
+# Copy one directory tree of a commit to a destination, read from the commit's objects. The tree is staged beside its
+# destination and renamed over it, so an interrupted copy never passes for a finished tree.
+install_commit_tree() {  # <commit> <directory in the commit> <destination>
+  local staged
+  mkdir -p -- "$(dirname -- "$3")" || fail 1 "cannot make the directory of $3"
+  staged=$(mktemp -d -- "$(dirname -- "$3")/.tree.XXXXXXXX") || fail 1 "cannot make a staged copy beside $3"
+  git -C "$RUNNER_ROOT/charlie-bot" archive --format=tar "$1" "$2" | tar -x -C "$staged" \
+    && rm -rf -- "$3" && mv -T -- "$staged/$2" "$3" \
+    || { rm -rf -- "$staged"; fail 1 "cannot install $2 of commit $1 as $3"; }
+  rm -rf -- "$staged"
 }
 
 # The arguments after the script's path of each live process that runs remote-runner.sh, one line per process, each line
@@ -929,15 +937,16 @@ fi
 
 [[ $commit =~ ^[0-9a-f]{40}$ ]] || fail 1 "not a full commit: $commit"
 
-# The kit that the round reads and runs and the charliebot that it calls come from one revision. The launch names the
-# revision its kit files came from; a launch that names another revision than the commit of its charliebot stops the
-# round before any side effect, and stderr names both revisions.
-check_kit_revision() {
-  local kit_revision
-  [[ -r $LAUNCH_DIR/kit-revision ]] || fail 1 "the launch holds no kit revision: $LAUNCH_DIR/kit-revision"
-  kit_revision=$(<"$LAUNCH_DIR/kit-revision")
-  [[ $kit_revision == "$commit" ]] || fail 7 \
-    "the kit is at revision $kit_revision and charliebot is at revision $commit; a round needs one revision for both"
+# The kit and the skills that the round reads and the charliebot that it calls come from one revision. The launch names
+# the revision that each came from; a launch that names another revision than the commit of its charliebot stops the
+# round before any side effect, and stderr names both revisions. The arguments are the launch's revision file and
+# what that file holds.
+check_launch_revision() {
+  local revision
+  [[ -r $LAUNCH_DIR/$1 ]] || fail 1 "the launch holds no $2 revision: $LAUNCH_DIR/$1"
+  revision=$(<"$LAUNCH_DIR/$1")
+  [[ $revision == "$commit" ]] || fail 7 \
+    "the launch names revision $revision for the $2 and $commit for charliebot; a round needs one revision for both"
 }
 
 # The round's dependencies, checked before any side effect of the round: the review backend's record and login, the
@@ -1019,7 +1028,8 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-check_kit_revision
+check_launch_revision kit-revision kit
+check_launch_revision skills-revision skills
 
 # The clone's identity, sync and pre-push check. The launch copies the file as it copies the in-flight rule.
 [[ -r $LAUNCH_DIR/clone-check.sh ]] \
@@ -1064,6 +1074,7 @@ ensure_cli "$commit"
 # The round reads and runs the kit from this commit's tool directory, and the same commit's charliebot is first on PATH.
 export IMPROVE_KIT_REVISION=$commit
 export IMPROVE_KIT_DIR="$RUNNER_ROOT/bin/$commit/kit"
+export IMPROVE_SKILLS_DIR="$RUNNER_ROOT/bin/$commit/skills"
 ensure_member_cli "$kind" "$member_version"
 ensure_member_cli "$review_kind" "$review_version"
 check_boundary_starts

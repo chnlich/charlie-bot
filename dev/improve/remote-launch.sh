@@ -28,6 +28,7 @@
 #   - the leak pattern file $CHARLIEBOT_HOME/skills_leak_patterns.local.txt;
 #   - the in-flight files list, which dev/improve/inflight-files.sh prints here;
 #   - the kit revision: HEAD of this checkout, whose dev/ tree the runner fetches as the round's kit;
+#   - the skills revision: HEAD of this checkout, whose skills/ tree the runner archives as the round's skills;
 #   - the worker session's metadata.json, for task_parent_id;
 #   - the cron task file of that parent session, for prompt_file;
 #   - the origin URL of this launcher's checkout, which the runner clones from.
@@ -458,6 +459,9 @@ cp -- "$SCRIPT_DIR/remote-runner.sh" "$payload/remote-runner.sh"
 # The revision of the kit the runner fetches from this launcher's origin; the runner refuses the launch unless its
 # charliebot is built from this commit.
 printf '%s\n' "$cli_commit" >"$payload/kit-revision"
+# The revision of the skills the runner archives from that commit. It is this checkout's HEAD as well. The runner
+# refuses the launch unless the kit revision, this one and its charliebot name the same commit.
+printf '%s\n' "$cli_commit" >"$payload/skills-revision"
 # The review backend's answer: the runner reads the review's backend record from it, and the answer holds no key.
 mkdir -- "$payload/review"
 printf '%s\n' "$review_answer" >"$payload/review/option.json"

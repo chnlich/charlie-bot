@@ -452,7 +452,13 @@ async fn run_listener(features: Arc<FeatureContext>) -> anyhow::Result<()> {
   let client = Arc::new(bot.client()?);
   let _trigger_manager = features.startup.require::<Arc<TriggerManager>>()?;
   let token = features.credentials.get()?.require("discord", BOT_TOKEN_FIELD)?;
-  let options = Options { max_size: None, close_timeout: Some(CLOSE_TIMEOUT), ..ws_client::WEBSOCKETS_16_DEFAULTS };
+  let options = Options {
+    open_timeout: ws_client::WEBSOCKETS_16_DEFAULTS.open_timeout,
+    close_timeout: Some(CLOSE_TIMEOUT),
+    max_size: None,
+    ping_interval: ws_client::WEBSOCKETS_16_DEFAULTS.ping_interval,
+    ping_timeout: ws_client::WEBSOCKETS_16_DEFAULTS.ping_timeout,
+  };
   run_listener_loop(features, client, token, options, ws_client::Settings::from_env()).await
 }
 

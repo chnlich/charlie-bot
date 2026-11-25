@@ -88,6 +88,27 @@ function listedAsWaiter(pid) {
     .some((line) => line.includes('-> FLOCK') && line.split(/\s+/).includes(String(pid)));
 }
 
+// The pids /proc/locks lists as holding a file lock on `file`. Fields: id, kind, advisory, mode, pid, device:inode, ...
+// A blocked request's line has `->` in the kind's place, so only held locks match.
+function heldLockPids(file) {
+  const inode = String(fs.statSync(file).ino);
+  return fs
+    .readFileSync('/proc/locks', 'utf8')
+    .split('\n')
+    .flatMap((line) => {
+      const fields = line.trim().split(/\s+/);
+      return fields[1] === 'FLOCK' && fields[5]?.endsWith(`:${inode}`) ? [Number(fields[4])] : [];
+    });
+}
+
+// The start time of a process: field 22 of /proc/<pid>/stat, in clock ticks since boot.
+function startTicks(pid) {
+  const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+  // Field 2 is the command name in parentheses and may hold spaces; field 3, the state, follows its last ")".
+  const fields = stat.slice(stat.lastIndexOf(') ') + 2).split(' ');
+  return Number(fields[19]);
+}
+
 // The bench-lock record that a side with the lock off writes to its evidence directory: a line at start and at end.
 function benchLockRecord(evidence) {
   const records = fs.readdirSync(evidence).filter((name) => name.startsWith('bench-lock-'));
@@ -308,6 +329,80 @@ test('a lock-off improve side runs beside a held lock and records the holder', {
     await waiter?.exited;
     fs.writeFileSync(`${held}.release`, '');
     await holder.exited;
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a lock-off side names the live holder, not the exited flock helper', { timeout: 60000 }, async () => {
+  const home = scratch('pn-lock-home-');
+  const dir = scratch('pn-lock-run-');
+  const lock = path.join(home, LOCK_FILE);
+  const marker = path.join(dir, 'taken');
+  const evidence = path.join(dir, 'evidence');
+  const ran = path.join(dir, 'ran');
+  const keeper = path.join(dir, 'keeper.sh');
+  // The step gate's holder shape: this shell opens the lock on fd 3 and takes it through bench_lock_fd_take, whose
+  // flock helper exits at once. A child the shell starts inherits fd 3 too. The shell holds the lock until the test
+  // releases it.
+  fs.writeFileSync(
+    keeper,
+    [
+      '#!/usr/bin/env bash',
+      'set -euo pipefail',
+      'source "$1"',
+      'exec 3>"$(bench_lock_path)"',
+      'bench_lock_fd_take 3 10',
+      'sleep 300 &',
+      'child=$!',
+      'touch "$2"',
+      'while [[ ! -e "$2.release" ]]; do sleep 0.1; done',
+      'kill "$child"',
+      '',
+    ].join('\n'),
+  );
+  const holder = spawn('bash', [keeper, LOCK, marker], { env: scratchEnv(home), stdio: 'ignore' });
+  const holderExited = once(holder, 'exit');
+  let waiter = null;
+  let waiterExited = null;
+  try {
+    await waitFor(() => fs.existsSync(marker));
+    // /proc/locks names the flock helper, which has exited, while the shell still holds the lock.
+    const helpers = heldLockPids(lock);
+    assert.equal(helpers.length, 1, `expected one held lock, found ${helpers.length}`);
+    assert.notEqual(helpers[0], holder.pid, '/proc/locks names the holder, not its flock helper');
+    assert.equal(fs.existsSync(`/proc/${helpers[0]}`), false, 'the flock helper is still alive');
+
+    // A second take queues behind the holder; a queued process is a waiter, never the record's holder.
+    waiter = spawn('flock', ['-w', '60', lock, 'true'], { env: scratchEnv(home), stdio: 'ignore' });
+    waiterExited = once(waiter, 'exit');
+    await waitFor(() => listedAsWaiter(waiter.pid));
+    const queued = execFileSync('bash', ['-c', 'source "$1"; bench_lock_waiter_pids', 'bash', LOCK], {
+      env: scratchEnv(home),
+      encoding: 'utf8',
+    });
+    assert.equal(queued.trim(), String(waiter.pid), 'the bench lock did not list the queued waiter');
+
+    const side = improveSide(home, ran, 1, 3, {
+      IMPROVE_DIRECTION: 'ux',
+      IMPROVE_TRIAL_USE_LOCK: '0',
+      CHARLIEBOT_RELEASE_RUN_DIR: evidence,
+    });
+    assert.equal(side.status, 3, side.stderr);
+    const records = benchLockRecord(evidence);
+    assert.equal(records.length, 2, `expected a start and an end record, found ${records.length}`);
+    for (const record of records) {
+      const named = / side (?:start|end): bench lock holder (\d+) start=(\d+) (.+)$/.exec(record);
+      assert.ok(named, `the record does not name a holder with a start time: ${record}`);
+      assert.equal(Number(named[1]), holder.pid, `the record names another process: ${record}`);
+      assert.equal(Number(named[2]), startTicks(holder.pid), `the record's start time is not the holder's: ${record}`);
+      assert.ok(named[3].includes(keeper), record);
+    }
+  } finally {
+    waiter?.kill('SIGKILL');
+    await waiterExited;
+    fs.writeFileSync(`${marker}.release`, '');
+    await holderExited;
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(dir, { recursive: true, force: true });
   }

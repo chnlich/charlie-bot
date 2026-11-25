@@ -66,18 +66,26 @@ bench_lock_fd_release() {
   flock -u "$1"
 }
 
+# _bench_lock_dev_inode: print the bench lock file's device and inode as /proc/locks and fdinfo write them,
+# `<major>:<minor>:<inode>`, with the device numbers in hex. The lock file is read for its device and inode only.
+_bench_lock_dev_inode() {
+  local device inode major minor
+  device=$(stat -c '%D' -- "$BENCH_LOCK_FILE") || return $?
+  inode=$(stat -c '%i' -- "$BENCH_LOCK_FILE") || return $?
+  # st_dev packs the major and minor the way glibc's makedev does; the kernel prints both in hex.
+  device=$((16#$device))
+  major=$(( ((device >> 8) & 0xfff) | ((device >> 32) & ~0xfff) ))
+  minor=$(( (device & 0xff) | ((device >> 12) & ~0xff) ))
+  printf '%02x:%02x:%s\n' "$major" "$minor" "$inode"
+}
+
 # _bench_lock_entries: print `hold <pid>` and `wait <pid>` for each FLOCK entry on the bench lock's file in /proc/locks.
 # A blocked request is listed with `->` first, so its line names the waiter that has not taken the lock. The lock file is
 # read for its device and inode only; the lock is never taken or released here.
 _bench_lock_entries() {
   [[ -e $BENCH_LOCK_FILE ]] || return 0
-  local device inode major minor _id kind rest state pid device_inode dev_major dev_minor dev_inode
-  device=$(stat -c '%D' -- "$BENCH_LOCK_FILE") || return $?
-  inode=$(stat -c '%i' -- "$BENCH_LOCK_FILE") || return $?
-  # st_dev packs the major and minor the way glibc's makedev does; /proc/locks prints them in hex.
-  device=$((16#$device))
-  major=$(( ((device >> 8) & 0xfff) | ((device >> 32) & ~0xfff) ))
-  minor=$(( (device & 0xff) | ((device >> 12) & ~0xff) ))
+  local wanted _id kind rest state pid _advisory _mode device_inode
+  wanted=$(_bench_lock_dev_inode) || return $?
   while read -r _id kind rest; do
     state=hold
     if [[ $kind == -\> ]]; then
@@ -86,12 +94,38 @@ _bench_lock_entries() {
     fi
     [[ $kind == FLOCK ]] || continue
     read -r _advisory _mode pid device_inode _ <<<"$rest"
-    IFS=: read -r dev_major dev_minor dev_inode <<<"$device_inode"
-    if (( 16#$dev_major == major && 16#$dev_minor == minor )) && [[ $dev_inode == "$inode" ]]; then
+    if [[ $device_inode == "$wanted" ]]; then
       printf '%s %s\n' "$state" "$pid"
     fi
   done </proc/locks || return $?
   return 0
+}
+
+# _bench_lock_fd_holders <device:inode>: print the pid of each process that holds the bench lock through a
+# descriptor, one per line, from the `lock:` lines of /proc/<pid>/fdinfo. The kernel lists a held lock in every
+# descriptor that shares its open file description, so a process that inherited the descriptor is listed too. The pid
+# inside the line is the flock helper's and may have exited, so each process is named from the fdinfo path its line
+# came from. grep exits 2 when it cannot read a process that another user owns and still prints every match, so that
+# status is not checked; a holder it cannot read leaves no candidate, and bench_lock_holder then fails.
+_bench_lock_fd_holders() {
+  local file
+  while read -r file; do
+    file=${file#/proc/}
+    printf '%s\n' "${file%%/*}"
+  done < <(grep -rlsE "^lock:.* FLOCK .* $1 " /proc/[0-9]*/fdinfo)
+}
+
+# _bench_lock_stat_fields <pid>: print the parent pid and the start time of a process, which are fields 4 and 22 of
+# /proc/<pid>/stat. The start time is in clock ticks since boot. It prints nothing and exits 1 when the process is gone.
+_bench_lock_stat_fields() {
+  local stat fields
+  if ! stat=$(exec 2>/dev/null; cat "/proc/$1/stat"); then
+    return 1
+  fi
+  # The command name in field 2 is in parentheses and may hold spaces, so the fields start after its last ")". The first
+  # of them is field 3, the state.
+  read -r -a fields <<<"${stat##*) }"
+  printf '%s %s\n' "${fields[1]}" "${fields[19]}"
 }
 
 # bench_lock_waiter_pids: print the pid of each process queued for the bench lock and not yet holding it, one per line.
@@ -105,19 +139,53 @@ bench_lock_waiter_pids() {
   return 0
 }
 
-# bench_lock_holder: print the holder of the bench lock as `<pid> <command line>`, or print nothing when no process
-# holds it. The holder is the process that took the lock, so its command line names the work that holds it. A
-# waiting process is not the holder. The lock file is read for its device and inode only, and the lock is never taken or
+# bench_lock_holder: print the holder of the bench lock as `<pid> start=<ticks> <command line>`, or print nothing
+# when no process holds it. The holder is the process that opened the lock's descriptor, so it lives for the whole
+# hold. The flock helper that took the lock exits at once, and /proc/locks names that helper, so the helper is never
+# the holder; nor is a process that only inherited the descriptor. ticks is field 22 of /proc/<pid>/stat, the holder's
+# start time in clock ticks since boot: a live process at <pid> with another start time is a reused pid. A waiting
+# process is not the holder. The lock file is read for its device and inode only, and the lock is never taken or
 # released here.
 bench_lock_holder() {
-  local state pid cmdline
+  local state pid cand ppid ticks cmdline dev_inode
+  local best='' best_ticks=0 holder_pid=''
+  local -a candidates=()
+  local -A started=() parent=()
   while read -r state pid; do
-    [[ $state == hold ]] || continue
-    if ! cmdline=$(exec 2>/dev/null; tr '\0' ' ' <"/proc/$pid/cmdline"); then
-      cmdline='(exited before its command line was read)'
+    if [[ $state == hold ]]; then
+      holder_pid=$pid
     fi
-    printf '%s %s\n' "$pid" "${cmdline% }"
-    return 0
   done < <(_bench_lock_entries) || return $?
-  return 0
+  [[ -n $holder_pid ]] || return 0
+  dev_inode=$(_bench_lock_dev_inode) || return $?
+  mapfile -t candidates < <(_bench_lock_fd_holders "$dev_inode")
+  for cand in "${candidates[@]}"; do
+    # A candidate that exits during the scan no longer holds the lock, so it is not named.
+    read -r ppid ticks < <(_bench_lock_stat_fields "$cand") || continue
+    started[$cand]=$ticks
+    parent[$cand]=$ppid
+  done
+  for cand in "${!started[@]}"; do
+    # A process whose parent holds the descriptor too inherited it. A parent and the child it forks can share a clock
+    # tick, so the parent test decides before the start time does.
+    ppid=${parent[$cand]}
+    if [[ -n ${started[$ppid]:-} ]]; then
+      continue
+    fi
+    ticks=${started[$cand]}
+    if [[ -z $best ]] || (( ticks < best_ticks )); then
+      best=$cand
+      best_ticks=$ticks
+    fi
+  done
+  if [[ -z $best ]]; then
+    printf 'bench lock: /proc/locks lists pid %s as the holder, but no process holds the descriptor of %s\n' \
+      "$holder_pid" "$BENCH_LOCK_FILE" >&2
+    return 1
+  fi
+  if ! cmdline=$(exec 2>/dev/null; tr '\0' ' ' <"/proc/$best/cmdline"); then
+    printf 'bench lock: holder pid %s exited while its command line was read\n' "$best" >&2
+    return 1
+  fi
+  printf '%s start=%s %s\n' "$best" "$best_ticks" "${cmdline% }"
 }

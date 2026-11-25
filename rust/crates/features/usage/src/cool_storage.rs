@@ -24,7 +24,9 @@ use charliebot_registry::usage::{
 };
 use charliebot_registry::usage_sweep::SweepCounter;
 use charliebot_registry::{FeatureContext, Registry};
-use charliebot_store::metadata::{CC_SESSION_ID_FIELD, UPDATED_AT_FIELD, UtcDateTime, read_metadata};
+use charliebot_store::metadata::{
+  CC_SESSION_ID_FIELD, STATUS_FIELD, SessionStatus, UPDATED_AT_FIELD, UtcDateTime, read_metadata,
+};
 use charliebot_store::run_identity::SESSION_METADATA_NAME;
 use charliebot_store::run_records::{
   CURSOR_NAME, DATA_DIR_NAME, MASTER_RUNS_DIR_NAME, OBSERVATION_EVENTS_REF, OBSERVATION_RAW_LOG_REF,
@@ -45,7 +47,6 @@ const ORPHAN_IDLE_DAYS: i64 = 2;
 const RAW_TRANSPORT_NAMES: [&str; 5] = [RAW_LOG_NAME, STDERR_LOG_NAME, CURSOR_NAME, STDOUT_LOG_NAME, "stderr.log"];
 /// The run-record keys that name transport evidence a migrated run keeps readable.
 const RUN_EVIDENCE_KEYS: [&str; 3] = [OBSERVATION_RAW_LOG_REF, OBSERVATION_EVENTS_REF, OBSERVATION_RESULT_REF];
-const SESSION_ARCHIVED: &str = "archived";
 
 /// The `cool_storage` scheduled handler: the real sweep at the wall clock, off the async runtime.
 pub fn run_handler(context: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Result<String>> {
@@ -168,7 +169,7 @@ fn scan_sessions(sessions_dir: &Path, now: UtcDateTime) -> anyhow::Result<HashMa
 /// missing or unusable never qualifies.
 fn is_cold_session(meta: &Map<String, Value>, now: UtcDateTime) -> bool {
   // A status of any JSON type other than the string never qualifies.
-  if !matches!(meta.get("status"), Some(Value::String(status)) if *status == SESSION_ARCHIVED) {
+  if !matches!(meta.get(STATUS_FIELD), Some(Value::String(status)) if *status == SessionStatus::Archived.as_str()) {
     return false;
   }
   // The falsy values drop before the text read takes the rest.

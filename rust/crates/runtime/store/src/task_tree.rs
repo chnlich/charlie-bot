@@ -2703,10 +2703,7 @@ fn build_tree_index_until(
       meta.id,
       meta.task_parent_id.as_deref().unwrap_or_default(),
       profile.as_str().expect("task profile serializes as a string"),
-      match meta.status {
-        SessionStatus::Active => "active",
-        SessionStatus::Archived => "archived",
-      },
+      meta.status.as_str(),
       task_state,
       if archived { "True" } else { "False" },
     ));

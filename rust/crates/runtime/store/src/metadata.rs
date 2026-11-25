@@ -163,6 +163,9 @@ pub const CREATED_AT_FIELD: &str = "created_at";
 /// The session-metadata field holding the session's last update time. The store writes it; the session listing and the
 /// usage page and the mock home's fixtures name it too, so it is spelled once, here.
 pub const UPDATED_AT_FIELD: &str = "updated_at";
+/// The session-metadata field holding the session's lifecycle state, whose values [`SessionStatus::as_str`] spells. The
+/// store writes it, and the usage feature's cold-storage sweep reads it by this name.
+pub const STATUS_FIELD: &str = "status";
 
 pub use charliebot_core::utc_datetime::UtcDateTime;
 
@@ -173,6 +176,16 @@ pub enum SessionStatus {
   #[default]
   Active,
   Archived,
+}
+
+impl SessionStatus {
+  /// The wire spelling the metadata's status field holds: the serde name of the variant.
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Self::Active => "active",
+      Self::Archived => "archived",
+    }
+  }
 }
 
 /// Task execution profile.
@@ -706,7 +719,7 @@ impl SessionMetadata {
     let mut declared = Vec::new();
     push(&mut declared, "id", &self.id);
     push(&mut declared, "name", &self.name);
-    push(&mut declared, "status", &self.status);
+    push(&mut declared, STATUS_FIELD, &self.status);
     push(&mut declared, HAS_UNREAD, &self.has_unread);
     if !exclude_transient {
       push(&mut declared, HAS_RUNNING_TASKS, &self.has_running_tasks);

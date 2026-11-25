@@ -2,9 +2,12 @@
 //!
 //! The matches that decide what a type does name every variant, handled or ignored, with no wildcard arm: `is_builtin`,
 //! the rendering of built-in types, the run summaries, and the subtype matches of system records. A variant that one
-//! of these leaves out fails the build. A `type` value that no variant covers is `Unnamed`; the fold that meets it
-//! logs it and goes on. `ChatEventType::of` and `SystemSubtype::of` are the only places that map a stored string to a
-//! variant.
+//! of these leaves out fails the build.
+//!
+//! The variants are the names that production writers emit, that the store's recorded chat and subagent logs carry,
+//! and that the usage fold names. A `type` value outside them is `Unnamed`: the fold that meets it logs it and goes
+//! on, so a writer added later shows up in the log until its name is added here. `ChatEventType::of` and
+//! `SystemSubtype::of` are the only places that map a stored string to a variant.
 
 use charliebot_core::event_types;
 
@@ -77,9 +80,15 @@ pub(crate) enum ChatEventType {
   RunEnd,
   RunError,
   TaskReparented,
+  ClaudeAccountLoginRequired,
+  CommandLifecycle,
+  FeatureEvent,
+  RateLimitEvent,
+  Stream,
+  WebStatusSubtree,
   /// A record with no `type` field.
   Untyped,
-  /// A `type` value that no writer version here emitted.
+  /// A `type` value that no variant names.
   Unnamed(String),
 }
 
@@ -154,6 +163,12 @@ impl ChatEventType {
       Some(event_types::RUN_END) => Self::RunEnd,
       Some(event_types::RUN_ERROR) => Self::RunError,
       Some(event_types::TASK_REPARENTED) => Self::TaskReparented,
+      Some("claude_account_login_required") => Self::ClaudeAccountLoginRequired,
+      Some("command_lifecycle") => Self::CommandLifecycle,
+      Some("feature_event") => Self::FeatureEvent,
+      Some(event_types::RATE_LIMIT_EVENT) => Self::RateLimitEvent,
+      Some("stream") => Self::Stream,
+      Some("web_status_subtree") => Self::WebStatusSubtree,
       Some(other) => Self::Unnamed(other.to_string()),
     }
   }
@@ -228,6 +243,12 @@ impl ChatEventType {
       | Self::FeishuReply
       | Self::PolicyTableChanged
       | Self::TaskReparented
+      | Self::ClaudeAccountLoginRequired
+      | Self::CommandLifecycle
+      | Self::FeatureEvent
+      | Self::RateLimitEvent
+      | Self::Stream
+      | Self::WebStatusSubtree
       | Self::Untyped
       | Self::Unnamed(_) => false,
     }
@@ -247,9 +268,11 @@ pub(crate) enum SystemSubtype {
   Status,
   HangDiagnostics,
   ThinkingTokens,
+  Stderr,
+  TaskUpdated,
   /// A system record with no `subtype` field.
   Plain,
-  /// A `subtype` value that no writer version here emitted.
+  /// A `subtype` value that no variant names.
   Unnamed(String),
 }
 
@@ -268,12 +291,14 @@ impl SystemSubtype {
       Some("status") => Self::Status,
       Some("hang_diagnostics") => Self::HangDiagnostics,
       Some("thinking_tokens") => Self::ThinkingTokens,
+      Some("stderr") => Self::Stderr,
+      Some("task_updated") => Self::TaskUpdated,
       Some(other) => Self::Unnamed(other.to_string()),
     }
   }
 }
 
-/// Logs a stored type or subtype that no writer version emitted, with the fold that met it and the record it came from.
+/// Logs a stored type or subtype that no variant names, with the fold that met it and the record it came from.
 pub(crate) fn log_unnamed(fold: &str, kind: &str, name: &str, source: Option<&str>) {
   tracing::error!(target: "charliebot_store", fold, kind, name, source = ?source, "store_fold_unnamed_type");
 }

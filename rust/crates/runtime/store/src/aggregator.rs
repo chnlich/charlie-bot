@@ -422,6 +422,8 @@ impl MessageAggregator {
       | SystemSubtype::Status
       | SystemSubtype::HangDiagnostics
       | SystemSubtype::ThinkingTokens
+      | SystemSubtype::Stderr
+      | SystemSubtype::TaskUpdated
       | SystemSubtype::Plain => Ok(Vec::new()),
       SystemSubtype::Unnamed(name) => {
         log_unnamed("feed_system", "system subtype", &name, record_id(event));
@@ -554,6 +556,8 @@ impl MessageAggregator {
       | SystemSubtype::Status
       | SystemSubtype::HangDiagnostics
       | SystemSubtype::ThinkingTokens
+      | SystemSubtype::Stderr
+      | SystemSubtype::TaskUpdated
       | SystemSubtype::Plain
       | SystemSubtype::Unnamed(_)) => {
         return Err(StoreError::new(format!("{other:?} is not a subagent event")));
@@ -947,6 +951,12 @@ fn render_builtin<E: EventFields>(
     | ChatEventType::FeishuReply
     | ChatEventType::PolicyTableChanged
     | ChatEventType::TaskReparented
+    | ChatEventType::ClaudeAccountLoginRequired
+    | ChatEventType::CommandLifecycle
+    | ChatEventType::FeatureEvent
+    | ChatEventType::RateLimitEvent
+    | ChatEventType::Stream
+    | ChatEventType::WebStatusSubtree
     | ChatEventType::System
     | ChatEventType::Untyped
     | ChatEventType::Unnamed(_) => {
@@ -1184,6 +1194,12 @@ pub fn run_tool_call_count<E: EventFields>(events: &[&E]) -> usize {
       | ChatEventType::RunEnd
       | ChatEventType::RunError
       | ChatEventType::TaskReparented
+      | ChatEventType::ClaudeAccountLoginRequired
+      | ChatEventType::CommandLifecycle
+      | ChatEventType::FeatureEvent
+      | ChatEventType::RateLimitEvent
+      | ChatEventType::Stream
+      | ChatEventType::WebStatusSubtree
       | ChatEventType::Untyped => 0,
     })
     .sum()
@@ -1275,6 +1291,12 @@ pub fn run_last_tool<E: EventFields>(events: &[&E]) -> Option<Value> {
       | ChatEventType::RunEnd
       | ChatEventType::RunError
       | ChatEventType::TaskReparented
+      | ChatEventType::ClaudeAccountLoginRequired
+      | ChatEventType::CommandLifecycle
+      | ChatEventType::FeatureEvent
+      | ChatEventType::RateLimitEvent
+      | ChatEventType::Stream
+      | ChatEventType::WebStatusSubtree
       | ChatEventType::Untyped => None,
     };
     if let Some(call) = call {
@@ -1396,6 +1418,12 @@ pub fn run_last_text<E: EventFields>(events: &[&E]) -> StoreResult<Option<Value>
       | ChatEventType::RunEnd
       | ChatEventType::RunError
       | ChatEventType::TaskReparented
+      | ChatEventType::ClaudeAccountLoginRequired
+      | ChatEventType::CommandLifecycle
+      | ChatEventType::FeatureEvent
+      | ChatEventType::RateLimitEvent
+      | ChatEventType::Stream
+      | ChatEventType::WebStatusSubtree
       | ChatEventType::Untyped => {}
     }
   }

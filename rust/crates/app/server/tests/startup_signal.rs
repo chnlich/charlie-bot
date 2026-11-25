@@ -8,7 +8,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use charliebot_core::logline;
+use charliebot_core::{event_types, logline};
 use charliebot_shell_harness::copy_file;
 use nix::sched::{CpuSet, sched_getaffinity, sched_setaffinity};
 use nix::sys::signal::{self, Signal};
@@ -25,6 +25,16 @@ fn is_event(line: &str, event: &str) -> bool {
 /// The value of one field of a server log line, when the line is a log line that has the field.
 fn field_of(line: &str, key: &str) -> Option<String> {
   logline::parse(line)?.field(key).map(str::to_string)
+}
+
+/// The most server log lines a failure message quotes. A healthy start logs far fewer; a start that logs a line per
+/// event logs millions, and a CI job log keeps only the tail of a message that quotes them all.
+const QUOTED_LINES: usize = 200;
+
+/// The server output for a failure message: the last [`QUOTED_LINES`] lines and the count of earlier lines left out.
+fn quoted(lines: &[String]) -> String {
+  let start = lines.len().saturating_sub(QUOTED_LINES);
+  format!("{start} earlier lines left out, then {:?}", &lines[start..])
 }
 
 struct ServerChild(Child);
@@ -139,7 +149,7 @@ fn wait_for_event(
   let mut lines = Vec::new();
   loop {
     let remaining = deadline.saturating_duration_since(Instant::now());
-    assert!(!remaining.is_zero(), "the server did not log {event}; output: {lines:?}");
+    assert!(!remaining.is_zero(), "the server did not log {event}; output: {}", quoted(&lines));
     match receiver.recv_timeout(remaining) {
       Ok(Ok(line)) => {
         let matched = is_event(&line, event);
@@ -151,11 +161,11 @@ fn wait_for_event(
       Ok(Err(error)) => panic!("reading the server log failed: {error}"),
       Err(mpsc::RecvTimeoutError::Timeout) => {
         let status = child.0.try_wait().expect("the server child status can be read");
-        panic!("the server did not log {event} within {timeout:?}; status: {status:?}; output: {lines:?}");
+        panic!("the server did not log {event} within {timeout:?}; status: {status:?}; output: {}", quoted(&lines));
       }
       Err(mpsc::RecvTimeoutError::Disconnected) => {
         let status = child.0.try_wait().expect("the server child status can be read");
-        panic!("the server log closed before {event}; status: {status:?}; output: {lines:?}");
+        panic!("the server log closed before {event}; status: {status:?}; output: {}", quoted(&lines));
       }
     }
   }
@@ -188,7 +198,7 @@ fn wait_for_exit(
     if let Some(status) = child.0.try_wait().expect("the server child status can be read") {
       return (status, started.elapsed());
     }
-    assert!(Instant::now() < deadline, "the server did not exit within {timeout:?}; output: {lines:?}");
+    assert!(Instant::now() < deadline, "the server did not exit within {timeout:?}; output: {}", quoted(lines));
     thread::sleep(Duration::from_millis(10));
   }
 }
@@ -212,7 +222,8 @@ fn assert_boot_signal(signal_to_send: Signal) {
   let mut lines = wait_for_event(&mut server, &receiver, "task_tree_recovery_test_gate", Duration::from_secs(20));
   assert!(
     lines.iter().any(|line| field_of(line, "delay_ms").as_deref() == Some(RECOVERY_GATE_MS)),
-    "the test recovery delay is 30 seconds: {lines:?}"
+    "the test recovery delay is 30 seconds: {}",
+    quoted(&lines)
   );
   assert!(!lines.iter().any(|line| is_event(line, "server_ready")));
 
@@ -221,9 +232,9 @@ fn assert_boot_signal(signal_to_send: Signal) {
   drain_logs(&receiver, &mut lines);
   println!("{signal_to_send:?} during task recovery exited in {:.3}s", elapsed.as_secs_f64());
   assert!(elapsed < BOOT_STOP_TIMEOUT, "the process took {elapsed:?} to stop");
-  assert!(!lines.iter().any(|line| is_event(line, "server_ready")), "{lines:?}");
+  assert!(!lines.iter().any(|line| is_event(line, "server_ready")), "{}", quoted(&lines));
   let shutdowns: Vec<&String> = lines.iter().filter(|line| is_event(line, "charliebot_shutdown")).collect();
-  assert_eq!(shutdowns.len(), 1, "the boot stop logs one shutdown line: {lines:?}");
+  assert_eq!(shutdowns.len(), 1, "the boot stop logs one shutdown line: {}", quoted(&lines));
   assert_eq!(
     field_of(shutdowns[0], "boot").as_deref(),
     Some("true"),
@@ -240,7 +251,8 @@ fn assert_boot_signal(signal_to_send: Signal) {
     wait_for_event(&mut restarted, &restarted_receiver, "server_ready", Duration::from_secs(30));
   assert!(
     !restarted_lines.iter().any(|line| is_event(line, "task_recovery_node_failed")),
-    "the restarted home recovers without a failed node: {restarted_lines:?}"
+    "the restarted home recovers without a failed node: {}",
+    quoted(&restarted_lines)
   );
   send_signal(&restarted, Signal::SIGTERM);
   let (status, elapsed) = wait_for_exit(&mut restarted, &restarted_receiver, &mut restarted_lines, BOOT_STOP_TIMEOUT);
@@ -277,7 +289,8 @@ fn startup_seeds_the_missing_default_cron_files() {
     lines.iter().any(|line| {
       is_event(line, "cron_default_task_seeded") && field_of(line, "task").as_deref() == Some("proactive-agent")
     }),
-    "the start seeds the proactive-agent host file: {lines:?}"
+    "the start seeds the proactive-agent host file: {}",
+    quoted(&lines)
   );
   assert!(home.join("config.d/cron.d/proactive-agent.yaml").is_file());
 
@@ -292,7 +305,8 @@ fn startup_seeds_the_missing_default_cron_files() {
     wait_for_event(&mut restarted, &restarted_receiver, "server_ready", Duration::from_secs(30));
   assert!(
     !restarted_lines.iter().any(|line| is_event(line, "cron_default_task_seeded")),
-    "the restart finds all default files and seeds none: {restarted_lines:?}"
+    "the restart finds all default files and seeds none: {}",
+    quoted(&restarted_lines)
   );
   send_signal(&restarted, Signal::SIGTERM);
   let (status, elapsed) = wait_for_exit(&mut restarted, &restarted_receiver, &mut restarted_lines, BOOT_STOP_TIMEOUT);
@@ -315,7 +329,8 @@ fn a_failed_bind_logs_an_error_line_and_exits_with_the_config_status() {
   let mut lines = wait_for_event(&mut server, &receiver, "bind_failed", Duration::from_secs(30));
   assert!(
     !lines.iter().any(|line| is_event(line, "server_ready")),
-    "server_ready is logged only after the bind succeeds: {lines:?}"
+    "server_ready is logged only after the bind succeeds: {}",
+    quoted(&lines)
   );
   let line = lines.last().expect("the bind failure line");
   let row = logline::parse(line).expect("the bind failure line is a log line");
@@ -330,9 +345,11 @@ fn a_failed_bind_logs_an_error_line_and_exits_with_the_config_status() {
 }
 
 /// Task-tree nodes the boot pass walks, and the chat events each node carries. On one CPU the walk takes at least
-/// `WALK_MIN_MS`, so the signal lands between nodes. Each node's events are inert (the fact fold ignores their type),
-/// which lengthens the walk without a directory per node. A release build walks an event about six times faster than a
-/// debug build, so its nodes carry five times the events.
+/// `WALK_MIN_MS`, so the signal lands between nodes. Each node's events are inert: the store names their type and every
+/// fold ignores it, which lengthens the walk without a directory per node. A type the store does not name logs a
+/// `store_fold_unnamed_type` error line from each fold for each event, millions of lines whose writing, not the walk,
+/// would set the boot's length. A release build walks an event about six times faster than a debug build, so its nodes
+/// carry five times the events.
 const WALK_SESSIONS: usize = 200;
 const WALK_EVENTS: usize = if cfg!(debug_assertions) { 4_800 } else { 24_000 };
 const WALK_MIN_MS: u64 = 2_000;
@@ -350,8 +367,8 @@ fn write_sessions(home: &Path, count: usize) {
       .expect("the synthetic session metadata is written");
     let mut events = format!("{}\n", serde_json::json!({"id": format!("{id}-created"), "type": "task_created"}));
     for event in 0..WALK_EVENTS {
-      writeln!(events, "{}", serde_json::json!({"id": format!("{id}-note-{event:05}"), "type": "note"}))
-        .expect("the synthetic chat events are formatted");
+      let inert = serde_json::json!({"id": format!("{id}-event-{event:05}"), "type": event_types::RATE_LIMIT_EVENT});
+      writeln!(events, "{inert}").expect("the synthetic chat events are formatted");
     }
     std::fs::write(data.join("chat_events.jsonl"), events).expect("the synthetic chat events are written");
   }
@@ -397,8 +414,8 @@ fn assert_segments_cover_ready(lines: &[String]) {
 }
 
 /// SIGTERM during a real node walk. Neither boot sets the delay gate, so the walk's own stop checks end it. Both boots
-/// run on one CPU, where the walk's length follows the fixture; on many cores its parallel reads end it in a fraction of
-/// `WALK_MIN_MS`.
+/// run on one CPU, where the walk's length follows the fixture; on many cores its parallel reads end it in a fraction
+/// of `WALK_MIN_MS`.
 #[test]
 #[ignore = "integration"]
 fn sigterm_stops_the_node_walk_without_the_delay_gate() {
@@ -418,11 +435,12 @@ fn sigterm_stops_the_node_walk_without_the_delay_gate() {
   assert_eq!(status.signal(), Some(Signal::SIGTERM as i32), "{status:?}");
   assert!(
     !lines.iter().any(|line| is_event(line, "task_tree_recovery_done")),
-    "the walk finished before the stop reached it: {lines:?}"
+    "the walk finished before the stop reached it: {}",
+    quoted(&lines)
   );
-  assert!(!lines.iter().any(|line| is_event(line, "server_ready")), "{lines:?}");
+  assert!(!lines.iter().any(|line| is_event(line, "server_ready")), "{}", quoted(&lines));
   let shutdowns: Vec<&String> = lines.iter().filter(|line| is_event(line, "charliebot_shutdown")).collect();
-  assert_eq!(shutdowns.len(), 1, "the boot stop logs one shutdown line: {lines:?}");
+  assert_eq!(shutdowns.len(), 1, "the boot stop logs one shutdown line: {}", quoted(&lines));
   assert_eq!(
     field_of(shutdowns[0], "boot").as_deref(),
     Some("true"),
@@ -438,7 +456,8 @@ fn sigterm_stops_the_node_walk_without_the_delay_gate() {
   assert_segments_cover_ready(&restarted_lines);
   assert!(
     !restarted_lines.iter().any(|line| is_event(line, "task_recovery_node_failed")),
-    "the restarted home walks every node without a failure: {restarted_lines:?}"
+    "the restarted home walks every node without a failure: {}",
+    quoted(&restarted_lines)
   );
   send_signal(&restarted, Signal::SIGTERM);
   let (status, elapsed) = wait_for_exit(&mut restarted, &restarted_receiver, &mut restarted_lines, BOOT_STOP_TIMEOUT);

@@ -4004,6 +4004,35 @@ fn production_scan_keeps_production_code_after_test_elements_and_names_its_revis
 
 #[test]
 #[ignore = "integration"]
+fn production_scan_keeps_macro_tokens_and_hidden_rust_files() {
+  const MACROS: &str = "\
+macro_rules! emit_test_module {
+  () => {
+    #[cfg(test)]
+    mod generated;
+  };
+}
+pub fn production() {}
+pub fn calls_macro() {
+  token_tree! {
+    #[cfg(test)]
+    mod not_a_module;
+  }
+}
+#[cfg(test)]
+test_item!();
+pub fn after() {}
+";
+  let sandbox = Sandbox::new();
+  write_fixtures(sandbox.root(), &[("src/lib.rs", MACROS), (".private/private.rs", "pub fn hidden() {}\n")]);
+  let run = production_scan(&sandbox, &["."]);
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert_eq!(scanned_lines(&run.stdout, "src/lib.rs"), (1..=13).chain([16]).collect::<Vec<_>>(), "{}", run.describe());
+  assert_eq!(scanned_lines(&run.stdout, ".private/private.rs"), vec![1], "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
 fn production_scan_ignores_braces_inside_literals_and_comments_of_a_test_module() {
   const LITERALS: &str = r##"pub fn before() {}
 #[cfg(test)]

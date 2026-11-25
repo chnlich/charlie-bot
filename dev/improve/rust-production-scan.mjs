@@ -335,18 +335,42 @@ function blockStatementEnd(source, tokens, start) {
   }
 }
 
+// The last token of a macro_rules definition or macro invocation that starts at `start`, or -1 if there is none.
+function macroTokenEnd(source, tokens, start) {
+  let open = -1;
+  if (
+    isWord(tokens[start], 'macro_rules') &&
+    isPunct(tokens[start + 1], '!') &&
+    tokens[start + 2]?.kind === 'word'
+  ) {
+    open = start + 3;
+  } else if (tokens[start]?.kind === 'word') {
+    let nameEnd = start;
+    while (
+      isPunct(tokens[nameEnd + 1], ':') &&
+      isPunct(tokens[nameEnd + 2], ':') &&
+      tokens[nameEnd + 3]?.kind === 'word'
+    ) {
+      nameEnd += 3;
+    }
+    if (isPunct(tokens[nameEnd + 1], '!')) open = nameEnd + 2;
+  }
+  if (open < 0 || !CLOSE_OF.has(tokens[open]?.text)) return -1;
+  const close = closeOf(source, tokens, open);
+  return isPunct(tokens[close + 1], ';') ? close + 1 : close;
+}
+
 // The index of the last token of the element that starts at `start`, when the element is not an item.
 function elementEnd(source, tokens, start) {
   const token = tokens[start];
+  const macroEnd = macroTokenEnd(source, tokens, start);
+  if (macroEnd >= 0) return macroEnd;
   if (
     isPunct(token, '{') ||
     (token.kind === 'word' && BLOCK_KEYWORDS.has(token.text)) ||
     (token.kind === 'lifetime' && isPunct(tokens[start + 1], ':'))
   ) {
     return blockStatementEnd(source, tokens, start);
-  }
-  if (token.kind === 'word' && isPunct(tokens[start + 1], '!') && isPunct(tokens[start + 2], '{')) {
-    return closeOf(source, tokens, start + 2);
   }
   if (isWord(token, 'let')) return semicolonEnd(source, tokens, start);
   const arrow = armArrow(tokens, start);
@@ -499,6 +523,11 @@ function analyze(source, tokens) {
         line: source.lineOf(token.start),
       });
     }
+    const macroEnd = macroTokenEnd(source, tokens, at);
+    if (macroEnd >= 0) {
+      at = macroEnd + 1;
+      continue;
+    }
     if (isPunct(token, '{')) {
       depth++;
       if (isWord(tokens[at - 2], 'mod') && tokens[at - 1]?.kind === 'word') {
@@ -578,10 +607,9 @@ function productionLines(owner) {
   return lines;
 }
 
-// Every .rs file under `dir`, sorted, skipping hidden entries and `tests` directories.
+// Every .rs file under `dir`, sorted, skipping `tests` directories.
 function walk(dir, out) {
   for (const name of readdirSync(dir).sort()) {
-    if (name.startsWith('.')) continue;
     const entry = path.join(dir, name);
     if (statSync(entry).isDirectory()) {
       if (name !== 'tests') walk(entry, out);

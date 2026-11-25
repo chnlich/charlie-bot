@@ -27,6 +27,13 @@ A defect is one of two kinds:
 - a layout defect that the before screenshot shows;
 - a click defect, as the Clicks section defines.
 
+## Input profile
+
+Every capture and click runs under the input profile of its window size, which `dev/improve/ux-input-profile.mjs`
+gives: a desktop size reports a fine pointer that hovers, and the phone size reports touch with no hover. The driver's
+browser starts with `INPUT_BROWSER_ARGS` from that module, and the driver checks each size's profile on the loaded page
+before its first capture at that size. A page whose hover and pointer answers differ from the profile is not captured.
+
 ## Clicks
 
 The round clicks each control on the screen it examines.

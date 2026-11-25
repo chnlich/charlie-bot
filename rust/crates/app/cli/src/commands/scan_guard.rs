@@ -21,6 +21,7 @@ use charliebot_cli_common::exit::CliExit;
 use charliebot_core::config::SESSIONS_DIR_NAME;
 use charliebot_core::home::{CHARLIEBOT_HOME_ENV, DEFAULT_HOME_DIR_NAME};
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
+use charliebot_core::paths;
 use charliebot_core::str_methods;
 use charliebot_store::layout::{DATA_DIR_NAME, RUNS_DIR_NAME};
 use charliebot_store::run_logs::COMPRESSED_SUFFIX;
@@ -469,7 +470,7 @@ fn store_token() -> Result<String, String> {
 }
 
 fn home_token() -> Result<String, String> {
-  match std::env::var("HOME") {
+  match paths::process_home_text() {
     Ok(home) => Ok(regex::escape(&home)),
     Err(error) => Err(format!("scan command parsing failed: the patterns need HOME: {error}")),
   }

@@ -14,6 +14,7 @@ use std::time::Duration;
 use anyhow::{Context, bail};
 use charliebot_core::config::{BackendOption, sessions_dir_in};
 use charliebot_core::home;
+use charliebot_core::paths;
 use charliebot_core::proc_status;
 use charliebot_core::repo_root::REPO_ROOT_ENV;
 use charliebot_core::run_token::{RUN_TOKEN_ENV, SESSION_ID_ENV};
@@ -68,7 +69,7 @@ pub struct OpenCodeHost {
 impl OpenCodeHost {
   /// The host resolved from the CharlieBot process environment: the server binary and repository paths.
   pub fn from_process() -> anyhow::Result<Self> {
-    let home_dir = std::env::var_os("HOME").context("HOME must be set for the opencode backend")?;
+    let home_dir = paths::process_home().context("HOME must be set for the opencode backend")?;
     let root = PathBuf::from(home_dir);
     let binary = root.join(".opencode").join("bin").join("opencode");
     let profile_home = home::charliebot_home_dir().map_err(anyhow::Error::new)?;

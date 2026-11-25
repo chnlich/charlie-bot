@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use charliebot_core::config::{CONFIG_D_DIR_NAME, CRON_D_DIR_NAME, CharlieBotConfig};
+use charliebot_core::paths;
 use charliebot_core::repo_root::RepoRoot;
 use charliebot_registry::Registry;
 use charliebot_registry::context::FeatureContext;
@@ -480,7 +481,7 @@ pub(crate) fn resolve_path(pointer: &str, repo: &Path) -> Result<PathBuf, String
 
 fn expand_home(path: &str) -> Result<String, String> {
   if path == "~" || path.starts_with("~/") {
-    let home = std::env::var_os("HOME").ok_or_else(|| "HOME is not set while expanding a cron path".to_string())?;
+    let home = paths::process_home().ok_or_else(|| "HOME is not set while expanding a cron path".to_string())?;
     let suffix = path.strip_prefix('~').expect("the path starts with a tilde");
     return Ok(PathBuf::from(home).join(suffix.trim_start_matches('/')).display().to_string());
   }

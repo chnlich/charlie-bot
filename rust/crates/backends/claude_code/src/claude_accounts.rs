@@ -25,6 +25,7 @@ use charliebot_core::backend_types;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types::{RATE_LIMIT_RESETS_AT, RATE_LIMIT_STATUS, RATE_LIMIT_STATUS_REJECTED};
 use charliebot_core::model_id;
+use charliebot_core::paths;
 use charliebot_core::text_repr::is_truthy;
 use charliebot_registry::backend::{
   IMPROVE_TOKEN_MIN_SECONDS, LaunchContext, MemberFailure, MemberReading, MemberWindow,
@@ -163,7 +164,7 @@ pub fn pool(cfg: &CharlieBotConfig) -> anyhow::Result<Vec<claude_config::ClaudeA
 }
 
 fn expand_account_path(value: &str) -> anyhow::Result<PathBuf> {
-  let home = std::env::var("HOME").ok();
+  let home = paths::process_home_text().ok();
   login_dirs::config_dir_path(value, home.as_deref())
 }
 

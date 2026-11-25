@@ -42,6 +42,7 @@ use charliebot_core::event_types::{
 };
 use charliebot_core::fsutil::{self, ExclusiveLock};
 use charliebot_core::home;
+use charliebot_core::paths;
 use charliebot_core::posix_path;
 use charliebot_core::subagent::SUBAGENT_TOOL_NAMES;
 use charliebot_store::layout;
@@ -654,7 +655,7 @@ fn is_standalone_user_dialog(command: &str) -> bool {
 }
 
 fn resolve_token(tok: &str, base: Option<&str>) -> Option<String> {
-  let home = std::env::var("HOME").unwrap_or_default();
+  let home = paths::process_home_text().unwrap_or_default();
   let cb_home = std::env::var(home::CHARLIEBOT_HOME_ENV).unwrap_or_default();
   let mut s = tok.to_string();
   for (var, val) in [

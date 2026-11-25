@@ -1,10 +1,11 @@
-//! Whether a `charliebot` process runs inside an improve round.
+//! Whether a `charliebot` process runs inside an improve round, and the variables that the runner exports to a round.
 //!
 //! `dev/improve/remote-runner.sh` starts each round with its launch directory in `IMPROVE_LAUNCH_DIR` and its profile
 //! home at `$HOME/improve/home`. A round's host runs no CharlieBot server, so the commands that need one refuse at
 //! once and name the round's state sources, which the runner exports beside the launch directory in `IMPROVE_DIRECTION`
 //! and `IMPROVE_KIT_DIR`. A trial server moves `HOME` and `CHARLIEBOT_HOME`, so it is not a round.
 
+use std::env::VarError;
 use std::path::Path;
 
 use charliebot_core::{home, paths};
@@ -12,7 +13,11 @@ use charliebot_core::{home, paths};
 use crate::exit::CliExit;
 
 /// The variable that names the round's launch directory. Only the runner sets it.
-const LAUNCH_DIR_ENV: &str = "IMPROVE_LAUNCH_DIR";
+pub const LAUNCH_DIR_ENV: &str = "IMPROVE_LAUNCH_DIR";
+/// The variable that names the round's direction, which is also the name of its prompt file. The runner exports it.
+pub const DIRECTION_ENV: &str = "IMPROVE_DIRECTION";
+/// The variable that names the kit: the `dev/` tree of the revision that the round runs. The runner exports it.
+pub const KIT_DIR_ENV: &str = "IMPROVE_KIT_DIR";
 /// The round home beneath the user's home, as the runner names it.
 const ROUND_HOME_SUFFIX: &str = "improve/home";
 
@@ -23,6 +28,20 @@ pub fn in_improve_round() -> Result<bool, CliExit> {
   }
   let charliebot_home = home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
   Ok(is_round_home(&charliebot_home, Path::new(&paths::expanduser("~"))))
+}
+
+/// The value of a variable that the runner exports to every round. A missing, empty or non-UTF-8 value is a kit
+/// defect, and the error names the variable.
+pub fn round_variable(name: &str) -> Result<String, CliExit> {
+  match std::env::var(name) {
+    Ok(value) if !value.is_empty() => Ok(value),
+    Ok(_) | Err(VarError::NotPresent) => Err(CliExit::error(format!(
+      "{name} is unset or empty in this improve round: the runner exports it, so the round's kit is defective"
+    ))),
+    Err(VarError::NotUnicode(_)) => {
+      Err(CliExit::error(format!("{name} is not valid UTF-8 in this improve round: the runner's kit is defective")))
+    }
+  }
 }
 
 /// Whether `charliebot_home` is the round home beneath `user_home`. The round home is resolved the same way as

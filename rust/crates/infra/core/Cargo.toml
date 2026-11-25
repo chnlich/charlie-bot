@@ -25,6 +25,7 @@ serde_yaml.workspace = true
 sha2.workspace = true
 subtle.workspace = true
 time.workspace = true
+tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true

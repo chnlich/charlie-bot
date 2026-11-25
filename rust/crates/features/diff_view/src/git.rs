@@ -2,12 +2,11 @@
 //! call carries a timeout.
 
 use std::path::Path;
-use std::process::Stdio;
 use std::time::Duration;
 
 use axum::response::Response;
 use charliebot_compat::responses;
-use charliebot_core::git::{merge_base_args, object_exists_args};
+use charliebot_core::git::{merge_base_args, object_exists_args, output_within};
 use charliebot_core::str_methods::universal_newlines;
 use http::StatusCode;
 use serde_json::json;
@@ -28,21 +27,12 @@ struct RawOutput {
 /// The `git <args>` run in `repo`, with its exit status and streams collected. Only a timeout, a spawn failure or
 /// undecodable stderr is this function's error. A nonzero exit lands in `RawOutput.ok`.
 async fn run_raw(repo: &Path, args: &[&str], timeout: Duration) -> Result<RawOutput, Response> {
-  let mut command = tokio::process::Command::new("git");
-  command
-    .args(args)
-    .current_dir(repo)
-    .stdin(Stdio::null())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .kill_on_drop(true);
-  let child = command.spawn().map_err(|error| responses::internal_error("OSError", error.to_string()))?;
-  let output = match tokio::time::timeout(timeout, child.wait_with_output()).await {
-    Ok(output) => output.map_err(|error| responses::internal_error("OSError", error.to_string()))?,
-    Err(_) => {
-      let detail = format!("Command '[\"git\", {}]' timed out after {} seconds", quoted(args), timeout.as_secs());
-      return Err(responses::internal_error("TimeoutExpired", detail));
-    }
+  let output = output_within(repo, args, None, &[], timeout)
+    .await
+    .map_err(|error| responses::internal_error("OSError", error.to_string()))?;
+  let Some(output) = output else {
+    let detail = format!("Command '[\"git\", {}]' timed out after {} seconds", quoted(args), timeout.as_secs());
+    return Err(responses::internal_error("TimeoutExpired", detail));
   };
   let stderr = decode(&output.stderr)?;
   Ok(RawOutput { ok: output.status.success(), stdout: output.stdout, stderr })

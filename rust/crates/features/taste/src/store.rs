@@ -8,8 +8,8 @@
 //! assign distinct ids. This module is the only writer of `rows.jsonl`.
 
 use std::collections::BTreeSet;
-use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
@@ -595,12 +595,7 @@ fn append_record(taste_dir: &Path, value: &Value) -> anyhow::Result<()> {
   let path = taste_dir.join(ROWS_FILENAME);
   let mut line = serde_json::to_string(value)?;
   line.push('\n');
-  let mut file = OpenOptions::new()
-    .create(true)
-    .append(true)
-    .open(&path)
-    .with_context(|| format!("open {} for append", path.display()))?;
-  file.write_all(line.as_bytes()).with_context(|| format!("append to {}", path.display()))
+  fsutil::append_line(&path, line.as_bytes(), 0o666).with_context(|| format!("append to {}", path.display()))
 }
 
 /// The exclusive store lock, held by the caller until its write ends.

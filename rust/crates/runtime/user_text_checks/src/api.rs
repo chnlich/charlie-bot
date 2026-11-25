@@ -6,9 +6,9 @@ use std::path::Path;
 use anyhow::{Context as AnyhowContext, anyhow};
 use charliebot_core::config::sessions_dir_in;
 
-use crate::checks::SessionIndex;
 use crate::config::UserTextChecksConfig;
 use crate::page::parse_page;
+use crate::sessions::SessionIndex;
 use crate::text::line_blocks;
 
 /// The internal-id check name shared by artifact assertions and web-reply refusals.

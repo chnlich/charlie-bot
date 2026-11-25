@@ -7,6 +7,7 @@ mod entry;
 mod links;
 mod markup;
 mod page;
+mod sessions;
 #[cfg(test)]
 mod tests;
 mod text;

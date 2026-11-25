@@ -2499,7 +2499,7 @@ const UI_TEXT_EXEMPTIONS: &[UiTextExemption] = &[
     reason: "Accepted clean verdicts a model writes for Chinese cold reads; no browser shows these parser tokens.",
   },
   UiTextExemption {
-    file: "rust/crates/runtime/user_text_checks/src/lib.rs",
+    file: "rust/crates/runtime/user_text_checks/src/api.rs",
     reason: "Rule-defined terms a user may write in a reply; the checker reports them to the agent, not the browser.",
   },
 ];

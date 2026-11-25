@@ -2183,7 +2183,9 @@ impl Store {
     let mut facts = RunFacts::default();
     let mut unnamed = UnnamedPass::new("run_facts_at");
     for event in newest_first.iter().rev() {
-      facts.observe(event, &mut unnamed);
+      unnamed
+        .note_type(event.get("type").and_then(CompactValue::as_str), event.get("id").and_then(CompactValue::as_str));
+      facts.observe(event);
     }
     let facts = Arc::new(facts);
     let entry = CachedRunFactsAt { identity, facts: Arc::clone(&facts) };
@@ -3021,7 +3023,7 @@ fn fold_task_facts_from(
     }
     let event = event.as_ref();
     if let Some(run_facts) = run_facts.as_deref_mut() {
-      run_facts.observe(event, &mut unnamed);
+      run_facts.observe(event);
     }
     let position = offset + index;
     // A close-request replay looks for these lines in the raw history, so they are kept before the id check below.
@@ -3240,7 +3242,7 @@ fn fold_task_facts_from(
           if prior_index % TASK_FACTS_STOP_CHECK_INTERVAL == 0 && should_stop() {
             return Ok(false);
           }
-          if admits_input(prior, &mut unnamed)
+          if admits_input(prior)
             && prior.get("id").and_then(CompactValue::as_str).is_some_and(|id| facts.imported_pending_ids.contains(id))
           {
             facts.input_candidates.push(Arc::clone(prior));
@@ -3324,7 +3326,7 @@ fn fold_task_facts_from(
       .get("id")
       .and_then(CompactValue::as_str)
       .is_some_and(|event_id| facts.imported_pending_ids.contains(event_id));
-    if admits_input(event, &mut unnamed)
+    if admits_input(event)
       && facts.boundary_open
       && (facts.boundary_index.is_none_or(|boundary| position > boundary) || imported)
     {
@@ -3391,7 +3393,10 @@ fn fold_node_facts_from(
       return Ok(false);
     }
     if let Some(run_facts) = run_facts.as_deref_mut() {
-      run_facts.observe(event.as_ref(), &mut unnamed);
+      let record = event.as_ref();
+      unnamed
+        .note_type(record.get("type").and_then(CompactValue::as_str), record.get("id").and_then(CompactValue::as_str));
+      run_facts.observe(record);
     }
   }
   Ok(!should_stop())
@@ -3455,7 +3460,10 @@ fn observe_run_facts(
     if index % TASK_FACTS_STOP_CHECK_INTERVAL == 0 && should_stop() {
       return Ok(false);
     }
-    facts.observe(event.as_ref(), &mut unnamed);
+    let record = event.as_ref();
+    unnamed
+      .note_type(record.get("type").and_then(CompactValue::as_str), record.get("id").and_then(CompactValue::as_str));
+    facts.observe(record);
   }
   Ok(!should_stop())
 }
@@ -3463,7 +3471,7 @@ fn observe_run_facts(
 /// Whether `event` is an input a turn consumes. A turn-end check shows its reason in the session. Its continuation
 /// carries the same reason to the agent, so that display is no input. A message carrying `TURN_HOOKS_ID` names the
 /// check result it shows.
-fn admits_input(event: &ChatEvent, unnamed: &mut UnnamedPass) -> bool {
+fn admits_input(event: &ChatEvent) -> bool {
   match ChatEventType::of(event.get("type").and_then(CompactValue::as_str)) {
     ChatEventType::DiscordReply => false,
     ChatEventType::SlackReply => false,
@@ -3558,10 +3566,8 @@ fn admits_input(event: &ChatEvent, unnamed: &mut UnnamedPass) -> bool {
     ChatEventType::Thought => false,
     ChatEventType::ToolProgress => false,
     ChatEventType::Untyped => false,
-    ChatEventType::Unnamed(name) => {
-      unnamed.note("event type", &name, event.get("id").and_then(CompactValue::as_str));
-      false
-    }
+    // The task fold's dispatch counts an unnamed type, so each record counts once in its pass.
+    ChatEventType::Unnamed(_) => false,
   }
 }
 
@@ -5844,19 +5850,31 @@ pub(crate) mod tests {
   }
 
   #[test]
+  fn each_unnamed_record_counts_once_in_the_task_fold_pass() {
+    use charliebot_core::test_support::LogCapture;
+    let records: Vec<Value> =
+      (0..1000).map(|index| json!({"type": "a_writer_added_later", "id": format!("r{index}")})).collect();
+    let log = LogCapture::default();
+    let _capture = log.install();
+    fold_task_facts(&records).unwrap();
+    let text = log.text();
+    assert_eq!(text.matches("store_fold_unnamed_type").count(), 1, "{text}");
+    assert!(text.contains("count=1000"), "{text}");
+  }
+
+  #[test]
   fn a_settled_run_never_scans_the_history_for_a_withheld_reason() {
     // The withheld-reason question is asked only on the queued branch, after the outcome and
     // stop-request maps decline the Run. The closure is that question. A settled Run must not ask it, or a node's
     // display-state pass walks its whole history once per Run. That pass cost 912 Runs over a 15 MB log on the
     // production copy.
     let mut facts = crate::run_records::RunFacts::default();
-    let mut unnamed = UnnamedPass::new("a_settled_run_never_scans_the_history_for_a_withheld_reason");
     for event in [
       json!({"type": "run_finished", "run_id": "done", "outcome": "success"}),
       json!({"type": "run_stop_requested", "run_id": "stopped"}),
       json!({"type": "run_launch_withheld", "run_id": "queued", "reason": "task closed"}),
     ] {
-      facts.observe(&ChatEvent::from_value(&event), &mut unnamed);
+      facts.observe(&ChatEvent::from_value(&event));
     }
     let mut boot = crate::run_records::HostBoot::default();
     let mut scans = 0;

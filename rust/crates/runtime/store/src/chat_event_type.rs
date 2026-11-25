@@ -420,6 +420,14 @@ impl UnnamedPass {
       .or_insert_with(|| UnnamedCount { count: 0, first_source: source.map(str::to_owned) });
     counted.count += 1;
   }
+
+  /// Counts a record of a replay loop when its `type` names no variant. The loop calls this once for each record it
+  /// visits, so each record counts once in the pass.
+  pub fn note_type(&mut self, record_type: Option<&str>, source: Option<&str>) {
+    if let ChatEventType::Unnamed(name) = ChatEventType::of(record_type) {
+      self.note("event type", &name, source);
+    }
+  }
 }
 
 impl Drop for UnnamedPass {

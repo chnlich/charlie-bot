@@ -22,7 +22,7 @@ use nix::unistd::{Pid, getpgid};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-use crate::chat_event_type::{ChatEventType, UnnamedPass};
+use crate::chat_event_type::ChatEventType;
 use crate::compact::CompactValue;
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
@@ -373,9 +373,7 @@ fn is_known_outcome(value: &str) -> bool {
 }
 
 impl RunFacts {
-  /// Folds one event into the run facts. `unnamed` is the replay pass that the caller runs, which counts the stored
-  /// names that no variant names.
-  pub(crate) fn observe(&mut self, event: &ChatEvent, unnamed: &mut UnnamedPass) {
+  pub(crate) fn observe(&mut self, event: &ChatEvent) {
     #[cfg(test)]
     {
       self.observed_events += 1;
@@ -484,9 +482,8 @@ impl RunFacts {
       ChatEventType::Thought => {}
       ChatEventType::ToolProgress => {}
       ChatEventType::Untyped => {}
-      ChatEventType::Unnamed(name) => {
-        unnamed.note("event type", &name, event.get("id").and_then(CompactValue::as_str));
-      }
+      // The replay loop that visits the record counts an unnamed type.
+      ChatEventType::Unnamed(_) => {}
     }
   }
 
@@ -1566,9 +1563,8 @@ mod tests {
       json!({"type": "run_launch_withheld", "run_id": "run-b", "reason": "closed task"}),
     ];
     let mut facts = RunFacts::default();
-    let mut unnamed = UnnamedPass::new("run_facts_retain_one_outcome_and_request_set_per_run");
     for event in &events {
-      facts.observe(&ChatEvent::from_value(event), &mut unnamed);
+      facts.observe(&ChatEvent::from_value(event));
     }
 
     assert_eq!(facts.outcomes.len(), 2, "one last outcome is retained per run");

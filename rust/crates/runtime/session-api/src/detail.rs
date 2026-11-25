@@ -2376,7 +2376,7 @@ backends:
     assert_eq!(expected.len(), FOR_YOU_MAX_ROWS, "the fixture has more rows before the first screen than the cap");
     let older = payload.value[OLDER_FOR_YOU_FIELD].as_array().expect("the bootstrap carries the older rows");
     assert_eq!(row_contents(older), expected);
-    assert!(older.iter().all(|row| for_you::is_reply_row(row) || for_you::is_error_row(row)));
+    assert!(older.iter().all(for_you::is_for_you_row));
   }
 
   /// The scan keeps the newest ten rows, and within 16 KiB of JSON the newest row is kept whatever its size.

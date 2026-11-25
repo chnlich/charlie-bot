@@ -1,0 +1,11 @@
+{
+  "roles": ["user", "web_reply", "web_reply_notice", "thread_reply", "draft"],
+  "error": {"role": "system", "prefix": "Error: "},
+  "thread": {
+    "reply_role": "thread_reply",
+    "platforms": ["slack", "discord", "feishu"],
+    "legacy_prefix": "Posted to ",
+    "summon_role": "agent_message",
+    "nudge_key": "nudge_of"
+  }
+}

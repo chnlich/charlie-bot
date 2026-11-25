@@ -491,6 +491,33 @@ test('For you shows thread replies and the summons that started them, each under
   assert.match(html(feishuReply), />Feishu<\/span>/, 'the reply carries the Feishu badge');
 });
 
+// A thread-bound manager's bootstrap head carries its thread rows before the first screen, and the same rows arriving as
+// live updates show in For you too. The rule's thread entry decides both, so the two paths show the same rows, and the
+// nudge that a live update carries stays out of both.
+test('a thread-bound manager shows its thread rows from the bootstrap head and from live updates alike', () => {
+  const summon = eMsg('agent_message', 'th-sum', 'What drives the LIST traffic?',
+      {slack: {channel_id: 'C1', thread_ts: '1.5'}});
+  const reply = eMsg('thread_reply', 'th-reply', 'The cause is the poll loop.', {platform: 'slack'});
+  const legacy = eMsg('system', 'th-legacy', 'Posted to Discord: Channel update posted.');
+  const nudge = eMsg('agent_message', 'th-nudge', 'the same question again',
+      {slack: {channel_id: 'C1', thread_ts: '1.5', nudge_of: 'th-sum'}});
+  const shownRows = (rig) => rig.root.children.filter((el) => el.dataset.messageRole)
+      .map((el) => [el.dataset.messageRole, el.dataset.messageId]);
+
+  const boot = forYouRig([], {forYouHead: [summon, reply, legacy]});
+  const live = forYouRig([]);
+  // The markdown body is the renderer's business; this case reads the badge that each path's bubble carries.
+  for (const rig of [boot, live]) rig.context.renderProseMarkdown = (text) => String(text);
+  for (const msg of [summon, reply, nudge, legacy]) live.context.appendMessageObject(msg, 'sess-fy', false);
+  settle(live.timers);
+
+  const expected = [['agent_message', 'th-sum'], ['thread_reply', 'th-reply'], ['system', 'th-legacy']];
+  assert.deepEqual(shownRows(boot), expected, 'the bootstrap head paints the thread rows');
+  assert.deepEqual(shownRows(live), expected, 'a live update shows the same rows and hides the nudge');
+  assert.match(boot.context.renderMessage(reply, 'sess-fy'), />Slack<\/span>/);
+  assert.match(live.context.renderMessage(reply, 'sess-fy'), />Slack<\/span>/);
+});
+
 test('a web reply mid-turn shows in For you and sits inside the folded steps in Everything', () => {
   const rig = forYouRig(fixture());
   assert.ok(rowsOf(rig.root).includes('web_reply'), 'For you shows the reply');

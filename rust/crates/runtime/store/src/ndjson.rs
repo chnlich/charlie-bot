@@ -1,5 +1,4 @@
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs;
 use std::path::Path;
 
 use charliebot_core::fsutil;
@@ -243,14 +242,10 @@ pub(crate) fn encode_line(value: &Value) -> String {
 pub(crate) fn append(path: &Path, value: &Value) -> StoreResult<usize> {
   let parent = path.parent().expect("an event-log path has a parent directory");
   fs::create_dir_all(parent).map_err(|error| StoreError::new(format!("{}: {error}", parent.display())))?;
-  let mut file = OpenOptions::new()
-    .create(true)
-    .append(true)
-    .open(path)
-    .map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
   let line = encode_line(value);
-  file.write_all(line.as_bytes()).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
-  file.sync_data().map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+  // 0o666 is the mode `OpenOptions` creates a file with by default, so the umask still decides the file's access bits.
+  fsutil::append_line(path, line.as_bytes(), 0o666)
+    .map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
   Ok(line.len())
 }
 

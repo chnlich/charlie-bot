@@ -1,4 +1,5 @@
-//! Atomic file publication, the exclusive file lock, and the read-only mapping that the log walkers scan backward.
+//! Atomic file publication, the synced line append, the exclusive file lock, and the read-only mapping that the log
+//! walkers scan backward.
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Read, Write};
@@ -130,6 +131,14 @@ pub fn atomic_write_mode(path: &Path, bytes: &[u8], mode: u32) -> std::io::Resul
     tracing::warn!(path = %temporary.display(), error = %error, "atomic_write_cleanup_failed");
   }
   result
+}
+
+/// Append `line` to `path`, creating the file with the access bits `mode` when it is absent, and sync its data before
+/// the call returns. `line` is one whole record with its newline included. The parent directory is not created here.
+pub fn append_line(path: &Path, line: &[u8], mode: u32) -> std::io::Result<()> {
+  let mut file = OpenOptions::new().create(true).append(true).mode(mode).open(path)?;
+  file.write_all(line)?;
+  file.sync_data()
 }
 
 /// An exclusive advisory lock on a file, held until the guard drops.

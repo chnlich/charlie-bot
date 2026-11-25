@@ -1,9 +1,7 @@
 //! Durable OpenCode connection records and the per-turn event relay.
 
 use std::ffi::OsString;
-use std::fs::{self, OpenOptions};
-use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -387,10 +385,9 @@ fn visit_complete_lines(
 }
 
 fn append_raw_event(path: &Path, raw: &[u8]) -> anyhow::Result<()> {
-  let mut file = OpenOptions::new().create(true).append(true).mode(0o644).open(path)?;
-  file.write_all(raw)?;
-  file.write_all(b"\n")?;
-  file.sync_data()?;
+  let mut line = raw.to_vec();
+  line.push(b'\n');
+  fsutil::append_line(path, &line, 0o644)?;
   Ok(())
 }
 

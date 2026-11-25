@@ -11,7 +11,16 @@ const INDEX_HTML = path.join(__dirname, '..', 'templates', 'index.html');
 // The page's scripts stand in the tail partial index.html names, so the harness reads both files in page order.
 const CHAT_SCRIPTS = path.join(__dirname, '..', 'templates', 'partials', 'chat_scripts.html');
 
+// Server-artifact mode: CHARLIEBOT_INLINE_JS_TABLE names the JSON object that `inline-js-table` (charliebot-inline-js)
+// prints, the minified text the server serves for each inline module body. A module the object names reads as that
+// text, so a suite checks what the page carries. Any other file reads from its source, and a named file that is
+// missing fails the read.
+const INLINE_JS_TABLE = process.env.CHARLIEBOT_INLINE_JS_TABLE;
+const servedScripts = INLINE_JS_TABLE ? JSON.parse(fs.readFileSync(INLINE_JS_TABLE, 'utf8')) : null;
+
 function readStatic(...parts) {
+  const name = `js/${parts.join('/')}`;
+  if (servedScripts && Object.hasOwn(servedScripts, name)) return servedScripts[name];
   return fs.readFileSync(path.join(__dirname, '..', 'static', 'js', ...parts), 'utf8');
 }
 

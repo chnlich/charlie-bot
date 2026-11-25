@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use charliebot_core::event_types::{self, EventFields};
 use serde_json::{Value, json};
 
+use crate::chat_event_type::{ChatEventType, log_unnamed};
 use crate::{StoreError, StoreResult};
 
 const ATTACHED_FILES_MARKER: &str = "\n\n[Attached files]\n";
@@ -144,15 +145,92 @@ fn interval_scan<'a, E: EventFields + 'a>(events: impl IntoIterator<Item = &'a E
   let mut closed = 0;
   for (index, event) in events.into_iter().enumerate() {
     let type_value = event.field("type");
-    let event_type = type_value.and_then(EventFields::as_str_field);
     let has_session_id = event.field("session_id").is_some_and(event_types::is_truthy);
     let no_type = type_value.is_none_or(E::is_null);
-    if (no_type || event_type == Some(event_types::SESSION_ATTACHED)) && has_session_id {
-      interval_start = Some(index);
-    } else if event_type == Some(event_types::MASTER_DONE)
-      && let Some(start) = interval_start.take()
-    {
-      complete.push((start, index));
+    match ChatEventType::of(type_value.and_then(EventFields::as_str_field)) {
+      ChatEventType::Untyped if no_type && has_session_id => interval_start = Some(index),
+      ChatEventType::SessionAttached if has_session_id => interval_start = Some(index),
+      ChatEventType::DiscordReply => {}
+      ChatEventType::SlackReply => {}
+      ChatEventType::WebAskCheck => {}
+      ChatEventType::DraftFailed => {}
+      ChatEventType::DraftRegistered => {}
+      ChatEventType::DraftSent => {}
+      ChatEventType::DiscordAck => {}
+      ChatEventType::WebStatusConfirmed => {}
+      ChatEventType::Assistant => {}
+      ChatEventType::System => {}
+      ChatEventType::ContextCompacted => {}
+      ChatEventType::Result => {}
+      ChatEventType::AgentMessage => {}
+      ChatEventType::AssistantError => {}
+      ChatEventType::BackendOverlayInactive => {}
+      ChatEventType::BackendOverlayUndeclared => {}
+      ChatEventType::BackendSwitched => {}
+      ChatEventType::ChildReport => {}
+      ChatEventType::CloneStart => {}
+      ChatEventType::ContextCompactFailed => {}
+      ChatEventType::HandlerResult => {}
+      ChatEventType::MasterDone => {
+        if let Some(start) = interval_start.take() {
+          complete.push((start, index));
+        }
+      }
+      ChatEventType::ModelFallbackNotice => {}
+      ChatEventType::PromptChanged => {}
+      ChatEventType::ResumeContextDropped => {}
+      ChatEventType::RunDelivery => {}
+      ChatEventType::RunFinished => {}
+      ChatEventType::RunHeader => {}
+      ChatEventType::RunLaunchWithheld => {}
+      ChatEventType::RunStopRequested => {}
+      ChatEventType::ScheduledRunSkipped => {}
+      ChatEventType::ScheduledTrigger => {}
+      ChatEventType::SessionAttached => {}
+      ChatEventType::SessionRenamed => {}
+      ChatEventType::TaskCloseRequested => {}
+      ChatEventType::TaskClosed => {}
+      ChatEventType::TaskCreated => {}
+      ChatEventType::TaskDelegated => {}
+      ChatEventType::TaskImported => {}
+      ChatEventType::TaskInputAcknowledged => {}
+      ChatEventType::TaskReopened => {}
+      ChatEventType::TaskTriggered => {}
+      ChatEventType::Thinking => {}
+      ChatEventType::ToolResult => {}
+      ChatEventType::ToolUse => {}
+      ChatEventType::User => {}
+      ChatEventType::WebReply => {}
+      ChatEventType::WebReplyNotice => {}
+      ChatEventType::WebReplyCheck => {}
+      ChatEventType::WebStatus => {}
+      ChatEventType::TurnHooks => {}
+      ChatEventType::ContinuationRan => {}
+      ChatEventType::FeishuAck => {}
+      ChatEventType::SlackAck => {}
+      ChatEventType::InputDelivered => {}
+      ChatEventType::ImproveFailed => {}
+      ChatEventType::ImproveIterationCompleted => {}
+      ChatEventType::Error => {}
+      ChatEventType::Message => {}
+      ChatEventType::Text => {}
+      ChatEventType::QuotaFailover => {}
+      ChatEventType::FeishuReply => {}
+      ChatEventType::PolicyTableChanged => {}
+      ChatEventType::WorkerSummary => {}
+      ChatEventType::RunEnd => {}
+      ChatEventType::RunError => {}
+      ChatEventType::TaskReparented => {}
+      ChatEventType::ClaudeAccountLoginRequired => {}
+      ChatEventType::CommandLifecycle => {}
+      ChatEventType::FeatureEvent => {}
+      ChatEventType::RateLimitEvent => {}
+      ChatEventType::Stream => {}
+      ChatEventType::WebStatusSubtree => {}
+      ChatEventType::Untyped => {}
+      ChatEventType::Unnamed(name) => {
+        log_unnamed("interval_scan", "event type", &name, event.field("id").and_then(EventFields::as_str_field));
+      }
     }
     if interval_start.is_none() {
       closed = index + 1;

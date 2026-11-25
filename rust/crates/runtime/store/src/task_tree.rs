@@ -15,6 +15,7 @@ use charliebot_core::{event_types, fsutil};
 use regex::Regex;
 use serde_json::{Map, Value, json};
 
+use crate::chat_event_type::{ChatEventType, log_unnamed};
 use crate::compact::CompactValue;
 use crate::event_types::ChatEvent;
 
@@ -2727,9 +2728,43 @@ fn live_end(identity: Option<FileIdentity>) -> u64 {
 
 /// The task state a lifecycle fact sets, or None for any other event.
 fn lifecycle_state_of(event: &ChatEvent) -> Option<TaskState> {
-  match event.get("type").and_then(CompactValue::as_str)? {
-    event_types::CLONE_START | event_types::TASK_REOPENED => Some("open".to_string()),
-    event_types::TASK_CLOSED => Some(
+  match ChatEventType::of(event.get("type").and_then(CompactValue::as_str)) {
+    ChatEventType::DiscordReply => None,
+    ChatEventType::SlackReply => None,
+    ChatEventType::WebAskCheck => None,
+    ChatEventType::DraftFailed => None,
+    ChatEventType::DraftRegistered => None,
+    ChatEventType::DraftSent => None,
+    ChatEventType::DiscordAck => None,
+    ChatEventType::WebStatusConfirmed => None,
+    ChatEventType::Assistant => None,
+    ChatEventType::System => None,
+    ChatEventType::ContextCompacted => None,
+    ChatEventType::Result => None,
+    ChatEventType::AgentMessage => None,
+    ChatEventType::AssistantError => None,
+    ChatEventType::BackendOverlayInactive => None,
+    ChatEventType::BackendOverlayUndeclared => None,
+    ChatEventType::BackendSwitched => None,
+    ChatEventType::ChildReport => None,
+    ChatEventType::CloneStart => Some("open".to_string()),
+    ChatEventType::ContextCompactFailed => None,
+    ChatEventType::HandlerResult => None,
+    ChatEventType::MasterDone => None,
+    ChatEventType::ModelFallbackNotice => None,
+    ChatEventType::PromptChanged => None,
+    ChatEventType::ResumeContextDropped => None,
+    ChatEventType::RunDelivery => None,
+    ChatEventType::RunFinished => None,
+    ChatEventType::RunHeader => None,
+    ChatEventType::RunLaunchWithheld => None,
+    ChatEventType::RunStopRequested => None,
+    ChatEventType::ScheduledRunSkipped => None,
+    ChatEventType::ScheduledTrigger => None,
+    ChatEventType::SessionAttached => None,
+    ChatEventType::SessionRenamed => None,
+    ChatEventType::TaskCloseRequested => None,
+    ChatEventType::TaskClosed => Some(
       event
         .get("outcome")
         .and_then(CompactValue::as_str)
@@ -2737,7 +2772,48 @@ fn lifecycle_state_of(event: &ChatEvent) -> Option<TaskState> {
         .unwrap_or("completed")
         .to_string(),
     ),
-    _ => None,
+    ChatEventType::TaskCreated => None,
+    ChatEventType::TaskDelegated => None,
+    ChatEventType::TaskImported => None,
+    ChatEventType::TaskInputAcknowledged => None,
+    ChatEventType::TaskReopened => Some("open".to_string()),
+    ChatEventType::TaskTriggered => None,
+    ChatEventType::Thinking => None,
+    ChatEventType::ToolResult => None,
+    ChatEventType::ToolUse => None,
+    ChatEventType::User => None,
+    ChatEventType::WebReply => None,
+    ChatEventType::WebReplyNotice => None,
+    ChatEventType::WebReplyCheck => None,
+    ChatEventType::WebStatus => None,
+    ChatEventType::TurnHooks => None,
+    ChatEventType::ContinuationRan => None,
+    ChatEventType::FeishuAck => None,
+    ChatEventType::SlackAck => None,
+    ChatEventType::InputDelivered => None,
+    ChatEventType::ImproveFailed => None,
+    ChatEventType::ImproveIterationCompleted => None,
+    ChatEventType::Error => None,
+    ChatEventType::Message => None,
+    ChatEventType::Text => None,
+    ChatEventType::QuotaFailover => None,
+    ChatEventType::FeishuReply => None,
+    ChatEventType::PolicyTableChanged => None,
+    ChatEventType::WorkerSummary => None,
+    ChatEventType::RunEnd => None,
+    ChatEventType::RunError => None,
+    ChatEventType::TaskReparented => None,
+    ChatEventType::ClaudeAccountLoginRequired => None,
+    ChatEventType::CommandLifecycle => None,
+    ChatEventType::FeatureEvent => None,
+    ChatEventType::RateLimitEvent => None,
+    ChatEventType::Stream => None,
+    ChatEventType::WebStatusSubtree => None,
+    ChatEventType::Untyped => None,
+    ChatEventType::Unnamed(name) => {
+      log_unnamed("lifecycle_state_of", "event type", &name, event.get("id").and_then(CompactValue::as_str));
+      None
+    }
   }
 }
 
@@ -2928,32 +3004,127 @@ fn fold_task_facts_from(
     }
     let position = offset + index;
     // A close-request replay looks for these lines in the raw history, so they are kept before the id check below.
-    match (event.get("type").and_then(CompactValue::as_str), event.get("request_id").and_then(CompactValue::as_str)) {
-      (Some(event_types::TASK_CLOSE_REQUESTED), Some(request_id)) => {
-        facts.close_request_ids.insert(request_id.to_string());
+    let event_type = ChatEventType::of(event.get("type").and_then(CompactValue::as_str));
+    let request_id = event.get("request_id").and_then(CompactValue::as_str);
+    match &event_type {
+      ChatEventType::TaskCloseRequested => {
+        if let Some(request_id) = request_id {
+          facts.close_request_ids.insert(request_id.to_string());
+        }
       }
-      (Some(event_types::TASK_CLOSED), Some(request_id)) => {
-        facts.first_close_by_request.entry(request_id.to_string()).or_insert_with(|| Arc::clone(&events[index]));
+      ChatEventType::TaskClosed => {
+        if let Some(request_id) = request_id {
+          facts.first_close_by_request.entry(request_id.to_string()).or_insert_with(|| Arc::clone(&events[index]));
+        }
       }
-      _ => {}
+      ChatEventType::DiscordReply => {}
+      ChatEventType::SlackReply => {}
+      ChatEventType::WebAskCheck => {}
+      ChatEventType::DraftFailed => {}
+      ChatEventType::DraftRegistered => {}
+      ChatEventType::DraftSent => {}
+      ChatEventType::DiscordAck => {}
+      ChatEventType::WebStatusConfirmed => {}
+      ChatEventType::Assistant => {}
+      ChatEventType::System => {}
+      ChatEventType::ContextCompacted => {}
+      ChatEventType::Result => {}
+      ChatEventType::AgentMessage => {}
+      ChatEventType::AssistantError => {}
+      ChatEventType::BackendOverlayInactive => {}
+      ChatEventType::BackendOverlayUndeclared => {}
+      ChatEventType::BackendSwitched => {}
+      ChatEventType::ChildReport => {}
+      ChatEventType::CloneStart => {}
+      ChatEventType::ContextCompactFailed => {}
+      ChatEventType::HandlerResult => {}
+      ChatEventType::MasterDone => {}
+      ChatEventType::ModelFallbackNotice => {}
+      ChatEventType::PromptChanged => {}
+      ChatEventType::ResumeContextDropped => {}
+      ChatEventType::RunDelivery => {}
+      ChatEventType::RunFinished => {}
+      ChatEventType::RunHeader => {}
+      ChatEventType::RunLaunchWithheld => {}
+      ChatEventType::RunStopRequested => {}
+      ChatEventType::ScheduledRunSkipped => {}
+      ChatEventType::ScheduledTrigger => {}
+      ChatEventType::SessionAttached => {}
+      ChatEventType::SessionRenamed => {}
+      ChatEventType::TaskCreated => {}
+      ChatEventType::TaskDelegated => {}
+      ChatEventType::TaskImported => {}
+      ChatEventType::TaskInputAcknowledged => {}
+      ChatEventType::TaskReopened => {}
+      ChatEventType::TaskTriggered => {}
+      ChatEventType::Thinking => {}
+      ChatEventType::ToolResult => {}
+      ChatEventType::ToolUse => {}
+      ChatEventType::User => {}
+      ChatEventType::WebReply => {}
+      ChatEventType::WebReplyNotice => {}
+      ChatEventType::WebReplyCheck => {}
+      ChatEventType::WebStatus => {}
+      ChatEventType::TurnHooks => {}
+      ChatEventType::ContinuationRan => {}
+      ChatEventType::FeishuAck => {}
+      ChatEventType::SlackAck => {}
+      ChatEventType::InputDelivered => {}
+      ChatEventType::ImproveFailed => {}
+      ChatEventType::ImproveIterationCompleted => {}
+      ChatEventType::Error => {}
+      ChatEventType::Message => {}
+      ChatEventType::Text => {}
+      ChatEventType::QuotaFailover => {}
+      ChatEventType::FeishuReply => {}
+      ChatEventType::PolicyTableChanged => {}
+      ChatEventType::WorkerSummary => {}
+      ChatEventType::RunEnd => {}
+      ChatEventType::RunError => {}
+      ChatEventType::TaskReparented => {}
+      ChatEventType::ClaudeAccountLoginRequired => {}
+      ChatEventType::CommandLifecycle => {}
+      ChatEventType::FeatureEvent => {}
+      ChatEventType::RateLimitEvent => {}
+      ChatEventType::Stream => {}
+      ChatEventType::WebStatusSubtree => {}
+      ChatEventType::Untyped => {}
+      ChatEventType::Unnamed(name) => {
+        log_unnamed("fold_task_facts_from", "event type", name, event.get("id").and_then(CompactValue::as_str))
+      }
     }
     if event.get("id").and_then(CompactValue::as_str).is_some()
       && !facts.events_by_id.insert(Arc::clone(&events[index]))
     {
       continue;
     }
-    let event_type = event.get("type").and_then(CompactValue::as_str).unwrap_or_default();
-    if event_type == event_types::USER {
-      for click in status_waiting_clicks(event, session_id) {
-        facts.clicked.push(click);
-      }
-      if facts.clicked.len() > MAX_CLICKED_WAITING_ITEMS {
-        let expired = facts.clicked.len() - MAX_CLICKED_WAITING_ITEMS;
-        facts.clicked.drain(..expired);
-      }
-    }
     match event_type {
-      event_types::CLONE_START => {
+      ChatEventType::DiscordReply => {}
+      ChatEventType::SlackReply => {}
+      ChatEventType::WebAskCheck => {}
+      ChatEventType::DraftFailed => {}
+      ChatEventType::DraftRegistered => {}
+      ChatEventType::DraftSent => {}
+      ChatEventType::DiscordAck => {}
+      ChatEventType::WebStatusConfirmed => {}
+      ChatEventType::Assistant => {}
+      ChatEventType::System => {}
+      ChatEventType::ContextCompacted => {}
+      ChatEventType::Result => {}
+      ChatEventType::AgentMessage => {}
+      ChatEventType::AssistantError => {}
+      ChatEventType::BackendOverlayInactive => {}
+      ChatEventType::BackendOverlayUndeclared => {}
+      ChatEventType::BackendSwitched => {}
+      ChatEventType::ChildReport => {
+        if let (Some(child_id), Some(child_event_id)) = (
+          event.get(event_types::CHILD_SESSION_ID).and_then(CompactValue::as_str),
+          event.get(event_types::CHILD_EVENT_ID).and_then(CompactValue::as_str),
+        ) {
+          facts.delivered_reports.insert((child_id.to_string(), child_event_id.to_string()));
+        }
+      }
+      ChatEventType::CloneStart => {
         facts.task_state = "open".to_string();
         facts.boundary_index = None;
         facts.boundary_open = true;
@@ -2964,13 +3135,61 @@ fn fold_task_facts_from(
         facts.delivered_reports.clear();
         facts.clicked.clear();
       }
-      event_types::TASK_CREATED => {
+      ChatEventType::ContextCompactFailed => {}
+      ChatEventType::HandlerResult => {}
+      ChatEventType::MasterDone => {}
+      ChatEventType::ModelFallbackNotice => {}
+      ChatEventType::PromptChanged => {}
+      ChatEventType::ResumeContextDropped => {}
+      ChatEventType::RunDelivery => {}
+      ChatEventType::RunFinished => {
+        if let Some(run_id) = event.get("run_id").and_then(CompactValue::as_str) {
+          let outcome = event.get("outcome").and_then(CompactValue::as_str).unwrap_or("None").to_string();
+          if event.get("outcome").and_then(CompactValue::as_str) == Some("None") {
+            facts.run_outcome_string_none_ids.insert(run_id.to_string());
+          } else {
+            facts.run_outcome_string_none_ids.remove(run_id);
+          }
+          facts.run_outcomes.insert(run_id.to_string(), outcome.clone());
+          facts.run_finish_positions.entry(run_id.to_string()).or_insert(position);
+          if outcome == "success"
+            && let Some(input_ids) = event.get(event_types::INPUT_EVENT_IDS).and_then(CompactValue::as_array)
+          {
+            facts.confirmed_input_ids.extend(input_ids.iter().filter_map(CompactValue::as_str).map(str::to_string));
+          }
+        }
+      }
+      ChatEventType::RunHeader => {}
+      ChatEventType::RunLaunchWithheld => {}
+      ChatEventType::RunStopRequested => {}
+      ChatEventType::ScheduledRunSkipped => {}
+      ChatEventType::ScheduledTrigger => {}
+      ChatEventType::SessionAttached => {}
+      ChatEventType::SessionRenamed => {}
+      ChatEventType::TaskCloseRequested => {
+        facts.close_requests.push(Arc::clone(&events[index]));
+      }
+      ChatEventType::TaskClosed => {
+        facts.task_state = event
+          .get("outcome")
+          .and_then(CompactValue::as_str)
+          .filter(|value| !value.is_empty())
+          .unwrap_or("completed")
+          .to_string();
+        facts.close_events.push(Arc::clone(&events[index]));
+        facts.boundary_index = Some(position);
+        facts.boundary_open = false;
+        facts.imported_pending_ids.clear();
+        facts.input_candidates.clear();
+      }
+      ChatEventType::TaskCreated => {
         if facts.boundary_index.is_none() {
           facts.boundary_index = Some(position);
           facts.input_candidates.clear();
         }
       }
-      event_types::TASK_IMPORTED => {
+      ChatEventType::TaskDelegated => {}
+      ChatEventType::TaskImported => {
         facts.boundary_index = Some(position);
         facts.imported_pending_ids.clear();
         for input_id in imported_pending_input_ids(event)? {
@@ -2988,58 +3207,59 @@ fn fold_task_facts_from(
           }
         }
       }
-      event_types::TASK_CLOSED => {
-        facts.task_state = event
-          .get("outcome")
-          .and_then(CompactValue::as_str)
-          .filter(|value| !value.is_empty())
-          .unwrap_or("completed")
-          .to_string();
-        facts.close_events.push(Arc::clone(&events[index]));
-        facts.boundary_index = Some(position);
-        facts.boundary_open = false;
-        facts.imported_pending_ids.clear();
-        facts.input_candidates.clear();
-      }
-      event_types::TASK_REOPENED => {
-        facts.task_state = "open".to_string();
-        facts.boundary_index = Some(position);
-        facts.boundary_open = true;
-      }
-      event_types::TASK_CLOSE_REQUESTED => {
-        facts.close_requests.push(Arc::clone(&events[index]));
-      }
-      event_types::RUN_FINISHED => {
-        if let Some(run_id) = event.get("run_id").and_then(CompactValue::as_str) {
-          let outcome = event.get("outcome").and_then(CompactValue::as_str).unwrap_or("None").to_string();
-          if event.get("outcome").and_then(CompactValue::as_str) == Some("None") {
-            facts.run_outcome_string_none_ids.insert(run_id.to_string());
-          } else {
-            facts.run_outcome_string_none_ids.remove(run_id);
-          }
-          facts.run_outcomes.insert(run_id.to_string(), outcome.clone());
-          facts.run_finish_positions.entry(run_id.to_string()).or_insert(position);
-          if outcome == "success"
-            && let Some(input_ids) = event.get(event_types::INPUT_EVENT_IDS).and_then(CompactValue::as_array)
-          {
-            facts.confirmed_input_ids.extend(input_ids.iter().filter_map(CompactValue::as_str).map(str::to_string));
-          }
-        }
-      }
-      event_types::TASK_INPUT_ACKNOWLEDGED => {
+      ChatEventType::TaskInputAcknowledged => {
         if let Some(input_ids) = event.get(event_types::INPUT_IDS).and_then(CompactValue::as_array) {
           facts.confirmed_input_ids.extend(input_ids.iter().filter_map(CompactValue::as_str).map(str::to_string));
         }
       }
-      event_types::CHILD_REPORT => {
-        if let (Some(child_id), Some(child_event_id)) = (
-          event.get(event_types::CHILD_SESSION_ID).and_then(CompactValue::as_str),
-          event.get(event_types::CHILD_EVENT_ID).and_then(CompactValue::as_str),
-        ) {
-          facts.delivered_reports.insert((child_id.to_string(), child_event_id.to_string()));
+      ChatEventType::TaskReopened => {
+        facts.task_state = "open".to_string();
+        facts.boundary_index = Some(position);
+        facts.boundary_open = true;
+      }
+      ChatEventType::TaskTriggered => {}
+      ChatEventType::Thinking => {}
+      ChatEventType::ToolResult => {}
+      ChatEventType::ToolUse => {}
+      ChatEventType::User => {
+        for click in status_waiting_clicks(event, session_id) {
+          facts.clicked.push(click);
+        }
+        if facts.clicked.len() > MAX_CLICKED_WAITING_ITEMS {
+          let expired = facts.clicked.len() - MAX_CLICKED_WAITING_ITEMS;
+          facts.clicked.drain(..expired);
         }
       }
-      _ => {}
+      ChatEventType::WebReply => {}
+      ChatEventType::WebReplyNotice => {}
+      ChatEventType::WebReplyCheck => {}
+      ChatEventType::WebStatus => {}
+      ChatEventType::TurnHooks => {}
+      ChatEventType::ContinuationRan => {}
+      ChatEventType::FeishuAck => {}
+      ChatEventType::SlackAck => {}
+      ChatEventType::InputDelivered => {}
+      ChatEventType::ImproveFailed => {}
+      ChatEventType::ImproveIterationCompleted => {}
+      ChatEventType::Error => {}
+      ChatEventType::Message => {}
+      ChatEventType::Text => {}
+      ChatEventType::QuotaFailover => {}
+      ChatEventType::FeishuReply => {}
+      ChatEventType::PolicyTableChanged => {}
+      ChatEventType::WorkerSummary => {}
+      ChatEventType::RunEnd => {}
+      ChatEventType::RunError => {}
+      ChatEventType::TaskReparented => {}
+      ChatEventType::ClaudeAccountLoginRequired => {}
+      ChatEventType::CommandLifecycle => {}
+      ChatEventType::FeatureEvent => {}
+      ChatEventType::RateLimitEvent => {}
+      ChatEventType::Stream => {}
+      ChatEventType::WebStatusSubtree => {}
+      ChatEventType::Untyped => {}
+      // The close-request dispatch above logs an unnamed type.
+      ChatEventType::Unnamed(_) => {}
     }
     let imported = event
       .get("id")
@@ -3183,11 +3403,85 @@ fn observe_run_facts(
 /// carries the same reason to the agent, so that display is no input. A message carrying `TURN_HOOKS_ID` names the
 /// check result it shows.
 fn admits_input(event: &ChatEvent) -> bool {
-  match event.get("type").and_then(CompactValue::as_str) {
-    Some("user") => event.get("content").is_some_and(CompactValue::is_string),
-    Some(event_types::AGENT_MESSAGE) => event.get(event_types::TURN_HOOKS_ID).is_none(),
-    Some(event_types::SCHEDULED_TRIGGER | event_types::CHILD_REPORT | event_types::DRAFT_SENT) => true,
-    _ => false,
+  match ChatEventType::of(event.get("type").and_then(CompactValue::as_str)) {
+    ChatEventType::DiscordReply => false,
+    ChatEventType::SlackReply => false,
+    ChatEventType::WebAskCheck => false,
+    ChatEventType::DraftFailed => false,
+    ChatEventType::DraftRegistered => false,
+    ChatEventType::DraftSent => true,
+    ChatEventType::DiscordAck => false,
+    ChatEventType::WebStatusConfirmed => false,
+    ChatEventType::Assistant => false,
+    ChatEventType::System => false,
+    ChatEventType::ContextCompacted => false,
+    ChatEventType::Result => false,
+    ChatEventType::AgentMessage => event.get(event_types::TURN_HOOKS_ID).is_none(),
+    ChatEventType::AssistantError => false,
+    ChatEventType::BackendOverlayInactive => false,
+    ChatEventType::BackendOverlayUndeclared => false,
+    ChatEventType::BackendSwitched => false,
+    ChatEventType::ChildReport => true,
+    ChatEventType::CloneStart => false,
+    ChatEventType::ContextCompactFailed => false,
+    ChatEventType::HandlerResult => false,
+    ChatEventType::MasterDone => false,
+    ChatEventType::ModelFallbackNotice => false,
+    ChatEventType::PromptChanged => false,
+    ChatEventType::ResumeContextDropped => false,
+    ChatEventType::RunDelivery => false,
+    ChatEventType::RunFinished => false,
+    ChatEventType::RunHeader => false,
+    ChatEventType::RunLaunchWithheld => false,
+    ChatEventType::RunStopRequested => false,
+    ChatEventType::ScheduledRunSkipped => false,
+    ChatEventType::ScheduledTrigger => true,
+    ChatEventType::SessionAttached => false,
+    ChatEventType::SessionRenamed => false,
+    ChatEventType::TaskCloseRequested => false,
+    ChatEventType::TaskClosed => false,
+    ChatEventType::TaskCreated => false,
+    ChatEventType::TaskDelegated => false,
+    ChatEventType::TaskImported => false,
+    ChatEventType::TaskInputAcknowledged => false,
+    ChatEventType::TaskReopened => false,
+    ChatEventType::TaskTriggered => false,
+    ChatEventType::Thinking => false,
+    ChatEventType::ToolResult => false,
+    ChatEventType::ToolUse => false,
+    ChatEventType::User => event.get("content").is_some_and(CompactValue::is_string),
+    ChatEventType::WebReply => false,
+    ChatEventType::WebReplyNotice => false,
+    ChatEventType::WebReplyCheck => false,
+    ChatEventType::WebStatus => false,
+    ChatEventType::TurnHooks => false,
+    ChatEventType::ContinuationRan => false,
+    ChatEventType::FeishuAck => false,
+    ChatEventType::SlackAck => false,
+    ChatEventType::InputDelivered => false,
+    ChatEventType::ImproveFailed => false,
+    ChatEventType::ImproveIterationCompleted => false,
+    ChatEventType::Error => false,
+    ChatEventType::Message => false,
+    ChatEventType::Text => false,
+    ChatEventType::QuotaFailover => false,
+    ChatEventType::FeishuReply => false,
+    ChatEventType::PolicyTableChanged => false,
+    ChatEventType::WorkerSummary => false,
+    ChatEventType::RunEnd => false,
+    ChatEventType::RunError => false,
+    ChatEventType::TaskReparented => false,
+    ChatEventType::ClaudeAccountLoginRequired => false,
+    ChatEventType::CommandLifecycle => false,
+    ChatEventType::FeatureEvent => false,
+    ChatEventType::RateLimitEvent => false,
+    ChatEventType::Stream => false,
+    ChatEventType::WebStatusSubtree => false,
+    ChatEventType::Untyped => false,
+    ChatEventType::Unnamed(name) => {
+      log_unnamed("admits_input", "event type", &name, event.get("id").and_then(CompactValue::as_str));
+      false
+    }
   }
 }
 

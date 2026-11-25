@@ -938,6 +938,7 @@ fn render_builtin<E: EventFields>(
     | ChatEventType::User
     | ChatEventType::WebReply
     | ChatEventType::WebReplyNotice
+    | ChatEventType::WebReplyCheck
     | ChatEventType::WebStatus
     | ChatEventType::TurnHooks
     | ChatEventType::ContinuationRan
@@ -1176,6 +1177,7 @@ pub fn run_tool_call_count<E: EventFields>(events: &[&E]) -> usize {
       | ChatEventType::User
       | ChatEventType::WebReply
       | ChatEventType::WebReplyNotice
+      | ChatEventType::WebReplyCheck
       | ChatEventType::WebStatus
       | ChatEventType::TurnHooks
       | ChatEventType::ContinuationRan
@@ -1273,6 +1275,7 @@ pub fn run_last_tool<E: EventFields>(events: &[&E]) -> Option<Value> {
       | ChatEventType::User
       | ChatEventType::WebReply
       | ChatEventType::WebReplyNotice
+      | ChatEventType::WebReplyCheck
       | ChatEventType::WebStatus
       | ChatEventType::TurnHooks
       | ChatEventType::ContinuationRan
@@ -1400,6 +1403,7 @@ pub fn run_last_text<E: EventFields>(events: &[&E]) -> StoreResult<Option<Value>
       | ChatEventType::User
       | ChatEventType::WebReply
       | ChatEventType::WebReplyNotice
+      | ChatEventType::WebReplyCheck
       | ChatEventType::WebStatus
       | ChatEventType::TurnHooks
       | ChatEventType::ContinuationRan

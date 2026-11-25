@@ -1,8 +1,9 @@
 //! The chat event types and system subtypes that the store folds replay.
 //!
 //! The matches that decide what a type does name every variant, handled or ignored, with no wildcard arm: `is_builtin`,
-//! the rendering of built-in types, the run summaries, and the subtype matches of system records. A variant that one
-//! of these leaves out fails the build.
+//! the rendering of built-in types, the run summaries, the subtype matches of system records, and the folds that replay
+//! stored records (the task tree, the run records, the socket frames and the message intervals). A variant that one of
+//! these leaves out fails the build.
 //!
 //! The variants are the names that production writers emit, that the store's recorded chat and subagent logs carry,
 //! and that the usage fold names. A `type` value outside them is `Unnamed`: the fold that meets it logs it and goes
@@ -62,6 +63,7 @@ pub(crate) enum ChatEventType {
   User,
   WebReply,
   WebReplyNotice,
+  WebReplyCheck,
   WebStatus,
   TurnHooks,
   ContinuationRan,
@@ -145,6 +147,7 @@ impl ChatEventType {
       Some(event_types::USER) => Self::User,
       Some(event_types::WEB_REPLY) => Self::WebReply,
       Some(event_types::WEB_REPLY_NOTICE) => Self::WebReplyNotice,
+      Some(event_types::WEB_REPLY_CHECK) => Self::WebReplyCheck,
       Some(event_types::WEB_STATUS) => Self::WebStatus,
       Some(event_types::TURN_HOOKS) => Self::TurnHooks,
       Some("continuation_ran") => Self::ContinuationRan,
@@ -230,6 +233,7 @@ impl ChatEventType {
       | Self::User
       | Self::WebReply
       | Self::WebReplyNotice
+      | Self::WebReplyCheck
       | Self::WebStatus
       | Self::TurnHooks
       | Self::ContinuationRan

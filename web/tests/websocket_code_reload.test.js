@@ -119,7 +119,7 @@ test('the first 4409 reloads a visible tab at once with the stale-asset cause, a
   assert.equal(timers.length, 0);
 });
 
-test('a 4409 on a hidden tab refreshes the shell and reloads at once when the guard allows', () => {
+test('a 4409 on a hidden tab waits until visible, then uses the main reload path', () => {
   const clock = {now: 5000};
   const {context, FakeWebSocket, reloaded, pendingRefreshes, timers} = buildHarness(clock, {hidden: true});
 
@@ -127,7 +127,10 @@ test('a 4409 on a hidden tab refreshes the shell and reloads at once when the gu
   FakeWebSocket.instances[0].emitClose({code: 4409});
   settleRefreshes(pendingRefreshes);
 
-  assert.deepEqual(reloaded, [{cause: 'stale_asset', at: 5000, path: 'refresh'}]);
+  assert.deepEqual(reloaded, [], 'main leaves the stale-protocol page in the background');
+  context.document.hidden = false;
+  context.document.dispatchEvent({type: 'visibilitychange'});
+  assert.deepEqual(reloaded, [{cause: 'stale_asset', at: 5000, path: 'visible'}]);
   assert.equal(timers.length, 0);
 });
 
@@ -170,28 +173,6 @@ test('a second 4409 on the page a reload opened shows the banner and does not na
   assert.deepEqual(reloadedPage.reloaded, [], 'the guard holds the reloaded page to the banner');
   assert.equal(reloadedPage.bodyChildren.length, 1);
   assert.equal(reloadedPage.bodyChildren[0].textContent, BANNER_TEXT);
-});
-
-test('a hidden tab the guard holds reloads when the window ends, if it is still hidden', async () => {
-  const clock = {now: 5000};
-  const {context, FakeWebSocket, reloaded, pendingRefreshes, timers, document} = buildHarness(clock, {hidden: true});
-
-  context.connectWS();
-  FakeWebSocket.instances[0].emitClose({code: 4409});
-  settleRefreshes(pendingRefreshes);
-  await flushPromises();
-  clock.now = 30000;
-  FakeWebSocket.instances[0].emitClose({code: 4409});
-  settleRefreshes(pendingRefreshes);
-
-  assert.deepEqual(reloaded.map((entry) => entry.at), [5000], 'the guard holds the second reload');
-  const wait = timers[timers.length - 1];
-  assert.equal(wait.ms, RESTART_WINDOW_MS - 25000, 'the wait runs to the end of the window');
-  clock.now = 65000;
-  wait.fn();
-  settleRefreshes(pendingRefreshes);
-  assert.deepEqual(reloaded.map((entry) => entry.at), [5000, 65000]);
-  assert.equal(document.hidden, true);
 });
 
 test('a failed shell refresh offers a retry without reloading the current page', () => {
@@ -305,6 +286,22 @@ test('a catch-up naming another release swaps a hidden tab once the shell refres
   await flushPromises();
 
   assert.deepEqual(reloaded, [{cause: 'stale_asset', at: 5000, path: 'refresh'}]);
+});
+
+test('a visible 4409 that arrives during a hidden swap uses the main reload path', async () => {
+  const clock = {now: 5000};
+  const {context, FakeWebSocket, reloaded, pendingRefreshes, document} = buildHarness(clock, {hidden: true});
+
+  context.connectWS();
+  const socket = FakeWebSocket.instances[0];
+  socket.emitOpen();
+  catchupComplete(socket, {assetVersion: 'v2'});
+  document.hidden = false;
+  socket.emitClose({code: 4409});
+  settleRefreshes(pendingRefreshes);
+  await flushPromises();
+
+  assert.deepEqual(reloaded, [{cause: 'stale_asset', at: 5000, path: 'visible'}]);
 });
 
 test('a catch-up after a 1006 close swaps a hidden tab the same way', async () => {

@@ -9,7 +9,6 @@ pub mod delegate;
 pub mod disk_sweep;
 pub mod files;
 pub mod gc_trash;
-pub mod google;
 pub mod kill_guard;
 pub mod land;
 pub mod linear;

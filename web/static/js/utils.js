@@ -22,9 +22,18 @@ function relativeTime(isoStr) {
   return formatTimeLabel(isoStr);
 }
 
+// A sidebar row's time item: the date, then the clock in a span of its own. A touch layout hides the clock
+// (styles.css), so the backend label beside it keeps its width next to the bell. The clock starts at the last ", " of
+// the label. A label with no ", " is the empty label of a row with no time, and it stays whole.
+function timeLabelHtml(label) {
+  const cut = label.lastIndexOf(', ');
+  if (cut < 0) return label;
+  return `${label.slice(0, cut)}<span class="session-clock">${label.slice(cut)}</span>`;
+}
+
 function updateRelativeTimes() {
   document.querySelectorAll('.session-time[data-time]').forEach(el => {
-    el.textContent = relativeTime(el.dataset.time);
+    el.innerHTML = timeLabelHtml(relativeTime(el.dataset.time));
   });
   // The pending-triggers tray's remaining-time spans ride the same sweep, so
   // "(in 3h 52m)" stays current between the tray's own refetches.

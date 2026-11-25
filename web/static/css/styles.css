@@ -546,6 +546,9 @@ main > header > a[title="View JSONL events"]:hover {
   #session-list [data-sgroup-toggle-key] > button {
     opacity: 1; pointer-events: auto; padding: 16px; margin: -14px;
   }
+  /* On a touch row the gear and a lead bell take width from the second line. The clock is hidden here, so the
+     date keeps the time item short and the backend label beside it stays whole. Pointer layouts show the clock. */
+  .session-row .session-clock { display: none; }
 }
 /* Prevent overscroll bounce */
 body { overscroll-behavior: none; }

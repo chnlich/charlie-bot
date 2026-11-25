@@ -617,7 +617,7 @@ function sessionBackendLabel(session) {
   return { full, display };
 }
 
-function renderSessionTimeLine(s, timeIso, timeStr, staticTime = false) {
+function renderSessionTimeLine(s, timeIso, timeHtml, staticTime = false) {
   const label = sessionBackendLabel(s);
   const model = label
     ? `<span class="session-backend truncate" title="${escapeHtmlAttr(label.full)}">${escapeHtml(label.display)}</span>`
@@ -629,7 +629,7 @@ function renderSessionTimeLine(s, timeIso, timeStr, staticTime = false) {
   // The line sits on slate-850, where slate-500 holds about 3.4:1.
   // slate-400 is still quieter than the name and holds about 6.3:1.
   return `<span class="flex items-center gap-1.5 text-xs text-slate-400">`
-    + `<span class="session-time flex-shrink-0"${timeAttr}>${timeStr}</span>`
+    + `<span class="session-time flex-shrink-0"${timeAttr}>${timeHtml}</span>`
     + model
     + `</span>`;
 }
@@ -808,7 +808,7 @@ function renderSessionItem(s, filter, options = {}) {
   const isWorkerRow = isWorker && !isArchivedRow;
   const activeClass = sessionRowActiveClass(isActive);
   const timeIso = sessionUpdatedIso(s);
-  const timeStr = timeIso ? relativeTime(timeIso) : '';
+  const timeHtml = timeIso ? timeLabelHtml(relativeTime(timeIso)) : '';
   let actions = '';
   if (isContextRow) {
     actions = renderStarButton(s);
@@ -871,7 +871,7 @@ function renderSessionItem(s, filter, options = {}) {
   ].join('\n    ');
   // The first registered row line that answers replaces the time line.
   const line = sessionRowLines.reduce((found, render) => found ?? render(s), null)
-      ?? renderSessionTimeLine(s, timeIso, timeStr, !!options.staticTime);
+      ?? renderSessionTimeLine(s, timeIso, timeHtml, !!options.staticTime);
   // A context row dims and carries the active tag on its name line. The tag
   // stays beside the name span, not inside it, so a long name truncates before
   // the tag does, and the time line keeps the column's full width.

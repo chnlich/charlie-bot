@@ -500,14 +500,16 @@ function shellStaticRefs(html) {
 // Fetches the shell and the files it names, stores them, and drops the stored files it no longer names. The page's
 // on-demand files (storeOnDemandFiles) are named too, so a warm keeps them.
 // The shell cache is named for this release, so a stored shell is this release's: a warm that finds it fetches nothing.
-async function warmShell(onDemand = []) {
+// A refresh (refreshShell) fetches the page again and revalidates the stored shell with its tag: an unchanged page
+// answers 304 and the stored shell stays.
+async function warmShell(onDemand = [], refresh = false) {
   const cache = await caches.open(SHELL_CACHE);
-  if (await cache.match(SHELL_KEY)) return {stored: true};
-  const response = await installFetch('/?session=', {cache: 'no-store', credentials: 'same-origin'});
-  if (response.status === 401) {
-    await dropCopies();
-    return {stored: false};
-  }
+  const stored = await cache.match(SHELL_KEY);
+  if (!refresh && stored) return {stored: true};
+  const headers = refresh && stored ? {'If-None-Match': stored.headers.get('ETag')} : {};
+  const response = await installFetch('/?session=', {cache: 'no-store', credentials: 'same-origin', headers});
+  if (response.status === 304) return {stored: true};
+  if (response.status === 401) return shellUnauthorized(cache, refresh);
   if (!response.ok) throw new Error('shell fetch failed: ' + response.status);
   const html = await response.text();
   const refs = shellStaticRefs(html);
@@ -525,10 +527,7 @@ async function warmShell(onDemand = []) {
       if (error.name === 'TypeError') continue;
       throw error;
     }
-    if (file.status === 401) {
-      await dropCopies();
-      return {stored: false};
-    }
+    if (file.status === 401) return shellUnauthorized(cache, refresh);
     if (!file.ok) throw new Error('shell file fetch failed: ' + ref + ' ' + file.status);
     if (file.headers.get('ETag')) fetchedFiles.push([ref, file]);
   }
@@ -544,6 +543,26 @@ async function warmShell(onDemand = []) {
     headers: {'Content-Type': 'text/html; charset=utf-8', ETag: response.headers.get('ETag')},
   }));
   return {stored: true};
+}
+
+// A 401 drops the stored copies. A refresh also drops the stored shell, so the navigation that follows reaches the
+// server.
+async function shellUnauthorized(cache, refresh) {
+  await dropCopies();
+  if (refresh) await cache.delete(SHELL_KEY);
+  return refresh ? {stored: false, unauthorized: true} : {stored: false};
+}
+
+// One refresh of the stored shell runs at a time: each tab whose reload asks for one shares the fetch in flight, so a
+// release that every open tab swaps costs the link one shell download. The page names the release it runs. A worker of
+// another release refreshes nothing, because its shell cache is named for its own release; the page waits for the
+// update that takes over before it asks the worker of its successor (offline-shell.js refreshStoredShell).
+let shellRefresh = null;
+
+function refreshShell(pageVersion, onDemand) {
+  if (pageVersion !== WORKER_CONFIG.version) return Promise.resolve({stored: false});
+  if (shellRefresh === null) shellRefresh = warmShell(onDemand, true).finally(() => { shellRefresh = null; });
+  return shellRefresh;
 }
 
 // Stores the page's on-demand files: the same-origin files a view or panel loads when it is first used. Each is stored
@@ -590,10 +609,12 @@ self.addEventListener('message', (event) => {
   const data = event.data || {};
   if (!WORKER_CONFIG.enabled) return;
   if (data.type === 'warm') {
-    const warming = warmShell(data.files).then(async (result) => {
-      if (result.stored) await storePageCopies(data.copies);
-      return result;
-    });
+    const warming = data.refresh === true
+      ? refreshShell(data.version, data.files)
+      : warmShell(data.files).then(async (result) => {
+        if (result.stored) await storePageCopies(data.copies);
+        return result;
+      });
     // The version names the release whose shell this worker holds, so the page can tell a worker of another release.
     const reply = (result) => replyTo(event, {...result, version: WORKER_CONFIG.version, fetchHolds: {...fetchHolds}});
     event.waitUntil(warming.then(reply, (error) => reply({stored: false, error: String(error)})));

@@ -52,7 +52,9 @@ function subscribeFrames(socket) {
 }
 
 function catchups({announced}) {
-  return announced.filter((event) => event.type === 'charliebot:client-socket-catchup').map((event) => event.detail);
+  return announced.filter((event) => event.type === 'charliebot:client-socket-catchup')
+    .map(({detail}) => ({subscription: detail.subscription, session_id: detail.session_id, eventTotal: detail.eventTotal,
+      bytes: detail.bytes}));
 }
 
 test('a switch keeps the socket open and rides a subscribe frame', () => {

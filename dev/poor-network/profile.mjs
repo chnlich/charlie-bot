@@ -48,6 +48,9 @@ export const TARGETS = Object.freeze({
   // The first-open time the plan set no target for, reported beside the pages readout so the number is not lost.
   foryouOpenLargeMs: null,
   foryouOpenTypicalMs: null,
+  // Restart cells (restart.mjs): the median wait from the return (the replacement's server_ready for the visible cell)
+  // to the probe row is at most this, per plan 6 v4 section 4.2.
+  restartCatchupMs: 2000,
 });
 
 // The background load of scenarios 1 to 3: the task-tree changes a live turn produces, one burst per window.

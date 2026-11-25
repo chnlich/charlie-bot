@@ -97,8 +97,7 @@ const KINDS: &[&str] = &[
   EventKind::PageLoad.as_str(),
   EventKind::Traffic.as_str(),
 ];
-const SOCKET_CAUSES: &[&str] = &["network"];
-const PAGE_LOAD_CAUSES: &[&str] = &["open", "bootstrap_failure", "stale_asset"];
+const PAGE_LOAD_CAUSES: &[&str] = &["open", "bootstrap_failure", "stale_asset", "feature_version"];
 const OPEN_CASES: &[&str] = &["A", "B", "C"];
 const CONTENT_SOURCES: &[&str] = &["network", "stored"];
 const VISIBILITY_STATES: &[&str] = &["visible", "hidden", "prerender"];
@@ -148,12 +147,12 @@ const SEND_BODY: BodyModel = BodyModel::required(SEND_FIELDS).forbid_extra();
 /// reconnect to the replay's `catchup_complete`. An episode the page leaves before its replay
 /// finished sends nulls for the reconnect and catch-up fields. A subscription record reports one
 /// replay's completion — the subscription number, the session it served and its bytes — and sends
-/// nulls for the disconnect fields. The only close cause is `network`: a switch keeps the
-/// socket and rides a subscribe frame.
+/// nulls for the disconnect fields. The close's kind is its `close_code`: a switch keeps the socket
+/// and rides a subscribe frame instead of closing it. `return_at` is the device time the page came
+/// back, and null when the replay finished while the page was still hidden.
 const SOCKET_FIELDS: &[Field] = &[
   Field::required("kind", FieldType::Literal(&[EventKind::Socket.as_str()])),
   Field::optional("disconnect_at", FieldType::NullableString).max_length(MAX_TIMESTAMP_CHARS),
-  Field::optional("cause", FieldType::NullableLiteral(SOCKET_CAUSES)),
   Field::optional("close_code", FieldType::NullableInteger).ge(Bound::Int(0)),
   Field::optional("reconnect_at", FieldType::NullableString).max_length(MAX_TIMESTAMP_CHARS),
   Field::optional("reconnect_count", FieldType::NullableInteger).ge(Bound::Int(0)),
@@ -161,6 +160,7 @@ const SOCKET_FIELDS: &[Field] = &[
   Field::optional("session_id", FieldType::NullableString).max_length(MAX_TIMESTAMP_CHARS),
   Field::optional("catchup_at", FieldType::NullableString).max_length(MAX_TIMESTAMP_CHARS),
   Field::optional("catchup_bytes", FieldType::NullableInteger).ge(Bound::Int(0)),
+  Field::optional("return_at", FieldType::NullableString).max_length(MAX_TIMESTAMP_CHARS),
   Field::required(request_body::CLIENT_TS, FieldType::String).max_length(MAX_TIMESTAMP_CHARS),
 ];
 const SOCKET_BODY: BodyModel = BodyModel::required(SOCKET_FIELDS).forbid_extra();
@@ -199,6 +199,7 @@ const PAGE_LOAD_FIELDS: &[Field] = &[
   Field::required("cause", FieldType::Literal(PAGE_LOAD_CAUSES)),
   Field::required("newest_message_ms", FieldType::NullableInteger).ge(Bound::Int(0)),
   Field::required("current_ms", FieldType::NullableInteger).ge(Bound::Int(0)),
+  Field::required("return_ms", FieldType::NullableInteger).ge(Bound::Int(0)),
   Field::required("open_case", FieldType::NullableLiteral(OPEN_CASES)),
   Field::required("content_source", FieldType::NullableLiteral(CONTENT_SOURCES)),
   Field::required("offline_shell", FieldType::Boolean),
@@ -326,7 +327,6 @@ impl ClientEvent<'_> {
     tracing::info!(
       kind = EventKind::Socket.as_str(),
       disconnect_at = %LogValue::of(optional_text_field_ref(values, "disconnect_at")),
-      cause = %LogValue::of(optional_text_field_ref(values, "cause")),
       close_code = %LogValue::of_int(integer_field(values, "close_code")),
       reconnect_at = %LogValue::of(optional_text_field_ref(values, "reconnect_at")),
       reconnect_count = %LogValue::of_int(integer_field(values, "reconnect_count")),
@@ -334,6 +334,7 @@ impl ClientEvent<'_> {
       session_id = %LogValue::of(optional_text_field_ref(values, "session_id")),
       catchup_at = %LogValue::of(optional_text_field_ref(values, "catchup_at")),
       catchup_bytes = %LogValue::of_int(integer_field(values, "catchup_bytes")),
+      return_at = %LogValue::of(optional_text_field_ref(values, "return_at")),
       client_ts = %text_field(values, request_body::CLIENT_TS),
       forwarded_for = %self.forwarded_for,
       "diag_client"
@@ -352,6 +353,7 @@ impl ClientEvent<'_> {
       cause = %text_field(values, "cause"),
       newest_message_ms = %LogValue::of_int(integer_field(values, "newest_message_ms")),
       current_ms = %LogValue::of_int(integer_field(values, "current_ms")),
+      return_ms = %LogValue::of_int(integer_field(values, "return_ms")),
       open_case = %LogValue::of(optional_text_field_ref(values, "open_case")),
       content_source = %LogValue::of(optional_text_field_ref(values, "content_source")),
       offline_shell = %values.get("offline_shell").expect("a required boolean validates to a value"),
@@ -490,12 +492,12 @@ mod tests {
       EventKind::Socket => json!({
         "kind": kind.as_str(),
         "disconnect_at": "2026-02-13T09:59:00Z",
-        "cause": "network",
         "close_code": 1006,
         "reconnect_at": "2026-02-13T09:59:02Z",
         "reconnect_count": 1,
         "catchup_at": "2026-02-13T09:59:03Z",
         "catchup_bytes": 80860,
+        "return_at": "2026-02-13T09:59:02Z",
         "client_ts": "2026-02-13T09:59:03Z",
       }),
       EventKind::PageLoad => json!({
@@ -506,6 +508,7 @@ mod tests {
         "cause": "bootstrap_failure",
         "newest_message_ms": 1200,
         "current_ms": 1900,
+        "return_ms": 1500,
         "open_case": "A",
         "content_source": "network",
         "offline_shell": false,
@@ -625,18 +628,17 @@ mod tests {
   }
 
   #[test]
-  fn an_unknown_socket_cause_and_an_unknown_page_load_cause_are_literal_errors() {
+  fn a_socket_cause_is_refused_and_an_unknown_page_load_cause_is_a_literal_error() {
+    // The socket record has no cause: the close code says what closed it, so a body that names one is refused
+    // as a field the model does not declare.
     let mut socket = base_body(EventKind::Socket);
     socket["cause"] = json!("deploy");
-    let errors = validate_event(socket).expect_err("the socket cause is unknown");
+    let errors = validate_event(socket).expect_err("the socket record names no cause");
     assert_eq!(loc(&errors[0]), ["body", "cause"]);
-    assert!(matches!(errors[0].kind, Kind::Literal(_)));
 
-    // A switch keeps the socket and rides a subscribe frame, so the `switch` close cause is refused
-    // with the rest.
     let mut socket = base_body(EventKind::Socket);
     socket["cause"] = json!("switch");
-    let errors = validate_event(socket).expect_err("the switch close cause is retired");
+    let errors = validate_event(socket).expect_err("the socket record names no cause");
     assert_eq!(loc(&errors[0]), ["body", "cause"]);
 
     let mut page_load = base_body(EventKind::PageLoad);
@@ -787,8 +789,8 @@ mod tests {
     let event = logged_event(base_body(EventKind::Socket));
     assert_eq!(field(&event, "kind"), EventKind::Socket.as_str());
     assert_eq!(field(&event, "disconnect_at"), "2026-02-13T09:59:00Z");
-    assert_eq!(field(&event, "cause"), "network");
     assert_eq!(field(&event, "close_code"), "1006");
+    assert_eq!(field(&event, "return_at"), "2026-02-13T09:59:02Z");
     assert_eq!(field(&event, "reconnect_at"), "2026-02-13T09:59:02Z");
     assert_eq!(field(&event, "reconnect_count"), "1");
     assert_eq!(field(&event, "subscription"), "null", "the episode flavor names no subscription");
@@ -811,7 +813,7 @@ mod tests {
     }));
     assert_eq!(field(&event, "kind"), EventKind::Socket.as_str());
     assert_eq!(field(&event, "disconnect_at"), "null", "a subscription record reports no disconnect");
-    assert_eq!(field(&event, "cause"), "null");
+    assert_eq!(field(&event, "return_at"), "null");
     assert_eq!(field(&event, "reconnect_at"), "null");
     assert_eq!(field(&event, "subscription"), "3");
     assert_eq!(field(&event, "session_id"), "session-b");
@@ -823,7 +825,6 @@ mod tests {
     let event = logged_event(json!({
       "kind": EventKind::Socket.as_str(),
       "disconnect_at": "2026-02-13T09:59:00Z",
-      "cause": "network",
       "close_code": 1006,
       "reconnect_at": null,
       "reconnect_count": null,
@@ -845,6 +846,7 @@ mod tests {
     assert_eq!(field(&event, "cause"), "bootstrap_failure");
     assert_eq!(field(&event, "newest_message_ms"), "1200");
     assert_eq!(field(&event, "current_ms"), "1900");
+    assert_eq!(field(&event, "return_ms"), "1500");
     assert_eq!(field(&event, "open_case"), "A");
     assert_eq!(field(&event, "content_source"), "network");
     assert_eq!(field(&event, "offline_shell"), "false");

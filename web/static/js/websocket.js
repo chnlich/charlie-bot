@@ -44,6 +44,13 @@ const RECONNECT_QUICK_RETRY_MS = 250;
 const RECONNECT_QUICK_RETRY_LIMIT = 5;
 let quickRetryTimer = null;
 let quickRetriesLeft = RECONNECT_QUICK_RETRY_LIMIT;
+// A close with code 1000 is a server stop, and a release's restart is ready a few seconds later. A visible page then
+// retries at this fixed interval until a socket opens. The window bounds it: after this long without a connection the
+// page falls back to the quick retry and the backoff, so a stalled switch or a rollback does not hold every visible
+// tab at two attempts a second. The window's end is 0 when no 1000 close is waiting on a connection.
+const RECONNECT_RESTART_RETRY_MS = 500;
+const RECONNECT_RESTART_WINDOW_MS = 60000;
+let restartWindowEnd = 0;
 // A visible page replaces a connect attempt that has not opened within this many milliseconds with a fresh one. The
 // kernel retransmits a lost SYN on a backoff that can run past the link's return by seconds; a fresh attempt sends its
 // first SYN at once. The timer belongs to the attempt in progress, and the attempt's open, close or teardown clears it.
@@ -252,7 +259,15 @@ function noteRequestSuccess() {
 // hidden page's path and as the backstop should the quick retry never run; whichever fires first
 // cancels the other through connectWS.
 function scheduleQuickRetry() {
-  if (quickRetryTimer || quickRetriesLeft <= 0 || document.visibilityState === 'hidden') return;
+  if (quickRetryTimer || document.visibilityState === 'hidden') return;
+  if (Date.now() < restartWindowEnd) {
+    quickRetryTimer = setTimeout(() => {
+      quickRetryTimer = null;
+      connectWS();
+    }, RECONNECT_RESTART_RETRY_MS);
+    return;
+  }
+  if (quickRetriesLeft <= 0) return;
   quickRetriesLeft--;
   quickRetryTimer = setTimeout(() => {
     quickRetryTimer = null;
@@ -266,7 +281,11 @@ function scheduleQuickRetry() {
 const pageFetch = globalThis.fetch;
 if (typeof pageFetch === 'function') {
   globalThis.fetch = (...args) => pageFetch(...args).then((response) => {
-    if (response.ok) noteRequestSuccess();
+    // The page's first answer after a socket closed is its return point when the page was hidden (client-events.js).
+    if (response.ok) {
+      document.dispatchEvent(new CustomEvent('charliebot:page-answer'));
+      noteRequestSuccess();
+    }
     return response;
   });
 }
@@ -287,7 +306,7 @@ function connectWS() {
   const generation = ++wsGeneration;
   const wsUrl = wsUrlWithToken(
       `/ws/sessions/${SESSION_ID}?cursor=${encodeURIComponent(eventCursor)}` +
-      `&asset_version=${encodeURIComponent(STATIC_ASSET_VERSION)}`);
+      `&protocol=${encodeURIComponent(WEB_PROTOCOL)}`);
   const socket = new WebSocket(wsUrl);
   ws = socket;
   wsOpen = false;
@@ -317,6 +336,7 @@ function connectWS() {
     wsOpen = true;
     reconnectDelay = 1000;
     quickRetriesLeft = RECONNECT_QUICK_RETRY_LIMIT;
+    restartWindowEnd = 0;
     document.dispatchEvent(new CustomEvent('charliebot:client-socket-open', {detail: {attempts: reconnectAttempts}}));
     reconnectAttempts = 0;
     // A snapshot: the connect handlers read the same value whether this one or
@@ -385,16 +405,19 @@ function connectWS() {
     clearConnectDeadline();
     if (wsOpen) {
       document.dispatchEvent(new CustomEvent('charliebot:client-socket-close', {
-        detail: {cause: 'network', code: event ? event.code : null},
+        detail: {code: event ? event.code : null},
       }));
     }
     wsOpen = false;
-    // 4409: the server's static asset version moved past this page's, so the tab kept running
-    // pre-deploy JavaScript. Reload instead of reconnecting with the old code.
+    // 4409: the server's web protocol moved past this page's, so the tab runs JavaScript the server no longer
+    // answers. Reload instead of reconnecting with the old code.
     if (event && event.code === 4409) {
-      console.log('WS closed: this page is older than the server, reloading');
+      console.log('WS closed: this page speaks an older web protocol, reloading');
       handleStalePageClose();
       return;
+    }
+    if (event && event.code === 1000 && Date.now() >= restartWindowEnd) {
+      restartWindowEnd = Date.now() + RECONNECT_RESTART_WINDOW_MS;
     }
     console.log('WS closed, reconnecting in', reconnectDelay, 'ms');
     networkLossPending = true;
@@ -432,35 +455,97 @@ function handleCatchupComplete(data) {
       session_id: data.session_id,
       bytes: replayBytes,
       eventTotal: data.event_total,
+      uptimeMs: data.uptime_ms,
     },
   }));
+  // The server runs another release than this page's code. A hidden page swaps to it now; a visible one keeps its code
+  // and swaps at its next hide.
+  if (data.asset_version !== STATIC_ASSET_VERSION) {
+    releaseCodePending = true;
+    reloadToCurrentCode();
+  }
 }
 
 // ---------------------------------------------------------------------------
-// Stale-page reload guard
+// Code reloads: the 4409 close and the hidden swap
 // ---------------------------------------------------------------------------
-// The 4409 close reloads past the stored shell (reloadPastStoredShell). The guard caps the automatic reload
-// at one per tab per 60 seconds, so a stale cache cannot turn the close into a reload loop.
+// Two things replace this page's code. A 4409 close means the server's web protocol moved past the page's: a
+// visible page reloads past its stored shell at once (reloadPastStoredShell), and a hidden page refreshes its
+// stored shell first. A catch-up that names another release swaps the code of a hidden page only: a visible page
+// keeps its code until it hides, and the swap refreshes the stored shell before it navigates (offline-shell.js).
+// The reload guard caps the automatic reloads at one per tab per 60 seconds, so a stale cache cannot turn them into
+// a loop. A visible tab the guard holds shows the banner. A hidden tab waits out the window and reloads if still
+// hidden.
 const STALE_PAGE_RELOAD_KEY = 'charliebot-stale-page-reload-at';
 const STALE_PAGE_RELOAD_GUARD_MS = 60000;
+let protocolStale = false;
+let releaseCodePending = false;
+let swapInFlight = false;
+let guardTimer = null;
 
-// A hidden tab reloads once it is visible.
-function handleStalePageClose() {
-  deferWhileHidden('stale-page-reload', reloadStalePage);
+function staleReloadWaitMs() {
+  const lastReload = Number(sessionStorage.getItem(STALE_PAGE_RELOAD_KEY));
+  if (!lastReload) return 0;
+  return Math.max(0, lastReload + STALE_PAGE_RELOAD_GUARD_MS - Date.now());
 }
 
-function reloadStalePage() {
-  const now = Date.now();
-  const lastReload = Number(sessionStorage.getItem(STALE_PAGE_RELOAD_KEY));
-  if (lastReload && now - lastReload < STALE_PAGE_RELOAD_GUARD_MS) {
-    showStalePageBanner();
+function markStaleReload() {
+  sessionStorage.setItem(STALE_PAGE_RELOAD_KEY, String(Date.now()));
+}
+
+function handleStalePageClose() {
+  protocolStale = true;
+  reloadToCurrentCode();
+}
+
+// Runs the code reload this page owes: a 4409 close's, or a pending release swap's. It runs when the close or the
+// catch-up names one, when the tab hides, and when a guard window ends.
+function reloadToCurrentCode() {
+  if ((!protocolStale && !releaseCodePending) || swapInFlight) return;
+  if (!document.hidden) {
+    // A visible page keeps its code for a release swap, and takes a protocol reload past its stored shell at once.
+    if (!protocolStale) return;
+    if (staleReloadWaitMs() > 0) {
+      showStalePageBanner();
+      return;
+    }
+    markStaleReload();
+    // The page-load telemetry names this reload's cause on the other side.
+    document.dispatchEvent(new CustomEvent('charliebot:page-load-cause', {detail: {cause: 'stale_asset'}}));
+    reloadPastStoredShell();
     return;
   }
-  sessionStorage.setItem(STALE_PAGE_RELOAD_KEY, String(now));
-  // The page-load telemetry names this reload's cause on the other side.
-  document.dispatchEvent(new CustomEvent('charliebot:page-load-cause', {detail: {cause: 'stale_asset'}}));
-  reloadPastStoredShell();
+  const wait = staleReloadWaitMs();
+  if (wait > 0) {
+    holdForGuard(wait);
+    return;
+  }
+  swapInFlight = true;
+  // A hidden page refreshes its stored shell, then navigates; nobody waits for it. A return before the navigation
+  // starts cancels a release swap: the page keeps its code and the next hide tries again. A protocol reload navigates
+  // regardless. Only a navigation that starts counts against the guard.
+  reloadAfterRefreshingShell('stale_asset', () => {
+    if (!protocolStale && !document.hidden) return false;
+    markStaleReload();
+    return true;
+  }).finally(() => { swapInFlight = false; });
 }
+
+// One timer for the guard's wait. It runs the reload decision again, so the decision is taken at the window's end.
+function holdForGuard(wait) {
+  if (guardTimer !== null) return;
+  guardTimer = setTimeout(() => {
+    guardTimer = null;
+    reloadToCurrentCode();
+  }, wait);
+}
+
+// A hidden page that is shown or hidden again re-decides its pending swap: a cancelled swap runs at the next hide.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) reloadToCurrentCode();
+});
+
+document.addEventListener('charliebot:offline-shell-refresh-failed', showStalePageBanner);
 
 function showStalePageBanner() {
   const banner = document.createElement('div');
@@ -473,7 +558,11 @@ function showStalePageBanner() {
     'padding:4px 12px;border-radius:6px;border:none;background:#fca5a5;color:#7f1d1d;' +
     'font-size:13px;font-weight:600;cursor:pointer;';
   button.textContent = 'Reload';
-  button.onclick = () => reloadPastStoredShell();
+  button.onclick = () => {
+    // The page-load telemetry names this reload's cause on the other side.
+    document.dispatchEvent(new CustomEvent('charliebot:page-load-cause', {detail: {cause: 'stale_asset'}}));
+    reloadPastStoredShell();
+  };
   banner.appendChild(button);
   document.body.appendChild(banner);
 }

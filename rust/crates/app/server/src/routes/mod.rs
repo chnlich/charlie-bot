@@ -19,7 +19,8 @@ use axum::routing::any;
 use charliebot_compat::responses;
 use charliebot_compat::static_files;
 use charliebot_registry::pages::STATIC_URL_PREFIX;
-use http::{StatusCode, header};
+use charliebot_registry::templating::Templating;
+use http::{HeaderName, HeaderValue, StatusCode, header};
 
 use crate::connection::ConnectionInfo;
 use crate::request_path;
@@ -35,6 +36,18 @@ pub(crate) const STATIC_FAMILY: Family = Family {
   routes: static_routes,
   matches: |state, path| state.static_mounts.iter().any(|mount| mount.route_path(path).is_some()),
 };
+
+/// The static asset version every `/static` answer carries, the value the page's own `STATIC_ASSET_VERSION` holds.
+const ASSET_VERSION_HEADER: HeaderName = HeaderName::from_static("x-asset-version");
+
+/// Names the server's current static asset version on a `/static` answer. A feature script's loader compares this
+/// header with the page's own version before it runs the script.
+fn stamp_asset_version(response: &mut Response, templating: &Templating) {
+  let version = templating.static_asset_version().expect("the static asset version reads the served trees");
+  response
+    .headers_mut()
+    .insert(ASSET_VERSION_HEADER, HeaderValue::from_str(&version).expect("a static asset version is a header value"));
+}
 
 fn static_routes() -> Router<Arc<AppState>> {
   let rest = format!("{STATIC_URL_PREFIX}{{*rest}}");
@@ -53,7 +66,11 @@ async fn serve(State(state): State<Arc<AppState>>, request: Request) -> Response
   tokio::task::spawn_blocking(move || {
     let mount = &state.static_mounts[index];
     let below = mount.route_path(&path).expect("the mount matched this path above");
-    static_files::serve(&mount.directory, &state.mime_types, below, &method, &headers)
+    let mut response = static_files::serve(&mount.directory, &state.mime_types, below, &method, &headers);
+    let templating =
+      state.features.startup.require::<Templating>().expect("boot inserts the templating before readiness");
+    stamp_asset_version(&mut response, &templating);
+    response
   })
   .await
   .expect("serving a static file does not panic")
@@ -105,4 +122,20 @@ fn redirect_url(request: &Request, path: &str) -> String {
     url.push_str(query);
   }
   url
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  /// A static answer names the version the server's templating computes, the one a page's own version matches.
+  #[test]
+  fn a_static_answer_names_the_static_asset_version() {
+    let repo_root = tempfile::tempdir().expect("temporary repo root");
+    let templating = Templating::new(repo_root.path(), &[]);
+    let mut response = Response::new(axum::body::Body::empty());
+    stamp_asset_version(&mut response, &templating);
+    let expected = templating.static_asset_version().expect("the version reads the empty tree");
+    assert_eq!(response.headers()[ASSET_VERSION_HEADER], expected.as_str());
+  }
 }

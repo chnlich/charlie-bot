@@ -114,9 +114,11 @@ impl UsageFold {
           | event_types::MODEL_FALLBACK_NOTICE
           | event_types::PROMPT_CHANGED
           | event_types::QUOTA_FAILOVER
+          | event_types::RATE_LIMIT_EVENT
           | event_types::RESUME_CONTEXT_DROPPED
           | event_types::RUN_DELIVERY
           | event_types::RUN_END
+          | event_types::RUN_ERROR
           | event_types::RUN_FINISHED
           | event_types::RUN_HEADER
           | event_types::RUN_LAUNCH_WITHHELD
@@ -132,6 +134,7 @@ impl UsageFold {
           | event_types::TASK_IMPORTED
           | event_types::TASK_INPUT_ACKNOWLEDGED
           | event_types::TASK_REOPENED
+          | event_types::TASK_REPARENTED
           | event_types::TASK_TRIGGERED
           | event_types::THINKING
           | event_types::TOOL_RESULT
@@ -144,7 +147,9 @@ impl UsageFold {
           | event_types::WEB_REPLY_NOTICE
           | event_types::WEB_STATUS
           | event_types::WEB_STATUS_CONFIRMED
+          | event_types::WORKER_SUMMARY
           | "claude_account_login_required"
+          | "command_lifecycle"
           | "continuation_ran"
           | "discord_ack"
           | "discord_reply"
@@ -211,10 +216,12 @@ impl UsageFold {
         | "hang_diagnostics"
         | "init"
         | "status"
+        | "stderr"
         | "thinking_tokens"
         | event_types::TASK_NOTIFICATION
         | event_types::TASK_PROGRESS
-        | event_types::TASK_STARTED,
+        | event_types::TASK_STARTED
+        | "task_updated",
       ) => {}
       // A system event with no subtype is a plain line, which `event_builders` writes without one.
       None => {}

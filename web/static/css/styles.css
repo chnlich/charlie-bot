@@ -431,8 +431,7 @@ main > header > a[title="View JSONL events"]:hover {
    One stack pitch is 30px. A hover-revealed box stretches over the row's full
    height, and its flex centering keeps that slot vertically centered in it. The offsets run
    from the row's padding edge right-to-left in reverse DOM order.
-   nth-last-of-type keeps non-button trailing spans (the archived tree's
-   active tag) out of the count. */
+   nth-last-of-type keeps non-button trailing spans out of the count. */
 .session-row { position: relative; }
 .session-row > button { position: absolute; right: 12px; pointer-events: none; }
 /* Pointer floor: a row action draws a 14px glyph in p-1's 8px, a 22px box. A named group

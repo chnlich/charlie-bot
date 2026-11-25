@@ -83,6 +83,12 @@ function openVoiceInput() {
     showToast('Open a session before recording voice input', true);
     return;
   }
+  // With no default backend and no configured stored choice, no run can start, so the click names the missing key
+  // before it asks for the microphone.
+  if (!selectedVoiceBackend()) {
+    showToast('Voice input needs a backend: voice.default_backend is not set in config.yaml', true);
+    return;
+  }
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     showToast('Microphone access is not available. Use HTTPS or a supported browser.', true);
     return;

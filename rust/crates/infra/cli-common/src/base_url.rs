@@ -1,6 +1,5 @@
 //! The internal-API base URL: the `server` section of `<home>/config.yaml` on every call.
 
-use std::env::VarError;
 use std::path::Path;
 
 use charliebot_core::config::{self, ServerConfig};
@@ -10,13 +9,6 @@ use serde_yaml::{Mapping, Value};
 
 use crate::exit::CliExit;
 use crate::improve_round;
-
-/// The variable that names the round's launch directory. The runner exports it.
-const LAUNCH_DIR_ENV: &str = "IMPROVE_LAUNCH_DIR";
-/// The variable that names the round's direction, which is also the name of its prompt file. The runner exports it.
-const DIRECTION_ENV: &str = "IMPROVE_DIRECTION";
-/// The variable that names the kit: the `dev/` tree of the revision that the round runs. The runner exports it.
-const KIT_DIR_ENV: &str = "IMPROVE_KIT_DIR";
 
 /// Refuses at once when this process runs in an improve round. A command that needs the server calls it before any
 /// side effect, and [`internal_base_url`] calls it before it reads the port. The refusal names the round's state
@@ -43,9 +35,9 @@ fn in_round_home() -> Result<bool, CliExit> {
 
 /// The refusal's message: the round has no CharlieBot server, and the round's state sources, by their paths.
 fn round_no_server_message() -> Result<String, CliExit> {
-  let launch_dir = round_variable(LAUNCH_DIR_ENV)?;
-  let direction = round_variable(DIRECTION_ENV)?;
-  let kit_dir = round_variable(KIT_DIR_ENV)?;
+  let launch_dir = improve_round::round_variable(improve_round::LAUNCH_DIR_ENV)?;
+  let direction = improve_round::round_variable(improve_round::DIRECTION_ENV)?;
+  let kit_dir = improve_round::round_variable(improve_round::KIT_DIR_ENV)?;
   let user_home = paths::expanduser("~");
   Ok(format!(
     "this improve round has no CharlieBot server, so the command cannot reach one. The round's state sources are \
@@ -53,20 +45,6 @@ fn round_no_server_message() -> Result<String, CliExit> {
      directories under {user_home}/improve/{direction}/evidence, and git in its clone and at origin. Read these \
      sources; do not reuse an earlier round's result as the current state."
   ))
-}
-
-/// The value of a variable that the runner exports to every round. A missing, empty or non-UTF-8 value is a kit
-/// defect, and the error names the variable.
-fn round_variable(name: &str) -> Result<String, CliExit> {
-  match std::env::var(name) {
-    Ok(value) if !value.is_empty() => Ok(value),
-    Ok(_) | Err(VarError::NotPresent) => Err(CliExit::error(format!(
-      "{name} is unset or empty in this improve round: the runner exports it, so the round's kit is defective"
-    ))),
-    Err(VarError::NotUnicode(_)) => {
-      Err(CliExit::error(format!("{name} is not valid UTF-8 in this improve round: the runner's kit is defective")))
-    }
-  }
 }
 
 /// The internal-API base URL, `http://localhost:<server.port>`, with the port read from

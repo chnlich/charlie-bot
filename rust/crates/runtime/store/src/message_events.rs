@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use charliebot_core::event_types::{self, EventFields};
 use serde_json::{Value, json};
 
-use crate::chat_event_type::{ChatEventType, log_unnamed};
+use crate::chat_event_type::{ChatEventType, UnnamedPass};
 use crate::{StoreError, StoreResult};
 
 const ATTACHED_FILES_MARKER: &str = "\n\n[Attached files]\n";
@@ -143,6 +143,7 @@ fn interval_scan<'a, E: EventFields + 'a>(events: impl IntoIterator<Item = &'a E
   let mut complete = Vec::new();
   let mut interval_start = None;
   let mut closed = 0;
+  let mut unnamed = UnnamedPass::new("interval_scan");
   for (index, event) in events.into_iter().enumerate() {
     let type_value = event.field("type");
     let has_session_id = event.field("session_id").is_some_and(event_types::is_truthy);
@@ -227,9 +228,28 @@ fn interval_scan<'a, E: EventFields + 'a>(events: impl IntoIterator<Item = &'a E
       ChatEventType::RateLimitEvent => {}
       ChatEventType::Stream => {}
       ChatEventType::WebStatusSubtree => {}
+      ChatEventType::AiTitle => {}
+      ChatEventType::AtisLatch => {}
+      ChatEventType::Attachment => {}
+      ChatEventType::Command => {}
+      ChatEventType::Context => {}
+      ChatEventType::CostState => {}
+      ChatEventType::FileHistorySnapshot => {}
+      ChatEventType::FileWrite => {}
+      ChatEventType::ImproveCompleted => {}
+      ChatEventType::ImproveStopped => {}
+      ChatEventType::LastPrompt => {}
+      ChatEventType::Mode => {}
+      ChatEventType::Observation => {}
+      ChatEventType::PermissionMode => {}
+      ChatEventType::PrLink => {}
+      ChatEventType::QueueOperation => {}
+      ChatEventType::Session => {}
+      ChatEventType::Thought => {}
+      ChatEventType::ToolProgress => {}
       ChatEventType::Untyped => {}
       ChatEventType::Unnamed(name) => {
-        log_unnamed("interval_scan", "event type", &name, event.field("id").and_then(EventFields::as_str_field));
+        unnamed.note("event type", &name, event.field("id").and_then(EventFields::as_str_field));
       }
     }
     if interval_start.is_none() {

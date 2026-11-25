@@ -22,7 +22,7 @@ use nix::unistd::{Pid, getpgid};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-use crate::chat_event_type::{ChatEventType, log_unnamed};
+use crate::chat_event_type::{ChatEventType, UnnamedPass};
 use crate::compact::CompactValue;
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
@@ -373,7 +373,9 @@ fn is_known_outcome(value: &str) -> bool {
 }
 
 impl RunFacts {
-  pub(crate) fn observe(&mut self, event: &ChatEvent) {
+  /// Folds one event into the run facts. `unnamed` is the replay pass that the caller runs, which counts the stored
+  /// names that no variant names.
+  pub(crate) fn observe(&mut self, event: &ChatEvent, unnamed: &mut UnnamedPass) {
     #[cfg(test)]
     {
       self.observed_events += 1;
@@ -462,9 +464,28 @@ impl RunFacts {
       ChatEventType::RateLimitEvent => {}
       ChatEventType::Stream => {}
       ChatEventType::WebStatusSubtree => {}
+      ChatEventType::AiTitle => {}
+      ChatEventType::AtisLatch => {}
+      ChatEventType::Attachment => {}
+      ChatEventType::Command => {}
+      ChatEventType::Context => {}
+      ChatEventType::CostState => {}
+      ChatEventType::FileHistorySnapshot => {}
+      ChatEventType::FileWrite => {}
+      ChatEventType::ImproveCompleted => {}
+      ChatEventType::ImproveStopped => {}
+      ChatEventType::LastPrompt => {}
+      ChatEventType::Mode => {}
+      ChatEventType::Observation => {}
+      ChatEventType::PermissionMode => {}
+      ChatEventType::PrLink => {}
+      ChatEventType::QueueOperation => {}
+      ChatEventType::Session => {}
+      ChatEventType::Thought => {}
+      ChatEventType::ToolProgress => {}
       ChatEventType::Untyped => {}
       ChatEventType::Unnamed(name) => {
-        log_unnamed("RunFacts::observe", "event type", &name, event.get("id").and_then(CompactValue::as_str));
+        unnamed.note("event type", &name, event.get("id").and_then(CompactValue::as_str));
       }
     }
   }
@@ -1545,8 +1566,9 @@ mod tests {
       json!({"type": "run_launch_withheld", "run_id": "run-b", "reason": "closed task"}),
     ];
     let mut facts = RunFacts::default();
+    let mut unnamed = UnnamedPass::new("run_facts_retain_one_outcome_and_request_set_per_run");
     for event in &events {
-      facts.observe(&ChatEvent::from_value(event));
+      facts.observe(&ChatEvent::from_value(event), &mut unnamed);
     }
 
     assert_eq!(facts.outcomes.len(), 2, "one last outcome is retained per run");

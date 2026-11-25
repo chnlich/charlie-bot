@@ -54,6 +54,7 @@ pub mod write_faults;
 
 pub use aggregator::{MessageAggregator, TOOL_PREVIEW_CHARS};
 pub use aggregator_hold::hold_aggregator_builds;
+pub use chat_event_type::UnnamedPass;
 pub use compact::CompactValue;
 pub use control::ControlGuard;
 pub use events::{ChatEvent, ChatEventHistory, ChatEventsDelta, SharedChatEvent, SharedChatEventRange};

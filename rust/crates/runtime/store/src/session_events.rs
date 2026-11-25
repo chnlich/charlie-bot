@@ -8,6 +8,7 @@ use charliebot_core::event_types;
 
 use crate::aggregator::MessageAggregator;
 use crate::aggregator_hold;
+use crate::chat_event_type::UnnamedPass;
 use crate::event_types::ChatEvent;
 use crate::projection::MessageProjection;
 use crate::streaming::{self, SocketHandle, Subscription};
@@ -251,12 +252,14 @@ impl Store {
       let events = self.load_chat_events_shared_async(session_id).await?;
       let archive_offset = self.read_archive_offset(session_id)?;
       let mut aggregator = self.new_message_aggregator(archive_offset, false);
+      // One pass covers the whole history load, so each unnamed stored name is logged once for the load.
+      let mut unnamed = UnnamedPass::new("session_history_replay");
       let mut dropped = false;
       let mut start = 0;
       while start < events.len() {
         let end = (start + AGGREGATOR_INIT_SLICE_EVENTS).min(events.len());
         for event in &events[start..end] {
-          aggregator.feed(&event.to_value())?;
+          aggregator.feed_in_pass(&event.to_value(), &mut unnamed)?;
         }
         start = end;
         tokio::task::yield_now().await;

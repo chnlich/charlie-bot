@@ -15,7 +15,7 @@ use charliebot_core::{event_types, fsutil};
 use regex::Regex;
 use serde_json::{Map, Value, json};
 
-use crate::chat_event_type::{ChatEventType, log_unnamed};
+use crate::chat_event_type::{ChatEventType, UnnamedPass, log_unnamed};
 use crate::compact::CompactValue;
 use crate::event_types::ChatEvent;
 
@@ -2181,8 +2181,9 @@ impl Store {
       None::<()>
     })?;
     let mut facts = RunFacts::default();
+    let mut unnamed = UnnamedPass::new("run_facts_at");
     for event in newest_first.iter().rev() {
-      facts.observe(event);
+      facts.observe(event, &mut unnamed);
     }
     let facts = Arc::new(facts);
     let entry = CachedRunFactsAt { identity, facts: Arc::clone(&facts) };
@@ -2809,6 +2810,25 @@ fn lifecycle_state_of(event: &ChatEvent) -> Option<TaskState> {
     ChatEventType::RateLimitEvent => None,
     ChatEventType::Stream => None,
     ChatEventType::WebStatusSubtree => None,
+    ChatEventType::AiTitle => None,
+    ChatEventType::AtisLatch => None,
+    ChatEventType::Attachment => None,
+    ChatEventType::Command => None,
+    ChatEventType::Context => None,
+    ChatEventType::CostState => None,
+    ChatEventType::FileHistorySnapshot => None,
+    ChatEventType::FileWrite => None,
+    ChatEventType::ImproveCompleted => None,
+    ChatEventType::ImproveStopped => None,
+    ChatEventType::LastPrompt => None,
+    ChatEventType::Mode => None,
+    ChatEventType::Observation => None,
+    ChatEventType::PermissionMode => None,
+    ChatEventType::PrLink => None,
+    ChatEventType::QueueOperation => None,
+    ChatEventType::Session => None,
+    ChatEventType::Thought => None,
+    ChatEventType::ToolProgress => None,
     ChatEventType::Untyped => None,
     ChatEventType::Unnamed(name) => {
       log_unnamed("lifecycle_state_of", "event type", &name, event.get("id").and_then(CompactValue::as_str));
@@ -2994,13 +3014,14 @@ fn fold_task_facts_from(
   run_facts: Option<&mut RunFacts>,
 ) -> StoreResult<bool> {
   let mut run_facts = run_facts;
+  let mut unnamed = UnnamedPass::new("fold_task_facts_from");
   for (index, event) in events.iter().enumerate() {
     if index % TASK_FACTS_STOP_CHECK_INTERVAL == 0 && should_stop() {
       return Ok(false);
     }
     let event = event.as_ref();
     if let Some(run_facts) = run_facts.as_deref_mut() {
-      run_facts.observe(event);
+      run_facts.observe(event, &mut unnamed);
     }
     let position = offset + index;
     // A close-request replay looks for these lines in the raw history, so they are kept before the id check below.
@@ -3088,9 +3109,28 @@ fn fold_task_facts_from(
       ChatEventType::RateLimitEvent => {}
       ChatEventType::Stream => {}
       ChatEventType::WebStatusSubtree => {}
+      ChatEventType::AiTitle => {}
+      ChatEventType::AtisLatch => {}
+      ChatEventType::Attachment => {}
+      ChatEventType::Command => {}
+      ChatEventType::Context => {}
+      ChatEventType::CostState => {}
+      ChatEventType::FileHistorySnapshot => {}
+      ChatEventType::FileWrite => {}
+      ChatEventType::ImproveCompleted => {}
+      ChatEventType::ImproveStopped => {}
+      ChatEventType::LastPrompt => {}
+      ChatEventType::Mode => {}
+      ChatEventType::Observation => {}
+      ChatEventType::PermissionMode => {}
+      ChatEventType::PrLink => {}
+      ChatEventType::QueueOperation => {}
+      ChatEventType::Session => {}
+      ChatEventType::Thought => {}
+      ChatEventType::ToolProgress => {}
       ChatEventType::Untyped => {}
       ChatEventType::Unnamed(name) => {
-        log_unnamed("fold_task_facts_from", "event type", name, event.get("id").and_then(CompactValue::as_str))
+        unnamed.note("event type", name, event.get("id").and_then(CompactValue::as_str));
       }
     }
     if event.get("id").and_then(CompactValue::as_str).is_some()
@@ -3200,7 +3240,7 @@ fn fold_task_facts_from(
           if prior_index % TASK_FACTS_STOP_CHECK_INTERVAL == 0 && should_stop() {
             return Ok(false);
           }
-          if admits_input(prior)
+          if admits_input(prior, &mut unnamed)
             && prior.get("id").and_then(CompactValue::as_str).is_some_and(|id| facts.imported_pending_ids.contains(id))
           {
             facts.input_candidates.push(Arc::clone(prior));
@@ -3257,15 +3297,34 @@ fn fold_task_facts_from(
       ChatEventType::RateLimitEvent => {}
       ChatEventType::Stream => {}
       ChatEventType::WebStatusSubtree => {}
+      ChatEventType::AiTitle => {}
+      ChatEventType::AtisLatch => {}
+      ChatEventType::Attachment => {}
+      ChatEventType::Command => {}
+      ChatEventType::Context => {}
+      ChatEventType::CostState => {}
+      ChatEventType::FileHistorySnapshot => {}
+      ChatEventType::FileWrite => {}
+      ChatEventType::ImproveCompleted => {}
+      ChatEventType::ImproveStopped => {}
+      ChatEventType::LastPrompt => {}
+      ChatEventType::Mode => {}
+      ChatEventType::Observation => {}
+      ChatEventType::PermissionMode => {}
+      ChatEventType::PrLink => {}
+      ChatEventType::QueueOperation => {}
+      ChatEventType::Session => {}
+      ChatEventType::Thought => {}
+      ChatEventType::ToolProgress => {}
       ChatEventType::Untyped => {}
-      // The close-request dispatch above logs an unnamed type.
+      // The dispatch above counts an unnamed type in the pass.
       ChatEventType::Unnamed(_) => {}
     }
     let imported = event
       .get("id")
       .and_then(CompactValue::as_str)
       .is_some_and(|event_id| facts.imported_pending_ids.contains(event_id));
-    if admits_input(event)
+    if admits_input(event, &mut unnamed)
       && facts.boundary_open
       && (facts.boundary_index.is_none_or(|boundary| position > boundary) || imported)
     {
@@ -3313,6 +3372,7 @@ fn fold_node_facts_from(
     return Ok(false);
   }
   let mut run_facts = run_facts;
+  let mut unnamed = UnnamedPass::new("fold_node_facts_from");
   let mut task_error = None;
   if let Ok(task) = &mut facts.task {
     match fold_task_facts_from(session_id, task, events, offset, should_stop, run_facts.as_deref_mut()) {
@@ -3331,7 +3391,7 @@ fn fold_node_facts_from(
       return Ok(false);
     }
     if let Some(run_facts) = run_facts.as_deref_mut() {
-      run_facts.observe(event.as_ref());
+      run_facts.observe(event.as_ref(), &mut unnamed);
     }
   }
   Ok(!should_stop())
@@ -3390,11 +3450,12 @@ fn observe_run_facts(
   events: &[SharedChatEvent],
   should_stop: &mut impl FnMut() -> bool,
 ) -> StoreResult<bool> {
+  let mut unnamed = UnnamedPass::new("observe_run_facts");
   for (index, event) in events.iter().enumerate() {
     if index % TASK_FACTS_STOP_CHECK_INTERVAL == 0 && should_stop() {
       return Ok(false);
     }
-    facts.observe(event.as_ref());
+    facts.observe(event.as_ref(), &mut unnamed);
   }
   Ok(!should_stop())
 }
@@ -3402,7 +3463,7 @@ fn observe_run_facts(
 /// Whether `event` is an input a turn consumes. A turn-end check shows its reason in the session. Its continuation
 /// carries the same reason to the agent, so that display is no input. A message carrying `TURN_HOOKS_ID` names the
 /// check result it shows.
-fn admits_input(event: &ChatEvent) -> bool {
+fn admits_input(event: &ChatEvent, unnamed: &mut UnnamedPass) -> bool {
   match ChatEventType::of(event.get("type").and_then(CompactValue::as_str)) {
     ChatEventType::DiscordReply => false,
     ChatEventType::SlackReply => false,
@@ -3477,9 +3538,28 @@ fn admits_input(event: &ChatEvent) -> bool {
     ChatEventType::RateLimitEvent => false,
     ChatEventType::Stream => false,
     ChatEventType::WebStatusSubtree => false,
+    ChatEventType::AiTitle => false,
+    ChatEventType::AtisLatch => false,
+    ChatEventType::Attachment => false,
+    ChatEventType::Command => false,
+    ChatEventType::Context => false,
+    ChatEventType::CostState => false,
+    ChatEventType::FileHistorySnapshot => false,
+    ChatEventType::FileWrite => false,
+    ChatEventType::ImproveCompleted => false,
+    ChatEventType::ImproveStopped => false,
+    ChatEventType::LastPrompt => false,
+    ChatEventType::Mode => false,
+    ChatEventType::Observation => false,
+    ChatEventType::PermissionMode => false,
+    ChatEventType::PrLink => false,
+    ChatEventType::QueueOperation => false,
+    ChatEventType::Session => false,
+    ChatEventType::Thought => false,
+    ChatEventType::ToolProgress => false,
     ChatEventType::Untyped => false,
     ChatEventType::Unnamed(name) => {
-      log_unnamed("admits_input", "event type", &name, event.get("id").and_then(CompactValue::as_str));
+      unnamed.note("event type", &name, event.get("id").and_then(CompactValue::as_str));
       false
     }
   }
@@ -5770,12 +5850,13 @@ pub(crate) mod tests {
     // display-state pass walks its whole history once per Run. That pass cost 912 Runs over a 15 MB log on the
     // production copy.
     let mut facts = crate::run_records::RunFacts::default();
+    let mut unnamed = UnnamedPass::new("a_settled_run_never_scans_the_history_for_a_withheld_reason");
     for event in [
       json!({"type": "run_finished", "run_id": "done", "outcome": "success"}),
       json!({"type": "run_stop_requested", "run_id": "stopped"}),
       json!({"type": "run_launch_withheld", "run_id": "queued", "reason": "task closed"}),
     ] {
-      facts.observe(&ChatEvent::from_value(&event));
+      facts.observe(&ChatEvent::from_value(&event), &mut unnamed);
     }
     let mut boot = crate::run_records::HostBoot::default();
     let mut scans = 0;

@@ -5,7 +5,6 @@ use charliebot_core::config::BackendsConfig;
 use serde_json::Value;
 
 use crate::aggregator::MessageAggregator;
-use crate::chat_event_type::log_unnamed;
 use crate::event_types::{ChatEvent, SharedChatEvent};
 use crate::hooks::EventRenderer;
 use crate::message_events;
@@ -169,7 +168,8 @@ pub fn events_to_view<T: AsRef<ChatEvent>>(
 }
 
 /// The committed messages of a frame list. A `message` frame appends its message. A `message_update` frame
-/// replaces the message with the same id, where it stands.
+/// replaces the message with the same id, where it stands. The aggregator emits no other frame type, so any other
+/// type is an error that names it.
 fn messages_of(deltas: Vec<Value>) -> StoreResult<Vec<Value>> {
   let mut messages: Vec<Value> = Vec::new();
   for delta in deltas {
@@ -185,7 +185,7 @@ fn messages_of(deltas: Vec<Value>) -> StoreResult<Vec<Value>> {
       }
       Some("stream") => {}
       None => {}
-      Some(other) => log_unnamed("messages_of", "frame type", other, None),
+      Some(other) => return Err(StoreError::new(format!("frame type `{other}` is not one the aggregator emits"))),
     }
   }
   Ok(messages)
@@ -233,7 +233,7 @@ fn fold_messages(
       }
       Some("stream") => {}
       None => {}
-      Some(other) => log_unnamed("fold_messages", "frame type", other, None),
+      Some(other) => return Err(StoreError::new(format!("frame type `{other}` is not one the aggregator emits"))),
     }
   }
   Ok((messages, separators, updates))
@@ -464,5 +464,11 @@ mod tests {
         events_to_messages(&compact_events(&events), 0, HashMap::new(), BackendsConfig::default()).unwrap()
       );
     }
+  }
+
+  #[test]
+  fn a_frame_type_the_aggregator_does_not_emit_is_an_error_that_names_it() {
+    let error = messages_of(vec![json!({"type": "frame_no_writer_emits"})]).unwrap_err();
+    assert!(error.to_string().contains("frame_no_writer_emits"), "{error}");
   }
 }

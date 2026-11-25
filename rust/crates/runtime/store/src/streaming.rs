@@ -10,7 +10,7 @@ use charliebot_core::event_types;
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::chat_event_type::{ChatEventType, log_unnamed};
+use crate::chat_event_type::{ChatEventType, UnnamedPass};
 use crate::{StoreError, StoreResult};
 
 /// Sidebar channel shared by every connected session view.
@@ -284,6 +284,7 @@ pub fn socket_frames(event: &Value, index: usize, deltas: Vec<Value>) -> StoreRe
   for frame in &mut frames {
     trim_user_echo(frame);
   }
+  let mut unnamed = UnnamedPass::new("socket_frames");
   let passes_payload = match ChatEventType::of(event.get("type").and_then(Value::as_str)) {
     ChatEventType::DiscordReply => true,
     ChatEventType::SlackReply => true,
@@ -376,9 +377,28 @@ pub fn socket_frames(event: &Value, index: usize, deltas: Vec<Value>) -> StoreRe
     ChatEventType::RateLimitEvent => true,
     ChatEventType::Stream => true,
     ChatEventType::WebStatusSubtree => true,
+    ChatEventType::AiTitle => true,
+    ChatEventType::AtisLatch => true,
+    ChatEventType::Attachment => true,
+    ChatEventType::Command => true,
+    ChatEventType::Context => true,
+    ChatEventType::CostState => true,
+    ChatEventType::FileHistorySnapshot => true,
+    ChatEventType::FileWrite => true,
+    ChatEventType::ImproveCompleted => true,
+    ChatEventType::ImproveStopped => true,
+    ChatEventType::LastPrompt => true,
+    ChatEventType::Mode => true,
+    ChatEventType::Observation => true,
+    ChatEventType::PermissionMode => true,
+    ChatEventType::PrLink => true,
+    ChatEventType::QueueOperation => true,
+    ChatEventType::Session => true,
+    ChatEventType::Thought => true,
+    ChatEventType::ToolProgress => true,
     ChatEventType::Untyped => true,
     ChatEventType::Unnamed(name) => {
-      log_unnamed("socket_frames", "event type", &name, event.get("id").and_then(Value::as_str));
+      unnamed.note("event type", &name, event.get("id").and_then(Value::as_str));
       true
     }
   };

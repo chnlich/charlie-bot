@@ -27,6 +27,7 @@ zstd.workspace = true
 write-faults = []
 
 [dev-dependencies]
+charliebot-core = { workspace = true, features = ["test-support"] }
 # The task-tree tests drive the completion owner that now writes archive facts.
 charliebot-registry.workspace = true
 charliebot-shell-harness.workspace = true

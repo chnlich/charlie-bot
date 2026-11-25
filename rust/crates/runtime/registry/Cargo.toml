@@ -11,6 +11,7 @@ axum.workspace = true
 matchit.workspace = true
 charliebot-compat.workspace = true
 charliebot-core.workspace = true
+charliebot-inline-js.workspace = true
 charliebot-store.workspace = true
 futures-util.workspace = true
 ignore.workspace = true

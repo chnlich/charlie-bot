@@ -10,6 +10,7 @@ pub const SLACK: ThreadPlatform = ThreadPlatform {
   name: "slack",
   display_name: "Slack",
   reply_event_type: crate::event_types::SLACK_REPLY,
+  ack_event_type: crate::event_types::SLACK_ACK,
   reply_command: "charliebot slack reply",
   max_post_chars: 40000,
   scope_doc: "slack_reply_scope.md",

@@ -39,6 +39,7 @@ const FAKECHAT: ThreadPlatform = ThreadPlatform {
   name: "fakechat",
   display_name: "Fakechat",
   reply_event_type: "fakechat_reply",
+  ack_event_type: "fakechat_ack",
   reply_command: "charliebot fakechat reply",
   max_post_chars: 2000,
   scope_doc: SCOPE,
@@ -704,7 +705,6 @@ fn the_segment_names_the_scope_source_and_the_two_repo_docs_as_base_full_sources
 fn fakechat_marker_keys_derive_from_the_name() {
   assert_eq!(FAKECHAT.notice_key(), "fakechat_notice");
   assert_eq!(FAKECHAT.backfill_key(), "fakechat_backfill");
-  assert_eq!(FAKECHAT.ack_event_type(), "fakechat_ack");
 }
 
 #[test]

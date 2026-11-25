@@ -21,6 +21,7 @@ pub const FEISHU: ThreadPlatform = ThreadPlatform {
   name: NAME,
   display_name: "Feishu",
   reply_event_type: crate::event_types::FEISHU_REPLY,
+  ack_event_type: crate::event_types::FEISHU_ACK,
   reply_command: REPLY_COMMAND,
   max_post_chars: MAX_POST_CHARS,
   scope_doc: "feishu_reply_scope.md",

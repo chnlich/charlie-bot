@@ -849,6 +849,9 @@ pub struct BrowserLoginConfig {
   pub lifetime_sec: Option<u64>,
 }
 
+/// The `config.yaml` key of the `host_auth:` section, which the host-auth feature and the cron loader both read.
+pub const HOST_AUTH_SECTION_KEY: &str = "host_auth";
+
 /// The `host_auth:` section: the host-auth panel's browser logins and Slack DM notification settings.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]

@@ -1,7 +1,7 @@
 //! Scheduled-task request and file models.
 
 use charliebot_compat::request_body::{BodyModel, Field, FieldType};
-use charliebot_core::config::{CharlieBotConfig, HostAuthConfig};
+use charliebot_core::config::{CharlieBotConfig, HOST_AUTH_SECTION_KEY, HostAuthConfig};
 use serde::{Deserialize, Serialize};
 
 /// The default time zone of a scheduled task and of a create request: `charliebot_core::pacific::ZONE`, the house zone.
@@ -148,7 +148,7 @@ pub fn validate_task(task: &ScheduledTaskConfig) -> Result<(), String> {
 
 /// The hosts that `host_auth.browser_logins` names, in config order. A config without the host-auth section names none.
 pub fn browser_login_hosts(cfg: &CharlieBotConfig) -> Vec<String> {
-  let Some(value) = cfg.section_value("host_auth") else { return Vec::new() };
+  let Some(value) = cfg.section_value(HOST_AUTH_SECTION_KEY) else { return Vec::new() };
   value
     .downcast_ref::<HostAuthConfig>()
     .expect("host_auth is parsed as HostAuthConfig")

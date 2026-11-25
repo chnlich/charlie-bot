@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Context;
+use charliebot_core::config::HOST_AUTH_SECTION_KEY;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::context::StartupStop;
 use charliebot_registry::wiring::{Phase, Service, ServiceContext, cancel_and_wait};
@@ -172,7 +173,7 @@ where
 /// Sends one Slack bot DM naming every listed host and status, and on success sets dm_status.
 pub async fn dm_step(features: &FeatureContext, state: &State, state_path: &Path) -> anyhow::Result<()> {
   let cfg = features.config.get()?;
-  let host_auth_cfg = cfg.section::<HostAuthConfig>("host_auth");
+  let host_auth_cfg = cfg.section::<HostAuthConfig>(HOST_AUTH_SECTION_KEY);
   if !host_auth_cfg.enable_slack_dm {
     return Ok(());
   }

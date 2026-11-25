@@ -1,3 +1,3 @@
-//! Event names owned by the Claude Code backend package.
+//! Event names that the Claude Code backend package writes. `charliebot_core::event_types` owns each name.
 
-pub const CLAUDE_ACCOUNT_LOGIN_REQUIRED: &str = "claude_account_login_required";
+pub const CLAUDE_ACCOUNT_LOGIN_REQUIRED: &str = charliebot_core::event_types::CLAUDE_ACCOUNT_LOGIN_REQUIRED;

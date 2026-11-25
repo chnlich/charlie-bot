@@ -49,6 +49,7 @@ pub const EVENT_INDEX: &str = "event_index";
 pub const MASTER_DONE: &str = "master_done";
 pub const ASSISTANT_ERROR: &str = "assistant_error";
 pub const QUOTA_EXHAUSTED: &str = "quota_exhausted";
+pub const CLAUDE_ACCOUNT_LOGIN_REQUIRED: &str = "claude_account_login_required";
 pub const STILL_THINKING: &str = "still_thinking";
 pub const THINKING_SECONDS: &str = "thinking_seconds";
 pub const INPUT_EVENT_ID: &str = "input_event_id";
@@ -70,6 +71,8 @@ pub const SCHEDULED_TRIGGER: &str = "scheduled_trigger";
 pub const SCHEDULED_RUN_SKIPPED: &str = "scheduled_run_skipped";
 pub const SESSION_ATTACHED: &str = "session_attached";
 pub const AGENT_MESSAGE: &str = "agent_message";
+pub const IMPROVE_ITERATION_COMPLETED: &str = "improve_iteration_completed";
+pub const IMPROVE_FAILED: &str = "improve_failed";
 /// The id of one pending input: a task's queued message that a wake admits.
 pub const INPUT_ID: &str = "input_id";
 /// The session an `agent_message` came from.
@@ -83,7 +86,11 @@ pub const NUDGE_OF: &str = "nudge_of";
 pub const MENTION_ID: &str = "mention_id";
 pub const WEB_REPLY: &str = "web_reply";
 pub const WEB_REPLY_NOTICE: &str = "web_reply_notice";
+pub const SLACK_REPLY: &str = "slack_reply";
+pub const DISCORD_REPLY: &str = "discord_reply";
+pub const FEISHU_REPLY: &str = "feishu_reply";
 pub const WEB_STATUS: &str = "web_status";
+pub const WEB_STATUS_SUBTREE: &str = "web_status_subtree";
 /// A confirmation through `charliebot web status confirm` that the stored status needs no change this turn. The
 /// event records that the turn ran a status command; the For-you view hides it.
 pub const WEB_STATUS_CONFIRMED: &str = "web_status_confirmed";
@@ -101,6 +108,7 @@ pub const RESUME_REASON_ANCHOR_MISSING: &str = "anchor_missing";
 pub const RESUME_REASON_TRANSCRIPT_MISSING: &str = "transcript_missing";
 pub const COMPACT_BOUNDARY: &str = "compact_boundary";
 pub const COMMAND_PROGRESS: &str = "command_progress";
+pub const HANG_DIAGNOSTICS: &str = "hang_diagnostics";
 pub const TASK_STARTED: &str = "task_started";
 pub const TASK_PROGRESS: &str = "task_progress";
 pub const TASK_NOTIFICATION: &str = "task_notification";

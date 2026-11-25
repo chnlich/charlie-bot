@@ -8,9 +8,10 @@ use std::process::{Command, Output};
 use anyhow::{Context, anyhow, bail};
 use charliebot_core::config::{CREDENTIALS_FILENAME, SESSIONS_DIR_NAME};
 use charliebot_core::home::{CLAUDE_CONFIG_DIR_NAME, OPENCODE_DIR_NAME};
+use charliebot_registry::FeatureContext;
 use charliebot_store::run_records::THREADS_DIR_NAME;
 
-use crate::config::ResticSettings;
+use crate::config::{self, ResticSettings};
 
 /// The retention policy every run applies after its snapshot: three daily snapshots plus the last snapshot of each
 /// week within 15 days, relative to the newest snapshot.
@@ -111,6 +112,13 @@ impl ResticSettings {
     command.arg("--repo").arg(&self.repository).arg("--password-file").arg(&self.password_file);
     command
   }
+}
+
+pub(crate) fn run_snapshot(features: &FeatureContext) -> anyhow::Result<String> {
+  let cfg = features.config.get()?;
+  let settings = cfg.section::<config::BackupConfig>(config::NAME).settings(&cfg.charliebot_home)?;
+  settings.backup(&cfg.charliebot_home)?;
+  Ok(format!("restic backup of {} to {} completed", cfg.charliebot_home.display(), settings.repository))
 }
 
 /// The output of a restic call, or the reason restic gave for failing.

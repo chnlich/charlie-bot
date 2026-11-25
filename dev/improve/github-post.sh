@@ -22,7 +22,8 @@
 # For a web page change, the review record (--review-record: the review's events.ndjson, kept by landing.md Step 6
 # as review-events.ndjson in the round's evidence directory) must show a read of each screenshot the body names.
 # It also refuses a merge unless the newest verdict comment names the pull request's head sha and reports no
-# issues. pr-comment --verdict-head writes that comment: its first line names the head the review read.
+# issues. pr-comment --verdict-head writes that comment: its first line names the head the review read, and the
+# call refuses any head that is not the pull request's full head sha as GitHub reads it now, before it posts.
 # pr-merge also refuses a merge whose round event log ($IMPROVE_LAUNCH_DIR/round-events.ndjson) or review record
 # reads a skill file outside $IMPROVE_SKILLS_DIR; dev/improve/skill-reads.sh names each such path.
 # After the merge, pr-merge reads the pull request back from GitHub and prints its number, reviewed head, merge commit
@@ -172,11 +173,56 @@ without_evidence_dir() {
   done
 }
 
+# check_verdict_head <head> <gh pr comment args...>: exit 2 unless <head> is the full 40-character sha that GitHub
+# reads as the head of the pull request the call names. An empty or short head, or the sha of an older commit,
+# sends nothing. The refusal names the given head and the pull request's head.
+check_verdict_head() {
+  local head=$1 selector='' repo='' pr_head target view_args
+  shift
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --verdict-head|--body-file|-F) shift 2 ;;
+      --repo|-R)
+        [[ $# -ge 2 && -n "$2" ]] || { printf 'Refused %s without a repo value.\n' "$1" >&2; exit 2; }
+        repo=$2
+        shift 2
+        ;;
+      --repo=*)
+        repo=${1#--repo=}
+        [[ -n "$repo" ]] || { printf 'Refused --repo without a repo value.\n' >&2; exit 2; }
+        shift
+        ;;
+      -*) shift ;;
+      *)
+        [[ -n "$1" ]] || { printf 'Refused an empty PR selector.\n' >&2; exit 2; }
+        [[ -z "$selector" ]] || { printf 'Refused a second PR selector: pr-comment takes one.\n' >&2; exit 2; }
+        selector=$1
+        shift
+        ;;
+    esac
+  done
+  # gh pr view reads the pull request that gh pr comment names, and the current branch's when the call names none.
+  target="PR ${selector:-(current branch)}"
+  view_args=(pr view)
+  [[ -z "$selector" ]] || view_args+=("$selector")
+  [[ -z "$repo" ]] || view_args+=(--repo "$repo")
+  pr_head=$(gh "${view_args[@]}" --json headRefOid --jq .headRefOid) || {
+    printf 'Cannot read the head of %s; nothing was sent.\n' "$target" >&2
+    exit 2
+  }
+  if [[ ! "$head" =~ ^[0-9a-f]{40}$ || "$head" != "$pr_head" ]]; then
+    printf 'Refused --verdict-head "%s": the head of %s is %s, and a verdict names that full 40-character sha; ' \
+      "$head" "$target" "$pr_head" >&2
+    printf 'nothing was sent.\n' >&2
+    exit 2
+  fi
+}
+
 [[ $# -ge 1 ]] || { usage; exit 2; }
 subcommand=$1
 shift
 orig_args=("$@")
-title='' body_file='' comment_file='' verdict_head='' evidence_dir=''
+title='' body_file='' comment_file='' verdict_head='' verdict_requested=0 evidence_dir=''
 
 # Text reaches gh only through the checked fields. An inline text argument would
 # go to gh unchecked, so it is refused before any call; its value is not echoed.
@@ -185,7 +231,12 @@ while [[ $# -gt 0 ]]; do
     --title|-t) title=$2; shift 2 ;;
     --body-file|-F) body_file=$2; shift 2 ;;
     --comment-file) comment_file=$2; shift 2 ;;
-    --verdict-head) verdict_head=$2; shift 2 ;;
+    --verdict-head)
+      [[ $# -ge 2 ]] || { printf 'Refused --verdict-head without a head value; nothing was sent.\n' >&2; exit 2; }
+      verdict_requested=1
+      verdict_head=$2
+      shift 2
+      ;;
     --evidence-dir)
       [[ $# -ge 2 && -n "$2" ]] || { printf 'Refused --evidence-dir without a directory.\n' >&2; exit 2; }
       evidence_dir=$2
@@ -258,11 +309,8 @@ case "$subcommand" in
     [[ -n "$body_file" ]] || { usage; exit 2; }
     require_readable "$body_file" body
     # A verdict comment opens with the full head sha its review read: pr-merge reads that first line back.
-    if [[ -n "$verdict_head" ]]; then
-      [[ "$verdict_head" =~ ^[0-9a-f]{40}$ ]] || {
-        printf 'Refused --verdict-head: it takes the full 40-character head sha; nothing was sent.\n' >&2
-        exit 2
-      }
+    if [[ $verdict_requested -eq 1 ]]; then
+      check_verdict_head "$verdict_head" "${orig_args[@]}"
       { printf 'Review verdict on %s\n\n' "$verdict_head"; cat -- "$body_file"; } > "$tmp_dir/verdict-body"
       body_file=$tmp_dir/verdict-body
     fi

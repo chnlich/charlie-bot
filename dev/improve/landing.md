@@ -347,6 +347,7 @@ Each review's scratch directory and its `events.ndjson` stay on disk until the n
 A failed review's scratch directory and its `events.ndjson` are named in the round's final message.
 
 The round posts each verdict as one pull-request comment through `$IMPROVE_KIT_DIR/dev/improve/github-post.sh pr-comment`, with `--verdict-head` naming the full head sha that the review read.
+The script refuses a head that is not the pull request's full current head sha, and posts nothing on a refusal.
 The verdict text ends with one line, `Round start: <the round's start stamp>`, which names the round's evidence directory.
 That comment is the verdict comment: it carries the verdict without the event stream, and `pr-merge` reads its head sha.
 A verdict is clean when it reports no issues; otherwise it reports findings.

@@ -1527,15 +1527,27 @@ fn a_pr_comment_with_a_verdict_head_posts_the_head_line_that_pr_merge_reads() {
   let review = world.sandbox.root().join("review.md");
   std::fs::write(&review, CLEAN_REVIEW).unwrap();
 
-  let run = world.comment(&["--verdict-head", HEAD_SHA, "--body-file", review.to_str().unwrap(), "5046"]);
+  let run = world.comment(&[
+    "--verdict-head",
+    HEAD_SHA,
+    "--body-file",
+    review.to_str().unwrap(),
+    "--repo",
+    "chnlich/charlie-bot",
+    "5046",
+  ]);
 
   assert_eq!(run.code, 0, "{}", run.describe());
   let posted = std::fs::read_to_string(&world.comment_body).expect("the verdict comment was posted");
   assert_eq!(posted, verdict_comment(HEAD_SHA, CLEAN_REVIEW), "{}", run.describe());
-  let calls: Vec<String> =
-    gh_log_lines(&world.gh_log).into_iter().filter(|line| line.starts_with("pr comment")).collect();
+  let log = gh_log_lines(&world.gh_log);
+  let calls: Vec<String> = log.iter().filter(|line| line.starts_with("pr comment")).cloned().collect();
   assert_eq!(calls.len(), 1, "{}", run.describe());
   assert!(!calls[0].contains("--verdict-head"), "gh receives no verdict flag: {}", calls[0]);
+  assert!(
+    log.contains(&"pr view 5046 --repo chnlich/charlie-bot --json headRefOid --jq .headRefOid".to_string()),
+    "the verdict head was not read from the pull request the comment names: {log:?}"
+  );
   // The comment the round posted is the one the merge reads back: the same head clears the merge.
   world.set_comments(&[posted]);
   let merge = world.merge(&["5046"]);
@@ -1544,16 +1556,28 @@ fn a_pr_comment_with_a_verdict_head_posts_the_head_line_that_pr_merge_reads() {
 
 #[test]
 #[ignore = "integration"]
-fn a_pr_comment_refuses_a_verdict_head_that_is_not_a_full_sha() {
+fn a_pr_comment_refuses_a_verdict_head_that_is_not_the_prs_full_head_and_posts_nothing() {
+  // The pull request's head is HEAD_SHA. Each call names a head that is empty, short, or an older commit's full sha.
   let world = MergeWorld::new("rust/crates/x/src/lib.rs\n", "## Evidence\nno screenshot needed.\n");
   let review = world.sandbox.root().join("review.md");
   std::fs::write(&review, CLEAN_REVIEW).unwrap();
-
-  let run = world.comment(&["--verdict-head", "0123abc", "--body-file", review.to_str().unwrap(), "5046"]);
-
-  assert_eq!(run.code, 2, "{}", run.describe());
-  assert!(run.stderr.contains("full 40-character head sha"), "{}", run.describe());
-  assert!(!world.comment_body.exists(), "nothing was posted");
+  let review = review.to_str().unwrap();
+  let refusals = [("an empty head", ""), ("a short sha", "0123abc"), ("a full sha that is not the head", OLDER_SHA)];
+  for (case, head) in refusals {
+    let run = world.comment(&["--verdict-head", head, "--body-file", review, "5046"]);
+    assert_eq!(run.code, 2, "{case}: {}", run.describe());
+    assert!(run.stderr.contains(HEAD_SHA), "{case} does not name the pull request's head: {}", run.describe());
+    assert!(run.stderr.contains(head), "{case} does not name the given head: {}", run.describe());
+    assert!(!world.comment_body.exists(), "{case} posted a comment");
+  }
+  let headless = world.comment(&["--body-file", review, "5046", "--verdict-head"]);
+  assert_eq!(headless.code, 2, "{}", headless.describe());
+  assert!(headless.stderr.contains("without a head value"), "{}", headless.describe());
+  assert!(!world.comment_body.exists(), "a flag without a head posted a comment");
+  assert!(
+    gh_log_lines(&world.gh_log).iter().all(|line| !line.starts_with("pr comment")),
+    "a refused verdict reached gh pr comment"
+  );
 }
 
 // -- the credential check: one scanner for the round's writes and the landing --

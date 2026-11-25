@@ -75,7 +75,8 @@ struct UsageFold {
 }
 
 impl UsageFold {
-  fn feed<E: EventFields>(&mut self, events: &[&E]) -> StoreResult<()> {
+  /// Folds the events of one session log. `source` names that session; an event type no arm names is logged with it.
+  fn feed<E: EventFields>(&mut self, events: &[&E], source: &str) -> StoreResult<()> {
     for event in events {
       let event_type = (*event).field("type").and_then(EventFields::as_str_field);
       if matches!(event_type, Some(event_types::ASSISTANT | event_types::RESULT))
@@ -86,12 +87,87 @@ impl UsageFold {
       }
       match event_type {
         Some(event_types::ASSISTANT) => self.feed_assistant(*event)?,
-        Some(event_types::SYSTEM) => self.feed_system(*event)?,
-        Some(event_types::CONTEXT_COMPACTED) if self.reading_kind == ReadingKind::Claude => {
-          self.feed_compaction_metadata(*event)?;
+        Some(event_types::SYSTEM) => self.feed_system(*event, source)?,
+        Some(event_types::CONTEXT_COMPACTED) => {
+          if self.reading_kind == ReadingKind::Claude {
+            self.feed_compaction_metadata(*event)?;
+          }
         }
         Some(event_types::RESULT) => self.feed_result(*event)?,
-        _ => {}
+        // These types carry no usage figure. Each one is named, so the final arm sees only a type that no arm lists.
+        Some(
+          event_types::AGENT_MESSAGE
+          | event_types::ASSISTANT_ERROR
+          | event_types::BACKEND_OVERLAY_INACTIVE
+          | event_types::BACKEND_OVERLAY_UNDECLARED
+          | event_types::BACKEND_SWITCHED
+          | event_types::CHILD_REPORT
+          | event_types::CLONE_START
+          | event_types::CONTEXT_COMPACT_FAILED
+          | event_types::DRAFT_FAILED
+          | event_types::DRAFT_REGISTERED
+          | event_types::DRAFT_SENT
+          | event_types::ERROR
+          | event_types::HANDLER_RESULT
+          | event_types::INPUT_DELIVERED
+          | event_types::MASTER_DONE
+          | event_types::MODEL_FALLBACK_NOTICE
+          | event_types::PROMPT_CHANGED
+          | event_types::QUOTA_FAILOVER
+          | event_types::RATE_LIMIT_EVENT
+          | event_types::RESUME_CONTEXT_DROPPED
+          | event_types::RUN_DELIVERY
+          | event_types::RUN_END
+          | event_types::RUN_ERROR
+          | event_types::RUN_FINISHED
+          | event_types::RUN_HEADER
+          | event_types::RUN_LAUNCH_WITHHELD
+          | event_types::RUN_STOP_REQUESTED
+          | event_types::SCHEDULED_RUN_SKIPPED
+          | event_types::SCHEDULED_TRIGGER
+          | event_types::SESSION_ATTACHED
+          | event_types::SESSION_RENAMED
+          | event_types::TASK_CLOSE_REQUESTED
+          | event_types::TASK_CLOSED
+          | event_types::TASK_CREATED
+          | event_types::TASK_DELEGATED
+          | event_types::TASK_IMPORTED
+          | event_types::TASK_INPUT_ACKNOWLEDGED
+          | event_types::TASK_REOPENED
+          | event_types::TASK_REPARENTED
+          | event_types::TASK_TRIGGERED
+          | event_types::THINKING
+          | event_types::TOOL_RESULT
+          | event_types::TOOL_USE
+          | event_types::TURN_HOOKS
+          | event_types::USER
+          | event_types::WEB_ASK_CHECK
+          | event_types::WEB_REPLY
+          | event_types::WEB_REPLY_CHECK
+          | event_types::WEB_REPLY_NOTICE
+          | event_types::WEB_STATUS
+          | event_types::WEB_STATUS_CONFIRMED
+          | event_types::WORKER_SUMMARY
+          | "claude_account_login_required"
+          | "command_lifecycle"
+          | "continuation_ran"
+          | "discord_ack"
+          | "discord_reply"
+          | "feature_event"
+          | "feishu_ack"
+          | "feishu_reply"
+          | "improve_failed"
+          | "improve_iteration_completed"
+          | "message"
+          | "policy_table_changed"
+          | "slack_ack"
+          | "slack_reply"
+          | "stream"
+          | "text"
+          | "web_status_subtree",
+        ) => {}
+        Some(other) => log_unnamed("event type", Some(other), source),
+        None => log_unnamed("event type", None, source),
       }
     }
     Ok(())
@@ -121,10 +197,12 @@ impl UsageFold {
     Ok(())
   }
 
-  fn feed_system<E: EventFields>(&mut self, event: &E) -> StoreResult<()> {
+  fn feed_system<E: EventFields>(&mut self, event: &E, source: &str) -> StoreResult<()> {
     match event.field("subtype").and_then(EventFields::as_str_field) {
-      Some(event_types::COMPACT_BOUNDARY) if self.reading_kind == ReadingKind::Claude => {
-        self.feed_compaction_metadata(event)?;
+      Some(event_types::COMPACT_BOUNDARY) => {
+        if self.reading_kind == ReadingKind::Claude {
+          self.feed_compaction_metadata(event)?;
+        }
       }
       Some(event_types::CONTEXT_READING) => {
         if let Some(reading) = event.field(event_types::CONTEXT_READING).filter(|value| is_truthy(*value)) {
@@ -132,7 +210,22 @@ impl UsageFold {
           self.reading = Some(reading.to_owned_value());
         }
       }
-      _ => {}
+      // These subtypes carry no usage figure.
+      Some(
+        event_types::COMMAND_PROGRESS
+        | "hang_diagnostics"
+        | "init"
+        | "status"
+        | "stderr"
+        | "thinking_tokens"
+        | event_types::TASK_NOTIFICATION
+        | event_types::TASK_PROGRESS
+        | event_types::TASK_STARTED
+        | "task_updated",
+      ) => {}
+      // A system event with no subtype is a plain line, which `event_builders` writes without one.
+      None => {}
+      Some(other) => log_unnamed("system subtype", Some(other), source),
     }
     Ok(())
   }
@@ -375,7 +468,7 @@ impl SessionUsage {
     run_kind: RunKind,
     backend_option: Option<&BackendOption>,
   ) -> StoreResult<Option<Value>> {
-    let fold = fold_events(events)?;
+    let fold = fold_events(session_id, events)?;
     self.log_cost_error_once(session_id, &fold);
     fold.resolve(&self.registry, events.len(), run_kind, backend_option)
   }
@@ -474,7 +567,7 @@ impl SessionUsage {
       Some(_) | None => UsageFold::default(),
     };
     let refs = delta.events[delta.start_index..].iter().map(Arc::as_ref).collect::<Vec<&ChatEvent>>();
-    fold.feed(&refs)?;
+    fold.feed(&refs, session_id)?;
     let memo_entry = FactsMemoEntry {
       session_id: session_id.to_string(),
       generation: delta.generation,
@@ -518,14 +611,20 @@ pub fn fold_usage<E: EventFields>(
   registry: &Registry,
   backend_option: Option<&BackendOption>,
 ) -> StoreResult<Option<Value>> {
-  fold_events(events)?.resolve(registry, events.len(), run_kind, backend_option)
+  fold_events("fold_usage", events)?.resolve(registry, events.len(), run_kind, backend_option)
 }
 
 /// The fold of an event slice, before any reading is resolved from it.
-fn fold_events<E: EventFields>(events: &[&E]) -> StoreResult<UsageFold> {
+fn fold_events<E: EventFields>(source: &str, events: &[&E]) -> StoreResult<UsageFold> {
   let mut fold = UsageFold::default();
-  fold.feed(events)?;
+  fold.feed(events, source)?;
   Ok(fold)
+}
+
+/// Logs a stored event type or subtype that no arm of the fold names, with the session it came from. The fold replays
+/// saved logs, which a newer writer may extend, so the fold goes on with the next event.
+fn log_unnamed(kind: &str, name: Option<&str>, source: &str) {
+  tracing::error!(target: "charliebot_usage", kind, name = ?name, source, "usage_fold_unnamed_event");
 }
 
 /// The run kind the session usage view assigns to a node profile.
@@ -795,6 +894,20 @@ mod tests {
     assert_eq!(
       fold_usage(&event_refs(&events), RunKind::Work, &registry(), None).unwrap().unwrap()["total_cost_usd"],
       0.1235
+    );
+  }
+
+  #[test]
+  fn an_event_type_or_subtype_no_arm_names_is_skipped_and_the_fold_goes_on() {
+    let known = vec![json!({"type": "result", "total_cost_usd": 0.25})];
+    let with_unnamed = vec![
+      json!({"type": "a_type_a_newer_writer_added", "content": "x"}),
+      json!({"type": "result", "total_cost_usd": 0.25}),
+      json!({"type": "system", "subtype": "a_subtype_a_newer_writer_added"}),
+    ];
+    assert_eq!(
+      fold_usage(&event_refs(&with_unnamed), RunKind::Work, &registry(), None).unwrap(),
+      fold_usage(&event_refs(&known), RunKind::Work, &registry(), None).unwrap()
     );
   }
 

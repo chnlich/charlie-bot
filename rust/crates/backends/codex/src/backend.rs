@@ -24,7 +24,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
 use super::options::CodexOptions;
 use super::text::is_truthy;
-use super::translate::CodexTranslator;
+use super::translate::{CodexTranslator, FILE_WRITE};
 use charliebot_agents::cli_base::prepend_path_dir;
 use charliebot_agents::gh_wrapper;
 use charliebot_agents::one_shot::{assistant_text, frame_system_prompt};
@@ -420,27 +420,56 @@ async fn collect(
       continue;
     };
     for translated in translator.translate_event(&event)? {
-      match translated.get("type").and_then(Value::as_str) {
-        Some(event_types::ERROR) => {
-          let message = translated.get("message").filter(|value| is_truthy(value)).or(translated.get("content"));
-          if let Some(message) = message.filter(|value| is_truthy(value))
-            && structured_error.is_none()
-          {
-            structured_error = Some(str_methods::strip(&value_str(message)).to_string());
-          }
-        }
-        Some(event_types::ASSISTANT)
-          if event.get("item").and_then(|item| item.get("type")).and_then(Value::as_str) == Some("agent_message") =>
-        {
-          parts.push(assistant_text(&translated));
-        }
-        _ => {}
-      }
+      fold_translated(&event, &translated, &mut parts, &mut structured_error)?;
     }
   }
   let status = child.wait().await?;
   let exit_code = proc_status::code_of(status).expect("an exit status has a code or signal");
   Ok((str_methods::strip(&parts.concat()).to_string(), structured_error, exit_code))
+}
+
+/// Folds one translated event of a live run into the answer parts and the first structured error. Each type the
+/// translator emits has its own arm, so an arm that is missing fails the run and names the type.
+fn fold_translated(
+  event: &Value,
+  translated: &Value,
+  parts: &mut Vec<String>,
+  structured_error: &mut Option<String>,
+) -> anyhow::Result<()> {
+  match translated.get("type").and_then(Value::as_str) {
+    Some(event_types::ERROR) => {
+      let message = translated.get("message").filter(|value| is_truthy(value)).or(translated.get("content"));
+      if let Some(message) = message.filter(|value| is_truthy(value))
+        && structured_error.is_none()
+      {
+        *structured_error = Some(str_methods::strip(&value_str(message)).to_string());
+      }
+    }
+    Some(event_types::ASSISTANT)
+      if event.get("item").and_then(|item| item.get("type")).and_then(Value::as_str) == Some("agent_message") =>
+    {
+      parts.push(assistant_text(translated));
+    }
+    // A todo list's text is progress, not the answer.
+    Some(event_types::ASSISTANT) => {}
+    // Reasoning is the model's thinking, not answer text.
+    Some(event_types::THINKING) => {}
+    // A tool step and its output are not answer text.
+    Some(event_types::TOOL_USE | event_types::TOOL_RESULT) => {}
+    // A file write is not answer text.
+    Some(FILE_WRITE) => {}
+    // The result repeats the run's last agent message, which the parts already hold.
+    Some(event_types::RESULT) => {}
+    // The session notice carries no answer text.
+    Some(event_types::SESSION_ATTACHED) => {}
+    // An item-level error is a non-fatal notice, and the turn goes on past it.
+    Some(event_types::SYSTEM) => {}
+    other => bail!(
+      "codex translator emitted an event type that the one-shot fold does not name: {}",
+      other.unwrap_or("<missing>")
+    ),
+  }
+  Ok(())
 }
 
 /// Writes the whole prompt to a child's stdin and closes it, so `codex exec` reads the prompt to its end.
@@ -466,6 +495,46 @@ async fn read_bounded_stderr(mut stderr: AgentPipeReader) -> anyhow::Result<Vec<
 #[cfg(test)]
 mod tests {
   use super::*;
+  use charliebot_agents::event_builders::make_text_event;
+  use serde_json::json;
+
+  #[test]
+  fn only_an_agent_message_adds_to_the_answer() {
+    let mut parts = Vec::new();
+    let mut structured_error = None;
+    let agent_message = json!({"type": "item.completed", "item": {"type": "agent_message"}});
+    fold_translated(&agent_message, &make_text_event("answer"), &mut parts, &mut structured_error).unwrap();
+    let todo_list = json!({"type": "item.updated", "item": {"type": "todo_list"}});
+    fold_translated(&todo_list, &make_text_event("- [ ] progress"), &mut parts, &mut structured_error).unwrap();
+    assert_eq!(parts, ["answer"]);
+    assert!(structured_error.is_none());
+  }
+
+  #[test]
+  fn each_named_translated_type_folds_to_nothing() {
+    let mut parts = Vec::new();
+    let mut structured_error = None;
+    let raw = json!({"type": "item.completed", "item": {"type": "command_execution"}});
+    for name in [
+      event_types::THINKING,
+      event_types::TOOL_USE,
+      event_types::TOOL_RESULT,
+      FILE_WRITE,
+      event_types::RESULT,
+      event_types::SESSION_ATTACHED,
+      event_types::SYSTEM,
+    ] {
+      fold_translated(&raw, &json!({"type": name}), &mut parts, &mut structured_error).unwrap();
+    }
+    assert!(parts.is_empty());
+    assert!(structured_error.is_none());
+  }
+
+  #[test]
+  fn a_translated_type_the_fold_does_not_name_fails_and_is_named() {
+    let error = fold_translated(&json!({}), &json!({"type": "plan"}), &mut Vec::new(), &mut None).unwrap_err();
+    assert!(error.to_string().contains("plan"), "{error}");
+  }
 
   #[test]
   fn toml_string_value_decodes_to_the_same_text() {

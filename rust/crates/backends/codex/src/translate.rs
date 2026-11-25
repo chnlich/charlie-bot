@@ -77,12 +77,22 @@ impl CodexTranslator {
         self.thread_id = thread_id.as_str().filter(|id| !id.is_empty()).map(str::to_string);
         Ok(vec![json!({"type": event_types::SESSION_ATTACHED, "session_id": thread_id})])
       }
+      // The codex exec event schema no longer names `session.created`, and the translator reads only `thread.started`.
+      // A stored log from an older codex still carries this type, so it folds to nothing.
+      "session.created" => Ok(Vec::new()),
       "turn.started" => Ok(Vec::new()),
       CODEX_TURN_COMPLETED => self.turn_completed(event),
       "turn.failed" | "error" => Ok(vec![make_error_event(&failure_message(event_type, event))]),
       "item.started" | "item.updated" | "item.completed" => self.translate_item(event),
+      // This fold reads stored raw logs as well as live output, so an unnamed type is logged and skipped. The log
+      // names the type and the thread the run has reached.
       _ => {
-        tracing::debug!(target: "charliebot_agents", r#type = event_type, "codex_event_unhandled");
+        tracing::error!(
+          target: "charliebot_agents",
+          r#type = event_type,
+          thread_id = ?self.thread_id,
+          "codex_event_unhandled"
+        );
         Ok(Vec::new())
       }
     }
@@ -207,7 +217,9 @@ impl CodexTranslator {
           vec![json!({"type": event_types::TOOL_RESULT, event_types::TOOL_NAME: tool, "content": output})]
         }
       }
-      _ => Vec::new(),
+      // A tool step is emitted at the item's start and its completion, so an update of the item emits none.
+      Some("item.updated") => Vec::new(),
+      _ => unreachable!("translate_item passes only item events, got {:?}", text_of(event, "type")),
     }
   }
 
@@ -358,7 +370,9 @@ fn mcp_tool_call(event: &Map<String, Value>, item: &Map<String, Value>) -> Vec<V
       };
       vec![make_tool_result_event(&tool_name, &value_str(&output))]
     }
-    _ => Vec::new(),
+    // A tool step is emitted at the item's start and its completion, so an update of the item emits none.
+    Some("item.updated") => Vec::new(),
+    _ => unreachable!("translate_item passes only item events, got {:?}", text_of(event, "type")),
   }
 }
 
@@ -426,6 +440,7 @@ fn full_event(event: &Map<String, Value>) -> String {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use charliebot_core::test_support::LogCapture;
 
   #[test]
   fn cumulative_agent_text_emits_only_the_new_part() {
@@ -523,6 +538,30 @@ mod tests {
     let event = json!({"type": "item.completed", "item": {"id": "item_0", "type": "error", "message": message}});
     let mut translator = CodexTranslator::new("gpt-5.5");
     assert_eq!(translator.translate_event(&event).unwrap(), [make_system_message_event(message)]);
+  }
+
+  /// The retired type folds to nothing and logs nothing, because a stored log of an older codex still carries it.
+  #[test]
+  fn a_retired_event_type_folds_without_a_report() {
+    let log = LogCapture::default();
+    let _capture = log.install();
+    let mut translator = CodexTranslator::new("gpt-5.5");
+    assert!(translator.translate_event(&json!({"type": "session.created", "session_id": "s1"})).unwrap().is_empty());
+    assert_eq!(log.text(), "", "a retired event type reports nothing");
+  }
+
+  /// A type the event schema does not name folds to nothing, and its log names the type and the thread.
+  #[test]
+  fn an_unnamed_event_type_folds_and_its_log_names_the_type() {
+    let log = LogCapture::default();
+    let _capture = log.install();
+    let mut translator = CodexTranslator::new("gpt-5.5");
+    translator.translate_event(&json!({"type": "thread.started", "thread_id": "thread-1"})).unwrap();
+    assert!(translator.translate_event(&json!({"type": "plan.proposed"})).unwrap().is_empty());
+    let text = log.text();
+    assert!(text.contains("ERROR") && text.contains("codex_event_unhandled"), "{text}");
+    assert!(text.contains("plan.proposed"), "{text}");
+    assert!(text.contains("thread-1"), "{text}");
   }
 
   #[test]

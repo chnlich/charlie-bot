@@ -26,6 +26,7 @@ charliebot-discord.workspace = true
 charliebot-failure-triage.workspace = true
 charliebot-feishu.workspace = true
 charliebot-github.workspace = true
+charliebot-google.workspace = true
 charliebot-improve.workspace = true
 charliebot-memory.workspace = true
 charliebot-taste.workspace = true

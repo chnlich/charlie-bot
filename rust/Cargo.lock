@@ -565,6 +565,7 @@ dependencies = [
  "charliebot-failure-triage",
  "charliebot-feishu",
  "charliebot-github",
+ "charliebot-google",
  "charliebot-improve",
  "charliebot-memory",
  "charliebot-packages",
@@ -1000,6 +1001,20 @@ dependencies = [
  "shlex",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "charliebot-google"
+version = "0.1.0"
+dependencies = [
+ "charliebot-cli-common",
+ "charliebot-core",
+ "clap",
+ "fancy-regex",
+ "reqwest 0.13.5",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
 ]
 
 [[package]]

@@ -116,7 +116,7 @@ fn run_subcommand(
     "files" => commands::files::main(args),
     "gc-trash" => commands::gc_trash::main(args, host),
     "github" => charliebot_github::cli::main(args),
-    "google" => commands::google::main(args),
+    "google" => charliebot_google::cli::main(args),
     "improve" => charliebot_improve::cli::improve_main(args),
     "kill-guard" => commands::kill_guard::main(args),
     "land" => commands::land::main(args),

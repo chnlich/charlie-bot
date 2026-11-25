@@ -49,6 +49,14 @@ A `charliebot` command that needs the server exits non-zero in the round.
 When the round's own scan or measurement cannot run, the round stops and names the missing input.
 The round does not reuse an earlier round's result as its current state.
 
+## Rust production scans
+
+A round's scan of Rust production code goes through `$IMPROVE_KIT_DIR/dev/improve/rust-production-scan.mjs`.
+The tool yields the production lines of the Rust files or directories that the scan names, each with its file and line,
+and it leaves out the test items and the files under `tests/` directories.
+It fails with the file and line on input it cannot parse, so an empty result means that no production line matched.
+A round's report names the tool's revision for each scan it cites; the tool's stderr summary line carries that revision.
+
 ## The round's browser
 
 The runner resolves the round's browser before the round starts: the Chrome of the Playwright build that

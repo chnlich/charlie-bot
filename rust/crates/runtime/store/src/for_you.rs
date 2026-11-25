@@ -199,7 +199,7 @@ mod tests {
     }
     let empty_reply = json!({"role": SYSTEM_ROLE, "content": "Posted to Slack: "});
     assert!(is_legacy_thread_reply(&empty_reply), "an empty reply keeps its label");
-    for text in ["Posted to Teams: reply", "Posted to Slack reply", "Backend switched: a → b"] {
+    for text in ["Posted to Teams: reply", "Posted to Slack reply", "Backend switched: a to b"] {
       assert!(!is_legacy_thread_reply(&json!({"role": SYSTEM_ROLE, "content": text})), "{text}");
     }
   }

@@ -381,8 +381,13 @@ pub fn text_probe_input(text: &str, questions: &str) -> String {
 }
 
 /// The findings parsed from a numbered cold-read answer with `question_count` questions.
+///
+/// Each numbered line is a reading of its question, and a line without a number joins the reading before it. A question
+/// may repeat its numbered line: every reading that gives a finding is reported as its own finding, and readings that
+/// all say none report nothing. A none reading beside a finding reading for the same question conflicts, so the answer
+/// is refused.
 pub fn parse_reply_findings(answer: &str, question_count: usize) -> anyhow::Result<Vec<String>> {
-  let mut answers: Vec<Option<String>> = vec![None; question_count];
+  let mut readings: Vec<Vec<String>> = vec![Vec::new(); question_count];
   let mut active = None;
   for line in answer.lines() {
     let trimmed = line.trim();
@@ -393,33 +398,40 @@ pub fn parse_reply_findings(answer: &str, question_count: usize) -> anyhow::Resu
         .find_map(|label| trimmed.strip_prefix(label.as_str()).map(|rest| (index, rest)))
     });
     if let Some((index, rest)) = labelled {
-      anyhow::ensure!(
-        answers[index].is_none(),
-        "cold-read reply answer repeats question {}; raw answer:\n{}",
-        index + 1,
-        answer
-      );
-      answers[index] = Some(rest.trim().trim_start_matches([':', '：', '.']).trim().to_string());
-      active = Some(index);
-    } else if let Some(index) = active
+      readings[index].push(rest.trim().trim_start_matches([':', '：', '.']).trim().to_string());
+      active = Some((index, readings[index].len() - 1));
+    } else if let Some((index, reading)) = active
       && !trimmed.is_empty()
     {
-      let text = answers[index].as_mut().expect("an active answer was initialized");
+      let text = &mut readings[index][reading];
       text.push('\n');
       text.push_str(trimmed);
     }
   }
   anyhow::ensure!(
-    answers.iter().all(Option::is_some),
+    readings.iter().all(|question| !question.is_empty()),
     "cold-read reply answer must answer all {question_count} numbered questions; raw answer:\n{answer}"
   );
 
   let mut findings = Vec::new();
-  for answer in answers.into_iter().flatten() {
-    let without_trailing = answer.trim().trim_end_matches('.').trim();
-    if !without_trailing.is_empty() && !is_none_verdict(without_trailing) {
-      findings.push(without_trailing.to_string());
+  for (index, question) in readings.into_iter().enumerate() {
+    let mut question_findings = Vec::new();
+    let mut none_count = 0;
+    for reading in question {
+      let without_trailing = reading.trim().trim_end_matches('.').trim();
+      if without_trailing.is_empty() || is_none_verdict(without_trailing) {
+        none_count += 1;
+      } else {
+        question_findings.push(without_trailing.to_string());
+      }
     }
+    anyhow::ensure!(
+      none_count == 0 || question_findings.is_empty(),
+      "cold-read reply answer conflicts on question {}: lines say both none and a finding; raw answer:\n{}",
+      index + 1,
+      answer
+    );
+    findings.extend(question_findings);
   }
   Ok(findings)
 }
@@ -985,6 +997,69 @@ BBBB
       vec!["\"Please approve the change.\""]
     );
     assert!(parse_reply_findings("The status is clear.", NOW_QUESTION_COUNT).is_err());
+  }
+
+  #[test]
+  fn now_findings_parser_reports_each_line_of_a_repeated_question() {
+    let n346 = concat!(
+      r#"(1) "d4fa7106 等你定固定 IP 与联系刘旭" asks the user to decide the fixed IP and contact 刘旭."#,
+      "\n",
+      r#"(1) "fpt-k8s 的新版安装和 PodMonitor 同步等上手试跑结束后我发 resume" waits on the user's hands-on "#,
+      r#"trial run to finish before the agent sends resume."#,
+    );
+    assert_eq!(
+      parse_reply_findings(n346, NOW_QUESTION_COUNT).unwrap(),
+      [
+        "\"d4fa7106 等你定固定 IP 与联系刘旭\" asks the user to decide the fixed IP and contact 刘旭",
+        concat!(
+          "\"fpt-k8s 的新版安装和 PodMonitor 同步等上手试跑结束后我发 resume\" waits on the user's hands-on ",
+          "trial run to finish before the agent sends resume",
+        ),
+      ]
+    );
+
+    let n231 = concat!(
+      r#"(1) "等待回报后发你审阅" (the draft goes to the user for review)."#,
+      "\n",
+      r#"(1) "原理解页继续挂在 Waiting on you" (a mention of the user's Waiting on you list)."#,
+    );
+    assert_eq!(
+      parse_reply_findings(n231, NOW_QUESTION_COUNT).unwrap(),
+      [
+        "\"等待回报后发你审阅\" (the draft goes to the user for review)",
+        "\"原理解页继续挂在 Waiting on you\" (a mention of the user's Waiting on you list)",
+      ]
+    );
+
+    let l0276 = concat!(
+      r#"(1) "训练线计划待审" (the training-line plan is pending review; "#,
+      r#"the Now text doesn't name the reviewer, "#,
+      r#"but the approvals it lists suggest the user)"#,
+      "\n",
+      r#"(1) "接口计划 v3 已备（新增 sudo 取舍）" (the sudo trade-off in the interface plan "#,
+      r#"may need the user's choice)."#,
+    );
+    assert_eq!(
+      parse_reply_findings(l0276, NOW_QUESTION_COUNT).unwrap(),
+      [
+        concat!(
+          "\"训练线计划待审\" (the training-line plan is pending review; ",
+          "the Now text doesn't name the reviewer, ",
+          "but the approvals it lists suggest the user)",
+        ),
+        "\"接口计划 v3 已备（新增 sudo 取舍）\" (the sudo trade-off in the interface plan may need the user's choice)",
+      ]
+    );
+  }
+
+  #[test]
+  fn now_findings_parser_refuses_a_repeated_question_whose_lines_conflict() {
+    for answer in ["(1) none\n(1) \"Please approve the change.\"", "(1) \"Please approve the change.\"\n(1) none"] {
+      let error = parse_reply_findings(answer, NOW_QUESTION_COUNT).unwrap_err().to_string();
+      assert!(error.contains("conflicts on question 1"), "{error}");
+      assert!(error.contains(answer), "{error}");
+    }
+    assert!(parse_reply_findings("(1) none\n(1) none", NOW_QUESTION_COUNT).unwrap().is_empty());
   }
 
   #[test]

@@ -49,7 +49,7 @@ A platform describes itself to the core with one `ThreadPlatform` value and one 
 | `block_keys` | Summon-block keys the failed-turn recovery nudge copies from the summon | `channel_id`, `thread_ts`, `mention_ts` | `guild_id`, `channel_id`, `thread_id`, `mention_id` | `chat_id`, `root_id`, `mention_id` |
 | `summon_line` | The whole summon input: one fixed line naming the platform and the event; the turn-end check reads it to recognize the current contract | `Slack 线程召唤` | `Discord 线程召唤` | `飞书 线程召唤` |
 
-Three marker keys derive from `name` and so carry no field of their own: `notice_key` names the marker payload that the turn-end notice delivery and boot backfill read, `backfill_key` names the lost-summon marker payload, and `ack_event_type` names the ack record's wire type (`slack_ack`, `discord_ack`).
+Two marker keys derive from `name` and so carry no field of their own: `notice_key` names the marker payload that the turn-end notice delivery and boot backfill read, and `backfill_key` names the lost-summon marker payload. `ack_event_type` is a field beside `reply_event_type`: it names the ack record's wire type (`slack_ack`, `discord_ack`), whose name `charliebot_core::event_types` owns.
 
 ### `ThreadAdapter` methods
 

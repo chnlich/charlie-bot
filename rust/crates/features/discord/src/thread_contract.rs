@@ -20,6 +20,7 @@ pub const DISCORD: ThreadPlatform = ThreadPlatform {
   name: "discord",
   display_name: "Discord",
   reply_event_type: crate::event_types::DISCORD_REPLY,
+  ack_event_type: crate::event_types::DISCORD_ACK,
   reply_command: REPLY_COMMAND,
   max_post_chars: MAX_POST_CHARS,
   scope_doc: "discord_reply_scope.md",

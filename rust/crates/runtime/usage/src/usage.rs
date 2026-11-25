@@ -153,16 +153,16 @@ impl UsageFold {
           | event_types::CLAUDE_ACCOUNT_LOGIN_REQUIRED
           | event_types::COMMAND_LIFECYCLE
           | event_types::CONTINUATION_RAN
-          | "discord_ack"
+          | event_types::DISCORD_ACK
           | event_types::DISCORD_REPLY
           | event_types::FEATURE_EVENT
-          | "feishu_ack"
+          | event_types::FEISHU_ACK
           | event_types::FEISHU_REPLY
           | event_types::IMPROVE_FAILED
           | event_types::IMPROVE_ITERATION_COMPLETED
           | "message"
           | event_types::POLICY_TABLE_CHANGED
-          | "slack_ack"
+          | event_types::SLACK_ACK
           | event_types::SLACK_REPLY
           | "stream"
           | "text"

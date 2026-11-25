@@ -3,8 +3,8 @@
 //! from its constants, implements `ThreadAdapter` over its client, and calls these entries with the adapter.
 //!
 //! Public API:
-//! - `ThreadPlatform`: the per-platform facts. `notice_key`, `backfill_key` and `ack_event_type`
-//!   derive the marker keys from `name`, and `platform_line` opens every platform's contract part.
+//! - `ThreadPlatform`: the per-platform facts. `notice_key` and `backfill_key` derive the marker keys from `name`,
+//!   and `platform_line` opens every platform's contract part.
 //! - `IdOrdering` (`ThreadPlatform::id_key`): text order for Slack ts strings, integer order for Discord snowflakes,
 //!   and millisecond-then-id order for Feishu's `<create_time ms>-<message id>` composites.
 //! - `ThreadMessage` and `ThreadAdapter`: the message the round side reads, and the
@@ -127,6 +127,8 @@ pub struct ThreadPlatform {
   pub display_name: &'static str,
   /// The platform's reply event type.
   pub reply_event_type: &'static str,
+  /// The event type of the platform's persisted ack audit record.
+  pub ack_event_type: &'static str,
   /// The command the reply-format contract names for posting a reply.
   pub reply_command: &'static str,
   /// The platform's per-message character limit (`max_post_chars`).
@@ -164,11 +166,6 @@ impl ThreadPlatform {
   /// Event payload key of the lost-summon backfill marker (`backfill_key`).
   pub fn backfill_key(&self) -> String {
     format!("{}_backfill", self.name)
-  }
-
-  /// Wire type of the platform's persisted ack audit record (`ack_event_type`).
-  pub fn ack_event_type(&self) -> String {
-    format!("{}_ack", self.name)
   }
 
   /// The key naming the thread's newest consumed message id in the read and ack readbacks (`watermark_key`).
@@ -1115,9 +1112,9 @@ pub async fn ack_messages(
     .persist_and_broadcast(
       session_id,
       json!({
-        "type": platform.ack_event_type(),
+        "type": platform.ack_event_type,
         "content": format!("{} thread ack: {} message(s) read through {ceiling}", platform.display_name, ids.len()),
-        (platform.ack_event_type()): {
+        (platform.ack_event_type): {
           (MESSAGE_IDS): ids,
           (platform.watermark_key()): watermark,
         },

@@ -89,6 +89,11 @@ pub const WEB_REPLY_NOTICE: &str = "web_reply_notice";
 pub const SLACK_REPLY: &str = "slack_reply";
 pub const DISCORD_REPLY: &str = "discord_reply";
 pub const FEISHU_REPLY: &str = "feishu_reply";
+/// Each platform's audit record of a thread ack. An ack advances the session's read watermark over the
+/// message ids it names.
+pub const SLACK_ACK: &str = "slack_ack";
+pub const DISCORD_ACK: &str = "discord_ack";
+pub const FEISHU_ACK: &str = "feishu_ack";
 pub const WEB_STATUS: &str = "web_status";
 pub const WEB_STATUS_SUBTREE: &str = "web_status_subtree";
 /// A confirmation through `charliebot web status confirm` that the stored status needs no change this turn. The

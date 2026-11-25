@@ -53,7 +53,10 @@ async fn effective_prompt(
   // An empty `kind` selects the default.
   let kind = match params.get("kind").filter(|kind| !kind.is_empty()) {
     Some(kind) if !is_run_kind(kind) => {
-      return detail(StatusCode::BAD_REQUEST, format!("unknown run kind: {}", str_repr(kind)));
+      return responses::http_exception_with_detail(
+        StatusCode::BAD_REQUEST,
+        &format!("unknown run kind: {}", str_repr(kind)),
+      );
     }
     Some(kind) => kind.as_str(),
     None => default_kind,
@@ -65,7 +68,10 @@ async fn effective_prompt(
   let mut preview_meta = meta.clone();
   if preview_meta.backend.is_empty() {
     let Some(backend) = cfg.backends.new_session_backend() else {
-      return detail(StatusCode::BAD_REQUEST, charliebot_agents::model_pool::MISSING_BACKEND_OPTION);
+      return responses::http_exception_with_detail(
+        StatusCode::BAD_REQUEST,
+        charliebot_agents::model_pool::MISSING_BACKEND_OPTION,
+      );
     };
     preview_meta.backend = backend;
   }
@@ -76,11 +82,11 @@ async fn effective_prompt(
   let backend_id = match charliebot_agents::model_pool::turn_member(&features, &cfg, &preview_meta) {
     Ok(Some(backend_id)) => backend_id,
     Ok(None) => match selector.exhausted_message(&preview_meta.backend) {
-      Ok(message) => return detail(StatusCode::BAD_REQUEST, message),
+      Ok(message) => return responses::http_exception_with_detail(StatusCode::BAD_REQUEST, &message),
       Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
     },
     Err(error) if cfg.backends.check_backend_id(&preview_meta.backend).is_err() => {
-      return detail(StatusCode::BAD_REQUEST, error.to_string());
+      return responses::http_exception_with_detail(StatusCode::BAD_REQUEST, &error.to_string());
     }
     Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
   };
@@ -95,7 +101,7 @@ async fn effective_prompt(
     Ok(coherent) => coherent,
     Err(error) => {
       return match error.downcast_ref::<TaskPromptError>() {
-        Some(error) => detail(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+        Some(error) => responses::http_exception_with_detail(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
         None => responses::internal_error("RuntimeError", format!("{error:#}")),
       };
     }
@@ -120,11 +126,6 @@ async fn effective_prompt(
 /// The run kinds: the manager kinds and the worker kinds make up the literal together.
 fn is_run_kind(kind: &str) -> bool {
   prompts::MANAGER_KINDS.contains(&kind) || prompts::WORKER_KINDS.contains(&kind)
-}
-
-/// The error answer: the status and `{"detail": text}`.
-fn detail(status: StatusCode, text: impl Into<String>) -> Response {
-  responses::json(status, &json!({"detail": text.into()}))
 }
 
 #[cfg(test)]

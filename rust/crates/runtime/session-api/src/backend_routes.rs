@@ -15,7 +15,7 @@ use charliebot_core::config::{CallClass, CallTarget, yaml_mapping_to_json};
 use charliebot_registry::FeatureContext;
 use charliebot_registry::backend::CLAUDE_CONFIG_DIR_FIELD;
 use charliebot_registry::caller::CallerIdentity;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::route_support::store_error;
 
@@ -60,7 +60,7 @@ async fn resolve(
 ) -> Response {
   let target = match target_of(&body) {
     Ok(target) => target,
-    Err(message) => return detail(StatusCode::BAD_REQUEST, message),
+    Err(message) => return responses::http_exception_with_detail(StatusCode::BAD_REQUEST, &message),
   };
   let cfg = match features.config.get() {
     Ok(cfg) => cfg,
@@ -99,7 +99,9 @@ async fn resolve(
   };
   let option = match resolved {
     Ok(option) => option,
-    Err(ResolveError::Refused(message)) => return detail(StatusCode::CONFLICT, message),
+    Err(ResolveError::Refused(message)) => {
+      return responses::http_exception_with_detail(StatusCode::CONFLICT, &message);
+    }
     Err(ResolveError::Failed(error)) => return responses::internal_error("RuntimeError", format!("{error:#}")),
   };
   let lifecycle = match features.registry.lifecycle_for(&option.backend_type) {
@@ -108,7 +110,7 @@ async fn resolve(
   };
   let claude_config_dir = match lifecycle.resolve_account_dir(&option, &cfg) {
     Ok(Ok(dir)) => dir,
-    Ok(Err(message)) => return detail(StatusCode::CONFLICT, message),
+    Ok(Err(message)) => return responses::http_exception_with_detail(StatusCode::CONFLICT, &message),
     Err(error) => return responses::internal_error("RuntimeError", format!("{error:#}")),
   };
   match yaml_mapping_to_json(&option.record()) {
@@ -124,16 +126,13 @@ async fn resolve(
   }
 }
 
-fn detail(status: StatusCode, text: impl Into<String>) -> Response {
-  responses::json(status, &json!({"detail": text.into()}))
-}
-
 #[cfg(test)]
 mod tests {
   use charliebot_agents::backend_availability::BackendAvailability;
   use charliebot_agents::model_pool::RotationPositions;
   use charliebot_core::run_token::RunTokenClaims;
   use charliebot_store::metadata::{SessionMetadata, TaskProfile};
+  use serde_json::json;
 
   use super::*;
   use crate::test_support::{GatedHome, answer, feature_context_with_auto};

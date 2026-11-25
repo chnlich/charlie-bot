@@ -134,7 +134,7 @@ A new platform repeats the shape Slack, Discord, and Feishu already fill. Work d
 5. Write the connection loop (`run_listener`): connect, reconnect with backoff, and run `backfill_followed_threads` on every (re)connection.
 6. Pick the session-id namespace and `summon_session_id`, and resolve the session label once per accepted summon.
 7. Write the summon line (`summon_line`), the contract's platform part, and the summon block keys; build the contract segment in the turn contribution with `thread_entry.thread_reply_contract` (the follow wake label comes from the shared `follow_wake_label`).
-8. Register the service in the feature crate's `lib.rs` (`registry.service(...)`) and write its `service.rs`: the listener task plus the boot-backfill task, behind the platform's credentials and allowed users.
+8. Register the service in the feature crate's `register` function (`registry.service(...)`) and write its `service.rs`: the listener task plus the boot-backfill task, behind the platform's credentials and allowed users.
 9. Register the platform's `turn_kind`, notice delivery, and failed-turn recovery on its turn contribution. The contribution answers `thread-reply` with its `ThreadPlatform` (`turn_end_check_names` and `run_turn_end_check`); the shared hook list already contains that name.
 10. Add the CLI verbs and the internal endpoints for reply and ack (or the platform's read equivalent, as Discord's `read` is).
 11. Add the reply event type constant in the package's own `event_types.rs` and return its session-view renderer from the same contribution's `event_renderers`.

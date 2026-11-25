@@ -511,7 +511,7 @@ mod tests {
         .body(Body::from(json!({"session_id": session_id, "text": "same response"}).to_string()))
         .unwrap()
     };
-    let router = crate::routes(&home.features);
+    let router = crate::entry::routes(&home.features);
     let (first, second) = tokio::join!(router.clone().oneshot(request()), router.oneshot(request()));
     let first = first.unwrap();
     let second = second.unwrap();
@@ -637,7 +637,7 @@ mod tests {
     drop(guard);
     home.features.store.record_launch(&session_id, COLLEAGUE_RUN, 424242, "12345").await.unwrap();
 
-    let router = crate::routes(&home.features);
+    let router = crate::entry::routes(&home.features);
     let writes = [
       ("/api/internal/web/status", json!({"session_id": session_id, "text": "{\"goal\": \"g\"}"})),
       ("/api/internal/web/status/confirm", json!({"session_id": session_id})),

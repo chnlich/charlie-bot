@@ -839,7 +839,6 @@ function renderSessionItem(s, filter, options = {}) {
   const indicators = [
       ...(isArchivedRow ? [] : [
         renderSessionIndicators(s),
-        renderPendingTriggerIndicator(s),
         renderPendingPlanApprovalIndicator(s),
         ...sessionRowBadges.map(render => render(s)),
       ]),
@@ -874,7 +873,9 @@ function renderSessionItem(s, filter, options = {}) {
       ?? renderSessionTimeLine(s, timeIso, timeStr, !!options.staticTime);
   // A context row dims and carries the active tag on its name line. The tag
   // stays beside the name span, not inside it, so a long name truncates before
-  // the tag does, and the time line keeps the column's full width.
+  // the tag does, and the time line keeps the column's full width. The
+  // pending-trigger bell takes the same place: in the lead column it narrows
+  // the time line, which then truncates the backend label of a row with a bell.
   return renderSessionRowShell(s, {
     filter,
     title: sessionRowTitle(s, filter, options.groupHeader),
@@ -884,7 +885,7 @@ function renderSessionItem(s, filter, options = {}) {
     line,
     nameTag: isContextRow
       ? '<span class="ml-auto px-1.5 py-0.5 rounded bg-slate-700 text-[10px] leading-none font-medium text-slate-400 flex-shrink-0">active</span>'
-      : '',
+      : (isArchivedRow ? '' : renderPendingTriggerIndicator(s)),
     actions,
   });
 }

@@ -725,6 +725,8 @@ const ACTIVITY_STATES = [
 ];
 const EXISTING_ICON_KINDS = ['spinner', 'worker-indicator', 'waiting-indicator', 'unread', 'subtree-unread',
   'pending-trigger', 'pending-plan-approval'];
+// The pending-trigger bell sits on the name line after the lead icons, so the marker's order check leaves it out.
+const LEAD_ICON_KINDS = EXISTING_ICON_KINDS.filter((kind) => kind !== 'pending-trigger');
 
 for (const state of ACTIVITY_STATES) {
   test(`a row in the ${state.name} state shows its marker after the existing icons, which keep their state`, () => {
@@ -747,7 +749,7 @@ for (const state of ACTIVITY_STATES) {
     assert.equal(renderedHidden(marked.nav, `waiting-marker-${own}`), false, 'the marker shows');
     const html = marked.nav.innerHTML;
     const marker = html.indexOf(`id="waiting-marker-${own}"`);
-    for (const kind of EXISTING_ICON_KINDS) {
+    for (const kind of LEAD_ICON_KINDS) {
       const position = html.indexOf(`id="${kind}-${own}"`);
       if (position !== -1) assert.ok(position < marker, `${kind}-${own} renders before the marker`);
     }

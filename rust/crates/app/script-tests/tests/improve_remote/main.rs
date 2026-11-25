@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-use charliebot_shell_harness as harness;
+use charliebot_shell_harness::{self as harness, Sandbox};
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 use world::{
@@ -3906,4 +3906,174 @@ fn a_round_prunes_the_tools_of_commits_that_no_live_process_names() {
   assert!(!bin.join(dead_commit).exists(), "a dead commit's directory stayed");
   assert!(!bin.join(format!("charliebot-{dead_commit}")).exists(), "a dead commit's tools stayed");
   assert!(bin.join(format!("charliebot-{}", world.commit)).exists(), "the round's own tools were pruned");
+}
+
+// The production scan (dev/improve/rust-production-scan.mjs), which the rounds scan Rust production code with.
+
+/// Writes each `(relative path, text)` fixture under `root`.
+fn write_fixtures(root: &Path, files: &[(&str, &str)]) {
+  for (relative, text) in files {
+    let path = root.join(relative);
+    fs::create_dir_all(path.parent().expect("a fixture path has a parent")).expect("the fixture directory");
+    fs::write(&path, text).expect("the fixture file");
+  }
+}
+
+/// Runs the production scan on `arguments`, from the fixture root.
+fn production_scan(sandbox: &Sandbox, arguments: &[&str]) -> harness::Run {
+  let mut command = harness::command("node", &sandbox.env());
+  command
+    .current_dir(sandbox.root())
+    .arg(harness::repo_root().join("dev/improve/rust-production-scan.mjs"))
+    .args(arguments);
+  harness::run(&mut command)
+}
+
+/// The line numbers that the scan printed for `file`, in order.
+fn scanned_lines(stdout: &str, file: &str) -> Vec<usize> {
+  stdout
+    .lines()
+    .filter_map(|line| line.strip_prefix(file)?.strip_prefix(':')?.split(':').next()?.parse().ok())
+    .collect()
+}
+
+const PRODUCTION_AFTER_TEST_ELEMENTS: &str = "\
+pub fn before() -> u8 {
+  1
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  mod nested {
+    fn deep() {
+      let _ = \"}\";
+    }
+  }
+
+  #[test]
+  fn reads_home() {
+    let _ = std::env::var(\"HOME\");
+  }
+}
+
+#[tokio::test(flavor = \"multi_thread\")]
+async fn outside_a_module() {
+  let _ = std::env::var(\"HOME\");
+}
+
+pub struct Counter {
+  #[cfg(test)]
+  builds: HashMap<String, u8>,
+  kept: u8,
+}
+
+pub fn choose(value: u8) -> u8 {
+  #[cfg(test)]
+  let _ = std::env::var(\"HOME\");
+  match value {
+    #[cfg(test)]
+    0 => 9,
+    _ => value,
+  }
+}
+
+pub fn after() -> u8 {
+  2
+}
+";
+
+#[test]
+#[ignore = "integration"]
+fn production_scan_keeps_production_code_after_test_elements_and_names_its_revision() {
+  let sandbox = Sandbox::new();
+  write_fixtures(sandbox.root(), &[("src/lib.rs", PRODUCTION_AFTER_TEST_ELEMENTS)]);
+  let run = production_scan(&sandbox, &["src/lib.rs"]);
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert_eq!(
+    scanned_lines(&run.stdout, "src/lib.rs"),
+    vec![1, 2, 3, 26, 29, 30, 32, 35, 38, 39, 40, 42, 43, 44],
+    "{}",
+    run.describe()
+  );
+  // The summary line names the tool's revision: twelve hex digits, then a colon.
+  let revision = run.stderr.strip_prefix("rust-production-scan ").and_then(|rest| rest.get(..12));
+  assert!(revision.is_some_and(|hex| hex.chars().all(|c| c.is_ascii_hexdigit())), "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn production_scan_ignores_braces_inside_literals_and_comments_of_a_test_module() {
+  const LITERALS: &str = r##"pub fn before() {}
+#[cfg(test)]
+mod literals {
+  const A: &str = "}";
+  const B: &str = r#"{ "}" }"#;
+  const C: char = '}';
+  const D: char = '\u{7B}';
+  const E: u8 = b'{';
+  // } an unbalanced brace in a comment
+  /* outer /* nested } */ still { */
+  fn lifetimes<'a>(x: &'a str) -> &'a str {
+    x
+  }
+}
+pub fn after() {}
+"##;
+  let sandbox = Sandbox::new();
+  write_fixtures(sandbox.root(), &[("src/lib.rs", LITERALS)]);
+  let run = production_scan(&sandbox, &["src/lib.rs"]);
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert_eq!(scanned_lines(&run.stdout, "src/lib.rs"), vec![1, 15], "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn production_scan_leaves_out_external_test_modules_and_tests_directories() {
+  let sandbox = Sandbox::new();
+  write_fixtures(
+    sandbox.root(),
+    &[
+      (
+        "src/lib.rs",
+        "#[cfg(test)]\nmod helpers;\n#[cfg(test)]\n#[path = \"elsewhere/by_path.rs\"]\nmod by_path;\nmod real;\n",
+      ),
+      ("src/helpers.rs", "pub fn helper() -> u8 {\n  1\n}\n\nmod deeper;\n"),
+      ("src/helpers/deeper.rs", "pub fn deep() {}\n"),
+      ("src/elsewhere/by_path.rs", "pub fn by_path() {}\n"),
+      ("src/real.rs", "pub fn real() -> u8 {\n  3\n}\n"),
+      ("tests/integration.rs", "pub fn it_works() {}\n"),
+    ],
+  );
+  let run = production_scan(&sandbox, &["."]);
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert_eq!(scanned_lines(&run.stdout, "src/lib.rs"), vec![6], "{}", run.describe());
+  assert_eq!(scanned_lines(&run.stdout, "src/real.rs"), vec![1, 2, 3], "{}", run.describe());
+  assert!(!run.stdout.contains("helper") && !run.stdout.contains("deep") && !run.stdout.contains("by_path"));
+
+  // A scan with no production file fails: an empty result would read as "no finding".
+  let tests_only = production_scan(&sandbox, &["tests/integration.rs"]);
+  assert_eq!(tests_only.code, 1, "{}", tests_only.describe());
+  assert!(tests_only.stdout.is_empty(), "{}", tests_only.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn production_scan_fails_with_the_file_and_line_of_input_it_cannot_parse() {
+  let cases: [(&str, &str, usize); 5] = [
+    ("an unclosed brace", "pub fn f() {\n  1\n", 1),
+    ("an unterminated string", "pub fn f() {}\nconst S: &str = \"abc;\n", 2),
+    ("a closer that does not match", "pub fn f() {\n  (\n}\n", 3),
+    ("a test attribute at the end of the file", "pub fn f() {}\n#[cfg(test)]\n", 2),
+    ("a test module declaration with no file", "#[cfg(test)]\nmod missing;\n", 2),
+  ];
+  for (case, text, line) in cases {
+    let sandbox = Sandbox::new();
+    write_fixtures(sandbox.root(), &[("src/bad.rs", text)]);
+    let run = production_scan(&sandbox, &["src/bad.rs"]);
+    assert_eq!(run.code, 1, "{case}: {}", run.describe());
+    assert!(run.stdout.is_empty(), "{case} printed production lines: {}", run.describe());
+    assert!(run.stderr.contains(&format!("src/bad.rs:{line}:")), "{case} did not name its line: {}", run.describe());
+  }
 }

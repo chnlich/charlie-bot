@@ -110,6 +110,8 @@ remote limits and injects a test git program; production builds use the timeout 
 - `git::git_worktree_prune`
 - `git::git_rev_parse`
 - `git::git_rev_list_count`
+- `git::git_rev_list_count_checked`
+- `git::git_branch_creation_point`
 - `git::git_push_branch`
 - `git::git_push_refspec`
 - `git::SUBPROCESS_GIT_READ_TIMEOUT_ASYNC`

@@ -2088,6 +2088,11 @@ impl TaskExecutionAdapter {
     Ok(())
   }
 
+  /// The landing a work run delivers, or the reason it delivers none.
+  ///
+  /// The branch must add a commit of its own past its creation point, and that commit must reach the
+  /// base's published ref. A branch that adds nothing points at a commit the base already holds, so the
+  /// ancestry check alone would pass it; the creation point tells the two cases apart.
   async fn landing_for_work(
     &self,
     session_id: &str,
@@ -2101,6 +2106,27 @@ impl TaskExecutionAdapter {
     let Some(commit) = git::git_rev_parse(Path::new(repo_path), branch_name).await else {
       return (None, format!("branch {branch_name} does not resolve in {repo_path}"));
     };
+    let creation = match git::git_branch_creation_point(Path::new(repo_path), branch_name).await {
+      Ok(creation) => creation,
+      Err(error) => {
+        return (None, format!("the creation point of work branch {branch_name} cannot be read: {error:#}"));
+      }
+    };
+    match git::git_rev_list_count_checked(Path::new(repo_path), &format!("{creation}..{commit}")).await {
+      Ok(0) => {
+        return (
+          None,
+          format!(
+            "the work branch {branch_name} adds no commit to {base_branch}: its tip {commit} is already reachable \
+             from its creation point {creation}"
+          ),
+        );
+      }
+      Ok(_) => {}
+      Err(error) => {
+        return (None, format!("counting the commits of work branch {branch_name} failed: {error:#}"));
+      }
+    }
     let target = review_text::review_landing_target(base_branch);
     let (landed, reason) = git::git_verify_commit_landed(Path::new(repo_path), &target, &commit).await;
     if !landed {

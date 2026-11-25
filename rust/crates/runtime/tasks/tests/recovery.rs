@@ -1532,6 +1532,19 @@ fn worktree(repo: &SyntheticRepo, stack: &Stack, _session_id: &str, run_id: &str
   Ok((branch, path))
 }
 
+/// Commit one empty change on *worktree*'s branch: a work run that delivers carries a commit of its own.
+fn commit_work(worktree: &Path) -> anyhow::Result<()> {
+  let output =
+    Command::new("git").arg("-C").arg(worktree).args(["commit", "--allow-empty", "-m", "synthetic work"]).output()?;
+  anyhow::ensure!(
+    output.status.success(),
+    "git commit failed in {}: {}",
+    worktree.display(),
+    String::from_utf8_lossy(&output.stderr)
+  );
+  Ok(())
+}
+
 fn child_reports(stack: &Stack, manager_id: &str) -> anyhow::Result<Vec<Value>> {
   Ok(
     stack
@@ -1604,6 +1617,8 @@ async fn recovery_never_rereviews_a_successfully_reviewed_work_run() -> anyhow::
   let stack = Stack::start("exit 0").await?;
   let worker = stack.node("worker", None, TaskProfile::Worker, Some(implement_spec(&repo.repo))).await?;
   let (branch, worktree) = worktree(&repo, &stack, &worker.id, "run-reviewed")?;
+  commit_work(&worktree)?;
+  repo.publish_worktree(&worktree)?;
   finished_work_run(&stack, &worker.id, "run-reviewed", &repo, &branch, &worktree, None).await?;
   review_of(&stack, &worker.id, "review-done", "run-reviewed", RunOutcomeKind::Success, "fake2").await?;
 
@@ -1624,6 +1639,8 @@ async fn recovery_spawns_no_review_for_a_superseded_work_run_on_a_closed_task() 
   let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
   let worker = stack.node("worker", Some(&manager.id), TaskProfile::Worker, Some(implement_spec(&repo.repo))).await?;
   let (branch, worktree) = worktree(&repo, &stack, &worker.id, "run-work-late")?;
+  commit_work(&worktree)?;
+  repo.publish_worktree(&worktree)?;
   finished_work_run(&stack, &worker.id, "run-work-early", &repo, &branch, &worktree, Some("2026-10-18T09:00:00Z"))
     .await?;
   finished_work_run(&stack, &worker.id, "run-work-late", &repo, &branch, &worktree, Some("2026-10-18T09:30:00Z"))
@@ -1770,6 +1787,7 @@ async fn recovery_reopened_task_reproves_landing() -> anyhow::Result<()> {
   let stack = Stack::start("exit 0").await?;
   let worker = stack.node("worker", None, TaskProfile::Worker, Some(implement_spec(&repo.repo))).await?;
   let (branch, worktree) = worktree(&repo, &stack, &worker.id, "run-work")?;
+  commit_work(&worktree)?;
   repo.publish_worktree(&worktree)?;
   finished_work_run(&stack, &worker.id, "run-work", &repo, &branch, &worktree, None).await?;
   review_of(&stack, &worker.id, "review-done", "run-work", RunOutcomeKind::Success, "fake2").await?;
@@ -1794,6 +1812,7 @@ async fn recovery_open_task_landing_unchanged() -> anyhow::Result<()> {
   let worker = stack.node("worker", Some(&manager.id), TaskProfile::Worker, Some(implement_spec(&repo.repo))).await?;
   stack.dispatch.set_executor(None);
   let (branch, worktree) = worktree(&repo, &stack, &worker.id, "run-work")?;
+  commit_work(&worktree)?;
   repo.publish_worktree(&worktree)?;
   finished_work_run(&stack, &worker.id, "run-work", &repo, &branch, &worktree, None).await?;
   review_of(&stack, &worker.id, "review-done", "run-work", RunOutcomeKind::Success, "fake2").await?;

@@ -22,6 +22,7 @@ use charliebot_store::metadata::{TaskApprover, TaskProfile, TaskSpec, TaskType, 
 use charliebot_store::run_records::{self, RunKind, RunOutcomeKind, RunRecord};
 use charliebot_store::{PatchTask, TaskCaller, control_events};
 use charliebot_tasks::completion::pause_reason;
+use charliebot_tasks::land::{LANDING_FILE_NAME, LandingRecord, STATE_LANDED};
 use charliebot_tasks::review;
 use process_guard::ProcessGroupGuard;
 use recovery_support::{Stack, SyntheticRepo, script_option, synthetic_run};
@@ -977,8 +978,12 @@ async fn an_explicit_review_pool_precedes_the_worker_route_fallback() -> anyhow:
 #[ignore = "integration"]
 async fn implement_delivery_requires_review_and_real_landing() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
+  let control = tempfile::tempdir()?;
   let stack = Stack::start_with(
-    vec![script_option("fake", &result_script("implemented")), script_option("fake2", &result_script("review ok"))],
+    vec![
+      script_option("fake", &gate_script(control.path(), "implemented")),
+      script_option("fake2", &result_script("review ok")),
+    ],
     vec!["fake".to_string(), "fake2".to_string()],
   )
   .await?;
@@ -990,6 +995,7 @@ async fn implement_delivery_requires_review_and_real_landing() -> anyhow::Result
   stack.dispatch.set_executor(None);
   let guard = ProcessGroupGuard::new();
   queue_and_launch_work(&stack, &worker.id, "run-work", "add marker").await?;
+  land_gated_work(&stack, &worker.id, "run-work", &repo, control.path()).await?;
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, "run-work").await?, RunOutcomeKind::Success);
   let review_run = wait_for_review(&stack, &worker.id, "run-work").await?;
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, &review_run.id).await?, RunOutcomeKind::Success);
@@ -1016,8 +1022,12 @@ async fn implement_delivery_requires_review_and_real_landing() -> anyhow::Result
 #[ignore = "integration"]
 async fn kept_worktree_releases_its_branch_at_task_end() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
+  let control = tempfile::tempdir()?;
   let stack = Stack::start_with(
-    vec![script_option("fake", &result_script("implemented")), script_option("fake2", &result_script("review ok"))],
+    vec![
+      script_option("fake", &gate_script(control.path(), "implemented")),
+      script_option("fake2", &result_script("review ok")),
+    ],
     vec!["fake".to_string(), "fake2".to_string()],
   )
   .await?;
@@ -1029,6 +1039,7 @@ async fn kept_worktree_releases_its_branch_at_task_end() -> anyhow::Result<()> {
   stack.dispatch.set_executor(None);
   let guard = ProcessGroupGuard::new();
   queue_and_launch_work(&stack, &worker.id, "run-work", "add marker").await?;
+  land_gated_work(&stack, &worker.id, "run-work", &repo, control.path()).await?;
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, "run-work").await?, RunOutcomeKind::Success);
   let work = stack.store().read_run_sync(&worker.id, "run-work")?.context("work run is recorded")?;
   let worktree = PathBuf::from(work.worktree_path.as_deref().context("work run has a worktree")?);
@@ -1143,9 +1154,10 @@ async fn repo_less_implement_review_failure_takes_the_failure_report() -> anyhow
 #[ignore = "integration"]
 async fn review_ending_on_a_spent_quota_moves_to_the_next_reviewer() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
+  let control = tempfile::tempdir()?;
   let stack = Stack::start_with(
     vec![
-      script_option("fake", &result_script("implemented")),
+      script_option("fake", &gate_script(control.path(), "implemented")),
       script_option("fake2", &spent_quota_script()),
       script_option("fake3", &result_script("review retry ok")),
     ],
@@ -1160,6 +1172,7 @@ async fn review_ending_on_a_spent_quota_moves_to_the_next_reviewer() -> anyhow::
   stack.dispatch.set_executor(None);
   let guard = ProcessGroupGuard::new();
   queue_and_launch_work(&stack, &worker.id, "run-work", "add marker").await?;
+  land_gated_work(&stack, &worker.id, "run-work", &repo, control.path()).await?;
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, "run-work").await?, RunOutcomeKind::Success);
   let first_review = wait_for_review(&stack, &worker.id, "run-work").await?;
   assert_eq!(first_review.backend.as_deref(), Some("fake2"));
@@ -1214,7 +1227,7 @@ async fn failed_review_with_a_queued_retry_reports_nothing_and_stays_open() -> a
   let control = tempfile::tempdir()?;
   let stack = Stack::start_with(
     vec![
-      script_option("fake", &result_script("implemented")),
+      script_option("fake", &gate_script(control.path(), "implemented")),
       script_option("fake2", "exit 1"),
       script_option("fake3", &shared_gate_script(control.path(), "review retry ok")),
     ],
@@ -1229,6 +1242,7 @@ async fn failed_review_with_a_queued_retry_reports_nothing_and_stays_open() -> a
   stack.dispatch.set_executor(None);
   let guard = ProcessGroupGuard::new();
   queue_and_launch_work(&stack, &worker.id, "run-work", "add marker").await?;
+  land_gated_work(&stack, &worker.id, "run-work", &repo, control.path()).await?;
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, "run-work").await?, RunOutcomeKind::Success);
   let first_review = wait_for_review(&stack, &worker.id, "run-work").await?;
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, &first_review.id).await?, RunOutcomeKind::Failed);
@@ -1561,6 +1575,9 @@ async fn implement_work_with_pending_trigger_pauses_then_continues_and_delivers(
   assert!(prompt.contains("build finished, check the log"), "{prompt}");
   assert!(!prompt.contains("add marker"), "{prompt}");
   stack.dispatch.set_executor(None);
+  // The continuation commits and publishes its change while it waits at its gate, as its landing push would.
+  git(Path::new(&worktree), &["commit", "--allow-empty", "-m", "synthetic continued work"])?;
+  repo.publish_worktree(Path::new(&worktree))?;
   fs::write(control.path().join("release-2"), "release")?;
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, &continuation.id).await?, RunOutcomeKind::Success);
   let review_run = wait_for_review(&stack, &worker.id, &continuation.id).await?;
@@ -1796,6 +1813,177 @@ async fn commit_on_neither_base_ref_reports_blocked_with_the_git_reason() -> any
   // The reviewer's closing words, whole, are the verdict the manager reads.
   assert_eq!(verdict, "review ok");
   assert!(worktree.exists(), "an unproven landing keeps the worktree for recovery");
+  Ok(())
+}
+
+/// Land the work run that `gate_script` holds: once the run has started, commit and publish its worktree, the change a
+/// landing carries, then release the run. The test makes the commit because the agent's own `git` is a guard.
+async fn land_gated_work(
+  stack: &Stack,
+  session_id: &str,
+  run_id: &str,
+  repo: &SyntheticRepo,
+  control: &Path,
+) -> anyhow::Result<()> {
+  wait_for_file(&control.join("started-1"), "the gated work run's start marker").await?;
+  let worktree = stack
+    .store()
+    .read_run_sync(session_id, run_id)?
+    .and_then(|run| run.worktree_path)
+    .context("work run has a worktree")?;
+  git(Path::new(&worktree), &["commit", "--allow-empty", "-m", "synthetic work"])?;
+  repo.publish_worktree(Path::new(&worktree))?;
+  fs::write(control.join("release-1"), "release")?;
+  Ok(())
+}
+
+/// Publish a workflow with a `pull_request` trigger to the default branch, so the CI gate applies to landings.
+fn publish_ci_gate(repo: &SyntheticRepo) -> anyhow::Result<()> {
+  fs::create_dir_all(repo.repo.join(".github/workflows"))?;
+  fs::write(
+    repo.repo.join(".github/workflows/ci.yml"),
+    "on:\n  pull_request:\n  push:\n    branches:\n      - main\njobs: {}\n",
+  )?;
+  git(&repo.repo, &["add", ".github/workflows/ci.yml"])?;
+  git(&repo.repo, &["commit", "-q", "-m", "synthetic ci gate"])?;
+  git(&repo.repo, &["push", "-q", "origin", "HEAD:main"])?;
+  Ok(())
+}
+
+/// Register the work run on *worktree*'s branch and its review run, both ended with success.
+async fn register_work_and_review(
+  stack: &Stack,
+  worker_id: &str,
+  repo: &SyntheticRepo,
+  branch: &str,
+  worktree: &Path,
+) -> anyhow::Result<()> {
+  let work = RunRecord {
+    backend: Some("fake".to_string()),
+    model: Some("fake-model".to_string()),
+    repo_path: Some(repo.repo.to_string_lossy().into_owned()),
+    base_branch: Some("main".to_string()),
+    branch_name: Some(branch.to_string()),
+    worktree_path: Some(worktree.to_string_lossy().into_owned()),
+    ..synthetic_run(worker_id, "run-work", RunKind::Work)
+  };
+  stack.register_with_task_spec(work, "add marker").await?;
+  stack.record_terminal(worker_id, "run-work", RunOutcomeKind::Success).await?;
+  let review = RunRecord {
+    backend: Some("fake2".to_string()),
+    model: Some("fake2-model".to_string()),
+    review_of_run_id: Some("run-work".to_string()),
+    ..synthetic_run(worker_id, "review-run", RunKind::Review)
+  };
+  stack.register(review).await?;
+  stack.record_terminal(worker_id, "review-run", RunOutcomeKind::Success).await?;
+  Ok(())
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn an_empty_work_branch_reports_blocked_with_the_no_commit_reason() -> anyhow::Result<()> {
+  let repo = SyntheticRepo::create()?;
+  let stack = Stack::start("exit 0").await?;
+  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+  let worker = stack
+    .node("worker", Some(&manager.id), TaskProfile::Worker, Some(implement_task("add marker", Some(&repo.repo))))
+    .await?;
+  stack.dispatch.set_executor(None);
+  // The worker made no commit: the branch still points at the base it was cut from.
+  let branch = "task/review-empty";
+  let worktree = Path::new(&stack.cfg.paths.worktree_dir).join(&worker.id);
+  repo.add_worktree(&worktree, branch)?;
+  register_work_and_review(&stack, &worker.id, &repo, branch, &worktree).await?;
+  write_events(&events_file(&stack, &worker.id, "review-run"), &[json!({"type":"result","result":"review ok"})])?;
+
+  stack.node_pass(&worker.id).await?;
+  let report = child_reports(&stack, &manager.id)?.into_iter().next().context("landing failure reports to parent")?;
+  assert_eq!(report["outcome"], "blocked");
+  let summary = report["summary"].as_str().context("blocked report has a summary")?;
+  let (head, verdict) = summary.split_once("\n\nReview verdict:\n").context("blocked report quotes the verdict")?;
+  assert!(head.starts_with("review run review-run ended without landing work run run-work on main: "), "{head}");
+  assert!(head.contains("the work branch task/review-empty adds no commit to main"), "{head}");
+  assert!(!head.contains("landed"), "{head}");
+  assert_eq!(verdict, "review ok");
+  Ok(())
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_work_commit_on_main_without_a_landing_record_reports_the_missing_gate() -> anyhow::Result<()> {
+  let repo = SyntheticRepo::create()?;
+  publish_ci_gate(&repo)?;
+  let stack = Stack::start("exit 0").await?;
+  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+  let worker = stack
+    .node("worker", Some(&manager.id), TaskProfile::Worker, Some(implement_task("add marker", Some(&repo.repo))))
+    .await?;
+  stack.dispatch.set_executor(None);
+  let branch = "task/review-hand-push";
+  let worktree = Path::new(&stack.cfg.paths.worktree_dir).join(&worker.id);
+  repo.add_worktree(&worktree, branch)?;
+  git(&worktree, &["commit", "--allow-empty", "-m", "synthetic work commit"])?;
+  // The commit reaches main without a landing record: a hand push that bypasses the gate.
+  repo.publish_worktree(&worktree)?;
+  register_work_and_review(&stack, &worker.id, &repo, branch, &worktree).await?;
+  write_events(&events_file(&stack, &worker.id, "review-run"), &[json!({"type":"result","result":"review ok"})])?;
+
+  stack.node_pass(&worker.id).await?;
+  let report = child_reports(&stack, &manager.id)?.into_iter().next().context("landing failure reports to parent")?;
+  assert_eq!(report["outcome"], "blocked");
+  let summary = report["summary"].as_str().context("blocked report has a summary")?;
+  let (head, _) = summary.split_once("\n\nReview verdict:\n").context("blocked report quotes the verdict")?;
+  assert_eq!(head, "review run review-run ended without landing work run run-work on main: landed without the CI gate");
+  Ok(())
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_work_commit_on_main_with_a_landed_record_closes_the_reviewed_task() -> anyhow::Result<()> {
+  let repo = SyntheticRepo::create()?;
+  publish_ci_gate(&repo)?;
+  let stack = Stack::start("exit 0").await?;
+  stack.dispatch.set_executor(None);
+  let worker =
+    stack.node("worker", None, TaskProfile::Worker, Some(implement_task("add marker", Some(&repo.repo)))).await?;
+  let branch = "task/review-gated";
+  let worktree = Path::new(&stack.cfg.paths.worktree_dir).join(charliebot_tasks::git::git_worktree_dir_name(branch));
+  repo.add_worktree(&worktree, branch)?;
+  git(&worktree, &["commit", "--allow-empty", "-m", "synthetic gated commit"])?;
+  repo.publish_worktree(&worktree)?;
+  let commit = git(&repo.repo, &["rev-parse", branch])?;
+  // The landing record of a commit that reached main through the gate.
+  let record = LandingRecord {
+    state: STATE_LANDED.to_string(),
+    repo: repo.repo.to_string_lossy().into_owned(),
+    base: "main".to_string(),
+    sha: commit.clone(),
+    pr_url: None,
+    checks: Vec::new(),
+    head_pushed_at: None,
+    ci_passed_at: None,
+    pushed_at: None,
+    rebase_retries: 0,
+  };
+  fs::write(stack.store().session_dir(&worker.id).join(LANDING_FILE_NAME), serde_json::to_string(&record)?)?;
+  register_work_and_review(&stack, &worker.id, &repo, branch, &worktree).await?;
+
+  stack.node_pass(&worker.id).await?;
+  wait_for_task_state(&stack, &worker.id, "completed").await?;
+  wait_for_worktree_removed(&worktree).await?;
+  let close = stack
+    .run_events(&worker.id)?
+    .into_iter()
+    .find(|event| event["type"].as_str() == Some(event_types::TASK_CLOSED))
+    .context("review delivery closes the task")?;
+  assert!(
+    close["result_refs"]
+      .as_array()
+      .unwrap()
+      .iter()
+      .any(|value| value.as_str() == Some(format!("landed:origin/main@{commit}").as_str()))
+  );
   Ok(())
 }
 

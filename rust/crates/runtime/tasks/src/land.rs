@@ -1227,9 +1227,10 @@ enum GateApplicability {
   NotApplicable,
 }
 
-/// The delivery-side gate check (execution.rs): when the gate applies, a commit that reached the
+/// The delivery-side gate check (execution.rs): when the gate applies, a work commit that reached the
 /// base branch without a `landing.json` in state `landed` blocks the delivery, so a hand push that
-/// bypasses the gate cannot be reported as landed.
+/// bypasses the gate cannot be reported as landed. The caller has already shown that the work adds
+/// the commit, so a branch that adds nothing never reaches this check.
 pub async fn landed_without_gate_blocker(
   repo_path: &Path,
   base_branch: &str,

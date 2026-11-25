@@ -403,13 +403,36 @@ pub async fn git_rev_parse(repo_path: &Path, rev: &str) -> Option<String> {
 
 /// Count commits in a range, or return None when git rev-list fails or prints no count.
 pub async fn git_rev_list_count(repo_path: &Path, range: &str) -> Option<i64> {
-  let (ok, output, _) =
+  git_rev_list_count_checked(repo_path, range).await.ok()
+}
+
+/// Count commits in a range. A git failure, or a count git does not print, is an error and never a zero.
+pub async fn git_rev_list_count_checked(repo_path: &Path, range: &str) -> anyhow::Result<i64> {
+  let (ok, output, err) =
     git_stdout(repo_path, &["rev-list", "--count", range], SUBPROCESS_GIT_READ_TIMEOUT_ASYNC, "git rev-list --count")
       .await;
-  if !ok || output.is_empty() || !output.chars().all(|character| character.is_ascii_digit()) {
-    return None;
-  }
-  output.parse().ok()
+  anyhow::ensure!(ok, "git rev-list --count {range} failed in {}: {err}", repo_path.display());
+  output.parse().map_err(|error| anyhow::anyhow!("git rev-list --count {range} printed {output:?}: {error}"))
+}
+
+/// The commit *branch* was created at: the oldest entry of its reflog. `git worktree add -b` and `git branch`
+/// both write that entry as `branch: Created from <start point>`. A branch with no reflog entry is an error.
+pub async fn git_branch_creation_point(repo_path: &Path, branch: &str) -> anyhow::Result<String> {
+  let reference = format!("refs/heads/{branch}");
+  let (ok, output, err) = git_stdout(
+    repo_path,
+    &["reflog", "show", "--format=%H", &reference],
+    SUBPROCESS_GIT_READ_TIMEOUT_ASYNC,
+    "git reflog show",
+  )
+  .await;
+  anyhow::ensure!(ok, "git reflog show {reference} failed in {}: {err}", repo_path.display());
+  // The reflog lists its newest entry first, so the last line is the creation.
+  output
+    .lines()
+    .last()
+    .map(str::to_string)
+    .ok_or_else(|| anyhow::anyhow!("branch {branch} has no reflog entry in {}", repo_path.display()))
 }
 
 /// The remote's default branch and its tip SHA from ONE `git ls-remote --symref origin`
@@ -1148,7 +1171,10 @@ mod tests {
   use std::path::{Path, PathBuf};
   use std::process::Command;
 
-  use super::{collect_local_worktree_artifacts, contains_git_marker, git_verify_commit_landed, run_git};
+  use super::{
+    collect_local_worktree_artifacts, contains_git_marker, git_branch_creation_point, git_rev_list_count_checked,
+    git_verify_commit_landed, run_git,
+  };
 
   fn git(repo: &Path, args: &[&str]) -> std::process::Output {
     run_git(repo, args)
@@ -1246,5 +1272,35 @@ mod tests {
     let (verified, reason) = git_verify_commit_landed(root.path(), "main", "not-a-hash").await;
     assert!(!verified);
     assert_eq!(reason, "commit 'not-a-hash' is not a git commit hash");
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn branch_creation_point_and_commit_count_separate_an_empty_branch_from_its_work() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    let repo = root.path();
+    assert!(git(repo, &["init", "-q", "-b", "main"]).status.success());
+    assert!(git(repo, &["config", "user.email", "synthetic@example.test"]).status.success());
+    assert!(git(repo, &["config", "user.name", "Synthetic"]).status.success());
+    fs::write(repo.join("tracked.txt"), "base\n").expect("synthetic file is written");
+    assert!(git(repo, &["add", "."]).status.success());
+    assert!(git(repo, &["commit", "-q", "-m", "base"]).status.success());
+    let base =
+      String::from_utf8(git(repo, &["rev-parse", "HEAD"]).stdout).expect("git sha is UTF-8").trim().to_string();
+
+    // A branch cut at the base and never committed to: its tip is its creation point.
+    assert!(git(repo, &["branch", "-q", "work"]).status.success());
+    assert_eq!(git_branch_creation_point(repo, "work").await.expect("creation point is read"), base);
+    assert_eq!(git_rev_list_count_checked(repo, &format!("{base}..work")).await.expect("count is read"), 0);
+
+    assert!(git(repo, &["switch", "-q", "work"]).status.success());
+    fs::write(repo.join("work.txt"), "work\n").expect("synthetic file is written");
+    assert!(git(repo, &["add", "."]).status.success());
+    assert!(git(repo, &["commit", "-q", "-m", "work"]).status.success());
+    assert_eq!(git_branch_creation_point(repo, "work").await.expect("creation point is read"), base);
+    assert_eq!(git_rev_list_count_checked(repo, &format!("{base}..work")).await.expect("count is read"), 1);
+
+    // A branch that was never created has no reflog to judge by: that is an error, not an empty branch.
+    assert!(git_branch_creation_point(repo, "missing").await.is_err());
   }
 }

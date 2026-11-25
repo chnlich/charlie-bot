@@ -533,9 +533,15 @@ main > header > a[title="View JSONL events"]:hover {
    header render no buttons and stay bare. The 44px touch boxes ride negative
    margins -- outer width 22px, the desktop star's slot -- so the row and
    header heights stay put. The desktop hover cover background is explicitly
-   off, because a tap's sticky hover must not paint it. */
+   off, because a tap's sticky hover must not paint it. A phone row's second
+   line wraps rather than cutting a label: the gear's flow slot, and a leading
+   attention mark on some rows, leave less width than the timestamp and the
+   backend name need together, so the line keeps the timestamp whole and moves
+   the backend name under it. Only a row whose two labels cannot share one line
+   grows taller, and no label is cut. */
 @media (hover: none) {
   #session-list .session-row > button { display: none; background: none; box-shadow: none; }
+  #session-list .session-row .session-row-name > span:has(> .session-time) { flex-wrap: wrap; gap: 4px; }
   #session-list .session-row > [title="Settings"] {
     display: block; position: static; opacity: 1; pointer-events: auto;
     padding: 15px; margin: -12px -11px;

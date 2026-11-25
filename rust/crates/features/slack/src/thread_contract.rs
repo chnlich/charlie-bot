@@ -13,7 +13,7 @@ pub const SLACK: ThreadPlatform = ThreadPlatform {
   reply_command: "charliebot slack reply",
   max_post_chars: 40000,
   scope_doc: "slack_reply_scope.md",
-  follow_trigger_prefix: "slack-thread-follow",
+  follow_trigger_prefix: FOLLOW_TRIGGER_PREFIX,
   id_key: IdOrdering::Text,
   recheck_after_failed_post: true,
   origin_field: SLACK_ORIGIN,

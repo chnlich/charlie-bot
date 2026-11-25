@@ -320,14 +320,16 @@ test('every reopen that follows a close reloads the list once', async () => {
   assert.equal(page.listLoadCount(), 1, 'the reopened socket reloads the list');
 });
 
-test('a stale-page close reloads a hidden tab at once when the reload guard allows it', () => {
+test('a stale-page close reloads a hidden tab when it becomes visible', () => {
   const page = buildPage();
   page.connect();
   page.socket().emitOpen();
   page.hide();
 
   page.socket().emitClose({code: 4409});
-  assert.equal(page.reloads, 1, 'a hidden tab reloads at once: the protocol changed and the guard is clear');
+  assert.equal(page.reloads, 0, 'a hidden tab waits for visibility');
+  page.show();
+  assert.equal(page.reloads, 1, 'a visible stale-protocol page reloads');
 });
 
 test('a starred-view row change fetches that row alone from the starred view', async () => {

@@ -470,9 +470,9 @@ function handleCatchupComplete(data) {
 // Code reloads: the 4409 close and the hidden swap
 // ---------------------------------------------------------------------------
 // Two things replace this page's code. A 4409 close means the server's web protocol moved past the page's: a
-// visible page reloads past its stored shell at once (reloadPastStoredShell), and a hidden page refreshes its
-// stored shell first. A catch-up that names another release swaps the code of a hidden page only: a visible page
-// keeps its code until it hides, and the swap refreshes the stored shell before it navigates (offline-shell.js).
+// visible page reloads past its stored shell at once (reloadPastStoredShell); a hidden page waits until it is visible.
+// A catch-up that names another release swaps the code of a hidden page only: a visible page keeps its code until it
+// hides, and the swap refreshes the stored shell before it navigates (offline-shell.js).
 // The reload guard caps the automatic reloads at one per tab per 60 seconds, so a stale cache cannot turn them into
 // a loop. A visible tab the guard holds shows the banner. A hidden tab waits out the window and reloads if still
 // hidden.
@@ -515,6 +515,9 @@ function reloadToCurrentCode() {
     reloadPastStoredShell();
     return;
   }
+  // A hidden protocol-stale page keeps main's behavior and waits until it is visible. Only a release swap refreshes
+  // the shell in the background.
+  if (protocolStale) return;
   const wait = staleReloadWaitMs();
   if (wait > 0) {
     holdForGuard(wait);
@@ -522,13 +525,16 @@ function reloadToCurrentCode() {
   }
   swapInFlight = true;
   // A hidden page refreshes its stored shell, then navigates; nobody waits for it. A return before the navigation
-  // starts cancels a release swap: the page keeps its code and the next hide tries again. A protocol reload navigates
-  // regardless. Only a navigation that starts counts against the guard.
+  // starts cancels a release swap: the page keeps its code and the next hide tries again. A protocol reload waits for
+  // visibility and uses reloadPastStoredShell. Only a navigation that starts counts against the guard.
   reloadAfterRefreshingShell('stale_asset', () => {
-    if (!protocolStale && !document.hidden) return false;
+    if (!document.hidden) return false;
     markStaleReload();
     return true;
-  }).finally(() => { swapInFlight = false; });
+  }).finally(() => {
+    swapInFlight = false;
+    if (protocolStale && !document.hidden) reloadToCurrentCode();
+  });
 }
 
 // One timer for the guard's wait. It runs the reload decision again, so the decision is taken at the window's end.
@@ -542,7 +548,7 @@ function holdForGuard(wait) {
 
 // A hidden page that is shown or hidden again re-decides its pending swap: a cancelled swap runs at the next hide.
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) reloadToCurrentCode();
+  if (document.hidden || protocolStale) reloadToCurrentCode();
 });
 
 document.addEventListener('charliebot:offline-shell-refresh-failed', showStalePageBanner);

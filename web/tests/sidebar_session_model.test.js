@@ -4,15 +4,16 @@ const test = require('node:test');
 const {loadGroupsWithCron, row} = require('./sidebar_groups_context_stub');
 
 // The model element must be a sibling of .session-time, never inside it.
-// updateRelativeTimes() (web/static/js/utils.js) reassigns .session-time's
-// textContent on every tick and would erase any model text nested in it.
+// updateRelativeTimes() (web/static/js/utils.js) rewrites .session-time's
+// markup on every tick and would erase any model text nested in it.
+// The time span holds the date and a clock span, so its own closing tag follows the clock's.
 function sessionTimeInnerHtml(html) {
   const open = html.match(/<span class="session-time[^"]*"[^>]*>/);
   assert.ok(open, 'row is missing a .session-time span');
   const start = html.indexOf(open[0]) + open[0].length;
-  const end = html.indexOf('</span>', start);
+  const end = html.indexOf('</span></span>', start);
   assert.ok(end > -1, '.session-time span is unterminated');
-  return html.slice(start, end);
+  return html.slice(start, end + '</span>'.length);
 }
 
 function modelSpan(html) {
@@ -66,7 +67,7 @@ test('a session without a backend renders no model element', () => {
 
 test('.session-time holds only the timestamp, so the time refresh cannot erase the model', () => {
   const html = row({backend: 'claude-opus-5'});
-  assert.equal(sessionTimeInnerHtml(html), 'Jul 29, 5:12 PM');
+  assert.equal(sessionTimeInnerHtml(html), 'Jul 29<span class="session-clock">, 5:12 PM</span>');
 });
 
 test('a bound node row shows its cron lines in place of the time line, in every view', () => {

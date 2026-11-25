@@ -5,7 +5,7 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
-use charliebot_core::paths::DEFAULT_PATH;
+use charliebot_core::paths::{self, DEFAULT_PATH};
 use charliebot_core::proxy_env::{HTTP_PROXY, HTTPS_PROXY, NO_PROXY};
 use charliebot_registry::backend::{Env, FinalStdoutOutcome, Translate};
 use serde_json::{Map, Value};
@@ -46,7 +46,7 @@ pub struct CliHost {
 impl CliHost {
   /// The host of the running server. HOME must be set.
   pub fn from_process() -> anyhow::Result<Self> {
-    let home = std::env::var_os("HOME").context("HOME must be set for the CLI backend types")?;
+    let home = paths::process_home().context("HOME must be set for the CLI backend types")?;
     let path = match std::env::var("PATH") {
       Ok(path) => path,
       Err(std::env::VarError::NotPresent) => DEFAULT_PATH.to_string(),

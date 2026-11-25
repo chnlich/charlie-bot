@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use charliebot_core::git::{ancestry_args, object_exists_args};
+use charliebot_core::paths;
 use charliebot_core::text_repr;
 use charliebot_registry::worktree_removal::WorktreeRemoval;
 use futures_util::future::BoxFuture;
@@ -815,7 +816,7 @@ fn assert_safe_worktree_cleanup_target(
   let resolved_wt = resolve_path(wt_path);
   let resolved_allowed_parent = resolve_path(allowed_parent);
   let resolved_repo = resolve_path(Path::new(repo_path));
-  let home = resolve_path(Path::new(&std::env::var("HOME").unwrap_or_else(|_| String::from("/home/<user>"))));
+  let home = resolve_path(Path::new(&paths::process_home_text().unwrap_or_else(|_| String::from("/home/<user>"))));
   if resolved_wt == Path::new("/") || resolved_wt == home {
     anyhow::bail!("refusing to clean unsafe worktree path: {}", wt_path.display());
   }

@@ -14,6 +14,16 @@ use std::path::{Path, PathBuf};
 /// The search path a process without a `PATH` variable uses: the glibc default executable path.
 pub const DEFAULT_PATH: &str = "/bin:/usr/bin";
 
+/// The `HOME` variable as a path, or `None` when it is unset. Each caller decides what a missing `HOME` means.
+pub fn process_home() -> Option<OsString> {
+  std::env::var_os("HOME")
+}
+
+/// The `HOME` variable as text: `Err` when it is unset or not valid Unicode, as `std::env::var` reports it.
+pub fn process_home_text() -> Result<String, std::env::VarError> {
+  std::env::var("HOME")
+}
+
 /// `expanduser`: `~` and `~user` prefixes become the home directory; other paths pass through.
 ///
 /// `~` reads `HOME`, falling back to the password database entry of the current uid; `~user` reads
@@ -24,7 +34,7 @@ pub fn expanduser(path: &str) -> String {
   }
   let end = path[1..].find('/').map_or(path.len(), |offset| offset + 1);
   let home = if end == 1 {
-    match std::env::var_os("HOME") {
+    match process_home() {
       Some(home) => Some(home.to_string_lossy().into_owned()),
       None => nix::unistd::User::from_uid(nix::unistd::getuid())
         .ok()

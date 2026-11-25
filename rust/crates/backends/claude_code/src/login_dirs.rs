@@ -12,7 +12,7 @@ pub const CREDENTIALS_FILE: &str = ".credentials.json";
 
 /// Return the default Claude login directory.
 pub fn default_claude_dir() -> anyhow::Result<PathBuf> {
-  let home = env::var_os("HOME").ok_or_else(|| anyhow::anyhow!("HOME is not set"))?;
+  let home = paths::process_home().ok_or_else(|| anyhow::anyhow!("HOME is not set"))?;
   Ok(PathBuf::from(home).join(CLAUDE_CONFIG_DIR_NAME))
 }
 
@@ -42,7 +42,7 @@ pub struct ClaudeHost {
 impl ClaudeHost {
   /// The host of the running server. HOME must be set, since this host's home directory comes from it.
   pub fn from_process() -> anyhow::Result<Self> {
-    let home = std::env::var_os("HOME").context("HOME must be set for the Claude Code usage source")?;
+    let home = paths::process_home().context("HOME must be set for the Claude Code usage source")?;
     Ok(Self { home: PathBuf::from(home), claude_config_dir: claude_config_dir()? })
   }
 

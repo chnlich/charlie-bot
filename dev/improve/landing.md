@@ -256,6 +256,9 @@ The checks use the direction's pinned target directory, `~/.cache/improve-target
   boundary allows.
 The round runs `cargo check` for the workspace and `cargo test` for each crate that the change touches.
 The round limits its tests to those crates, because CI runs the full suite.
+A test that fails inside the write boundary because the boundary refuses a path is reported as not run, with the refused
+path named. The pull request's CI result decides for that test; the round reports it neither as passed nor as a round
+defect.
 The builds run with four build jobs at nice level 19, so the host's CPU stays with the other owners' builds.
 
 ## Step 5: write the evidence and open the pull request

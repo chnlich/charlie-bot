@@ -140,7 +140,7 @@ mod tests {
       "no browser login named 'nope'",
       r#"quote " and backslash \ in the message"#,
       "control \u{1} tab\t newline\n",
-      "non-ASCII é — 😀",
+      "non-ASCII é — 中文",
       "</script><b>markup</b>",
     ];
     for detail in details {

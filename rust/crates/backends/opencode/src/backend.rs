@@ -24,7 +24,7 @@ use charliebot_registry::usage::{
 use futures_util::future::BoxFuture;
 use nix::sys::signal::Signal;
 use serde_json::{Map, Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
 use tokio::sync::watch;
 use uuid::Uuid;
 
@@ -38,7 +38,7 @@ use charliebot_agents::runner::EventFn;
 use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_agents::transport::follow::{self, SilenceCallback};
 use charliebot_agents::transport::kill::kill_process_group;
-use charliebot_agents::transport::spawn::{AgentPipeReader, SpawnSpec, spawn_one_shot};
+use charliebot_agents::transport::spawn::{SpawnSpec, spawn_one_shot};
 use charliebot_core::cgroup::SESSION_CGROUP_OOM_SCORE_ADJ;
 
 const RUN_PLAN_MARKER: &str = "__charliebot_opencode_run__=";
@@ -1127,7 +1127,7 @@ async fn run_one_shot(request: OpenCodeOneShotRequest) -> anyhow::Result<String>
   Ok(text)
 }
 
-async fn collect_one_shot(stdout: AgentPipeReader) -> anyhow::Result<String> {
+pub(super) async fn collect_one_shot(stdout: impl AsyncRead + Unpin) -> anyhow::Result<String> {
   let mut reader = BufReader::new(stdout);
   let mut line = Vec::new();
   let mut parts = Vec::new();
@@ -1149,7 +1149,23 @@ async fn collect_one_shot(stdout: AgentPipeReader) -> anyhow::Result<String> {
           .context("opencode text event has no part.text")?
           .to_string(),
       ),
-      _ => {}
+      // A step boundary carries no answer text, and the one-shot reads no token usage from it.
+      Some("step_start") => {}
+      Some("step_finish") => {}
+      // The one-shot denies every tool in its config, so no tool output joins the answer.
+      Some("tool_use") => {}
+      Some("tool") => {}
+      // Reasoning parts hold the model's thinking, and the answer is the text parts alone.
+      Some("reasoning") => {}
+      // A wait notice lists the background jobs that the run waits for, with no answer text.
+      Some("background_wait") => {}
+      // A retried attempt sends its answer text in later events, so the retry notice carries none.
+      Some("retry") => {}
+      // An unnamed type fails the run: it may carry answer text, and folding past it would return a partial answer.
+      other => bail!(
+        "opencode run emitted an event type that the one-shot fold does not name: {}",
+        other.unwrap_or("<missing>")
+      ),
     }
     if error.is_some() {
       break;

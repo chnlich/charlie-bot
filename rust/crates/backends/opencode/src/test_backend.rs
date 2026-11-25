@@ -9,6 +9,7 @@ use std::time::Duration;
 use anyhow::Context;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types;
+use charliebot_core::test_support::LogCapture;
 use charliebot_registry::Registry;
 use charliebot_registry::backend::{AgentBackend, BackendFactory, Env, LaunchArgs};
 use charliebot_registry::usage::SNAPSHOT_READING_KIND;
@@ -17,7 +18,7 @@ use nix::sys::signal::Signal;
 use serde_json::{Map, Value, json};
 use tokio::task::JoinHandle;
 
-use super::backend::{OpenCodeFactory, extract_model_limit, image_file_attachments};
+use super::backend::{OpenCodeFactory, collect_one_shot, extract_model_limit, image_file_attachments};
 use super::opencode_limits;
 use super::protocol;
 use super::server;
@@ -1985,6 +1986,46 @@ async fn prompt_waits_for_an_earlier_interrupt_to_settle() {
   assert_eq!(collected_events(&output).last().unwrap()["type"], event_types::RESULT);
   harness.stop().await.unwrap();
   harness.clear_finished_turn_pids();
+}
+
+#[tokio::test]
+async fn one_shot_folds_the_writer_types_it_names_without_a_report() {
+  let log = LogCapture::default();
+  let _capture = log.install();
+  // Only the text parts make the answer, so every other named type folds to nothing.
+  let stream = concat!(
+    r#"{"type":"step_start","timestamp":1,"sessionID":"s1","part":{"type":"step-start"}}"#,
+    "\n",
+    r#"{"type":"tool_use","timestamp":2,"sessionID":"s1","part":{"type":"tool"}}"#,
+    "\n",
+    r#"{"type":"tool","timestamp":3,"sessionID":"s1","part":{"type":"tool"}}"#,
+    "\n",
+    r#"{"type":"reasoning","timestamp":4,"sessionID":"s1","part":{"type":"reasoning","text":"thinking"}}"#,
+    "\n",
+    r#"{"type":"background_wait","timestamp":5,"sessionID":"s1","jobs":[]}"#,
+    "\n",
+    r#"{"type":"retry","timestamp":6,"sessionID":"s1","attempt":1}"#,
+    "\n",
+    r#"{"type":"text","timestamp":7,"sessionID":"s1","part":{"type":"text","text":"answer"}}"#,
+    "\n",
+    r#"{"type":"step_finish","timestamp":5,"sessionID":"s1","part":{"type":"step-finish","reason":"stop"}}"#,
+    "\n",
+  );
+  let answer = collect_one_shot(stream.as_bytes()).await.expect("the named writer types fold");
+  assert_eq!(answer, "answer");
+  assert_eq!(log.text(), "", "a named writer type reports nothing");
+}
+
+#[tokio::test]
+async fn one_shot_fails_on_an_unnamed_writer_type() {
+  let stream = concat!(
+    r#"{"type":"text","timestamp":1,"sessionID":"s1","part":{"type":"text","text":"answer"}}"#,
+    "\n",
+    r#"{"type":"future_kind","timestamp":2,"sessionID":"s1","part":{"type":"future"}}"#,
+    "\n",
+  );
+  let error = collect_one_shot(stream.as_bytes()).await.expect_err("an unnamed type fails the run");
+  assert!(error.to_string().contains("future_kind"), "error={error}");
 }
 
 #[ignore = "integration"]

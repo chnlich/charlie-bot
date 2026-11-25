@@ -192,6 +192,7 @@ charliebot-google = { path = "crates/features/google" }
 charliebot-improve = { path = "crates/features/improve" }
 charliebot-host-auth = { path = "crates/features/host_auth" }
 charliebot-memory = { path = "crates/features/memory" }
+charliebot-mock-home = { path = "crates/app/mock-home" }
 charliebot-openai-compatible = { path = "crates/backends/openai_compatible" }
 charliebot-opencode = { path = "crates/backends/opencode" }
 charliebot-packages = { path = "crates/app/packages" }

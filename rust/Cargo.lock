@@ -1389,6 +1389,7 @@ dependencies = [
  "charliebot-cli-common",
  "charliebot-compat",
  "charliebot-core",
+ "charliebot-mock-home",
  "charliebot-packages",
  "charliebot-registry",
  "charliebot-session-api",
@@ -1413,7 +1414,6 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
- "tungstenite",
  "zstd",
 ]
 

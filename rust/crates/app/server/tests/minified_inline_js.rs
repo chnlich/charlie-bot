@@ -1,43 +1,43 @@
-//! The minified inline script check. The server runs twice on one session home, once with USE_MINIFIED_INLINE_JS unset
-//! and once with 0, and headless Chrome loads the chat, events, diff and token-usage pages on each. A pair must
-//! log the same error classes and page errors, and show the same DOM once the inline script bodies, the spinners'
-//! animation delays, and the token page's read time and generation time, are left out. Each page's inline scripts must
-//! also differ between
-//! the two servers, which shows that the switch changed what the server served.
+//! The minified inline script check. The server runs twice on one mock home, once with USE_MINIFIED_INLINE_JS unset and
+//! once with 0, and headless Chrome loads the chat, events, diff and token-usage pages on each. A pair must log
+//! the same error classes and page errors, and show the same DOM and text once the clocks, the spinners' animation
+//! delays and the inline script bodies are left out. Each page's inline scripts must also differ between the two
+//! servers, which shows that the switch changed what the server served.
 //!
-//! The test is `#[ignore = "integration"]`, so the rust-integration job runs it with CHARLIEBOT_TEST_CHROME_BIN set to
-//! the Chrome it finds. It panics when that variable or the server binary is missing, and it never skips.
+//! Chrome runs over its pipe transport: commands go to its fd 3 and its replies come from its fd 4. The test is
+//! `#[ignore = "integration"]`, so the rust-integration job runs it with CHARLIEBOT_TEST_CHROME_BIN set to the Chrome CI
+//! finds. It panics when that variable or the server binary is missing, and it never skips.
 
 use std::collections::{BTreeSet, VecDeque};
 use std::env;
 use std::fs::{self, File};
-use std::io::ErrorKind;
+use std::io::{self, BufRead, BufReader, PipeReader, PipeWriter, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::LazyLock;
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use charliebot_mock_home::generate::generate;
+use charliebot_mock_home::{DEFAULT_SEED, Language, Shape};
 use nix::sys::signal::{Signal, killpg};
 use nix::unistd::Pid;
 use regex::Regex;
 use serde_json::{Value, json};
-use tungstenite::client::IntoClientRequest;
-use tungstenite::protocol::WebSocket;
-use tungstenite::{Message, client};
 
 const ACCESS_KEY: &str = "minified-inline-js-check-key";
-const SESSION_ID: &str = "3f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f";
-const SESSION_NAME: &str = "Minified inline script check";
-const USER_TEXT: &str = "Minified check question about the table.";
-const ANSWER_TEXT: &str = "Minified check answer with bold text.";
-const CHROME_TIMEOUT: Duration = Duration::from_secs(60);
+/// The sessions of each server's home. The check reads the first one in directory order.
+const SESSIONS: usize = 6;
 const SERVER_TIMEOUT: Duration = Duration::from_secs(60);
 const PAGE_LOAD_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long a loaded page runs before its console, exceptions and DOM are read.
 const PAGE_SETTLE: Duration = Duration::from_secs(3);
+/// Replaces the shell with the browser: the shell's stdin is the pipe Chrome reads its commands from (fd 3), and its
+/// stdout is the pipe Chrome writes its replies to (fd 4). Stdin and stdout then point at /dev/null.
+const PIPE_LAUNCHER: &str = r#"exec "$0" "$@" 3<&0 4>&1 </dev/null >/dev/null"#;
 
 static UUID: LazyLock<Regex> = LazyLock::new(|| {
   Regex::new(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}").expect("the UUID pattern compiles")
@@ -73,30 +73,26 @@ fn config_text(port: u16) -> String {
   )
 }
 
-/// One session the server lists and opens: its metadata and two chat events.
-fn write_session(home: &Path) {
-  let session = home.join("sessions").join(SESSION_ID);
-  let data = session.join("data");
-  fs::create_dir_all(&data).expect("the session's data directory is created");
-  let metadata = json!({
-    "id": SESSION_ID,
-    "name": SESSION_NAME,
-    "status": "active",
-    "profile": "manager",
-    "backend": "claude-synthetic",
-    "created_at": "2026-03-13T14:04:00.000000Z",
-    "updated_at": "2026-03-13T14:04:01.000000Z",
-    "schema_version": 2,
-    "has_unread": false,
-    "starred": false,
-  });
-  fs::write(session.join("metadata.json"), metadata.to_string()).expect("the session metadata is written");
-  let events = [
-    json!({"type": "user", "content": USER_TEXT, "timestamp": "2026-03-13T14:04:00Z"}),
-    json!({"type": "assistant", "message": {"content": ANSWER_TEXT}, "timestamp": "2026-03-13T14:04:01Z"}),
-  ];
-  let lines: String = events.iter().map(|event| format!("{event}\n")).collect();
-  fs::write(data.join("chat_events.jsonl"), lines).expect("the chat events are written");
+/// The first session of a generated home, in directory order: its id and its name, from its metadata.
+struct Session {
+  id: String,
+  name: String,
+}
+
+fn first_session(sessions: &Path) -> Session {
+  let mut dirs: Vec<PathBuf> = fs::read_dir(sessions)
+    .expect("the sessions directory is read")
+    .map(|entry| entry.expect("a sessions directory entry is read").path())
+    .filter(|path| path.join("metadata.json").is_file())
+    .collect();
+  dirs.sort();
+  let first = dirs.first().expect("the generated home holds a session");
+  let text = fs::read_to_string(first.join("metadata.json")).expect("the session metadata is read");
+  let metadata: Value = serde_json::from_str(&text).expect("the session metadata is JSON");
+  Session {
+    id: metadata["id"].as_str().expect("the session id is a string").to_owned(),
+    name: metadata["name"].as_str().expect("the session name is a string").to_owned(),
+  }
 }
 
 fn free_port() -> u16 {
@@ -117,7 +113,8 @@ impl Server {
   fn start(root: &Path, mode: &str, server_bin: &Path, repo_root: &Path, minified_switch: Option<&str>) -> Self {
     let home = root.join(mode);
     fs::create_dir_all(&home).expect("the server home is created");
-    write_session(&home);
+    generate(&home.join("sessions"), SESSIONS, DEFAULT_SEED, Shape::Default, Language::English)
+      .expect("the mock home is generated");
     let port = free_port();
     fs::write(home.join("config.yaml"), config_text(port)).expect("the config is written");
     fs::write(home.join("credentials.yaml"), format!("charliebot:\n  access_key: {ACCESS_KEY}\n"))
@@ -171,9 +168,11 @@ impl Drop for Server {
   }
 }
 
-/// The DevTools protocol over one WebSocket. Events that arrive while a call waits are kept in the queue.
+/// The DevTools protocol over Chrome's pipe transport. Commands are written to Chrome's fd 3 and its replies come from
+/// fd 4, each message closed by a NUL byte. Events that arrive while a call waits are kept in the queue.
 struct Cdp {
-  socket: WebSocket<TcpStream>,
+  commands: PipeWriter,
+  replies: Receiver<Value>,
   next_id: u64,
   queued: VecDeque<Value>,
 }
@@ -186,7 +185,9 @@ impl Cdp {
     if let Some(session) = session {
       message["sessionId"] = json!(session);
     }
-    self.socket.send(Message::Text(message.to_string().into())).expect("the DevTools call writes");
+    let mut bytes = message.to_string().into_bytes();
+    bytes.push(0);
+    self.commands.write_all(&bytes).expect("the DevTools call writes");
     let deadline = Instant::now() + PAGE_LOAD_TIMEOUT;
     loop {
       let value = self
@@ -202,25 +203,13 @@ impl Cdp {
     }
   }
 
-  /// The next message from the socket, or `None` when the deadline passes first.
+  /// The next reply, or `None` when the deadline passes first.
   fn read_until(&mut self, deadline: Instant) -> Option<Value> {
-    loop {
-      let remaining = deadline.checked_duration_since(Instant::now())?;
-      self
-        .socket
-        .get_mut()
-        .set_read_timeout(Some(remaining.max(Duration::from_millis(1))))
-        .expect("the socket accepts a read timeout");
-      match self.socket.read() {
-        Ok(Message::Text(text)) => {
-          return Some(serde_json::from_str(text.as_str()).expect("a DevTools message is JSON"));
-        }
-        Ok(_) => continue,
-        Err(tungstenite::Error::Io(error)) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
-          return None;
-        }
-        Err(error) => panic!("the DevTools socket failed: {error}"),
-      }
+    let remaining = deadline.checked_duration_since(Instant::now())?;
+    match self.replies.recv_timeout(remaining) {
+      Ok(value) => Some(value),
+      Err(RecvTimeoutError::Timeout) => None,
+      Err(RecvTimeoutError::Disconnected) => panic!("Chrome closed its DevTools pipe"),
     }
   }
 
@@ -229,6 +218,20 @@ impl Cdp {
     let deadline = Instant::now() + duration;
     while let Some(value) = self.read_until(deadline) {
       self.queued.push_back(value);
+    }
+  }
+}
+
+/// Sends each NUL-closed reply that Chrome writes to its fd 4, until Chrome closes the pipe.
+fn forward_replies(replies: PipeReader, sender: Sender<Value>) {
+  let mut reader = BufReader::new(replies);
+  let mut message = Vec::new();
+  while reader.read_until(0, &mut message).expect("Chrome's reply pipe reads") > 0 {
+    message.pop();
+    let value: Value = serde_json::from_slice(&message).expect("a DevTools reply is JSON");
+    message.clear();
+    if sender.send(value).is_err() {
+      return;
     }
   }
 }
@@ -250,36 +253,25 @@ impl Browser {
     let profile = root.join("chrome-profile");
     fs::create_dir_all(&profile).expect("the Chrome profile directory is created");
     let stderr = File::create(root.join("chrome.log")).expect("the Chrome log is created");
-    let child = Command::new(chrome)
-      .args(["--headless", "--disable-gpu", "--no-sandbox", "--no-first-run", "--remote-debugging-port=0"])
+    let (command_read, command_write) = io::pipe().expect("the command pipe is created");
+    let (reply_read, reply_write) = io::pipe().expect("the reply pipe is created");
+    let child = Command::new("/bin/sh")
+      .arg("-c")
+      .arg(PIPE_LAUNCHER)
+      .arg(chrome)
+      .args(["--headless", "--disable-gpu", "--no-sandbox", "--no-first-run", "--remote-debugging-pipe"])
       .arg(format!("--user-data-dir={}", profile.display()))
       .arg("about:blank")
-      .stdout(Stdio::null())
+      .stdin(Stdio::from(command_read))
+      .stdout(Stdio::from(reply_write))
       .stderr(Stdio::from(stderr))
       // The browser leads its own process group, so the kill reaches the processes Chrome forks.
       .process_group(0)
       .spawn()
       .unwrap_or_else(|error| panic!("Chrome at {} does not start: {error}", chrome.display()));
-    let port_file = profile.join("DevToolsActivePort");
-    let deadline = Instant::now() + CHROME_TIMEOUT;
-    let (port, path) = loop {
-      if let Ok(text) = fs::read_to_string(&port_file) {
-        let mut lines = text.lines();
-        if let (Some(port), Some(path)) = (lines.next(), lines.next()) {
-          break (port.to_owned(), path.to_owned());
-        }
-      }
-      assert!(Instant::now() < deadline, "Chrome wrote no {} within {CHROME_TIMEOUT:?}", port_file.display());
-      thread::sleep(Duration::from_millis(50));
-    };
-    let stream = TcpStream::connect(("127.0.0.1", port.parse::<u16>().expect("the DevTools port is a number")))
-      .expect("the DevTools port accepts a connection");
-    stream.set_read_timeout(Some(CHROME_TIMEOUT)).expect("the socket accepts a timeout");
-    stream.set_write_timeout(Some(CHROME_TIMEOUT)).expect("the socket accepts a timeout");
-    let url = format!("ws://127.0.0.1:{port}{path}");
-    let request = url.as_str().into_client_request().expect("the DevTools URL is a request");
-    let (socket, _) = client(request, stream).expect("the DevTools WebSocket handshake succeeds");
-    let mut cdp = Cdp { socket, next_id: 1, queued: VecDeque::new() };
+    let (sender, replies) = mpsc::channel();
+    thread::spawn(move || forward_replies(reply_read, sender));
+    let mut cdp = Cdp { commands: command_write, replies, next_id: 1, queued: VecDeque::new() };
     let target = cdp.call(None, "Target.createTarget", json!({"url": "about:blank"}));
     let target_id = target["targetId"].as_str().expect("the target has an id").to_owned();
     let attached = cdp.call(None, "Target.attachToTarget", json!({"targetId": target_id, "flatten": true}));
@@ -483,11 +475,12 @@ fn the_minified_inline_scripts_render_each_page_as_the_source_scripts_do() {
 
   let on = Server::start(root.path(), "on", &server_bin, &repo_root, None);
   let off = Server::start(root.path(), "off", &server_bin, &repo_root, Some("0"));
+  let session = first_session(&root.path().join("on").join("sessions"));
   let mut browser = Browser::launch(&chrome, root.path());
 
   let pages = [
-    ("chat", format!("/?session={SESSION_ID}")),
-    ("events", format!("/sessions/{SESSION_ID}/events")),
+    ("chat", format!("/?session={}", session.id)),
+    ("events", format!("/sessions/{}/events", session.id)),
     ("diff", "/diff".to_owned()),
     ("token-usage", "/token-usage".to_owned()),
   ];
@@ -512,15 +505,16 @@ fn the_minified_inline_scripts_render_each_page_as_the_source_scripts_do() {
       "{name}: the page text differs {}",
       first_difference(&on_view.text, &off_view.text)
     );
-    assert_page_shows_its_content(name, &on_view);
+    assert_page_shows_its_content(name, &on_view, &session);
   }
 }
 
 /// Each page shows its own content, so a pair that matches because both pages failed to load does not pass.
-fn assert_page_shows_its_content(name: &str, view: &PageView) {
+fn assert_page_shows_its_content(name: &str, view: &PageView, session: &Session) {
+  let checkpoint = format!("Checkpoint {}", session.id);
   let (title, marker) = match name {
-    "chat" => (SESSION_NAME, USER_TEXT),
-    "events" => ("Events", USER_TEXT),
+    "chat" => (session.name.as_str(), checkpoint.as_str()),
+    "events" => ("Events", checkpoint.as_str()),
     "diff" => ("Diff Viewer", "Open in code-server"),
     "token-usage" => ("Token usage", "Read from the ledger"),
     other => panic!("no content check is set for {other}"),

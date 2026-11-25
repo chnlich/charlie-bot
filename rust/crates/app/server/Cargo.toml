@@ -49,12 +49,12 @@ tracing.workspace = true
 # anyhow::Result; no server module outside `#[cfg(test)]` names anyhow.
 anyhow.workspace = true
 charliebot-core = { workspace = true, features = ["test-support"] }
+# The minified inline script check builds its home with the mock home generator.
+charliebot-mock-home.workspace = true
 charliebot-shell-harness.workspace = true
 # The thread-rule test assembles a turn through the prompt builder; no server module outside `#[cfg(test)]` names a
 # task type, so this crate's own code does not use the tasks runtime.
 charliebot-tasks.workspace = true
 tempfile.workspace = true
-# The minified inline script check drives headless Chrome over its DevTools WebSocket.
-tungstenite.workspace = true
 # The page-encoding test decodes the zstd form the page memo serves.
 zstd.workspace = true

@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 pub use charliebot_core::config::{BrowserLoginConfig, HostAuthConfig};
-use charliebot_core::config::{ConfigSection, SectionValue};
+use charliebot_core::config::{ConfigSection, HOST_AUTH_SECTION_KEY, SectionValue};
 use charliebot_core::ui_text::check_label;
 use regex::Regex;
 
@@ -16,7 +16,7 @@ const NAME_PATTERN: &str = r"^[a-z0-9-]+$";
 
 /// The browser logins of the config, in config order.
 pub fn browser_logins(cfg: &charliebot_core::config::CharlieBotConfig) -> Vec<BrowserLoginConfig> {
-  cfg.section::<HostAuthConfig>("host_auth").browser_logins.clone()
+  cfg.section::<HostAuthConfig>(HOST_AUTH_SECTION_KEY).browser_logins.clone()
 }
 
 /// Refuse a browser login whose label or input prompt holds a character that product UI text rejects. The config
@@ -37,7 +37,7 @@ pub fn login_bound_to<'a>(logins: &'a [BrowserLoginConfig], alias: &str) -> Opti
 }
 
 pub fn section() -> ConfigSection {
-  ConfigSection { key: "host_auth", legacy_keys: &[], parse: parse_section, dump: dump_section }
+  ConfigSection { key: HOST_AUTH_SECTION_KEY, legacy_keys: &[], parse: parse_section, dump: dump_section }
 }
 
 /// The section rendered as its model dumps it (`charliebot config get host_auth`).

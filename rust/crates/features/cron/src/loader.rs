@@ -564,7 +564,7 @@ fn cron_files_problems(cfg: &CharlieBotConfig, repo: &Path) -> Result<(), String
 mod tests {
   use std::path::Path;
 
-  use charliebot_core::config::{CharlieBotConfig, HostAuthConfig};
+  use charliebot_core::config::{CharlieBotConfig, HOST_AUTH_SECTION_KEY, HostAuthConfig};
   use serde_json::{Value, json};
 
   use super::{
@@ -724,7 +724,7 @@ mod tests {
     assert_eq!(snapshot.tasks.iter().map(|task| task.name.as_str()).collect::<Vec<_>>(), ["keyed"]);
     assert_eq!(snapshot.tasks[0].improve_host.as_deref(), Some("remote-test-host"));
     let logins = &cfg
-      .section_value("host_auth")
+      .section_value(HOST_AUTH_SECTION_KEY)
       .and_then(|value| value.downcast_ref::<HostAuthConfig>())
       .expect("host_auth parses as HostAuthConfig")
       .browser_logins;

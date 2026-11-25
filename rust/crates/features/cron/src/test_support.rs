@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 use charliebot_agents::agent_environment::AgentBaseEnvironment;
 use charliebot_agents::backend_pool::BackendPool;
 use charliebot_core::config::{
-  BackendOption, CONFIG_FILENAME, ConfigSection, HostAuthConfig, PoolBilling, PoolConfig, PoolMember, PoolRule,
-  SectionValue,
+  BackendOption, CONFIG_FILENAME, ConfigSection, HOST_AUTH_SECTION_KEY, HostAuthConfig, PoolBilling, PoolConfig,
+  PoolMember, PoolRule, SectionValue,
 };
 use charliebot_core::credentials::load_credentials;
 use charliebot_core::hot_reload::HotReload;
@@ -376,7 +376,7 @@ pub fn host_probe_count(home: &Path, alias: &str) -> usize {
 
 fn register_host_auth_stub(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.config_section(ConfigSection {
-    key: "host_auth",
+    key: HOST_AUTH_SECTION_KEY,
     legacy_keys: &[],
     parse: parse_host_auth,
     dump: dump_host_auth,

@@ -42,43 +42,6 @@ use charliebot_agents::transport::spawn::{SpawnSpec, spawn_one_shot};
 use charliebot_core::cgroup::SESSION_CGROUP_OOM_SCORE_ADJ;
 
 const RUN_PLAN_MARKER: &str = "__charliebot_opencode_run__=";
-const TOOL_EVENT_TYPES: [&str; 25] = [
-  "permission.replied",
-  "session.agent.selected",
-  "session.created",
-  "session.deleted",
-  protocol::EXECUTION_STARTED,
-  "session.forked",
-  "session.inbox.cancelled",
-  "session.inbox.delivered",
-  "session.inbox.delivery.changed",
-  "session.inbox.enqueued",
-  "session.instructions.updated",
-  "session.message.content.updated",
-  "session.metadata.updated",
-  "session.model.selected",
-  "session.permissions",
-  "session.renamed",
-  "session.retry.scheduled",
-  "session.reasoning.started",
-  "session.shell.ended",
-  "session.shell.started",
-  "session.skill.activated",
-  "session.step.failed",
-  "session.step.streamed",
-  "session.synthetic",
-  "session.text.started",
-];
-const MORE_IGNORED_TYPES: [&str; 8] = [
-  "session.tool.input.delta",
-  "session.tool.input.ended",
-  "session.tool.progress",
-  "session.usage.recorded",
-  "session.usage.updated",
-  "session.viewed",
-  "session.compaction.delta",
-  "session.heartbeat",
-];
 
 static RUN_PLANS: OnceLock<Mutex<HashMap<String, Arc<OpenCodeRunPlan>>>> = OnceLock::new();
 static UNHANDLED_TYPES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -829,6 +792,7 @@ impl OpenCodeTranslator {
   }
 
   /// The translation of one opencode session event into zero or more CharlieBot events.
+  /// The raw log is replayed from stored records during recovery, so a type that no arm names is logged and skipped.
   pub fn translate_event(&mut self, event: &Value) -> anyhow::Result<Vec<Value>> {
     let event_type = required_string(event, "type")?;
     let data = object_or_empty(event.get("data"))?;
@@ -940,14 +904,66 @@ impl OpenCodeTranslator {
         self.accumulate_usage(data)?;
         Ok(Vec::new())
       }
-      _ if TOOL_EVENT_TYPES.contains(&event_type) || MORE_IGNORED_TYPES.contains(&event_type) => Ok(Vec::new()),
+      // permission.asked: reject_permission aborts the live run on this type before the translator reads it.
+      "permission.asked" => Ok(Vec::new()),
+      // The names below carry no CharlieBot event. Each has its own arm, so a type that no arm names reaches the
+      // final arm.
+      "permission.replied" => Ok(Vec::new()),
+      "session.agent.selected" => Ok(Vec::new()),
+      "session.archived" => Ok(Vec::new()),
+      "session.compaction.delta" => Ok(Vec::new()),
+      "session.compaction.failed" => Ok(Vec::new()),
+      "session.created" => Ok(Vec::new()),
+      "session.deleted" => Ok(Vec::new()),
+      protocol::EXECUTION_STARTED => Ok(Vec::new()),
+      "session.forked" => Ok(Vec::new()),
+      "session.heartbeat" => Ok(Vec::new()),
+      "session.inbox.cancelled" => Ok(Vec::new()),
+      "session.inbox.delivered" => Ok(Vec::new()),
+      "session.inbox.delivery.changed" => Ok(Vec::new()),
+      "session.inbox.enqueued" => Ok(Vec::new()),
+      "session.instructions.updated" => Ok(Vec::new()),
+      "session.message.content.updated" => Ok(Vec::new()),
+      "session.metadata.updated" => Ok(Vec::new()),
+      "session.model.selected" => Ok(Vec::new()),
+      "session.moved" => Ok(Vec::new()),
+      "session.permissions" => Ok(Vec::new()),
+      "session.permissions.updated" => Ok(Vec::new()),
+      "session.reasoning.started" => Ok(Vec::new()),
+      "session.renamed" => Ok(Vec::new()),
+      "session.retry.scheduled" => Ok(Vec::new()),
+      "session.revert.cleared" => Ok(Vec::new()),
+      "session.revert.committed" => Ok(Vec::new()),
+      "session.revert.staged" => Ok(Vec::new()),
+      "session.shell.ended" => Ok(Vec::new()),
+      "session.shell.started" => Ok(Vec::new()),
+      "session.skill.activated" => Ok(Vec::new()),
+      "session.step.failed" => Ok(Vec::new()),
+      "session.step.first-token" => Ok(Vec::new()),
+      "session.step.streamed" => Ok(Vec::new()),
+      "session.synthetic" => Ok(Vec::new()),
+      "session.text.started" => Ok(Vec::new()),
+      "session.tool.input.delta" => Ok(Vec::new()),
+      "session.tool.input.ended" => Ok(Vec::new()),
+      "session.tool.progress" => Ok(Vec::new()),
+      "session.unarchived" => Ok(Vec::new()),
+      "session.usage.recorded" => Ok(Vec::new()),
+      "session.usage.updated" => Ok(Vec::new()),
+      "session.viewed" => Ok(Vec::new()),
+      // The log names each unnamed type once per process, with the session it arrived on.
       _ => {
+        let session_id = data.get("sessionID").map(value_str);
         let mut unhandled = UNHANDLED_TYPES
           .get_or_init(|| Mutex::new(HashSet::new()))
           .lock()
           .expect("opencode event registry is not poisoned");
         if unhandled.insert(event_type.to_string()) {
-          tracing::debug!(target: "charliebot_agents", event_type, "opencode_session_event_unhandled");
+          tracing::error!(
+            target: "charliebot_agents",
+            event_type,
+            session_id = ?session_id,
+            "opencode_session_event_unhandled"
+          );
         }
         Ok(Vec::new())
       }

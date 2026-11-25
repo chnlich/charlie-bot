@@ -528,7 +528,7 @@ fn assert_page_shows_its_content(name: &str, view: &PageView, session: &Session)
   let (title, marker) = match name {
     "chat" => (session.name.as_str(), checkpoint.as_str()),
     "events" => ("Events", checkpoint.as_str()),
-    "diff" => ("Diff Viewer", "Open in code-server"),
+    "diff" => ("Diff Viewer", "Compare lists every file that changed"),
     "token-usage" => ("Token usage", "Read from the ledger"),
     other => panic!("no content check is set for {other}"),
   };

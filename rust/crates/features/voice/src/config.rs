@@ -17,8 +17,15 @@ use crate::transcription::{self, BackendEntry, CredentialRef};
 pub(crate) struct VoiceSettings {
   /// The id a request names none of; unset, such a request fails with the key named.
   pub(crate) default_backend: Option<String>,
+  /// Words the recognizer should favor, such as names and product terms. Gemini receives them as its custom vocabulary,
+  /// and Muse as keywords. An empty list sends no words.
   pub(crate) vocabulary: Vec<String>,
+  /// The transcript languages, by code. Only `zh` (Mandarin Chinese) and `en` (English) map to a protocol language.
+  /// Any other code is dropped without a message, and the service then gets no language hint for it.
   pub(crate) languages: Vec<String>,
+  /// One entry per backend id, `gemini` or `muse`; an entry's fields are described on [`BackendEntry`]. A backend with
+  /// no entry stays in the voice menu as unavailable, and its reason names the `voice.backends` key to set. An entry
+  /// that lacks a field fails the section's parse, and the error names that field.
   pub(crate) backends: BTreeMap<String, BackendEntry>,
 }
 
@@ -26,11 +33,15 @@ pub(crate) struct VoiceSettings {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawVoiceSettings {
+  /// The `voice.default_backend` key; its effect is on [`VoiceSettings::default_backend`].
   default_backend: Option<String>,
+  /// The `voice.vocabulary` key; its effect is on [`VoiceSettings::vocabulary`].
   #[serde(default)]
   vocabulary: Vec<String>,
+  /// The `voice.languages` key; its effect is on [`VoiceSettings::languages`].
   #[serde(default)]
   languages: Vec<String>,
+  /// The `voice.backends` key; its effect is on [`VoiceSettings::backends`].
   #[serde(default)]
   backends: BTreeMap<String, RawBackendEntry>,
 }
@@ -38,9 +49,13 @@ struct RawVoiceSettings {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawBackendEntry {
+  /// The `voice.backends.<id>.label` key; its effect is on [`BackendEntry::label`].
   label: Option<String>,
+  /// The `voice.backends.<id>.model` key; its effect is on [`BackendEntry::model`].
   model: Option<String>,
+  /// The `voice.backends.<id>.endpoint` key; its effect is on [`BackendEntry::endpoint`].
   endpoint: Option<String>,
+  /// The `voice.backends.<id>.credential` key; its effect is on [`BackendEntry::credential`].
   credential: Option<String>,
 }
 

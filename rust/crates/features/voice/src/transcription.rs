@@ -107,11 +107,18 @@ impl Serialize for CredentialRef {
 /// One complete `voice.backends.<id>` entry: the protocol its id names and every value the config gives it.
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct BackendEntry {
+  /// The name the chat page's voice menu shows for this backend.
   pub(crate) label: String,
+  /// The protocol the entry's id names. The id selects it when the entry is parsed; no config key holds it.
   #[serde(skip)]
   pub(crate) protocol: &'static BackendSpec,
+  /// The model id the session asks the service for: `setup.model` for Gemini and `model` in the handshake for Muse.
   pub(crate) model: String,
+  /// The websocket URL the session connects to. Gemini gets `?key=<token>` appended to it. Muse gets the URL as
+  /// written and receives the token in its handshake.
   pub(crate) endpoint: String,
+  /// The `section.field` in `credentials.yaml` that holds the token the session sends. While that value is unset, the
+  /// voice menu lists the backend as unavailable with the reason `needs section.field`.
   pub(crate) credential: CredentialRef,
 }
 

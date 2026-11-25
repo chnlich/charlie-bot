@@ -245,15 +245,18 @@ async fn browser_login_input(
     Err(error) => return failure(error),
   };
   if login.input_prompt.is_none() {
-    return detail(StatusCode::CONFLICT, format!("login '{name}' takes no input"));
+    return responses::http_exception_with_detail(StatusCode::CONFLICT, &format!("login '{name}' takes no input"));
   }
   let Some(value) = input_value(&body) else {
-    return detail(StatusCode::BAD_REQUEST, "the body must be {\"value\": one non-empty line}".to_string());
+    return responses::http_exception_with_detail(
+      StatusCode::BAD_REQUEST,
+      "the body must be {\"value\": one non-empty line}",
+    );
   };
   match browser_login::give_input(&login.name, value).await {
     Ok(()) => responses::json(StatusCode::OK, &json!({ "ok": true })),
     Err(InputRefused::NotAwaiting) => {
-      detail(StatusCode::CONFLICT, format!("login '{name}' is not waiting for a value"))
+      responses::http_exception_with_detail(StatusCode::CONFLICT, &format!("login '{name}' is not waiting for a value"))
     }
     Err(InputRefused::Write(error)) => {
       tracing::error!(login = %name, error = %error, "browser_login_input_failed");
@@ -277,17 +280,12 @@ fn login_named(features: &FeatureContext, name: &str) -> anyhow::Result<Option<B
 
 /// The 404 answer for a login name the config does not hold.
 fn no_such_login(name: &str) -> Response {
-  detail(StatusCode::NOT_FOUND, format!("no browser login named '{name}'"))
+  responses::http_exception_with_detail(StatusCode::NOT_FOUND, &format!("no browser login named '{name}'"))
 }
 
 /// The 404 answer for a row id the table does not hold.
 fn no_such_row(id: &str) -> Response {
-  detail(StatusCode::NOT_FOUND, format!("no host-auth row named '{id}'"))
-}
-
-/// The error body of a status-coded answer: a JSON object whose `detail` holds the message.
-fn detail(status: StatusCode, detail: String) -> Response {
-  responses::fast_json(status, &json!({ "detail": detail }))
+  responses::http_exception_with_detail(StatusCode::NOT_FOUND, &format!("no host-auth row named '{id}'"))
 }
 
 /// A 303 redirect to `location`: an empty body, its length and its location.

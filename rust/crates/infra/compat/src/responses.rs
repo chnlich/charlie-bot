@@ -133,4 +133,27 @@ mod tests {
     assert_eq!(quote_redirect_url("a~b_c.d-e"), "a~b_c.d-e");
     assert_eq!(quote_redirect_url("\"<>{}|\\^`\n\u{7f}"), "%22%3C%3E%7B%7D%7C%5C%5E%60%0A%7F");
   }
+
+  #[tokio::test]
+  async fn an_error_detail_body_is_the_fast_json_of_its_detail() {
+    let details = [
+      "no browser login named 'nope'",
+      r#"quote " and backslash \ in the message"#,
+      "control \u{1} tab\t newline\n",
+      "non-ASCII é — 中文",
+      "</script><b>markup</b>",
+    ];
+    for detail in details {
+      let body = axum::body::to_bytes(http_exception_with_detail(StatusCode::CONFLICT, detail).into_body(), usize::MAX)
+        .await
+        .expect("the error body reads");
+      let fast = json::fast_json_bytes(&json!({ "detail": detail }));
+      assert_eq!(
+        serde_json::from_slice::<Value>(&body).expect("the error body is JSON"),
+        serde_json::from_slice::<Value>(&fast).expect("the fast body is JSON"),
+        "{detail:?}"
+      );
+      assert_eq!(body.as_ref(), fast.as_slice(), "{detail:?}");
+    }
+  }
 }

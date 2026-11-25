@@ -151,17 +151,17 @@ impl UsageFold {
           | event_types::WEB_STATUS_CONFIRMED
           | event_types::WORKER_SUMMARY
           | event_types::CLAUDE_ACCOUNT_LOGIN_REQUIRED
-          | "command_lifecycle"
-          | "continuation_ran"
+          | event_types::COMMAND_LIFECYCLE
+          | event_types::CONTINUATION_RAN
           | "discord_ack"
           | event_types::DISCORD_REPLY
-          | "feature_event"
+          | event_types::FEATURE_EVENT
           | "feishu_ack"
           | event_types::FEISHU_REPLY
           | event_types::IMPROVE_FAILED
           | event_types::IMPROVE_ITERATION_COMPLETED
           | "message"
-          | "policy_table_changed"
+          | event_types::POLICY_TABLE_CHANGED
           | "slack_ack"
           | event_types::SLACK_REPLY
           | "stream"
@@ -243,7 +243,7 @@ impl UsageFold {
         | event_types::TASK_NOTIFICATION
         | event_types::TASK_PROGRESS
         | event_types::TASK_STARTED
-        | "task_updated"
+        | event_types::TASK_UPDATED
         | event_types::API_RETRY
         | event_types::CODE_CHANGE_PUBLISHED
         | event_types::COMMANDS_CHANGED

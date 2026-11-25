@@ -5,7 +5,9 @@
 #
 # The commit is extracted from this repository into an isolated tree with its own home, private tmux server and a port
 # in 18650-18669, and the server starts on it. The command then runs with CHARLIEBOT_SERVE_URL,
-# CHARLIEBOT_SERVE_AUTH_HEADER (one line `Authorization: Bearer <key>`) and CHARLIEBOT_SERVE_PID in its environment.
+# CHARLIEBOT_SERVE_AUTH_HEADER (one line `Authorization: Bearer <key>`), CHARLIEBOT_SERVE_PID, and
+# CHARLIEBOT_SERVE_PID_FILE in its environment. A command that restarts the server updates the pid file, which the
+# trial follows until every run ends and it stops the current server.
 # The server runs inside a systemd user scope with MemoryMax=16G, so a measurement cannot push the live server into
 # swap. A server that the scope's OOM killer
 # ends fails the trial with a MemoryCap line that names the cap, the peak and the scope. A trial whose server still runs
@@ -512,6 +514,7 @@ EVIDENCE_CAPTURED=0
 CLEANUP_DONE=0
 SERVE_UNIT_STARTED=0
 SERVER_PID=
+SERVER_PID_FILE=
 SERVER_CGROUP_DIR=
 SERVER_PIDS=()
 OWNED_CGROUP_PATHS=()
@@ -558,13 +561,14 @@ stop_failed() {
   printf 'CAUSE serve: %s (server binary %s, scope %s)\n' "$1" "$BINARY" "$scope"
 }
 
-# stop_server_pid PID LOG CHECK: stops the server PID with SIGTERM and waits at most SERVER_STOP_WAIT_MS for it to exit.
-# A server that is still running then gets SIGKILL, so no process of the trial outlives the stop, and the stop fails.
-# It returns 0 only for a server that exited on SIGTERM with status 0 or 143.
+# stop_server_pid PID LOG CHECK WAITABLE: stops the server PID with SIGTERM and waits at most SERVER_STOP_WAIT_MS for it
+# to exit. A server that is still running then gets SIGKILL, so no process of the trial outlives the stop, and the stop
+# fails. A child PID must exit with status 0 or 143; a replacement PID must log a new charliebot_shutdown line.
 stop_server_pid() {
   local pid=$1
   local server_log=$2
   local check_number=$3
+  local waitable=$4
   local state
   local wait_status
   local sent=0
@@ -574,7 +578,12 @@ stop_server_pid() {
   local elapsed_ms=0
   local log_line
   local log_found=0
+  local log_offset=0
+  local graceful_exit=0
   local stop_cause=
+  if [[ -f $server_log ]]; then
+    log_offset=$(wc -c <"$server_log")
+  fi
   state=$(process_state "$pid")
   if [[ -n $state && $state != *Z* ]]; then
     if kill -TERM "$pid" 2>/dev/null; then
@@ -605,10 +614,14 @@ stop_server_pid() {
   else
     printf 'SIGTERM check=%s pid=%s was_not_running=1\n' "$check_number" "$pid"
   fi
-  if wait "$pid"; then
-    wait_status=0
+  if (( waitable == 1 )); then
+    if wait "$pid"; then
+      wait_status=0
+    else
+      wait_status=$?
+    fi
   else
-    wait_status=$?
+    wait_status=unavailable
   fi
   if (( sent == 1 )); then
     exit_ms=$(date +%s%3N)
@@ -621,15 +634,27 @@ stop_server_pid() {
       log_found=1
       printf 'SIGTERM_LOG check=%s server-log=%s %s\n' "$check_number" "${server_log##*/}" "$log_line" | sanitize_log_text
     done < <(rg 'graceful_shutdown_timeout_exceeded|charliebot_shutdown' "$server_log" || true)
+    if (( waitable == 0 )) && tail -c +$((log_offset + 1)) "$server_log" | rg -q 'charliebot_shutdown'; then
+      graceful_exit=1
+    fi
   fi
   if (( log_found == 0 )); then
     printf 'SIGTERM_LOG check=%s server-log=%s no matching shutdown lines\n' "$check_number" "${server_log##*/}"
   fi
-  if (( sent == 1 && killed == 0 )) && [[ $wait_status == 0 || $wait_status == 143 ]]; then
-    return 0
+  if (( sent == 1 && killed == 0 )); then
+    if (( waitable == 1 )) && [[ $wait_status == 0 || $wait_status == 143 ]]; then
+      return 0
+    fi
+    if (( waitable == 0 && graceful_exit == 1 )); then
+      return 0
+    fi
   fi
   if (( sent == 1 && killed == 0 )); then
-    stop_cause="server pid $pid exited with status $wait_status after SIGTERM"
+    if (( waitable == 0 )); then
+      stop_cause="server pid $pid exited after SIGTERM without a new charliebot_shutdown log line"
+    else
+      stop_cause="server pid $pid exited with status $wait_status after SIGTERM"
+    fi
   fi
   if [[ -n $stop_cause ]]; then
     stop_failed "$stop_cause"
@@ -641,8 +666,27 @@ stop_current_server() {
   local pid=${SERVER_PID:-}
   local check_number=${1:-6}
   [[ -n $pid ]] || return 0
+  local server_pid
+  local waitable=0
+  if ! IFS= read -r pid <"$SERVER_PID_FILE"; then
+    printf 'trial server pid file cannot be read: %s\n' "$SERVER_PID_FILE" >&2
+    return 1
+  fi
+  if [[ ! $pid =~ ^[1-9][0-9]*$ ]]; then
+    printf 'trial server pid file does not contain a positive pid: %s\n' "$SERVER_PID_FILE" >&2
+    return 1
+  fi
+  for server_pid in "${SERVER_PIDS[@]}"; do
+    if [[ $server_pid == "$pid" ]]; then
+      waitable=1
+      break
+    fi
+  done
+  if (( waitable == 0 )); then
+    SERVER_PIDS+=("$pid")
+  fi
   SERVER_PID=
-  if ! stop_server_pid "$pid" "$SERVER_LOG" "$check_number"; then
+  if ! stop_server_pid "$pid" "$SERVER_LOG" "$check_number" "$waitable"; then
     return 1
   fi
   return 0
@@ -943,9 +987,17 @@ server_memory_cap_killed() {
   [[ $SCOPE_RESULT == oom-kill ]]
 }
 
-# server_is_gone succeeds when the trial server process has exited or is a zombie, so it no longer runs.
+# server_is_gone follows the current PID file and succeeds when that server has exited or is a zombie.
 server_is_gone() {
   local state
+  if ! IFS= read -r SERVER_PID <"$SERVER_PID_FILE"; then
+    printf 'trial server pid file cannot be read: %s\n' "$SERVER_PID_FILE" >&2
+    return 2
+  fi
+  if [[ ! $SERVER_PID =~ ^[1-9][0-9]*$ ]]; then
+    printf 'trial server pid file does not contain a positive pid: %s\n' "$SERVER_PID_FILE" >&2
+    return 2
+  fi
   state=$(process_state "$SERVER_PID")
   [[ -z $state || $state == *Z* ]]
 }
@@ -955,13 +1007,19 @@ server_is_gone() {
 # read waits here before the read failure is reported.
 wait_server_gone() {
   local started=$SECONDS
-  while ! server_is_gone; do
+  local status
+  while :; do
+    if server_is_gone; then
+      return 0
+    else
+      status=$?
+      (( status == 1 )) || return 1
+    fi
     if (( SECONDS - started >= SERVE_EXIT_WAIT_SECONDS )); then
       return 1
     fi
     sleep 0.1
   done
-  return 0
 }
 
 # report_server_exit prints the FAIL and CAUSE lines of a serve whose server exited before every run of its home had
@@ -1147,6 +1205,7 @@ start_server() {
   fi
   SERVER_PID=$!
   SERVER_PIDS+=("$SERVER_PID")
+  printf '%s\n' "$SERVER_PID" >"$SERVER_PID_FILE"
   # Each poll reads the port's listeners, then asks whether a process this trial started holds each one. A listener that
   # none of them holds is another process's: this server's bind fails behind it, so the side fails now, with the holder.
   for _ in $(seq 1 "$SERVE_READY_POLLS"); do
@@ -1397,8 +1456,9 @@ run_serve_mode() {
   # One caller command. The exit code is the command's, demoted to 1 by a foreign cgroup removal (sweep-check) or any
   # cleanup failure.
   local cmd_rc=0 sweep_failed=0 cleanup_failed=0
-  local wait_started server_pid server_state state stray_pids disabled_tasks
+  local wait_started server_pid server_state server_status state stray_pids disabled_tasks
   SERVE_UNIT="charliebot-release-trial-serve-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  SERVER_PID_FILE="$TREE/server.pid"
   if [[ -n $SEED_HOME ]]; then
     if ! copy_seed_sessions; then
       printf 'FAIL serve Seed: the sessions of %s did not copy into %s\n' "$SEED_HOME" "$SESSIONS_DIR"
@@ -1428,10 +1488,11 @@ run_serve_mode() {
   export CHARLIEBOT_SERVE_URL="http://127.0.0.1:$CHOSEN_PORT"
   export CHARLIEBOT_SERVE_AUTH_HEADER="Authorization: Bearer $ACCESS_KEY"
   export CHARLIEBOT_SERVE_PID="$SERVER_PID"
+  export CHARLIEBOT_SERVE_PID_FILE="$SERVER_PID_FILE"
   printf 'SERVE command start: %s\n' "${COMMAND[*]}"
   "${COMMAND[@]}"
   cmd_rc=$?
-  unset CHARLIEBOT_SERVE_URL CHARLIEBOT_SERVE_AUTH_HEADER CHARLIEBOT_SERVE_PID
+  unset CHARLIEBOT_SERVE_URL CHARLIEBOT_SERVE_AUTH_HEADER CHARLIEBOT_SERVE_PID CHARLIEBOT_SERVE_PID_FILE
   printf 'SERVE command exit=%s\n' "$cmd_rc"
 
   # The wait stops the moment the server is gone, or a runs page cannot be read, and it runs out at the bound. A runs
@@ -1444,14 +1505,28 @@ run_serve_mode() {
       cleanup_failed=1
       report_server_exit
       break
+    else
+      server_status=$?
+      if (( server_status != 1 )); then
+        cleanup_failed=1
+        printf 'FAIL serve RunWait: the current trial server pid cannot be read\n'
+        break
+      fi
     fi
     if ! serve_home_has_active_run; then
       # A read that fails because the server exited is classified by the first check of the next pass, which names a
       # memory cap when the scope's OOM killer ended the server.
-      server_state=$(process_state "$SERVER_PID")
-      if [[ -z $server_state || $server_state == *Z* ]]; then
+      if server_is_gone; then
         continue
+      else
+        server_status=$?
+        if (( server_status != 1 )); then
+          cleanup_failed=1
+          printf 'FAIL serve RunWait: the current trial server pid cannot be read\n'
+          break
+        fi
       fi
+      server_state=$(process_state "$SERVER_PID")
       cleanup_failed=1
       if (( IN_CALLER_SCOPE == 0 )) && wait_server_gone; then
         report_server_exit

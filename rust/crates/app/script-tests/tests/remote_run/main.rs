@@ -9,7 +9,7 @@
 //! guard's refusal names the same host and prints in full while the host is unset.
 
 use std::fs;
-use std::io::Read;
+use std::io::{ErrorKind, Read};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -801,13 +801,28 @@ fn spawn_remote_exec(env: &Env, payload: &str) -> std::process::Child {
   command.spawn().expect("remote-exec starts")
 }
 
+/// The child pid the command writes to `path`. The shell creates the file before `echo` writes the pid, so the pid
+/// counts as written only once the content ends with the newline that `echo` writes after it.
 fn wait_for_pid_file(path: &Path) -> u32 {
   let deadline = Instant::now() + Duration::from_secs(5);
-  while !path.exists() {
-    assert!(Instant::now() < deadline, "the command did not write its child pid");
+  loop {
+    let content = match fs::read_to_string(path) {
+      Ok(content) => content,
+      Err(error) if error.kind() == ErrorKind::NotFound => String::new(),
+      Err(error) => panic!("read {}: {error}", path.display()),
+    };
+    if let Some(line) = content.strip_suffix('\n') {
+      return line.parse().unwrap_or_else(|error| {
+        panic!("{} does not hold a numeric pid: {error}; content: {content:?}", path.display())
+      });
+    }
+    assert!(
+      Instant::now() < deadline,
+      "{} did not hold a complete child pid line within 5 s; content: {content:?}",
+      path.display()
+    );
     thread::sleep(Duration::from_millis(10));
   }
-  fs::read_to_string(path).expect("read the child pid").trim().parse().expect("the child pid is numeric")
 }
 
 #[test]

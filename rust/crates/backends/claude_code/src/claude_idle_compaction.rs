@@ -9,6 +9,7 @@ use std::time::Duration;
 use anyhow::Context;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types;
+use charliebot_core::model_id;
 use charliebot_registry::Registry;
 use charliebot_registry::backend::{
   CompactionOutcome, CompactionRun, CompactionRunFn, Env, IdleArmContext, LaunchArgs,
@@ -379,7 +380,7 @@ pub fn idle_run_options(
     trigger: "idle".to_string(),
     failure_trigger: Some("idle".to_string()),
     model: option.model.clone(),
-    family: claude_compaction::model_family(Some(&option.model)),
+    family: model_id::family(Some(&option.model)),
   }
 }
 

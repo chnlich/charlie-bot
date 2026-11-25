@@ -23,6 +23,7 @@ pub mod logging;
 pub mod logline;
 pub mod memo;
 pub mod metadata_slot;
+pub mod model_id;
 pub mod ndjson;
 pub mod oauth;
 pub mod os_error;

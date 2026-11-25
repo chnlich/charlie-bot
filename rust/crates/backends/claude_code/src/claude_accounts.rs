@@ -24,6 +24,7 @@ use anyhow::{Context, anyhow};
 use charliebot_core::backend_types;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types::{RATE_LIMIT_RESETS_AT, RATE_LIMIT_STATUS, RATE_LIMIT_STATUS_REJECTED};
+use charliebot_core::model_id;
 use charliebot_core::text_repr::is_truthy;
 use charliebot_registry::backend::{
   IMPROVE_TOKEN_MIN_SECONDS, LaunchContext, MemberFailure, MemberReading, MemberWindow,
@@ -429,7 +430,7 @@ pub fn observe_rate_limit(
 
 /// The rejection key of `model`: its family, or [`ALL_MODELS`] when the model names no family.
 fn rejection_key(model: Option<&str>) -> String {
-  let family = model_family(model);
+  let family = model_id::family(model);
   if family.is_empty() { ALL_MODELS.to_string() } else { family }
 }
 
@@ -466,18 +467,6 @@ pub fn observe_usage_panel(state: &ClaudeAccountState, label: &str, usage_data: 
   );
 }
 
-fn model_family(model: Option<&str>) -> String {
-  let Some(model) = model.filter(|model| !model.is_empty()) else {
-    return String::new();
-  };
-  let parts = model.to_lowercase().split('-').map(str::to_string).collect::<Vec<_>>();
-  if parts.first().is_some_and(|part| part == "claude") && parts.len() > 1 {
-    parts[1].clone()
-  } else {
-    parts[0].clone()
-  }
-}
-
 fn panel_scope_matches(window: &Value, family: &str) -> bool {
   let scope = window.get(usage::PANEL_SCOPE_LABEL);
   if !scope.is_some_and(is_truthy) {
@@ -488,7 +477,7 @@ fn panel_scope_matches(window: &Value, family: &str) -> bool {
 }
 
 fn live_windows<'a>(reading: &'a PanelReading, model: Option<&str>, now: UtcDateTime) -> Vec<&'a Value> {
-  let family = model_family(model);
+  let family = model_id::family(model);
   reading
     .windows
     .iter()

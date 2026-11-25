@@ -35,6 +35,7 @@ const CHAT_CHANNELS: [&str; 3] = ["slack", "discord", "feishu"];
 /// no missing one.
 const RUNTIME_LAYERS: [(&str, usize); 10] = [
   ("store", 1),
+  ("inline-js", 1),
   ("registry", 2),
   ("user_text_checks", 3),
   ("usage", 3),

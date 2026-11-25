@@ -35,6 +35,7 @@ function makeEl(id = '') {
 function buildHarness() {
   const ran = [];
   const calls = [];
+  const toasts = [];
   const loads = [];
   const idleCallbacks = [];
   const documentListeners = new Map();
@@ -77,6 +78,7 @@ function buildHarness() {
       addEventListener: (name, callback) => { if (name === 'load') loads.push(callback); },
       requestIdleCallback: (callback) => idleCallbacks.push(callback),
     },
+    showToast: (message, isError) => toasts.push({message, isError}),
     loadPageStyles: () => { calls.push('styles'); return Promise.resolve(); },
     // The module lands after a delay and defines its functions on the global scope.
     loadPageScripts: () => new Promise((resolve) => setTimeout(() => {
@@ -99,6 +101,7 @@ function buildHarness() {
     button,
     ran,
     calls,
+    toasts,
     loads,
     idleCallbacks,
     stream,
@@ -123,6 +126,15 @@ test('first click requests the microphone immediately and waits for the module',
   assert.ok(sandbox.startRequest.audioContext);
   assert.ok(sandbox.startRequest.clickedAt <= Date.now());
   assert.ok(calls.indexOf('getUserMedia') < calls.indexOf('module-loaded'));
+});
+
+test('first click with no default backend opens no microphone and shows one error', () => {
+  const {sandbox, calls, toasts} = buildHarness();
+  sandbox.VOICE_DEFAULT_BACKEND = null;
+  assert.doesNotThrow(() => sandbox.openVoiceInput());
+  assert.deepEqual(calls, []);
+  assert.equal(toasts.length, 1);
+  assert.equal(toasts[0].isError, true);
 });
 
 test('idle preload starts only after the page load event', () => {

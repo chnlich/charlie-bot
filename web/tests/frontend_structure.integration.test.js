@@ -47,6 +47,8 @@
 //     registerSessionMenuItems    web/static/js/sidebar/groups.js (items of a session row's Settings menu)
 //     registerSessionRowBadge     web/static/js/sidebar/groups.js (a badge after a session row's indicators)
 //     registerSessionRowLine      web/static/js/sidebar/groups.js (a line in place of a session row's time line)
+//     registerSessionRowTitleBadge
+//                                 web/static/js/sidebar/groups.js (a badge on a session row's title line)
 //     registerSidebarControl      web/static/js/sidebar/namespace.js (the handler a rendered sidebar control calls by name)
 //     registerSidebarFilter       web/static/js/sidebar/filters.js (a sidebar filter button)
 //     registerTab                 web/static/js/tabs.js (a tab: its layout, show and hide callbacks)

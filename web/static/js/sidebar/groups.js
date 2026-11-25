@@ -157,6 +157,7 @@ function loadFullListing(key) {
 // these entries when its script loads. Each entry checks its argument and
 // rejects a duplicate.
 const sessionRowBadges = [];
+const sessionRowTitleBadges = [];
 const sessionRowLines = [];
 const sessionMenuItemSources = [];
 const groupMenuItems = [];
@@ -177,6 +178,14 @@ function registerSessionRowBadge(render) {
   if (typeof render !== 'function') throw new Error('Invalid session row badge registration');
   if (sessionRowBadges.includes(render)) throw new Error('Duplicate session row badge');
   sessionRowBadges.push(render);
+}
+
+// A title badge: render(s) returns the badge HTML that sits on the row's title line after the name, or ''. The badge
+// takes no width from the line under the title, which keeps the full width of the name block.
+function registerSessionRowTitleBadge(render) {
+  if (typeof render !== 'function') throw new Error('Invalid session row title badge registration');
+  if (sessionRowTitleBadges.includes(render)) throw new Error('Duplicate session row title badge');
+  sessionRowTitleBadges.push(render);
 }
 
 // A row line: render(s) returns the HTML of the row's line, or null to keep
@@ -325,14 +334,15 @@ function sessionRowActiveClass(isActive) {
 // closing tag.
 // A markup change to the row frame is made here once, not in each renderer.
 // indicators and line are prebuilt strings — the status column and the content
-// after the name span — and actions the trailing button column. The anchor's
-// session-row class is the plain-CSS hook styles.css's hover reveal keys on
-// (positioning context for the row's out-of-flow action buttons).
+// after the title line — and actions the trailing button column. titleBadges
+// is the prebuilt badge strings that sit on the title line after the name. The
+// anchor's session-row class is the plain-CSS hook styles.css's hover reveal
+// keys on (positioning context for the row's out-of-flow action buttons).
 // The name span's title is the full name on every row. A title the row rule
 // shortened (sessionRowTitle) reads whole on hover, and the rename field, the
 // switch notice and the archive confirmation read the name from the same
 // attribute. updateSidebarSessionName keeps it current on rename.
-function renderSessionRowShell(s, {filter, title, activeClass, options, indicators, line, nameTag, actions}) {
+function renderSessionRowShell(s, {filter, title, activeClass, options, indicators, nameTag, titleBadges, line, actions}) {
   const extraClass = options.extraClass ? ' ' + options.extraClass : '';
   const extraAttrs = options.extraAttrs ? ' ' + options.extraAttrs : '';
   return `<a href="/?session=${s.id}&filter=${filter}"
@@ -341,9 +351,10 @@ function renderSessionRowShell(s, {filter, title, activeClass, options, indicato
      id="session-${s.id}"${extraAttrs}>
     ${indicators}
     <span class="session-row-name flex-1 min-w-0">
-      <span class="flex items-center gap-2">
-        <span class="truncate block session-name" title="${escapeHtmlAttr(s.name)}">${escapeHtml(title)}</span>
-        ${nameTag}
+      <span class="flex items-center gap-1.5 min-w-0">
+        <span class="truncate block flex-1 min-w-0 session-name"
+              title="${escapeHtmlAttr(s.name)}">${escapeHtml(title)}</span>
+        ${nameTag}${titleBadges}
       </span>
       ${line}
     </span>
@@ -891,6 +902,7 @@ function renderSessionItem(s, filter, options = {}) {
     activeClass: activeClass + (isContextRow ? ' opacity-60' : ''),
     options,
     indicators: lead,
+    titleBadges: isArchivedRow ? '' : sessionRowTitleBadges.map((render) => render(s)).join(''),
     line,
     nameTag: isContextRow
       ? '<span class="ml-auto px-1.5 py-0.5 rounded bg-slate-700 text-[10px] leading-none font-medium text-slate-400 flex-shrink-0">active</span>'
@@ -1002,6 +1014,7 @@ function mergeRowsIntoRenderedList(rows, goneIds) {
 const GLOBALS = {
   registerGroupPreviewLimitExemption,
   registerSessionRowBadge,
+  registerSessionRowTitleBadge,
   registerSessionRowLine,
   registerSessionMenuItems,
   registerGroupMenuItem,

@@ -435,9 +435,8 @@ main > header > a[title="View JSONL events"]:hover {
    nth-last-of-type keeps non-button trailing spans out of the count. */
 .session-row { position: relative; }
 .session-row > button { position: absolute; right: 12px; pointer-events: none; }
-/* Keep the platform tag after the name while the Waiting and other row marks stay at the leading edge. */
+/* The name follows the row's leading marks, and the row's action buttons come last. */
 .session-row > .session-row-name { order: 1; }
-.session-row > .thread-platform-badge { order: 2; }
 .session-row > button { order: 3; }
 /* Pointer floor: a row action draws a 14px glyph in p-1's 8px, a 22px box. A named group
    header's two actions draw a 12px glyph in p-0.5's 4px, a 16px box. Both sit under the 24px

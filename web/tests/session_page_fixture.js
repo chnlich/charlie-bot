@@ -137,6 +137,7 @@ ${dialogHtml()}
 window.registerWorkspaceBadge = () => {};
 window.registerGroupPreviewLimitExemption = () => {};
 window.registerSessionRowBadge = () => {};
+window.registerSessionRowTitleBadge = () => {};
 window.registerSessionRowLine = () => {};
 window.SESSION_ID = ${JSON.stringify(SESSION_ID)};
 // The page's websocket and timer helpers, and the icon call the usage strip's chip draws, which this page lacks. The

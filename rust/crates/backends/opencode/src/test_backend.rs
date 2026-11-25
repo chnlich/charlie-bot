@@ -2005,25 +2005,21 @@ async fn one_shot_folds_the_writer_types_it_names_without_a_report() {
     r#"{"type":"step_finish","timestamp":5,"sessionID":"s1","part":{"type":"step-finish","reason":"stop"}}"#,
     "\n",
   );
-  let answer = collect_one_shot(stream.as_bytes(), MODEL).await.expect("the named writer types fold");
+  let answer = collect_one_shot(stream.as_bytes()).await.expect("the named writer types fold");
   assert_eq!(answer, "answer");
   assert_eq!(log.text(), "", "a named writer type reports nothing");
 }
 
 #[tokio::test]
-async fn one_shot_reports_an_unnamed_writer_type_and_keeps_folding() {
-  let log = LogCapture::default();
-  let _capture = log.install();
+async fn one_shot_fails_on_an_unnamed_writer_type() {
   let stream = concat!(
-    r#"{"type":"future_kind","timestamp":1,"sessionID":"s1","part":{"type":"future"}}"#,
+    r#"{"type":"text","timestamp":1,"sessionID":"s1","part":{"type":"text","text":"answer"}}"#,
     "\n",
-    r#"{"type":"text","timestamp":2,"sessionID":"s1","part":{"type":"text","text":"answer"}}"#,
+    r#"{"type":"future_kind","timestamp":2,"sessionID":"s1","part":{"type":"future"}}"#,
     "\n",
   );
-  let answer = collect_one_shot(stream.as_bytes(), MODEL).await.expect("an unnamed type does not stop the fold");
-  assert_eq!(answer, "answer");
-  let report = log.text();
-  assert!(report.contains("future_kind") && report.contains(MODEL), "report={report}");
+  let error = collect_one_shot(stream.as_bytes()).await.expect_err("an unnamed type fails the run");
+  assert!(error.to_string().contains("future_kind"), "error={error}");
 }
 
 #[ignore = "integration"]

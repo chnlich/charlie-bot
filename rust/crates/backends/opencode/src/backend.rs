@@ -1074,7 +1074,7 @@ async fn run_one_shot(request: OpenCodeOneShotRequest) -> anyhow::Result<String>
   args.push("--file".into());
   args.push(prompt_file.to_string_lossy().into_owned().into());
   args.push("-m".into());
-  args.push(model.as_str().into());
+  args.push(model.into());
   args.push("--".into());
   args.push("Follow the task prompt in the attached file.".into());
   let spec = SpawnSpec::new(
@@ -1104,7 +1104,7 @@ async fn run_one_shot(request: OpenCodeOneShotRequest) -> anyhow::Result<String>
     let mut bytes = Vec::new();
     stderr.read_to_end(&mut bytes).await.map(|_| bytes)
   });
-  let collect = collect_one_shot(stdout, &model);
+  let collect = collect_one_shot(stdout);
   let collect_result = match timeout {
     Some(limit) => match tokio::time::timeout(limit, collect).await {
       Ok(result) => result,
@@ -1127,7 +1127,7 @@ async fn run_one_shot(request: OpenCodeOneShotRequest) -> anyhow::Result<String>
   Ok(text)
 }
 
-pub(super) async fn collect_one_shot(stdout: impl AsyncRead + Unpin, model: &str) -> anyhow::Result<String> {
+pub(super) async fn collect_one_shot(stdout: impl AsyncRead + Unpin) -> anyhow::Result<String> {
   let mut reader = BufReader::new(stdout);
   let mut line = Vec::new();
   let mut parts = Vec::new();
@@ -1155,12 +1155,10 @@ pub(super) async fn collect_one_shot(stdout: impl AsyncRead + Unpin, model: &str
       // The one-shot denies every tool in its config, so no tool output joins the answer.
       Some("tool_use") => {}
       Some("tool") => {}
-      // A type that no arm names is reported and skipped, so a writer change never stops the run.
-      other => tracing::warn!(
-        target: "charliebot_agents",
-        event_type = other.unwrap_or("<missing>"),
-        model,
-        "opencode_run_event_unhandled"
+      // An unnamed type fails the run: it may carry answer text, and folding past it would return a partial answer.
+      other => bail!(
+        "opencode run emitted an event type that the one-shot fold does not name: {}",
+        other.unwrap_or("<missing>")
       ),
     }
     if error.is_some() {

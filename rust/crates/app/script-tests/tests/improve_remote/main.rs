@@ -352,17 +352,31 @@ fn the_round_environment_names_its_state_sources_and_its_round_home() {
   let launch_dir = env.get("IMPROVE_LAUNCH_DIR").expect("the round's environment names its launch directory");
   assert!(launch_dir.starts_with(&format!("{}/improve/launch/", world.remote_home.display())), "{launch_dir}");
   assert_eq!(env.get("IMPROVE_DIRECTION"), Some(&DIRECTION.to_string()), "{}", run.describe());
-  assert_eq!(
-    env.get("IMPROVE_BROWSER"),
-    Some(&world.browser_path().display().to_string()),
-    "the round's environment does not name the browser its start check ran: {}",
-    run.describe()
-  );
   let kit_dir = env.get("IMPROVE_KIT_DIR").expect("the round's environment names its kit directory");
   assert!(
     Path::new(kit_dir).join("dev/improve/github-post.sh").is_file(),
     "the kit holds no posting script: {kit_dir}"
   );
+}
+
+/// The round's tools start the browser that its start check ran: the round environment names that browser in each
+/// input that a round tool reads first, so no tool resolves a browser of its own inside a round.
+#[test]
+#[ignore = "integration"]
+fn the_round_environment_hands_its_browser_to_each_tool_input() {
+  let world = World::new();
+  let run = world.run(&world.env());
+  assert_eq!(run.code, 0, "{}", run.describe());
+  let env = world.claude_environment();
+  let browser = world.browser_path().display().to_string();
+  for input in ["IMPROVE_BROWSER", "LIVE_SHOT_CHROME", "POOR_NETWORK_CHROME"] {
+    assert_eq!(
+      env.get(input),
+      Some(&browser),
+      "the round's {input} does not name the browser its start check ran: {}",
+      run.describe()
+    );
+  }
 }
 
 #[test]

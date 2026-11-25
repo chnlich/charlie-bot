@@ -1260,7 +1260,10 @@ ensure_member_cli "$review_kind" "$review_version"
 check_boundary_starts
 ROUND_BROWSER=$(resolve_round_browser)
 check_browser_starts "$ROUND_BROWSER"
+# The round's tools that resolve a browser of their own read these inputs first, so each one starts this browser.
 export IMPROVE_BROWSER=$ROUND_BROWSER
+export LIVE_SHOT_CHROME=$ROUND_BROWSER
+export POOR_NETWORK_CHROME=$ROUND_BROWSER
 export PATH="$RUNNER_ROOT/members/$kind-$member_version/bin:$RUNNER_ROOT/members/$review_kind-$review_version/bin:$RUNNER_ROOT/bin/$commit:$PATH"
 
 # A failed scope is dead: an OOM kill or another fatal end leaves the unit failed, and systemd-run

@@ -45,6 +45,23 @@ jobs:
         working-directory: web
         run: npm install --no-audit --no-fund
 
+      # The suites that read inline scripts through read_static run on the minified text the server serves. The
+      # table's crate builds with the pinned toolchain, as the release job does, and its binary prints that text.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.99.0
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+          key: frontend-test
+
+      - name: Write the served inline scripts
+        working-directory: rust
+        run: |
+          mkdir -p ../web/target
+          cargo run --locked --quiet -p charliebot-inline-js --bin inline-js-table > ../web/target/inline-js-table.json
+
       # One suite per web/tests/*.test.{js,mjs} file on disk, minus the integration suites, which the Integration
       # workflow runs. The glob is the single source, so a suite file that lands runs here without a registration
       # edit. The dev/ unit suites run in the same process set, so their tests report their times too. The JUnit
@@ -52,6 +69,8 @@ jobs:
       # instead of a CI hang.
       - name: Test
         working-directory: web
+        env:
+          CHARLIEBOT_INLINE_JS_TABLE: target/inline-js-table.json
         run: |
           suites=$(find tests -maxdepth 1 \( -name '*.test.js' -o -name '*.test.mjs' \) ! -name '*.integration.test.*' | sort)
           count=$(printf '%s\n' "$suites" | grep -c .)

@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::Path;
 
+use charliebot_compat::file_urls;
 use charliebot_registry::Registry;
 use tempfile::TempDir;
 use uuid::Uuid;

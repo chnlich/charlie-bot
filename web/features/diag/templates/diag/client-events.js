@@ -119,18 +119,35 @@
   // reconnect wait and the replay it took; an episode still open at the next
   // close posts with what it gathered, so a page that never reaches
   // catchup_complete still reports its disconnect.
+  // The page's visibility, as its return point reads it. A return is a hidden-to-visible change, so the last visible
+  // moment is the last such change (or the page's start, when it started visible), in the device clock and in the
+  // navigation's milliseconds for the page-load record.
+  let lastVisibleMs = Date.now();
+  let lastVisibleLoadMs = 0;
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      if (socketEpisode) socketEpisode.visible_throughout = false;
+      return;
+    }
+    lastVisibleMs = Date.now();
+    lastVisibleLoadMs = performance.now();
+  });
+
   let socketEpisode = null;
 
   document.addEventListener('charliebot:client-socket-close', (event) => {
     if (socketEpisode) postSocket(socketEpisode);
     socketEpisode = {
       close_at: new Date().toISOString(),
-      cause: event.detail.cause,
       close_code: event.detail.code == null ? null : event.detail.code,
+      visible_throughout: !document.hidden,
+      // The page's first answer after the close: a successful request, or the socket's own open.
+      first_answer_ms: null,
       reconnect_at: null,
       reconnect_count: null,
       catchup_at: null,
       catchup_bytes: null,
+      return_at: null,
     };
   });
 
@@ -138,6 +155,11 @@
     if (!socketEpisode) return;
     socketEpisode.reconnect_at = new Date().toISOString();
     socketEpisode.reconnect_count = event.detail.attempts;
+    if (socketEpisode.first_answer_ms === null) socketEpisode.first_answer_ms = Date.now();
+  });
+
+  document.addEventListener('charliebot:page-answer', () => {
+    if (socketEpisode && socketEpisode.first_answer_ms === null) socketEpisode.first_answer_ms = Date.now();
   });
 
   // The page is current once its catch-up ends and any stored copy's mark has cleared (sidebar/last-state.js).
@@ -145,33 +167,46 @@
 
   document.addEventListener('charliebot:client-socket-catchup', (event) => {
     const detail = event.detail;
+    const receivedMs = Date.now();
     postClientEvent('socket', {
       disconnect_at: null,
-      cause: null,
       close_code: null,
       reconnect_at: null,
       reconnect_count: null,
+      return_at: null,
       subscription: detail.subscription,
       session_id: detail.session_id,
-      catchup_at: new Date().toISOString(),
+      catchup_at: new Date(receivedMs).toISOString(),
       catchup_bytes: detail.bytes,
     });
     if (!socketEpisode || socketEpisode.reconnect_at === null || detail.subscription !== 0) return;
-    socketEpisode.catchup_at = new Date().toISOString();
+    const returnMs = returnPointMs(socketEpisode, detail.uptimeMs, receivedMs);
+    socketEpisode.catchup_at = new Date(receivedMs).toISOString();
     socketEpisode.catchup_bytes = detail.bytes;
+    socketEpisode.return_at = returnMs === null ? null : new Date(returnMs).toISOString();
     postSocket(socketEpisode);
     socketEpisode = null;
   });
 
+  // The device time the page came back, for the wait from return to caught up. A page still hidden when its replay
+  // completes returns at no point: its wait is zero. A watched restart (a 1000 close the page saw from visible) returns
+  // when the server became ready, which the catch-up's uptime places on this clock. Any other return is the later of the
+  // page's last visible moment and its first answer after the close.
+  function returnPointMs(episode, uptimeMs, receivedMs) {
+    if (document.hidden) return null;
+    if (episode.visible_throughout && episode.close_code === 1000) return receivedMs - uptimeMs;
+    return Math.max(lastVisibleMs, episode.first_answer_ms);
+  }
+
   function postSocket(episode) {
     postClientEvent('socket', {
       disconnect_at: episode.close_at,
-      cause: episode.cause,
       close_code: episode.close_code,
       reconnect_at: episode.reconnect_at,
       reconnect_count: episode.reconnect_count,
       catchup_at: episode.catchup_at,
       catchup_bytes: episode.catchup_bytes,
+      return_at: episode.return_at,
     });
   }
 
@@ -183,7 +218,9 @@
   // catch-up's time (both ms from navigation start), and the page's render-blocking
   // files from another origin beside the same-origin timings of the same load.
   const PAGE_LOAD_CAUSE_KEY = 'charliebot-page-load-cause';
-  const PAGE_LOAD_CAUSE_TTL_MS = 60000;
+  // The mark outlives a reload that did not start for this long. A reload that navigates commits well inside it, and
+  // the page that the navigation opens reads the mark once.
+  const PAGE_LOAD_CAUSE_TTL_MS = 10000;
   // The longest the report waits past the load event for the first catch-up.
   const PAGE_LOAD_CATCHUP_WAIT_MS = 60000;
   // The most rows each of the report's two resource lists carries; the server's model allows this many.
@@ -192,6 +229,9 @@
   let pageLoaded = false;
   let pageLoadReported = false;
   let catchupMs = null;
+  // The page's return point in navigation milliseconds: the last time it became visible, or null when its catch-up
+  // completed while it was hidden (its wait is zero).
+  let returnMs = null;
   let newestMessageMs = null;
   // The page's markup-named blocking URLs, read now: the markup is parsed by the time this script runs.
   const blockingUrls = new Set(renderBlockingUrls());
@@ -202,10 +242,14 @@
 
   document.addEventListener('charliebot:page-load-cause', (event) => {
     try {
-      sessionStorage.setItem(PAGE_LOAD_CAUSE_KEY, JSON.stringify({cause: event.detail.cause, at: Date.now()}));
+      sessionStorage.setItem(PAGE_LOAD_CAUSE_KEY, JSON.stringify({cause: event.detail.cause}));
     } catch (error) {
       console.warn('client-events: page load cause not recorded', error);
+      return;
     }
+    // A navigation that never commits leaves the page alive, so its mark is removed here. A navigation that commits
+    // unloads this page, and the new page reads the mark once.
+    setTimeout(() => sessionStorage.removeItem(PAGE_LOAD_CAUSE_KEY), PAGE_LOAD_CAUSE_TTL_MS);
   });
 
   window.addEventListener('load', () => {
@@ -221,7 +265,10 @@
   }
 
   function markCatchup() {
-    if (catchupMs === null) catchupMs = performance.now();
+    if (catchupMs === null) {
+      catchupMs = performance.now();
+      returnMs = document.hidden ? null : Math.round(lastVisibleLoadMs);
+    }
     reportIfReady();
   }
 
@@ -318,6 +365,7 @@
       cause: consumePageLoadCause(),
       newest_message_ms: roundOrNull(newestMessageMs),
       current_ms: roundOrNull(catchupMs),
+      return_ms: returnMs,
       open_case: OpenedSessions.openCase(),
       content_source: openContentSource(),
       offline_shell: offlineShellPresent(),
@@ -330,8 +378,7 @@
     const raw = sessionStorage.getItem(PAGE_LOAD_CAUSE_KEY);
     if (!raw) return 'open';
     sessionStorage.removeItem(PAGE_LOAD_CAUSE_KEY);
-    const marked = JSON.parse(raw);
-    return marked && Date.now() - marked.at <= PAGE_LOAD_CAUSE_TTL_MS ? marked.cause : 'open';
+    return JSON.parse(raw).cause;
   }
 
   // --- background traffic -------------------------------------------------------

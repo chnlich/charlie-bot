@@ -2,10 +2,11 @@
 // Offline shell: the page's side of the service worker (offline-shell-worker.js)
 // ---------------------------------------------------------------------------
 // The page registers the worker once its catch-up completes and asks it to store the shell then, asks it to store
-// the session page's on-demand files once the page is idle, reloads past the stored shell on a 4409 close, reports
-// the catch-up's end to the worker, reports the start and the end of its user-waiting requests so the worker holds
-// its installs off them, and drops the stored copies on a 401. A browser without service workers keeps the page it
-// always had.
+// the session page's on-demand files once the page is idle, reloads past the stored shell on a visible 4409 close,
+// refreshes the stored shell before a reload that replaces a hidden page's code or a feature file's, reports the
+// catch-up's end to the worker, reports the start and the end of its user-waiting requests so the worker holds its
+// installs off them, and drops the stored copies on a 401. A browser without service workers keeps the page it always
+// had.
 
 const OFFLINE_SHELL_WORKER_PATH = '/offline-shell-worker.js';
 
@@ -55,22 +56,30 @@ function warmOfflineShell() {
 // cache is named for its release), so a reply from another release means the update has not taken over yet: the page
 // checks for the update, waits for the worker that takes over, and warms that one.
 function postWarm(registration, mayCheckUpdate) {
+  postToReleaseWorker(registration, {type: 'warm', copies: offlineShellSeedCopies(), files: onDemandFileUrls()},
+      mayCheckUpdate, reportWarm);
+}
+
+// Posts `message` to the registration's active worker and hands its reply to `onReply`, once the reply comes from this
+// release. A reply from another release means the update has not taken over yet: the page checks for the update (when
+// mayCheckUpdate allows it), waits for the worker that takes over, and posts to that one. An update that fails or does
+// not take over arrives at onReply as an error.
+function postToReleaseWorker(registration, message, mayCheckUpdate, onReply) {
   const channel = new MessageChannel();
   channel.port1.onmessage = (event) => {
-    const report = event.data ?? {};
-    if (report.version === STATIC_ASSET_VERSION) {
-      reportWarm(report);
+    const reply = event.data ?? {};
+    if (reply.version === STATIC_ASSET_VERSION) {
+      onReply(reply);
     } else if (!mayCheckUpdate) {
-      reportWarm({stored: false, error: `the worker is release ${report.version}, not ${STATIC_ASSET_VERSION}`});
+      onReply({stored: false, error: `the worker is release ${reply.version}, not ${STATIC_ASSET_VERSION}`});
     } else {
       registration.update()
           .then(() => whenUpdateTakesOver(registration))
-          .then((taken) => postWarm(taken, false))
-          .catch((err) => reportWarm({error: String(err)}));
+          .then((taken) => postToReleaseWorker(taken, message, false, onReply))
+          .catch((err) => onReply({error: String(err)}));
     }
   };
-  registration.active.postMessage({type: 'warm', copies: offlineShellSeedCopies(), files: onDemandFileUrls()},
-      [channel.port2]);
+  registration.active.postMessage(message, [channel.port2]);
 }
 
 // The registration the page's messages to the current release's worker go to, once any update it holds has taken
@@ -290,7 +299,9 @@ const RELOAD_PAST_SHELL_PARAM = 'reloading';
 
 // The worker that answered this page's shell learns that the server runs a newer release first, so the navigation the
 // reload makes goes to the network: a later navigation of this tab cannot take the same stale shell (4409 again). The
-// update check runs first, so the release's worker script is fetched and its install starts before the reload.
+// update check runs first, so the release's worker script is fetched and its install starts before the reload. A
+// visible page reloads this way (the 4409 close, the banner's button): its reload waits for no refresh. A hidden page's
+// code reload refreshes the stored shell instead (reloadAfterRefreshingShell), where nobody waits for it.
 function reloadPastStoredShell() {
   const url = new URL(location.href);
   url.searchParams.set(RELOAD_PAST_SHELL_PARAM, '1');
@@ -312,6 +323,50 @@ function reloadPastStoredShell() {
     location.replace(url.href);
   };
   controller.postMessage({type: 'stale-shell'}, [channel.port2]);
+}
+
+// A reload that replaces a hidden page's code (websocket.js) or a feature file's code (utils.js). The worker refreshes
+// the stored shell first, so the navigation answers with the release's shell (landing requirement B). `beforeNavigate`
+// runs once the refresh has answered and returns false to cancel the reload. The page-load cause mark is written just
+// before the navigation, so the mark names this reload and not one that never started. The promise settles when the
+// reload navigated, was cancelled, or failed to refresh.
+function reloadAfterRefreshingShell(cause, beforeNavigate = () => true) {
+  const navigate = () => {
+    if (!beforeNavigate()) return;
+    document.dispatchEvent(new CustomEvent('charliebot:page-load-cause', {detail: {cause}}));
+    location.reload();
+  };
+  if (!offlineShellSupported()) {
+    navigate();
+    return Promise.resolve();
+  }
+  return refreshStoredShell().then((result) => {
+    if (result === undefined || result.stored || result.unauthorized) {
+      navigate();
+      return;
+    }
+    if (result.error) {
+      reportShellRefreshFailure(new Error(result.error));
+      return;
+    }
+    throw new Error('offline shell refresh returned no result');
+  }).catch(reportShellRefreshFailure);
+}
+
+// The refresh asks the worker of this page's release to re-fetch the stored shell (offline-shell-worker.js
+// refreshShell). Resolves to the worker's reply, or to undefined when no worker holds this page.
+function refreshStoredShell() {
+  return navigator.serviceWorker.getRegistration().then((registration) => {
+    if (!registration || !registration.active) return undefined;
+    const message = {type: 'warm', refresh: true, version: STATIC_ASSET_VERSION, files: onDemandFileUrls()};
+    return new Promise((resolve) => postToReleaseWorker(registration, message, true, resolve));
+  });
+}
+
+// A refresh that fails leaves the page as it is. The event lets websocket.js offer the reload as a banner.
+function reportShellRefreshFailure(error) {
+  console.error('offline shell refresh failed:', error);
+  document.dispatchEvent(new CustomEvent('charliebot:offline-shell-refresh-failed', {detail: {error: String(error)}}));
 }
 
 // The page takes the parameter out of the address bar once it has loaded: the marked navigation is the one that loaded

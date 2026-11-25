@@ -759,6 +759,150 @@ test('a full store evicts the session opened longest ago and then stores the new
   assert.ok(keys.includes(BOOTSTRAP_URL), 'the new first screen is stored');
 });
 
+test('a refresh replaces the stored shell after storing its versioned files', async () => {
+  const h = harness();
+  const store = await h.caches.api.open('last-state-shell-v1');
+  await store.put(SHELL_KEY, new Response('<html>old</html>'));
+  const html = '<script src="/static/js/app.js?v=2"></script>';
+  h.state.network = async (req) => (req.url === SHELL_URL
+    ? new Response(html, {status: 200})
+    : new Response('new app', {status: 200, headers: {ETag: '"app-v2"'}}));
+  const channel = messageChannel();
+
+  await Promise.all(h.fire('message', {
+    data: {type: 'warm', refresh: true, version: 'v1'}, ports: [channel.port2],
+  }).waits);
+
+  assert.equal(channel.replies.length, 1);
+  assert.equal(channel.replies[0].stored, true);
+  assert.equal(await (await store.match(SHELL_KEY)).text(), html);
+  const files = await h.caches.api.open('last-state-files');
+  assert.equal(await (await files.match(ORIGIN + '/static/js/app.js?v=2')).text(), 'new app');
+});
+
+test('a worker of another release refreshes nothing and names its own release', async () => {
+  const h = harness();
+  const store = await h.caches.api.open('last-state-shell-v1');
+  await store.put(SHELL_KEY, new Response('<html>current</html>'));
+  h.state.network = async () => new Response('<html>newer page</html>', {status: 200});
+  const channel = messageChannel();
+
+  await Promise.all(h.fire('message', {
+    data: {type: 'warm', refresh: true, version: 'v2'}, ports: [channel.port2],
+  }).waits);
+
+  assert.equal(h.state.calls.length, 0, 'the page of the release the page does not run is never fetched');
+  assert.equal(channel.replies[0].stored, false);
+  assert.equal(channel.replies[0].version, 'v1');
+  assert.equal(await (await store.match(SHELL_KEY)).text(), '<html>current</html>');
+});
+
+test('a failed shell refresh leaves the stored shell available to navigation', async () => {
+  const h = harness();
+  const store = await h.caches.api.open('last-state-shell-v1');
+  await store.put(SHELL_KEY, new Response('<html>current</html>'));
+  h.state.network = async (req) => (req.url === SHELL_URL
+    ? new Response('<link href="/static/css/new.css?v=2" rel="stylesheet">', {status: 200})
+    : new Response('busy', {status: 503}));
+  const channel = messageChannel();
+
+  await Promise.all(h.fire('message', {
+    data: {type: 'warm', refresh: true, version: 'v1'}, ports: [channel.port2],
+  }).waits);
+
+  assert.equal(channel.replies.length, 1);
+  assert.equal(channel.replies[0].stored, false);
+  assert.match(channel.replies[0].error, /new\.css.*503/);
+  const nav = await answer(h, request(SHELL_URL, {mode: 'navigate'}));
+  assert.equal(await nav.response.text(), '<html>current</html>');
+});
+
+test('two refreshes that overlap share one shell fetch, and both tabs get its result', async () => {
+  const h = harness();
+  const store = await h.caches.api.open('last-state-shell-v1');
+  await store.put(SHELL_KEY, new Response('<html>old</html>'));
+  const shellAnswer = deferred();
+  h.state.network = (req) => (req.url === SHELL_URL
+    ? shellAnswer.promise
+    : new Response('new app', {status: 200, headers: {ETag: '"app-v2"'}}));
+  const first = messageChannel();
+  const second = messageChannel();
+  const warms = [
+    h.fire('message', {data: {type: 'warm', refresh: true, version: 'v1'}, ports: [first.port2]}),
+    h.fire('message', {data: {type: 'warm', refresh: true, version: 'v1'}, ports: [second.port2]}),
+  ];
+  await flush();
+  shellAnswer.release(new Response('<html>new</html>', {status: 200}));
+  await Promise.all(warms.flatMap((event) => event.waits));
+
+  assert.equal(h.state.calls.filter((call) => call.url === SHELL_URL).length, 1, 'one shell download per release');
+  assert.equal(first.replies[0].stored, true);
+  assert.equal(second.replies[0].stored, true);
+  assert.equal(await (await store.match(SHELL_KEY)).text(), '<html>new</html>');
+});
+
+test('a shell refresh names the stored shell by its tag: a 304 keeps it, and a 200 stores its own tag', async () => {
+  const h = harness();
+  const store = await h.caches.api.open('last-state-shell-v1');
+  await store.put(SHELL_KEY, new Response('<html>current</html>', {headers: {ETag: '"shell-1"'}}));
+  h.state.network = async () => new Response('<html>changed</html>', {status: 200, headers: {ETag: '"shell-2"'}});
+  const first = messageChannel();
+  await Promise.all(h.fire('message', {data: {type: 'warm', refresh: true, version: 'v1'}, ports: [first.port2]}).waits);
+  assert.equal(h.state.calls.at(-1).init.headers['If-None-Match'], '"shell-1"', 'the refresh names the stored tag');
+  assert.equal(first.replies[0].stored, true);
+
+  h.state.network = async () => new Response(null, {status: 304});
+  const second = messageChannel();
+  await Promise.all(h.fire('message', {data: {type: 'warm', refresh: true, version: 'v1'}, ports: [second.port2]}).waits);
+  assert.equal(h.state.calls.at(-1).init.headers['If-None-Match'], '"shell-2"', 'the 200 stored its own tag');
+  assert.equal(second.replies[0].stored, true);
+  assert.equal(await (await store.match(SHELL_KEY)).text(), '<html>changed</html>', 'the 304 keeps the stored shell');
+});
+
+test('a 401 during refresh clears stored copies and the old shell', async () => {
+  const h = harness();
+  const store = await h.caches.api.open('last-state-shell-v1');
+  await store.put(SHELL_KEY, new Response('<html>old</html>'));
+  const copies = await h.caches.api.open(DATA_CACHE);
+  await copies.put(BOOTSTRAP_URL, firstScreen('private copy'));
+  h.state.network = async () => new Response('unauthorized', {status: 401});
+  const channel = messageChannel();
+
+  await Promise.all(h.fire('message', {
+    data: {type: 'warm', refresh: true, version: 'v1'}, ports: [channel.port2],
+  }).waits);
+
+  assert.equal(channel.replies.length, 1);
+  assert.equal(channel.replies[0].stored, false);
+  assert.equal(channel.replies[0].unauthorized, true);
+  assert.equal('error' in channel.replies[0], false);
+  assert.equal(await store.match(SHELL_KEY), undefined);
+  assert.equal(await copies.match(BOOTSTRAP_URL), undefined);
+});
+
+test('a shell file 401 during refresh clears stored copies and the old shell', async () => {
+  const h = harness();
+  const store = await h.caches.api.open('last-state-shell-v1');
+  await store.put(SHELL_KEY, new Response('<html>old</html>'));
+  const copies = await h.caches.api.open(DATA_CACHE);
+  await copies.put(BOOTSTRAP_URL, firstScreen('private copy'));
+  h.state.network = async (req) => (req.url === SHELL_URL
+    ? new Response('<link href="/static/css/private.css?v=2" rel="stylesheet">', {status: 200})
+    : new Response('unauthorized', {status: 401}));
+  const channel = messageChannel();
+
+  await Promise.all(h.fire('message', {
+    data: {type: 'warm', refresh: true, version: 'v1'}, ports: [channel.port2],
+  }).waits);
+
+  assert.equal(channel.replies.length, 1);
+  assert.equal(channel.replies[0].stored, false);
+  assert.equal(channel.replies[0].unauthorized, true);
+  assert.equal('error' in channel.replies[0], false);
+  assert.equal(await store.match(SHELL_KEY), undefined);
+  assert.equal(await copies.match(BOOTSTRAP_URL), undefined);
+});
+
 test('a release keeps the stored copies and drops the shell of the release before it', async (t) => {
   t.mock.timers.enable({apis: ['setTimeout']});
   const h = harness({version: 'v2'});

@@ -6,8 +6,11 @@
     let DRAFT_KEY = SESSION_ID ? 'charliebot-draft-' + SESSION_ID : null;
     let THINKING_SINCE = {{ (active_session.thinking_since.isoformat()|tojson) if active_session and active_session.thinking_since else 'null' }};
     let eventCursor = {{ event_count }};
-    // The asset version this document carries: the session WebSocket handshake sends it as
-    // asset_version, and a stale value gets the 4409 close that reloads the page (websocket.js).
+    // The web protocol this document speaks: the session WebSocket handshake names it, and a page on another
+    // protocol gets the 4409 close that reloads it (websocket.js).
+    const WEB_PROTOCOL = {{ web_protocol }};
+    // The asset version this document carries: a hidden page swaps its code when the catch-up names another one,
+    // and a feature script whose X-Asset-Version differs reloads the page (websocket.js, utils.js).
     const STATIC_ASSET_VERSION = {{ static_asset_version|tojson }};
     // The name the header and tab title show at page load; the displayed-session module starts from it.
     const SESSION_NAME = {{ active_session.name|tojson if active_session else 'null' }};

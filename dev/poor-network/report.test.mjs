@@ -139,3 +139,20 @@ test('a repetition without a For-you switch-large cell is left out of its values
   const reps = [{switch: {large: {firstRowMs: 900}}}, {switch: null}, {switch: {large: {firstRowMs: 1100}}}];
   assert.deepEqual(summarize(reps, metric).values, [900, 1100]);
 });
+
+test('the restart gate reads the catch-up wait, and the probe row is reported without a target', () => {
+  // The gate is plan 6 v4 section 4.2's wait from the return to catch-up. A probe row that paints in time must not
+  // pass a gate whose catch-up misses it.
+  const reps = [
+    { waitMs: 2500, probeWaitMs: 1300 },
+    { waitMs: 2600, probeWaitMs: 1200 },
+    { waitMs: 2400, probeWaitMs: 1250 },
+  ];
+  const gate = summarize(reps, METRICS.find((candidate) => candidate.id === 'restart-visible'));
+  assert.equal(gate.median, 2500);
+  assert.equal(gate.pass, false);
+  const probe = summarize(reps, METRICS.find((candidate) => candidate.id === 'restart-visible.probeRow'));
+  assert.equal(probe.median, 1250);
+  assert.equal(probe.target, null);
+  assert.equal(probe.pass, null);
+});

@@ -18,8 +18,17 @@ const PAGE_ASSET_URL_JS = /^function pageAssetUrl\(path\) \{\n[\s\S]*?\n\}/m.exe
 
 function buildContext() {
   const appended = [];
+  const reloads = [];
+  const fetched = [];
   const context = {
     STATIC_ASSET_VERSION: 'v1',
+    // The release the server answers a feature file with. A test sets it to a later release to model a stale page.
+    serverRelease: 'v1',
+    fetch: (url) => {
+      fetched.push(url);
+      return Promise.resolve({ok: true, headers: {get: () => context.serverRelease}});
+    },
+    reloadAfterRefreshingShell: (cause) => reloads.push(cause),
     console: {error() {}},
     document: {
       createElement: () => ({}),
@@ -33,7 +42,7 @@ function buildContext() {
   vm.createContext(context);
   vm.runInContext(PAGE_ASSET_URL_JS, context, {filename: 'config.js'});
   vm.runInContext(UTILS_JS, context, {filename: 'utils.js'});
-  return {context, appended};
+  return {context, appended, reloads, fetched};
 }
 
 const settle = () => new Promise((resolve) => setImmediate(resolve));
@@ -56,6 +65,28 @@ test('a failed page-script load retries from the failed file, never re-running a
     'the retry asks for the failed file only');
   appended[2].onload();
   await second;
+});
+
+test('a feature script checks its release with a fetch of the page version, then runs', async () => {
+  const {context, appended, reloads, fetched} = buildContext();
+
+  const loading = context.loadPageScripts('feature', ['/a.js']);
+  await settle();
+  assert.deepEqual(fetched, ['/a.js?v=v1']);
+  assert.deepEqual(appended.map((script) => script.src), ['/a.js?v=v1']);
+  appended[0].onload();
+  await loading;
+  assert.deepEqual(reloads, []);
+});
+
+test('a feature script from another release reloads the page with its cause and runs nothing', async () => {
+  const {context, appended, reloads} = buildContext();
+  context.serverRelease = 'v2';
+
+  const loading = context.loadPageScripts('feature', ['/a.js']);
+  await assert.rejects(loading, /the page runs another release and reloads before the script runs: \/a\.js/);
+  assert.deepEqual(appended, [], 'the script does not run');
+  assert.deepEqual(reloads, ['feature_version']);
 });
 
 test('a file on another origin keeps its own URL; a same-origin one takes the page version', async () => {

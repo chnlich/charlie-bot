@@ -21,7 +21,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { METRICS, REPS_OF_SCENARIO, deriveSide } from './report.mjs';
+import { METRICS, deriveSide, repsOfMetric } from './report.mjs';
 
 // The window in which a stored R is the reference for a new run (design value: the main that a day's runs measure).
 export const STORE_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -162,7 +162,7 @@ function rowRecord(side, row, key, createdAt) {
   } else {
     reps = side.reps[row] ?? [];
   }
-  const failsTargets = METRICS.some((metric) => REPS_OF_SCENARIO[metric.scenario] === row
+  const failsTargets = METRICS.some((metric) => repsOfMetric(metric) === row
     && side.metrics[metric.id]?.pass === false);
   const capped = side.units.filter((unit) => unit.status === 'capped' && unit.name.startsWith(`${row} `)).length;
   return {

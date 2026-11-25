@@ -85,10 +85,11 @@ async function withCleanup(body, cleanup) {
   return value;
 }
 
-// One repetition's browser, proxy and tabs, torn down on every path.
-// One fresh browser profile behind one fresh proxy, with the tabs `tabNames` names. Exported for the For-you
-// scenario's first-open cells, which need a fresh profile that has opened no page yet.
-export async function withLink(ctx, label, tabNames, body) {
+// One repetition's browser, proxy and tabs, torn down on every path. `initScript`, when given, runs in each document of
+// the first tab before the page's own scripts. One fresh browser profile behind one fresh proxy, with the tabs
+// `tabNames` names. Exported for the For-you scenario's first-open cells, which need a fresh profile that has opened no
+// page yet.
+export async function withLink(ctx, label, tabNames, body, initScript = null) {
   const proxy = new ShapingProxy({ target: { host: '127.0.0.1', port: ctx.frontPort } });
   const proxyPort = await proxy.start();
   const profile = `${ctx.runDir}/profile-${label}-${randomTag()}`;
@@ -108,7 +109,7 @@ export async function withLink(ctx, label, tabNames, body) {
     for (const [index, name] of tabNames.entries()) {
       // The first tab is the one the scenario shows. The others open in the background, so showing the first needs
       // no visibility change to reach them.
-      opened.push(await tabs.open(name, null, { background: index > 0 }));
+      opened.push(await tabs.open(name, index === 0 ? initScript : null, { background: index > 0 }));
     }
     return await body({ proxy, tabs, tab: opened[0], hidden: opened.slice(1) });
   } finally {

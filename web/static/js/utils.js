@@ -170,10 +170,35 @@ function sessionUpdatedMs(session) {
 const pageScriptLoads = new Map();
 const pageScriptProgress = new Map();
 
+// A same-origin feature script answers with the server's asset version. A page on another version reloads to the
+// current code before the script runs, so its registrations come from the release that serves them. A file on another
+// origin names no version the page can check.
+function checkPageScriptRelease(path) {
+  if (/^https?:\/\//.test(path)) return Promise.resolve();
+  return fetch(pageAssetUrl(path), {credentials: 'same-origin'}).then((response) => {
+    if (!response.ok) throw new Error('the page script did not load: ' + path);
+    if (response.headers.get('X-Asset-Version') === STATIC_ASSET_VERSION) return;
+    reloadPageToRelease('feature_version');
+    throw new Error('the page runs another release and reloads before the script runs: ' + path);
+  });
+}
+
+// The reload to the release's code. The chat page's offline shell refreshes its stored shell first, so the
+// navigation answers with the release's shell (offline-shell.js). A page without a shell (the usage, cron or diff
+// pages) reloads at once. The chat page defines the shell; the other pages do not load its script.
+function reloadPageToRelease(cause) {
+  if (typeof reloadAfterRefreshingShell === 'function') {
+    reloadAfterRefreshingShell(cause);
+    return;
+  }
+  document.dispatchEvent(new CustomEvent('charliebot:page-load-cause', {detail: {cause}}));
+  location.reload();
+}
+
 function loadPageScripts(key, paths) {
   if (!pageScriptLoads.has(key)) {
     const start = pageScriptProgress.get(key) || 0;
-    const loadOne = (path, index) => new Promise((resolve, reject) => {
+    const loadOne = (path, index) => checkPageScriptRelease(path).then(() => new Promise((resolve, reject) => {
       const script = document.createElement('script');
       script.src = pageAssetUrl(path);
       script.onload = () => {
@@ -182,7 +207,7 @@ function loadPageScripts(key, paths) {
       };
       script.onerror = () => reject(new Error('the page script did not load: ' + path));
       document.head.appendChild(script);
-    });
+    }));
     const loading = paths.slice(start).reduce(
       (previous, path, index) => previous.then(() => loadOne(path, index)),
       Promise.resolve(),

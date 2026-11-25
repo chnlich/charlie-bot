@@ -83,7 +83,7 @@ async fn create_task(
   };
   let name = values.get("name").and_then(Value::as_str).expect("the model requires a string name").to_string();
   if let Err(error) = validate_name(&name) {
-    return detail(StatusCode::BAD_REQUEST, error);
+    return responses::http_exception_with_detail(StatusCode::BAD_REQUEST, &error);
   }
   let cfg = match features.config.get() {
     Ok(cfg) => cfg,
@@ -97,7 +97,7 @@ async fn create_task(
   }
   let path = loader::cron_path(&cfg, &name);
   if path.exists() {
-    return detail(StatusCode::CONFLICT, format!("Task \"{name}\" already exists"));
+    return responses::http_exception_with_detail(StatusCode::CONFLICT, &format!("Task \"{name}\" already exists"));
   }
   let mut body = create_file_body(&values);
   let repo = match features.startup.require::<RepoRoot>() {
@@ -111,7 +111,7 @@ async fn create_task(
     &crate::config::browser_login_hosts(&cfg),
   ) {
     Ok(task) => task,
-    Err(error) => return detail(StatusCode::CONFLICT, error),
+    Err(error) => return responses::http_exception_with_detail(StatusCode::CONFLICT, &error),
   };
   if let CallerIdentity::Agent { claims } = &caller
     && requested_session.is_none()
@@ -141,7 +141,7 @@ async fn update_task(
   request: Request<Body>,
 ) -> Response {
   if let Err(error) = validate_name(&name) {
-    return detail(StatusCode::BAD_REQUEST, error);
+    return responses::http_exception_with_detail(StatusCode::BAD_REQUEST, &error);
   }
   let (parts, body) = request.into_parts();
   let (body, null_bool_fields) = match request_body::read(&parts.headers, body).await {
@@ -177,18 +177,18 @@ async fn update_task(
   };
   let path = loader::cron_path(&cfg, &name);
   if !path.exists() {
-    return detail(StatusCode::NOT_FOUND, format!("Task \"{name}\" not found"));
+    return responses::http_exception_with_detail(StatusCode::NOT_FOUND, &format!("Task \"{name}\" not found"));
   }
   let repo = match features.startup.require::<RepoRoot>() {
     Ok(repo) => repo,
     Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
   };
   if let Err(error) = loader::load_file(&path, &name, repo.path(), &crate::config::browser_login_hosts(&cfg)) {
-    return detail(StatusCode::CONFLICT, error);
+    return responses::http_exception_with_detail(StatusCode::CONFLICT, &error);
   }
   let original = match read_yaml_mapping(&path) {
     Ok(value) => value,
-    Err(error) => return detail(StatusCode::CONFLICT, error),
+    Err(error) => return responses::http_exception_with_detail(StatusCode::CONFLICT, &error),
   };
   let stored = original.get("session_id").and_then(Value::as_str).filter(|value| !value.is_empty());
   let requested = values.get("session_id").and_then(Value::as_str).filter(|value| !value.is_empty());
@@ -207,7 +207,7 @@ async fn update_task(
     &crate::config::browser_login_hosts(&cfg),
   ) {
     Ok(task) => task,
-    Err(error) => return detail(StatusCode::CONFLICT, error),
+    Err(error) => return responses::http_exception_with_detail(StatusCode::CONFLICT, &error),
   };
   if values.get("enabled") == Some(&Value::Bool(true))
     && let Some(session_id) = candidate_task.session_id.as_deref()
@@ -236,7 +236,7 @@ async fn update_task(
 
 async fn delete_task(State(features): State<Arc<FeatureContext>>, Path(name): Path<String>) -> Response {
   if let Err(error) = validate_name(&name) {
-    return detail(StatusCode::BAD_REQUEST, error);
+    return responses::http_exception_with_detail(StatusCode::BAD_REQUEST, &error);
   }
   let cfg = match features.config.get() {
     Ok(cfg) => cfg,
@@ -244,7 +244,7 @@ async fn delete_task(State(features): State<Arc<FeatureContext>>, Path(name): Pa
   };
   let path = loader::cron_path(&cfg, &name);
   if !path.exists() {
-    return detail(StatusCode::NOT_FOUND, format!("Task \"{name}\" not found"));
+    return responses::http_exception_with_detail(StatusCode::NOT_FOUND, &format!("Task \"{name}\" not found"));
   }
   match std::fs::remove_file(path) {
     Ok(()) => responses::fast_json(StatusCode::OK, &json!({"ok": true})),
@@ -267,14 +267,15 @@ async fn run_task(
         "thread_id":result.thread_id}),
     ),
     Err(scheduler::RunError::Unavailable) => {
-      detail(StatusCode::SERVICE_UNAVAILABLE, "Scheduler not available".to_string())
+      responses::http_exception_with_detail(StatusCode::SERVICE_UNAVAILABLE, "Scheduler not available")
     }
     Err(scheduler::RunError::Missing(name)) => {
-      detail(StatusCode::NOT_FOUND, format!("No scheduled task named '{name}'"))
+      responses::http_exception_with_detail(StatusCode::NOT_FOUND, &format!("No scheduled task named '{name}'"))
     }
-    Err(scheduler::RunError::RoundInFlight { task, round }) => {
-      detail(StatusCode::CONFLICT, format!("scheduled task '{task}' has a round still running in session '{round}'"))
-    }
+    Err(scheduler::RunError::RoundInFlight { task, round }) => responses::http_exception_with_detail(
+      StatusCode::CONFLICT,
+      &format!("scheduled task '{task}' has a round still running in session '{round}'"),
+    ),
     Err(scheduler::RunError::Failed(error)) => responses::internal_error("RuntimeError", error),
   }
 }
@@ -324,10 +325,6 @@ fn write_yaml(path: &std::path::Path, value: &Value) -> Result<(), String> {
     loader::TaskFileWriteError::Encode(error) => error.to_string(),
     loader::TaskFileWriteError::Write(error) => format!("{}: {error}", path.display()),
   })
-}
-
-fn detail(status: StatusCode, detail: String) -> Response {
-  responses::fast_json(status, &json!({"detail": detail}))
 }
 
 fn internal_error(kind: &str, message: &str) -> Response {

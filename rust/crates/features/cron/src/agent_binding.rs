@@ -11,7 +11,7 @@ use charliebot_registry::context::FeatureContext;
 use charliebot_registry::task_errors::store_error;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
 use charliebot_store::{CreateTask, TaskCaller};
-use serde_json::{Map, json};
+use serde_json::Map;
 
 use crate::config::ScheduledTaskConfig;
 
@@ -107,5 +107,5 @@ async fn require_within_caller(
 }
 
 fn forbidden(rule: &str) -> Response {
-  responses::fast_json(StatusCode::FORBIDDEN, &json!({"detail": rule}))
+  responses::http_exception_with_detail(StatusCode::FORBIDDEN, rule)
 }

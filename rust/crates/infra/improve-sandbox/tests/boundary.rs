@@ -5,6 +5,7 @@
 //! boundary is never reported as passing.
 
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// The kernel release and the active security modules, so a failure names the kernel it ran on.
@@ -103,4 +104,45 @@ fn a_signal_to_a_process_outside_the_round_fails_with_eperm_and_one_to_the_round
   assert!(stderr.contains("Operation not permitted"), "the refused signal named no EPERM: {context}");
   assert!(has_line("own-signalled"), "the signal to the round's own child failed: {context}");
   assert!(has_line("own-exit=143"), "the round's own child did not end by SIGTERM: {context}");
+}
+
+#[ignore = "integration"]
+#[test]
+fn a_write_under_the_golden_scratch_directory_succeeds_and_a_neighbouring_path_fails() {
+  // `golden_cases` writes under the fixed `/tmp/charliebot-golden`. The neighbour is a sibling of that directory, not a
+  // child, so the allow-list must refuse it. The neighbour carries this process's id, so a concurrent run keeps its own.
+  let home = tempfile::tempdir_in("/tmp").expect("the scratch HOME");
+  // A direction of this test only, so the `/tmp` directories that the program creates are this test's own.
+  let direction = format!("golden{}", std::process::id());
+  let scratch = Path::new("/tmp/charliebot-golden").join(&direction);
+  let neighbour = PathBuf::from(format!("/tmp/charliebot-golden-other-{}", std::process::id()));
+  fs::create_dir_all(&neighbour).expect("the neighbouring directory");
+  let script = format!(
+    "mkdir -p \"{scratch}\" && printf inside >\"{scratch}/inside.txt\"; printf outside >\"{neighbour}/outside.txt\"",
+    scratch = scratch.display(),
+    neighbour = neighbour.display(),
+  );
+
+  let output = Command::new(env!("CARGO_BIN_EXE_improve-sandbox"))
+    .env_clear()
+    .env("HOME", home.path())
+    .env("PATH", "/usr/bin:/bin")
+    .args([direction.as_str(), "--", "sh", "-c", script.as_str()])
+    .output()
+    .expect("the sandbox starts");
+  remove_tmp_directories(&direction);
+  let inside_text = fs::read_to_string(scratch.join("inside.txt")).ok();
+  let outside_written = neighbour.join("outside.txt").exists();
+  for own in [&scratch, &neighbour] {
+    if own.exists() {
+      fs::remove_dir_all(own).expect("the test's own directory");
+    }
+  }
+
+  let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+  let context = format!("{}; stderr: {stderr}", kernel_summary());
+  assert_eq!(inside_text.as_deref(), Some("inside"), "the write under the golden scratch directory failed: {context}");
+  assert!(!outside_written, "the write to the neighbouring path succeeded: {context}");
+  assert!(stderr.contains("Permission denied"), "the refused write named no permission error: {context}");
+  assert!(!output.status.success(), "the command succeeded although its neighbouring write failed: {context}");
 }

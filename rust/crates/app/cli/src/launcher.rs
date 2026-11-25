@@ -13,7 +13,11 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use charliebot_core::{proc_status, ssh, text_repr};
+use charliebot_core::{
+  proc_status,
+  ssh::{self, REMOTE_RUNS_DIR},
+  text_repr,
+};
 use nix::errno::Errno;
 use nix::sys::signal::{Signal, killpg};
 use nix::sys::wait::waitpid;
@@ -21,13 +25,6 @@ use nix::unistd::{Pid, setsid};
 use time::OffsetDateTime;
 use time::format_description::BorrowedFormatItem;
 use time::macros::format_description;
-
-/// The remote side of one launch stages its log, exit file and PID file under this directory, named by launch id.
-///
-/// `$HOME` is expanded by the remote shell. The launch reads the expanded home back, so the launch record and the
-/// watch targets hold absolute paths. The directory sits under the home, not `/tmp`. A login pod's `/tmp` is local
-/// disk that a pod restart drops, and its home is an export that survives the restart.
-pub const REMOTE_RUNS_DIR: &str = "$HOME/charliebot_runs";
 
 /// The remote home variable that `REMOTE_RUNS_DIR` starts with.
 const REMOTE_HOME: &str = "$HOME";

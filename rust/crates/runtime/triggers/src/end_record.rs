@@ -14,13 +14,13 @@
 
 use std::time::SystemTime;
 
+use charliebot_core::ssh::REMOTE_RUNS_DIR;
 use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
 use time::{OffsetDateTime, PrimitiveDateTime};
 
-/// The remote directory prefix that holds one watch's end files, under the remote home. The remote shell expands
-/// `$HOME`, so the word stays unexpanded until it runs there.
-const WATCH_DIR_WORD_PREFIX: &str = "$HOME/charliebot_runs/watch-";
+/// The name prefix of one watch's directory under `REMOTE_RUNS_DIR`, which holds that watch's end files.
+const WATCH_DIR_NAME_PREFIX: &str = "watch-";
 
 /// The sacct columns one query reads: the state and exit code the fire decision uses, then `End` for the end
 /// reading. The local and the remote query use the same list.
@@ -110,7 +110,7 @@ pub fn reading(
 /// The end-file path of one watched pid, as a remote shell word. Double quotes keep `$HOME` expandable while the
 /// rest of the path, a UUID and a pid, survives any remote home with spaces in it.
 pub fn end_file_word(trigger_id: &str, pid: i64) -> String {
-  format!("\"{WATCH_DIR_WORD_PREFIX}{trigger_id}/{pid}.end\"")
+  format!("\"{REMOTE_RUNS_DIR}/{WATCH_DIR_NAME_PREFIX}{trigger_id}/{pid}.end\"")
 }
 
 /// The verify-command segment that starts the end recorder for one watched pid, before the probe verdict.
@@ -119,7 +119,7 @@ pub fn end_file_word(trigger_id: &str, pid: i64) -> String {
 /// verify ssh still returns within its limit. It is bounded by the trigger's max wait and writes one epoch.ns line
 /// to the end file only when the watched pid died first. An expiry of the timeout writes nothing.
 pub fn recorder_command(pid: i64, trigger_id: &str, max_wait_seconds: i64) -> String {
-  let dir = format!("\"{WATCH_DIR_WORD_PREFIX}{trigger_id}\"");
+  let dir = format!("\"{REMOTE_RUNS_DIR}/{WATCH_DIR_NAME_PREFIX}{trigger_id}\"");
   let end_file = end_file_word(trigger_id, pid);
   let payload =
     format!("timeout {max_wait_seconds} tail --pid={pid} -f /dev/null >/dev/null 2>&1 && date +%s.%N > {end_file}");

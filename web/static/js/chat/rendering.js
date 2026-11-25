@@ -1154,7 +1154,8 @@ function renderMessage(msg, sessionId) {
     const threadPlatform = globalThis.getDisplayedSessionPlatform();
     const replyHeader = threadPlatform !== null
       ? "<div class=\"flex items-center gap-2 text-[10px] font-semibold tracking-wider text-slate-400 mb-1\">"
-        + webBadgeHtml() + "<span>web reply · 私有，未发到 " + escapeHtml(platformLabel(threadPlatform)) + "</span></div>"
+        + webBadgeHtml() + "<span>Web reply · private, not posted to "
+        + escapeHtml(platformLabel(threadPlatform)) + "</span></div>"
       : "<div class=\"text-[10px] font-semibold tracking-wider text-slate-400 mb-1\">Reply</div>";
     return openMessageWrapper("flex justify-start", msg) + "<div class=\"max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm\">"
       + replyHeader

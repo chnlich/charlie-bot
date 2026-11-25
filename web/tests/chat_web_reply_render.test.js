@@ -28,7 +28,7 @@ test('a web reply in a thread session names its private destination beside the W
   const html = context.renderMessage(
       {role: 'web_reply', id: 'r2', content: 'Private update.', timestamp: null}, 'sess-1');
   assert.match(html, />Web<\/span>/);
-  assert.match(html, /web reply · 私有，未发到 Slack/);
+  assert.match(html, /Web reply · private, not posted to Slack/);
 });
 
 test('a web reply notice renders centered, with its text escaped as plain text', () => {

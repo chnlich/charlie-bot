@@ -288,7 +288,9 @@ function summonPlatformOf(msg) {
   if (msg.role !== thread.summon_role) return null;
   for (const platform of thread.platforms) {
     const block = msg[platform];
-    if (block && typeof block === 'object' && !Object.hasOwn(block, thread.nudge_key)) return platform;
+    if (block && typeof block === 'object' && !Array.isArray(block) && !Object.hasOwn(block, thread.nudge_key)) {
+      return platform;
+    }
   }
   return null;
 }

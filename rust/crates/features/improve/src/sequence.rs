@@ -47,11 +47,11 @@ use crate::wire;
 /// The sequence kind every iteration Run carries.
 pub const SEQUENCE_KIND: &str = "improve";
 /// The per-iteration progress event: chat visibility only.
-pub const IMPROVE_ITERATION_COMPLETED: &str = "improve_iteration_completed";
+pub const IMPROVE_ITERATION_COMPLETED: &str = charliebot_core::event_types::IMPROVE_ITERATION_COMPLETED;
 /// The final report's type when the loop completed.
 pub const IMPROVE_COMPLETED: &str = "improve_completed";
 /// The final report's type when the loop failed or was blocked.
-pub const IMPROVE_FAILED: &str = "improve_failed";
+pub const IMPROVE_FAILED: &str = charliebot_core::event_types::IMPROVE_FAILED;
 /// The final report's type when a stop request ended the loop.
 pub const IMPROVE_STOPPED: &str = "improve_stopped";
 /// The fixed loop parameters one controller run carries.

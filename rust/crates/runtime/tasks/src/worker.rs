@@ -811,7 +811,7 @@ impl Worker {
       }
       let diag_event = json!({
         "type": ET::SYSTEM,
-        "subtype": "hang_diagnostics",
+        "subtype": ET::HANG_DIAGNOSTICS,
         "diagnostics_path": diag_path.display().to_string(),
         (EXIT_CODE_FIELD): exit_code,
         "timestamp": clamp_ts(clamp_to),

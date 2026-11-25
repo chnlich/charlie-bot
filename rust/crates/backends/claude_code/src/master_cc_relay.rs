@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use super::{claude_accounts, claude_compaction, claude_config, claude_metadata, claude_relay};
 use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::event_types;
 use charliebot_registry::backend::{LaunchContext, LaunchKind, LaunchRefused, MemberFailure, RunningTurnsFn};
 use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
 
@@ -272,7 +273,8 @@ async fn report_login_required(
     account = account.label,
     config_dir = account.config_dir,
     reason,
-    "claude_account_login_required"
+    "{}",
+    event_types::CLAUDE_ACCOUNT_LOGIN_REQUIRED
   );
   (ctx.emit)(claude_relay::login_required_event(account, reason)).await
 }

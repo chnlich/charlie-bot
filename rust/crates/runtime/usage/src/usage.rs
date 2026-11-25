@@ -148,23 +148,23 @@ impl UsageFold {
           | event_types::WEB_STATUS
           | event_types::WEB_STATUS_CONFIRMED
           | event_types::WORKER_SUMMARY
-          | "claude_account_login_required"
+          | event_types::CLAUDE_ACCOUNT_LOGIN_REQUIRED
           | "command_lifecycle"
           | "continuation_ran"
           | "discord_ack"
-          | "discord_reply"
+          | event_types::DISCORD_REPLY
           | "feature_event"
           | "feishu_ack"
-          | "feishu_reply"
-          | "improve_failed"
-          | "improve_iteration_completed"
+          | event_types::FEISHU_REPLY
+          | event_types::IMPROVE_FAILED
+          | event_types::IMPROVE_ITERATION_COMPLETED
           | "message"
           | "policy_table_changed"
           | "slack_ack"
-          | "slack_reply"
+          | event_types::SLACK_REPLY
           | "stream"
           | "text"
-          | "web_status_subtree",
+          | event_types::WEB_STATUS_SUBTREE,
         ) => {}
         Some(other) => log_unnamed("event type", Some(other), source),
         None => log_unnamed("event type", None, source),
@@ -213,7 +213,7 @@ impl UsageFold {
       // These subtypes carry no usage figure.
       Some(
         event_types::COMMAND_PROGRESS
-        | "hang_diagnostics"
+        | event_types::HANG_DIAGNOSTICS
         | "init"
         | "status"
         | "stderr"

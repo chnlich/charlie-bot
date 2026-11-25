@@ -52,7 +52,7 @@ fn label(item: &str) -> &'static str {
 }
 
 /// The non-persisted frame an ancestor's page receives when a descendant sets its status (`SUBTREE_NOTICE_TYPE`).
-const SUBTREE_NOTICE_TYPE: &str = "web_status_subtree";
+const SUBTREE_NOTICE_TYPE: &str = charliebot_core::event_types::WEB_STATUS_SUBTREE;
 
 /// The validation messages a status file can break, as the `StatusPatch` and `WaitingItem` readers raise them.
 const MUST_NOT_BE_BLANK: &str = "Value error, must not be blank";

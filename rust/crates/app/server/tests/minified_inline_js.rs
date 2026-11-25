@@ -1,8 +1,10 @@
 //! The minified inline script check. The server runs twice on one mock home, once with USE_MINIFIED_INLINE_JS unset and
 //! once with 0, and headless Chrome loads the chat, events, diff and token-usage pages on each. A pair must log
 //! the same error classes and page errors, and show the same DOM and text once the clocks, the spinners' animation
-//! delays and the inline script bodies are left out. Each page's inline scripts must also differ between the two
-//! servers, which shows that the switch changed what the server served.
+//! delays and the inline script bodies are left out. The scripts with a `src` load the same sources as a set: the
+//! page's loader appends them in the order their fetches finish, so their order in the DOM is not the switch's. Each
+//! page's inline scripts must also differ between the two servers, which shows that the switch changed what the server
+//! served.
 //!
 //! Chrome runs over its pipe transport: commands go to its fd 3 and its replies come from its fd 4. The test is
 //! `#[ignore = "integration"]`, so the rust-integration job runs it with CHARLIEBOT_TEST_CHROME_BIN set to the Chrome CI
@@ -353,16 +355,24 @@ impl Drop for Browser {
   }
 }
 
-/// The page's document with each inline script's text removed, the text of those scripts, the title and the body text.
+/// The page's document with each inline script's text removed, the sorted sources of the scripts with a `src`, the text
+/// of the inline scripts, the title and the body text. The scripts with a `src` leave the document, and their sources
+/// are reported as a sorted list.
 const PAGE_STATE_SCRIPT: &str = r#"(() => {
   const copy = document.documentElement.cloneNode(true);
   const scripts = [];
   document.querySelectorAll('script').forEach((script) => scripts.push(script.textContent));
+  const sources = [];
+  copy.querySelectorAll('script[src]').forEach((script) => {
+    sources.push(script.getAttribute('src'));
+    script.remove();
+  });
   copy.querySelectorAll('script').forEach((script) => {
     script.textContent = '';
   });
   return JSON.stringify({
     dom: copy.outerHTML,
+    sources: sources.sort().join('\n'),
     scripts: scripts.join('\n'),
     title: document.title,
     text: document.body ? document.body.innerText : '',
@@ -376,6 +386,7 @@ struct PageView {
   error_classes: BTreeSet<String>,
   page_errors: BTreeSet<String>,
   inline_scripts: String,
+  sources: String,
   title: String,
   text: String,
   dom: String,
@@ -420,6 +431,7 @@ impl PageView {
       error_classes,
       page_errors,
       inline_scripts: state["scripts"].as_str().expect("the inline scripts are a string").to_owned(),
+      sources: state["sources"].as_str().expect("the script sources are a string").to_owned(),
       title: state["title"].as_str().unwrap_or_default().to_owned(),
       text,
       dom,
@@ -499,6 +511,7 @@ fn the_minified_inline_scripts_render_each_page_as_the_source_scripts_do() {
     );
     assert_eq!(on_view.error_classes, off_view.error_classes, "{name}: console error classes differ");
     assert_eq!(on_view.page_errors, off_view.page_errors, "{name}: page errors differ");
+    assert_eq!(on_view.sources, off_view.sources, "{name}: the scripts with a src load different sources");
     assert!(on_view.dom == off_view.dom, "{name}: the DOM differs {}", first_difference(&on_view.dom, &off_view.dom));
     assert!(
       on_view.text == off_view.text,

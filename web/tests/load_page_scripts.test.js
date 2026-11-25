@@ -28,7 +28,8 @@ function buildContext() {
       fetched.push(url);
       return Promise.resolve({ok: true, headers: {get: () => context.serverRelease}});
     },
-    reloadAfterRefreshingShell: (cause) => reloads.push(cause),
+    reloadPastStoredShell: (cause) => reloads.push({cause, path: 'main'}),
+    reloadAfterRefreshingShell: (cause) => reloads.push({cause, path: 'refresh'}),
     console: {error() {}},
     document: {
       createElement: () => ({}),
@@ -86,7 +87,7 @@ test('a feature script from another release reloads the page with its cause and 
   const loading = context.loadPageScripts('feature', ['/a.js']);
   await assert.rejects(loading, /the page runs another release and reloads before the script runs: \/a\.js/);
   assert.deepEqual(appended, [], 'the script does not run');
-  assert.deepEqual(reloads, ['feature_version']);
+  assert.deepEqual(reloads, [{cause: 'feature_version', path: 'refresh'}]);
 });
 
 test('a file on another origin keeps its own URL; a same-origin one takes the page version', async () => {

@@ -15,7 +15,7 @@ use charliebot_registry::usage::{
 use charliebot_registry::{FeatureContext, Registry, RegistryError};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
 use charliebot_store::run_records::RunKind;
-use charliebot_store::{ChatEvent, Store, StoreError, StoreResult};
+use charliebot_store::{ChatEvent, Store, StoreError, StoreResult, UnnamedPass};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 
@@ -75,8 +75,10 @@ struct UsageFold {
 }
 
 impl UsageFold {
-  /// Folds the events of one session log. `source` names that session; an event type no arm names is logged with it.
+  /// Folds the events of one session log. `source` names that session. The pass counts each event type or subtype that
+  /// no arm names, and logs each one once when the log ends.
   fn feed<E: EventFields>(&mut self, events: &[&E], source: &str) -> StoreResult<()> {
+    let mut unnamed = UnnamedPass::new("UsageFold::feed");
     for event in events {
       let event_type = (*event).field("type").and_then(EventFields::as_str_field);
       if matches!(event_type, Some(event_types::ASSISTANT | event_types::RESULT))
@@ -87,7 +89,7 @@ impl UsageFold {
       }
       match event_type {
         Some(event_types::ASSISTANT) => self.feed_assistant(*event)?,
-        Some(event_types::SYSTEM) => self.feed_system(*event, source)?,
+        Some(event_types::SYSTEM) => self.feed_system(*event, source, &mut unnamed)?,
         Some(event_types::CONTEXT_COMPACTED) => {
           if self.reading_kind == ReadingKind::Claude {
             self.feed_compaction_metadata(*event)?;
@@ -164,10 +166,30 @@ impl UsageFold {
           | event_types::SLACK_REPLY
           | "stream"
           | "text"
-          | event_types::WEB_STATUS_SUBTREE,
+          | event_types::WEB_STATUS_SUBTREE
+          | event_types::AI_TITLE
+          | event_types::ATIS_LATCH
+          | event_types::ATTACHMENT
+          | event_types::COMMAND
+          | event_types::CONTEXT
+          | event_types::COST_STATE
+          | event_types::FILE_HISTORY_SNAPSHOT
+          | event_types::FILE_WRITE
+          | event_types::IMPROVE_COMPLETED
+          | event_types::IMPROVE_STOPPED
+          | event_types::LAST_PROMPT
+          | event_types::MODE
+          | event_types::OBSERVATION
+          | event_types::PERMISSION_MODE
+          | event_types::PR_LINK
+          | event_types::QUEUE_OPERATION
+          | event_types::SESSION
+          | event_types::THOUGHT
+          | event_types::TOOL_PROGRESS,
         ) => {}
-        Some(other) => log_unnamed("event type", Some(other), source),
-        None => log_unnamed("event type", None, source),
+        Some(other) => unnamed.note("event type", other, Some(source)),
+        // A record with no `type` is counted under the name `<absent>`.
+        None => unnamed.note("event type", "<absent>", Some(source)),
       }
     }
     Ok(())
@@ -197,7 +219,7 @@ impl UsageFold {
     Ok(())
   }
 
-  fn feed_system<E: EventFields>(&mut self, event: &E, source: &str) -> StoreResult<()> {
+  fn feed_system<E: EventFields>(&mut self, event: &E, source: &str, unnamed: &mut UnnamedPass) -> StoreResult<()> {
     match event.field("subtype").and_then(EventFields::as_str_field) {
       Some(event_types::COMPACT_BOUNDARY) => {
         if self.reading_kind == ReadingKind::Claude {
@@ -221,11 +243,24 @@ impl UsageFold {
         | event_types::TASK_NOTIFICATION
         | event_types::TASK_PROGRESS
         | event_types::TASK_STARTED
-        | "task_updated",
+        | "task_updated"
+        | event_types::API_RETRY
+        | event_types::CODE_CHANGE_PUBLISHED
+        | event_types::COMMANDS_CHANGED
+        | event_types::HOOK_PROGRESS
+        | event_types::HOOK_RESPONSE
+        | event_types::HOOK_STARTED
+        | event_types::INFORMATIONAL
+        | event_types::MODEL_CONSENT_FALLBACK
+        | event_types::MODEL_REFUSAL_FALLBACK
+        | event_types::PERMISSION_DENIED
+        | event_types::TUI_MENU_DISMISSED
+        | event_types::TURN_DURATION
+        | event_types::VCS_STATE_CHANGED,
       ) => {}
       // A system event with no subtype is a plain line, which `event_builders` writes without one.
       None => {}
-      Some(other) => log_unnamed("system subtype", Some(other), source),
+      Some(other) => unnamed.note("system subtype", other, Some(source)),
     }
     Ok(())
   }
@@ -621,12 +656,6 @@ fn fold_events<E: EventFields>(source: &str, events: &[&E]) -> StoreResult<Usage
   Ok(fold)
 }
 
-/// Logs a stored event type or subtype that no arm of the fold names, with the session it came from. The fold replays
-/// saved logs, which a newer writer may extend, so the fold goes on with the next event.
-fn log_unnamed(kind: &str, name: Option<&str>, source: &str) {
-  tracing::error!(target: "charliebot_usage", kind, name = ?name, source, "usage_fold_unnamed_event");
-}
-
 /// The run kind the session usage view assigns to a node profile.
 pub fn usage_run_kind(meta: &SessionMetadata) -> RunKind {
   if meta.profile == TaskProfile::Manager { RunKind::ManagerTurn } else { RunKind::Work }
@@ -720,6 +749,8 @@ mod tests {
 
   use std::path::Path;
   use std::sync::OnceLock;
+
+  use charliebot_core::test_support::LogCapture;
 
   use charliebot_anthropic_compatible as anthropic_compatible;
   use charliebot_claude_code as claude_code;
@@ -909,6 +940,64 @@ mod tests {
       fold_usage(&event_refs(&with_unnamed), RunKind::Work, &registry(), None).unwrap(),
       fold_usage(&event_refs(&known), RunKind::Work, &registry(), None).unwrap()
     );
+  }
+
+  #[test]
+  fn records_with_no_type_log_once_per_pass_with_their_count() {
+    let absent: Vec<Value> = (0..1000).map(|index| json!({"id": format!("r{index}"), "content": "x"})).collect();
+    let log = LogCapture::default();
+    let _capture = log.install();
+    fold_usage(&event_refs(&absent), RunKind::Work, &registry(), None).unwrap();
+    let text = log.text();
+    assert_eq!(text.matches("store_fold_unnamed_type").count(), 1, "{text}");
+    assert!(text.contains("count=1000") && text.contains("<absent>"), "{text}");
+  }
+
+  #[test]
+  fn the_stored_names_the_writers_emit_log_nothing_in_the_usage_fold() {
+    let types = [
+      event_types::AI_TITLE,
+      event_types::ATIS_LATCH,
+      event_types::ATTACHMENT,
+      event_types::COMMAND,
+      event_types::CONTEXT,
+      event_types::COST_STATE,
+      event_types::FILE_HISTORY_SNAPSHOT,
+      event_types::FILE_WRITE,
+      event_types::IMPROVE_COMPLETED,
+      event_types::IMPROVE_STOPPED,
+      event_types::LAST_PROMPT,
+      event_types::MODE,
+      event_types::OBSERVATION,
+      event_types::PERMISSION_MODE,
+      event_types::PR_LINK,
+      event_types::QUEUE_OPERATION,
+      event_types::SESSION,
+      event_types::THOUGHT,
+      event_types::TOOL_PROGRESS,
+    ];
+    let subtypes = [
+      event_types::API_RETRY,
+      event_types::CODE_CHANGE_PUBLISHED,
+      event_types::COMMANDS_CHANGED,
+      event_types::HOOK_PROGRESS,
+      event_types::HOOK_RESPONSE,
+      event_types::HOOK_STARTED,
+      event_types::INFORMATIONAL,
+      event_types::MODEL_CONSENT_FALLBACK,
+      event_types::MODEL_REFUSAL_FALLBACK,
+      event_types::PERMISSION_DENIED,
+      event_types::TUI_MENU_DISMISSED,
+      event_types::TURN_DURATION,
+      event_types::VCS_STATE_CHANGED,
+    ];
+    let mut records: Vec<Value> = types.iter().map(|name| json!({"type": name, "id": name})).collect();
+    records.extend(subtypes.iter().map(|name| json!({"type": "system", "subtype": name, "id": name})));
+    let log = LogCapture::default();
+    let _capture = log.install();
+    fold_usage(&event_refs(&records), RunKind::Work, &registry(), None).unwrap();
+    let text = log.text();
+    assert_eq!(text.matches("store_fold_unnamed_type").count(), 0, "{text}");
   }
 
   #[test]

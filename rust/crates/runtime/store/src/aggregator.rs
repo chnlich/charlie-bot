@@ -8,7 +8,7 @@ use charliebot_core::model_id;
 use charliebot_core::text_repr::value_str;
 use serde_json::{Value, json};
 
-use crate::chat_event_type::{ChatEventType, SystemSubtype, log_unnamed};
+use crate::chat_event_type::{ChatEventType, SystemSubtype, UnnamedPass};
 use crate::hooks::EventRenderer;
 use crate::message_events;
 use crate::metadata::{BASE_BRANCH_FIELD, TASK_STATE};
@@ -91,17 +91,23 @@ impl MessageAggregator {
 
   /// Process one persisted event and return its message or stream frames.
   pub fn feed<E: EventFields>(&mut self, event: &E) -> StoreResult<Vec<Value>> {
+    self.feed_in_pass(event, &mut UnnamedPass::new("MessageAggregator::feed"))
+  }
+
+  /// Process one persisted event within the replay pass `unnamed`, which counts the stored names that the pass meets.
+  pub fn feed_in_pass<E: EventFields>(&mut self, event: &E, unnamed: &mut UnnamedPass) -> StoreResult<Vec<Value>> {
     let index = self.event_index_offset + self.processed;
     self.processed += 1;
-    self.feed_at(event, index)
+    self.feed_at(event, index, unnamed)
   }
 
   /// Process borrowed events whose source indexes are already known.
   pub fn feed_indexed<E: EventFields>(&mut self, events: &[(usize, &E)]) -> StoreResult<Vec<Value>> {
+    let mut unnamed = UnnamedPass::new("MessageAggregator::feed_indexed");
     let mut deltas = Vec::new();
     for &(index, event) in events {
       self.processed += 1;
-      deltas.extend(self.feed_at(event, self.event_index_offset + index)?);
+      deltas.extend(self.feed_at(event, self.event_index_offset + index, &mut unnamed)?);
     }
     Ok(deltas)
   }
@@ -111,7 +117,7 @@ impl MessageAggregator {
   /// that used it could carry an index below the event's place in the log.
   pub fn feed_at_absolute<E: EventFields>(&mut self, event: &E, index: usize) -> StoreResult<Vec<Value>> {
     self.processed += 1;
-    self.feed_at(event, index)
+    self.feed_at(event, index, &mut UnnamedPass::new("MessageAggregator::feed_at_absolute"))
   }
 
   /// Return an independent copy that continues at the same event index.
@@ -180,7 +186,7 @@ impl MessageAggregator {
     self.omit_streamed_content = omit;
   }
 
-  fn feed_at<E: EventFields>(&mut self, event: &E, index: usize) -> StoreResult<Vec<Value>> {
+  fn feed_at<E: EventFields>(&mut self, event: &E, index: usize, unnamed: &mut UnnamedPass) -> StoreResult<Vec<Value>> {
     self.current_index = index;
     if !event.is_object() {
       return Err(StoreError::new("chat event must be a JSON object"));
@@ -195,7 +201,7 @@ impl MessageAggregator {
       ChatEventType::ToolResult => self.feed_tool_result(event, index),
       ChatEventType::Thinking => self.feed_thinking(event, index, &event_id),
       ChatEventType::Untyped => Ok(Vec::new()),
-      event_type => self.feed_rendered(event, event_type, index, &event_id),
+      event_type => self.feed_rendered(event, event_type, index, &event_id, unnamed),
     }
   }
 
@@ -368,15 +374,16 @@ impl MessageAggregator {
     event_type: ChatEventType,
     index: usize,
     event_id: &str,
+    unnamed: &mut UnnamedPass,
   ) -> StoreResult<Vec<Value>> {
     if event_type == ChatEventType::System {
-      return self.feed_system(event, index, event_id);
+      return self.feed_system(event, index, event_id, unnamed);
     }
     let renderer =
       event.field("type").and_then(EventFields::as_str_field).and_then(|name| self.event_renderers.get(name).cloned());
     if !event_type.is_builtin() && renderer.is_none() {
       if let ChatEventType::Unnamed(name) = &event_type {
-        log_unnamed("feed_rendered", "event type", name, record_id(event));
+        unnamed.note("event type", name, record_id(event));
       }
       return Ok(Vec::new());
     }
@@ -404,7 +411,13 @@ impl MessageAggregator {
 
   /// A `system` record, by its subtype. A subagent record updates its tool row, and command progress shows a system
   /// line. The other subtypes, and a record with no subtype, are not shown.
-  fn feed_system<E: EventFields>(&mut self, event: &E, index: usize, event_id: &str) -> StoreResult<Vec<Value>> {
+  fn feed_system<E: EventFields>(
+    &mut self,
+    event: &E,
+    index: usize,
+    event_id: &str,
+    unnamed: &mut UnnamedPass,
+  ) -> StoreResult<Vec<Value>> {
     let subtype = SystemSubtype::of(event.field("subtype").and_then(EventFields::as_str_field));
     match subtype {
       SystemSubtype::TaskStarted | SystemSubtype::TaskProgress | SystemSubtype::TaskNotification => {
@@ -425,9 +438,22 @@ impl MessageAggregator {
       | SystemSubtype::ThinkingTokens
       | SystemSubtype::Stderr
       | SystemSubtype::TaskUpdated
+      | SystemSubtype::ApiRetry
+      | SystemSubtype::CodeChangePublished
+      | SystemSubtype::CommandsChanged
+      | SystemSubtype::HookProgress
+      | SystemSubtype::HookResponse
+      | SystemSubtype::HookStarted
+      | SystemSubtype::Informational
+      | SystemSubtype::ModelConsentFallback
+      | SystemSubtype::ModelRefusalFallback
+      | SystemSubtype::PermissionDenied
+      | SystemSubtype::TuiMenuDismissed
+      | SystemSubtype::TurnDuration
+      | SystemSubtype::VcsStateChanged
       | SystemSubtype::Plain => Ok(Vec::new()),
       SystemSubtype::Unnamed(name) => {
-        log_unnamed("feed_system", "system subtype", &name, record_id(event));
+        unnamed.note("system subtype", &name, record_id(event));
         Ok(Vec::new())
       }
     }
@@ -559,6 +585,19 @@ impl MessageAggregator {
       | SystemSubtype::ThinkingTokens
       | SystemSubtype::Stderr
       | SystemSubtype::TaskUpdated
+      | SystemSubtype::ApiRetry
+      | SystemSubtype::CodeChangePublished
+      | SystemSubtype::CommandsChanged
+      | SystemSubtype::HookProgress
+      | SystemSubtype::HookResponse
+      | SystemSubtype::HookStarted
+      | SystemSubtype::Informational
+      | SystemSubtype::ModelConsentFallback
+      | SystemSubtype::ModelRefusalFallback
+      | SystemSubtype::PermissionDenied
+      | SystemSubtype::TuiMenuDismissed
+      | SystemSubtype::TurnDuration
+      | SystemSubtype::VcsStateChanged
       | SystemSubtype::Plain
       | SystemSubtype::Unnamed(_)) => {
         return Err(StoreError::new(format!("{other:?} is not a subagent event")));
@@ -959,6 +998,25 @@ fn render_builtin<E: EventFields>(
     | ChatEventType::RateLimitEvent
     | ChatEventType::Stream
     | ChatEventType::WebStatusSubtree
+    | ChatEventType::AiTitle
+    | ChatEventType::AtisLatch
+    | ChatEventType::Attachment
+    | ChatEventType::Command
+    | ChatEventType::Context
+    | ChatEventType::CostState
+    | ChatEventType::FileHistorySnapshot
+    | ChatEventType::FileWrite
+    | ChatEventType::ImproveCompleted
+    | ChatEventType::ImproveStopped
+    | ChatEventType::LastPrompt
+    | ChatEventType::Mode
+    | ChatEventType::Observation
+    | ChatEventType::PermissionMode
+    | ChatEventType::PrLink
+    | ChatEventType::QueueOperation
+    | ChatEventType::Session
+    | ChatEventType::Thought
+    | ChatEventType::ToolProgress
     | ChatEventType::System
     | ChatEventType::Untyped
     | ChatEventType::Unnamed(_) => {
@@ -1120,6 +1178,7 @@ fn extract_message_field<E: EventFields>(blocks: &[&E], field: &str) -> StoreRes
 
 /// Count the tool rows opened by these run events.
 pub fn run_tool_call_count<E: EventFields>(events: &[&E]) -> usize {
+  let mut unnamed = UnnamedPass::new("run_tool_call_count");
   events
     .iter()
     .map(|event| match ChatEventType::of(event.field("type").and_then(EventFields::as_str_field)) {
@@ -1129,7 +1188,7 @@ pub fn run_tool_call_count<E: EventFields>(events: &[&E]) -> usize {
         .count(),
       ChatEventType::ToolUse => 1,
       ChatEventType::Unnamed(name) => {
-        log_unnamed("run_tool_call_count", "event type", &name, record_id(*event));
+        unnamed.note("event type", &name, record_id(*event));
         0
       }
       ChatEventType::DiscordReply
@@ -1203,6 +1262,25 @@ pub fn run_tool_call_count<E: EventFields>(events: &[&E]) -> usize {
       | ChatEventType::RateLimitEvent
       | ChatEventType::Stream
       | ChatEventType::WebStatusSubtree
+      | ChatEventType::AiTitle
+      | ChatEventType::AtisLatch
+      | ChatEventType::Attachment
+      | ChatEventType::Command
+      | ChatEventType::Context
+      | ChatEventType::CostState
+      | ChatEventType::FileHistorySnapshot
+      | ChatEventType::FileWrite
+      | ChatEventType::ImproveCompleted
+      | ChatEventType::ImproveStopped
+      | ChatEventType::LastPrompt
+      | ChatEventType::Mode
+      | ChatEventType::Observation
+      | ChatEventType::PermissionMode
+      | ChatEventType::PrLink
+      | ChatEventType::QueueOperation
+      | ChatEventType::Session
+      | ChatEventType::Thought
+      | ChatEventType::ToolProgress
       | ChatEventType::Untyped => 0,
     })
     .sum()
@@ -1210,6 +1288,7 @@ pub fn run_tool_call_count<E: EventFields>(events: &[&E]) -> usize {
 
 /// Return the newest tool row opened by these run events, with its preview and source timestamp.
 pub fn run_last_tool<E: EventFields>(events: &[&E]) -> Option<Value> {
+  let mut unnamed = UnnamedPass::new("run_last_tool");
   for event in events.iter().rev() {
     let call = match ChatEventType::of(event.field("type").and_then(EventFields::as_str_field)) {
       ChatEventType::Assistant => run_assistant_tool_uses(*event)
@@ -1227,7 +1306,7 @@ pub fn run_last_tool<E: EventFields>(events: &[&E]) -> Option<Value> {
         "input": event.field("input").map(EventFields::to_owned_value).unwrap_or(Value::Null),
       })),
       ChatEventType::Unnamed(name) => {
-        log_unnamed("run_last_tool", "event type", &name, record_id(*event));
+        unnamed.note("event type", &name, record_id(*event));
         None
       }
       ChatEventType::DiscordReply
@@ -1301,6 +1380,25 @@ pub fn run_last_tool<E: EventFields>(events: &[&E]) -> Option<Value> {
       | ChatEventType::RateLimitEvent
       | ChatEventType::Stream
       | ChatEventType::WebStatusSubtree
+      | ChatEventType::AiTitle
+      | ChatEventType::AtisLatch
+      | ChatEventType::Attachment
+      | ChatEventType::Command
+      | ChatEventType::Context
+      | ChatEventType::CostState
+      | ChatEventType::FileHistorySnapshot
+      | ChatEventType::FileWrite
+      | ChatEventType::ImproveCompleted
+      | ChatEventType::ImproveStopped
+      | ChatEventType::LastPrompt
+      | ChatEventType::Mode
+      | ChatEventType::Observation
+      | ChatEventType::PermissionMode
+      | ChatEventType::PrLink
+      | ChatEventType::QueueOperation
+      | ChatEventType::Session
+      | ChatEventType::Thought
+      | ChatEventType::ToolProgress
       | ChatEventType::Untyped => None,
     };
     if let Some(call) = call {
@@ -1340,6 +1438,7 @@ pub fn run_last_assistant_text<E: EventFields>(events: &[&E]) -> StoreResult<Opt
 
 /// Return the newest non-empty result or assistant text and its source timestamp.
 pub fn run_last_text<E: EventFields>(events: &[&E]) -> StoreResult<Option<Value>> {
+  let mut unnamed = UnnamedPass::new("run_last_text");
   for event in events.iter().rev() {
     match ChatEventType::of(event.field("type").and_then(EventFields::as_str_field)) {
       ChatEventType::Result => {
@@ -1357,7 +1456,7 @@ pub fn run_last_text<E: EventFields>(events: &[&E]) -> StoreResult<Option<Value>
           return Ok(Some(text));
         }
       }
-      ChatEventType::Unnamed(name) => log_unnamed("run_last_text", "event type", &name, record_id(*event)),
+      ChatEventType::Unnamed(name) => unnamed.note("event type", &name, record_id(*event)),
       ChatEventType::DiscordReply
       | ChatEventType::SlackReply
       | ChatEventType::WebAskCheck
@@ -1429,6 +1528,25 @@ pub fn run_last_text<E: EventFields>(events: &[&E]) -> StoreResult<Option<Value>
       | ChatEventType::RateLimitEvent
       | ChatEventType::Stream
       | ChatEventType::WebStatusSubtree
+      | ChatEventType::AiTitle
+      | ChatEventType::AtisLatch
+      | ChatEventType::Attachment
+      | ChatEventType::Command
+      | ChatEventType::Context
+      | ChatEventType::CostState
+      | ChatEventType::FileHistorySnapshot
+      | ChatEventType::FileWrite
+      | ChatEventType::ImproveCompleted
+      | ChatEventType::ImproveStopped
+      | ChatEventType::LastPrompt
+      | ChatEventType::Mode
+      | ChatEventType::Observation
+      | ChatEventType::PermissionMode
+      | ChatEventType::PrLink
+      | ChatEventType::QueueOperation
+      | ChatEventType::Session
+      | ChatEventType::Thought
+      | ChatEventType::ToolProgress
       | ChatEventType::Untyped => {}
     }
   }
@@ -1600,6 +1718,7 @@ mod tests {
 
   use super::*;
   use crate::store::test_support::{assistant_text_event, assistant_text_tool_use_event};
+  use charliebot_core::test_support::LogCapture;
 
   fn parity_renderers() -> HashMap<String, Arc<dyn EventRenderer>> {
     let slack: Arc<dyn EventRenderer> = Arc::new(|event: &Value| {
@@ -2011,6 +2130,20 @@ mod tests {
     assert_eq!(deltas.len(), without.len());
     assert_eq!(deltas[0]["message"]["content"], without[0]["message"]["content"]);
     assert_eq!(deltas[1]["message"]["role"], "separator");
+  }
+
+  #[test]
+  fn many_records_of_one_unnamed_type_log_one_line_per_replay_pass() {
+    let records: Vec<Value> =
+      (0..1000).map(|index| json!({"type": "a_writer_added_later", "id": format!("r{index}")})).collect();
+    let indexed: Vec<(usize, &Value)> = records.iter().enumerate().collect();
+    let log = LogCapture::default();
+    let _capture = log.install();
+    let mut replayed = MessageAggregator::new(0, false, BackendsConfig::default());
+    replayed.feed_indexed(&indexed).unwrap();
+    let text = log.text();
+    assert_eq!(text.matches("store_fold_unnamed_type").count(), 1, "{text}");
+    assert!(text.contains("count=1000") && text.contains("a_writer_added_later"), "{text}");
   }
 
   #[test]

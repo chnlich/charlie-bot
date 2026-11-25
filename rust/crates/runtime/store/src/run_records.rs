@@ -22,7 +22,7 @@ use nix::unistd::{Pid, getpgid};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-use crate::chat_event_type::{ChatEventType, log_unnamed};
+use crate::chat_event_type::ChatEventType;
 use crate::compact::CompactValue;
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
@@ -462,10 +462,28 @@ impl RunFacts {
       ChatEventType::RateLimitEvent => {}
       ChatEventType::Stream => {}
       ChatEventType::WebStatusSubtree => {}
+      ChatEventType::AiTitle => {}
+      ChatEventType::AtisLatch => {}
+      ChatEventType::Attachment => {}
+      ChatEventType::Command => {}
+      ChatEventType::Context => {}
+      ChatEventType::CostState => {}
+      ChatEventType::FileHistorySnapshot => {}
+      ChatEventType::FileWrite => {}
+      ChatEventType::ImproveCompleted => {}
+      ChatEventType::ImproveStopped => {}
+      ChatEventType::LastPrompt => {}
+      ChatEventType::Mode => {}
+      ChatEventType::Observation => {}
+      ChatEventType::PermissionMode => {}
+      ChatEventType::PrLink => {}
+      ChatEventType::QueueOperation => {}
+      ChatEventType::Session => {}
+      ChatEventType::Thought => {}
+      ChatEventType::ToolProgress => {}
       ChatEventType::Untyped => {}
-      ChatEventType::Unnamed(name) => {
-        log_unnamed("RunFacts::observe", "event type", &name, event.get("id").and_then(CompactValue::as_str));
-      }
+      // The replay loop that visits the record counts an unnamed type.
+      ChatEventType::Unnamed(_) => {}
     }
   }
 

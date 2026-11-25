@@ -15,7 +15,7 @@ use charliebot_core::{event_types, fsutil};
 use regex::Regex;
 use serde_json::{Map, Value, json};
 
-use crate::chat_event_type::{ChatEventType, log_unnamed};
+use crate::chat_event_type::{ChatEventType, UnnamedPass, log_unnamed};
 use crate::compact::CompactValue;
 use crate::event_types::ChatEvent;
 
@@ -2181,7 +2181,10 @@ impl Store {
       None::<()>
     })?;
     let mut facts = RunFacts::default();
+    let mut unnamed = UnnamedPass::new("run_facts_at");
     for event in newest_first.iter().rev() {
+      unnamed
+        .note_type(event.get("type").and_then(CompactValue::as_str), event.get("id").and_then(CompactValue::as_str));
       facts.observe(event);
     }
     let facts = Arc::new(facts);
@@ -2809,6 +2812,25 @@ fn lifecycle_state_of(event: &ChatEvent) -> Option<TaskState> {
     ChatEventType::RateLimitEvent => None,
     ChatEventType::Stream => None,
     ChatEventType::WebStatusSubtree => None,
+    ChatEventType::AiTitle => None,
+    ChatEventType::AtisLatch => None,
+    ChatEventType::Attachment => None,
+    ChatEventType::Command => None,
+    ChatEventType::Context => None,
+    ChatEventType::CostState => None,
+    ChatEventType::FileHistorySnapshot => None,
+    ChatEventType::FileWrite => None,
+    ChatEventType::ImproveCompleted => None,
+    ChatEventType::ImproveStopped => None,
+    ChatEventType::LastPrompt => None,
+    ChatEventType::Mode => None,
+    ChatEventType::Observation => None,
+    ChatEventType::PermissionMode => None,
+    ChatEventType::PrLink => None,
+    ChatEventType::QueueOperation => None,
+    ChatEventType::Session => None,
+    ChatEventType::Thought => None,
+    ChatEventType::ToolProgress => None,
     ChatEventType::Untyped => None,
     ChatEventType::Unnamed(name) => {
       log_unnamed("lifecycle_state_of", "event type", &name, event.get("id").and_then(CompactValue::as_str));
@@ -2994,6 +3016,7 @@ fn fold_task_facts_from(
   run_facts: Option<&mut RunFacts>,
 ) -> StoreResult<bool> {
   let mut run_facts = run_facts;
+  let mut unnamed = UnnamedPass::new("fold_task_facts_from");
   for (index, event) in events.iter().enumerate() {
     if index % TASK_FACTS_STOP_CHECK_INTERVAL == 0 && should_stop() {
       return Ok(false);
@@ -3088,9 +3111,28 @@ fn fold_task_facts_from(
       ChatEventType::RateLimitEvent => {}
       ChatEventType::Stream => {}
       ChatEventType::WebStatusSubtree => {}
+      ChatEventType::AiTitle => {}
+      ChatEventType::AtisLatch => {}
+      ChatEventType::Attachment => {}
+      ChatEventType::Command => {}
+      ChatEventType::Context => {}
+      ChatEventType::CostState => {}
+      ChatEventType::FileHistorySnapshot => {}
+      ChatEventType::FileWrite => {}
+      ChatEventType::ImproveCompleted => {}
+      ChatEventType::ImproveStopped => {}
+      ChatEventType::LastPrompt => {}
+      ChatEventType::Mode => {}
+      ChatEventType::Observation => {}
+      ChatEventType::PermissionMode => {}
+      ChatEventType::PrLink => {}
+      ChatEventType::QueueOperation => {}
+      ChatEventType::Session => {}
+      ChatEventType::Thought => {}
+      ChatEventType::ToolProgress => {}
       ChatEventType::Untyped => {}
       ChatEventType::Unnamed(name) => {
-        log_unnamed("fold_task_facts_from", "event type", name, event.get("id").and_then(CompactValue::as_str))
+        unnamed.note("event type", name, event.get("id").and_then(CompactValue::as_str));
       }
     }
     if event.get("id").and_then(CompactValue::as_str).is_some()
@@ -3257,8 +3299,27 @@ fn fold_task_facts_from(
       ChatEventType::RateLimitEvent => {}
       ChatEventType::Stream => {}
       ChatEventType::WebStatusSubtree => {}
+      ChatEventType::AiTitle => {}
+      ChatEventType::AtisLatch => {}
+      ChatEventType::Attachment => {}
+      ChatEventType::Command => {}
+      ChatEventType::Context => {}
+      ChatEventType::CostState => {}
+      ChatEventType::FileHistorySnapshot => {}
+      ChatEventType::FileWrite => {}
+      ChatEventType::ImproveCompleted => {}
+      ChatEventType::ImproveStopped => {}
+      ChatEventType::LastPrompt => {}
+      ChatEventType::Mode => {}
+      ChatEventType::Observation => {}
+      ChatEventType::PermissionMode => {}
+      ChatEventType::PrLink => {}
+      ChatEventType::QueueOperation => {}
+      ChatEventType::Session => {}
+      ChatEventType::Thought => {}
+      ChatEventType::ToolProgress => {}
       ChatEventType::Untyped => {}
-      // The close-request dispatch above logs an unnamed type.
+      // The dispatch above counts an unnamed type in the pass.
       ChatEventType::Unnamed(_) => {}
     }
     let imported = event
@@ -3313,6 +3374,7 @@ fn fold_node_facts_from(
     return Ok(false);
   }
   let mut run_facts = run_facts;
+  let mut unnamed = UnnamedPass::new("fold_node_facts_from");
   let mut task_error = None;
   if let Ok(task) = &mut facts.task {
     match fold_task_facts_from(session_id, task, events, offset, should_stop, run_facts.as_deref_mut()) {
@@ -3331,7 +3393,10 @@ fn fold_node_facts_from(
       return Ok(false);
     }
     if let Some(run_facts) = run_facts.as_deref_mut() {
-      run_facts.observe(event.as_ref());
+      let record = event.as_ref();
+      unnamed
+        .note_type(record.get("type").and_then(CompactValue::as_str), record.get("id").and_then(CompactValue::as_str));
+      run_facts.observe(record);
     }
   }
   Ok(!should_stop())
@@ -3390,11 +3455,15 @@ fn observe_run_facts(
   events: &[SharedChatEvent],
   should_stop: &mut impl FnMut() -> bool,
 ) -> StoreResult<bool> {
+  let mut unnamed = UnnamedPass::new("observe_run_facts");
   for (index, event) in events.iter().enumerate() {
     if index % TASK_FACTS_STOP_CHECK_INTERVAL == 0 && should_stop() {
       return Ok(false);
     }
-    facts.observe(event.as_ref());
+    let record = event.as_ref();
+    unnamed
+      .note_type(record.get("type").and_then(CompactValue::as_str), record.get("id").and_then(CompactValue::as_str));
+    facts.observe(record);
   }
   Ok(!should_stop())
 }
@@ -3477,11 +3546,28 @@ fn admits_input(event: &ChatEvent) -> bool {
     ChatEventType::RateLimitEvent => false,
     ChatEventType::Stream => false,
     ChatEventType::WebStatusSubtree => false,
+    ChatEventType::AiTitle => false,
+    ChatEventType::AtisLatch => false,
+    ChatEventType::Attachment => false,
+    ChatEventType::Command => false,
+    ChatEventType::Context => false,
+    ChatEventType::CostState => false,
+    ChatEventType::FileHistorySnapshot => false,
+    ChatEventType::FileWrite => false,
+    ChatEventType::ImproveCompleted => false,
+    ChatEventType::ImproveStopped => false,
+    ChatEventType::LastPrompt => false,
+    ChatEventType::Mode => false,
+    ChatEventType::Observation => false,
+    ChatEventType::PermissionMode => false,
+    ChatEventType::PrLink => false,
+    ChatEventType::QueueOperation => false,
+    ChatEventType::Session => false,
+    ChatEventType::Thought => false,
+    ChatEventType::ToolProgress => false,
     ChatEventType::Untyped => false,
-    ChatEventType::Unnamed(name) => {
-      log_unnamed("admits_input", "event type", &name, event.get("id").and_then(CompactValue::as_str));
-      false
-    }
+    // The task fold's dispatch counts an unnamed type, so each record counts once in its pass.
+    ChatEventType::Unnamed(_) => false,
   }
 }
 
@@ -5761,6 +5847,19 @@ pub(crate) mod tests {
     let walks_before = store.history_fact_walk_count();
     assert_eq!(store.task_tree_activity(&node.id).unwrap().work_state, "idle");
     assert_eq!(store.history_fact_walk_count() - walks_before, 1);
+  }
+
+  #[test]
+  fn each_unnamed_record_counts_once_in_the_task_fold_pass() {
+    use charliebot_core::test_support::LogCapture;
+    let records: Vec<Value> =
+      (0..1000).map(|index| json!({"type": "a_writer_added_later", "id": format!("r{index}")})).collect();
+    let log = LogCapture::default();
+    let _capture = log.install();
+    fold_task_facts(&records).unwrap();
+    let text = log.text();
+    assert_eq!(text.matches("store_fold_unnamed_type").count(), 1, "{text}");
+    assert!(text.contains("count=1000"), "{text}");
   }
 
   #[test]

@@ -283,6 +283,43 @@ pub const CREDENTIALS_RELOAD_FAILED_EVENT: &str = "credentials_reload_failed";
 /// work use it.
 pub const BACKGROUND_TASK_FAILED_EVENT: &str = "background_task_failed";
 
+/// Stored event types that the store folds and the usage fold name. Each one is handled or ignored by name, so a replay
+/// logs nothing for it; a stored type that no constant here names is logged once per replay pass.
+pub const AI_TITLE: &str = "ai-title";
+pub const ATIS_LATCH: &str = "atis-latch";
+pub const ATTACHMENT: &str = "attachment";
+pub const COMMAND: &str = "command";
+pub const CONTEXT: &str = "context";
+pub const COST_STATE: &str = "cost-state";
+pub const FILE_HISTORY_SNAPSHOT: &str = "file-history-snapshot";
+pub const FILE_WRITE: &str = "file_write";
+pub const IMPROVE_COMPLETED: &str = "improve_completed";
+pub const IMPROVE_STOPPED: &str = "improve_stopped";
+pub const LAST_PROMPT: &str = "last-prompt";
+pub const MODE: &str = "mode";
+pub const OBSERVATION: &str = "observation";
+pub const PERMISSION_MODE: &str = "permission-mode";
+pub const PR_LINK: &str = "pr-link";
+pub const QUEUE_OPERATION: &str = "queue-operation";
+pub const SESSION: &str = "session";
+pub const THOUGHT: &str = "thought";
+pub const TOOL_PROGRESS: &str = "tool_progress";
+/// Stored system subtypes that the store folds and the usage fold name. Like the types above, each is handled or
+/// ignored by name.
+pub const API_RETRY: &str = "api_retry";
+pub const CODE_CHANGE_PUBLISHED: &str = "code_change_published";
+pub const COMMANDS_CHANGED: &str = "commands_changed";
+pub const HOOK_PROGRESS: &str = "hook_progress";
+pub const HOOK_RESPONSE: &str = "hook_response";
+pub const HOOK_STARTED: &str = "hook_started";
+pub const INFORMATIONAL: &str = "informational";
+pub const MODEL_CONSENT_FALLBACK: &str = "model_consent_fallback";
+pub const MODEL_REFUSAL_FALLBACK: &str = "model_refusal_fallback";
+pub const PERMISSION_DENIED: &str = "permission_denied";
+pub const TUI_MENU_DISMISSED: &str = "tui_menu_dismissed";
+pub const TURN_DURATION: &str = "turn_duration";
+pub const VCS_STATE_CHANGED: &str = "vcs_state_changed";
+
 /// Field reads shared by `serde_json::Value` and the store's compact parsed events, so the
 /// event-type helpers and the message aggregator read either form in place.
 pub trait EventFields: Sized {

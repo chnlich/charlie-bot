@@ -16,6 +16,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 charliebot-anthropic-compatible.workspace = true
+charliebot-core = { workspace = true, features = ["test-support"] }
 charliebot-claude-code.workspace = true
 charliebot-codex.workspace = true
 tempfile.workspace = true

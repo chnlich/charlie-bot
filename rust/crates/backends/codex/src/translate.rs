@@ -23,7 +23,7 @@ use charliebot_agents::event_builders::{
 
 /// The event type the translation emits for each file a `file_change` item adds or updates. The wire value is
 /// persisted in events.jsonl.
-pub const FILE_WRITE: &str = "file_write";
+pub const FILE_WRITE: &str = event_types::FILE_WRITE;
 
 /// Codex item types that translate to one fixed tool event: (item type, (tool name, payload field carrying the input,
 /// whether the completed output is turned into text)). The output is `aggregated_output` first (codex-cli 0.157.0

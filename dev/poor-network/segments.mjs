@@ -1,8 +1,8 @@
-// The bench's segments. A segment is the steps the bench runs between two takes of the lock. Its first unit is a probe,
-// one repetition of the reference cell, whose tail reads the host's CPU speed as a rate; the rate gate reads that rate.
-// A segment ends with a yield whenever a process queues for the lock after a step, and by the segment's length, when a
-// probe is due again without a yield. step-gate.mjs owns the lock and the caps; this module owns the probe and the
-// gate.
+// The bench's segments. A segment is the units the bench runs between two takes of the lock. The first unit's step runs
+// a probe before it: one repetition of the reference cell, whose tail reads the host's CPU speed as a rate. The probe
+// and the unit share the step, so one hold of the lock and one cap cover both. The rate gate reads that rate. A segment
+// ends with a yield whenever a process queues for the lock after a step, and by the segment's length, when a probe is
+// due again without a yield. step-gate.mjs owns the lock and the caps; this module owns the probe.
 
 import { cpuRateFrom, hostInterference, referenceTail } from './open.mjs';
 import { LIVE_CPU_TAIL } from './profile.mjs';
@@ -42,6 +42,10 @@ export function rateVerdict(rate, reference) {
   return { ok: true, reason: null };
 }
 
+function isoOf(ms) {
+  return new Date(ms).toISOString();
+}
+
 export class Segments {
   #gate;
   #probe;
@@ -66,50 +70,67 @@ export class Segments {
     return this.#reference;
   }
 
-  // Runs one unit as a step of the current segment and returns the step's outcome. A probe comes first when the segment
-  // is new or the last step gave the lock up: a yield ends the segment, and the next unit starts with a new probe.
-  // The gate gives the lock up at each step's end (BenchGate.step), so every step, probes included, can end a segment.
+  // Runs one unit as a step of the current segment and returns the step's outcome. When a probe is due, it runs first
+  // inside this step, so the probe and the unit share one hold of the lock and one cap; a step that passes its cap runs
+  // both again. A yield after the step ends the segment: the next unit probes again.
   async unit(kind, name, body) {
-    while (this.#needProbe) {
-      await this.#enter();
+    const due = this.#needProbe;
+    let pass = 0;
+    const outcome = await this.#gate.step(kind, name, async () => {
+      pass += 1;
+      const probe = due ? await this.#runProbe(pass) : null;
+      return { probe, value: await body() };
+    });
+    if (outcome.status !== 'ok') {
+      // A capped step started no segment: the probes it ran stay in the gate's units, and the next unit probes again.
+      if (outcome.yielded || Date.now() - this.#startedAt >= SEGMENT_MAX_MS) {
+        this.#needProbe = true;
+      }
+      return outcome;
     }
-    const outcome = await this.#gate.step(kind, name, body);
+    const { probe, value } = outcome.value;
+    if (probe !== null) {
+      this.#count = probe.number;
+      this.#probeRate = probe.rate;
+      this.#reference ??= probe.rate;
+      this.#startedAt = probe.endedAtMs;
+      this.#needProbe = false;
+    }
     outcome.unit.segment = this.#count;
     outcome.unit.probeRate = this.#probeRate;
-    if (Date.now() - this.#startedAt >= SEGMENT_MAX_MS || outcome.yielded) {
+    if (outcome.yielded || Date.now() - this.#startedAt >= SEGMENT_MAX_MS) {
       this.#needProbe = true;
     }
-    return outcome;
+    return { status: 'ok', value, unit: outcome.unit, yielded: outcome.yielded };
   }
 
-  // Starts a segment with a probe that passes the gate. A probe that fails is recorded as discarded and run once more.
-  async #enter() {
+  // Runs the probe the segment starts with, inside the unit's step, recording each attempt as a unit of the gate. The
+  // first probe that passes the rate gate starts the segment, and a probe that fails the gate is recorded as discarded
+  // and run once more; a second failure ends the run with exit status 5. `pass` is the step's pass, which the gate's
+  // own units carry.
+  async #runProbe(pass) {
     let reason = null;
-    for (let attempt = 1; attempt <= PROBE_ATTEMPTS; attempt++) {
+    for (let tries = 1; tries <= PROBE_ATTEMPTS; tries++) {
       const number = this.#count + 1;
-      const outcome = await this.#gate.step('probe', `segment ${number}`, () => this.#probe());
-      if (outcome.status === 'capped') {
-        throw new StepCapped(`the probe of segment ${number} passed its cap twice`);
-      }
-      const rep = outcome.value;
+      const startedAt = Date.now();
+      const rep = await this.#probe();
+      const endedAt = Date.now();
+      const unit = {
+        kind: 'probe', name: `segment ${number}`, attempt: pass, status: 'ok',
+        startedAt: isoOf(startedAt), endedAt: isoOf(endedAt), segment: number,
+      };
+      this.#gate.units.push(unit);
       const interference = hostInterference(rep);
       const rate = interference === null ? cpuRateFrom(LIVE_CPU_TAIL.medianMs, referenceTail(rep)) : null;
+      unit.probeRate = rate;
       const verdict = interference === null
         ? rateVerdict(rate, this.#reference)
         : { ok: false, reason: `host interference: ${interference}` };
-      outcome.unit.segment = number;
-      outcome.unit.probeRate = rate;
       if (verdict.ok) {
-        this.#count = number;
-        this.#probeRate = rate;
-        this.#reference ??= rate;
-        // A probe whose step gave the lock up is followed by a new probe, so the segment it started ends at once.
-        this.#needProbe = outcome.yielded;
-        this.#startedAt = Date.now();
-        return;
+        return { number, rate, endedAtMs: endedAt };
       }
-      outcome.unit.discarded = true;
-      outcome.unit.reason = verdict.reason;
+      unit.discarded = true;
+      unit.reason = verdict.reason;
       reason = verdict.reason;
       process.stderr.write(`[${this.#side}] segment ${number} discarded: ${verdict.reason}\n`);
     }

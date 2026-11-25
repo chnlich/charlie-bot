@@ -485,7 +485,7 @@ async function main() {
     checkMockHome(args, api);
     await gate.open();
     // The bench holds the lock one step at a time: it takes it here, gives it up after a step that a queued process
-    // waits for, and takes it again. The probe that starts each segment is the first step after each take.
+    // waits for, and takes it again. The probe that starts each segment runs inside the first step after each take.
     await gate.take();
     const sessions = await gate.step('prepare', 'the sessions and the For-you targets',
       () => prepareSessions(ctx, args), { attempts: 1 });

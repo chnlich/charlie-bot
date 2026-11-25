@@ -1,7 +1,8 @@
 // The bench's step gate. The bench holds the host's bench lock one step at a time, so a process queued behind it waits for
-// at most one step's cap. A step is one preparation stage, one probe or one measurement. The gate takes and releases the
-// lock through lock.sh's functions, caps each step, stops what a capped step started, and gives the lock up after a step
-// when a process is queued for it.
+// at most one step's cap. A step is one preparation stage or one measurement; the probe that starts a segment runs
+// inside its measurement's step, so one hold covers both. The gate takes and releases the lock through lock.sh's
+// functions, caps each step, stops what a capped step started, and gives the lock up after a step when a process is
+// queued for it.
 
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';

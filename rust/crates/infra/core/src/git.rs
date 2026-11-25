@@ -190,7 +190,9 @@ mod tests {
   }
 
   /// A git that outlives the timeout answers `None`, not an error: a caller bounds a hung git with it. The alias sleeps
-  /// five seconds, far past the 200 ms timeout, so the answer does not depend on how fast git starts.
+  /// five seconds, far past the 200 ms timeout, so the answer does not depend on how fast git starts. It waits out the
+  /// timeout, so it is an integration test and stays out of the unit-test time gate.
+  #[ignore = "integration"]
   #[test]
   fn output_within_is_none_when_git_outlives_the_timeout() {
     let dir = tempfile::tempdir().unwrap();

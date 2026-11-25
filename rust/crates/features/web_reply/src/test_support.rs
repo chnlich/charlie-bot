@@ -324,7 +324,7 @@ impl Home {
 
   /// The routes answering one request, as the server mounts them.
   pub async fn send(&self, method: Method, uri: &str, body: Option<Value>) -> (http::StatusCode, Value) {
-    let router: Router = crate::routes(&self.features);
+    let router: Router = crate::entry::routes(&self.features);
     let request = Request::builder()
       .method(method)
       .uri(uri)

@@ -12,6 +12,7 @@ use charliebot_core::event_types::{
   COMPACT_BOUNDARY, COMPACT_POST_TOKENS, COMPACT_PRE_TOKENS, EDIT_TOOL, GLOB_TOOL, GREP_TOOL, IS_ERROR, MODEL_USAGE,
   NOTEBOOK_EDIT_TOOL, READ_TOOL, SKILL_TOOL, WRITE_TOOL,
 };
+use charliebot_core::model_id;
 use charliebot_core::subagent::AGENT_TOOL;
 use charliebot_core::text_repr::is_truthy;
 use charliebot_core::web_search::TOOL_NAME;
@@ -79,7 +80,7 @@ fn family_is_compacted(cfg: &CharlieBotConfig, model: Option<&str>) -> anyhow::R
     .families
     .as_ref()
     .context("accounts.claude_compaction.families is unset while backends.calls.compaction is set")?;
-  Ok(families.contains(&model_family(model)))
+  Ok(families.contains(&model_id::family(model)))
 }
 
 /// Whether a session on `model` may compact at all: `backends.calls.compaction` is set and the family is listed.
@@ -135,18 +136,6 @@ pub fn relay_compaction_wanted(
           .relay_tokens
     })
   }))
-}
-
-pub fn model_family(model: Option<&str>) -> String {
-  let Some(model) = model.filter(|value| !value.is_empty()) else {
-    return String::new();
-  };
-  let parts = model.to_lowercase().split('-').map(str::to_string).collect::<Vec<_>>();
-  if parts.first().is_some_and(|part| part == "claude") && parts.len() > 1 {
-    parts[1].clone()
-  } else {
-    parts[0].clone()
-  }
 }
 
 fn read_transcript_rows(path: &Path, marker: &str) -> anyhow::Result<Vec<Value>> {
@@ -341,7 +330,7 @@ pub fn judge(
       cache_read_tokens: None,
     };
   }
-  if models.is_empty() || models.iter().any(|model| model_family(Some(model)) != family) {
+  if models.is_empty() || models.iter().any(|model| model_id::family(Some(model)) != family) {
     return CompactionOutcome {
       ok: false,
       error: Some(format!(
@@ -428,7 +417,7 @@ async fn compact_with_sonnet_inner(
     return Ok(false);
   };
   let env = make_env(config_dir)?;
-  let family = model_family(Some(&option.model));
+  let family = model_id::family(Some(&option.model));
   let outcome = run_compaction_inner(CompactionRun {
     argv: compaction_command(session_id, session_cgroup_id, &option.model),
     env,

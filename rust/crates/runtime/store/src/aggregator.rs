@@ -4,6 +4,7 @@ use std::sync::Arc;
 use charliebot_core::config::BackendsConfig;
 use charliebot_core::event_types::{self, EventFields, is_truthy};
 use charliebot_core::int_text;
+use charliebot_core::model_id;
 use charliebot_core::text_repr::value_str;
 use serde_json::{Value, json};
 
@@ -1499,9 +1500,7 @@ fn model_note<E: EventFields>(event: &E) -> String {
   let Some(model) = event.field("model").and_then(EventFields::as_str_field).filter(|model| !model.is_empty()) else {
     return String::new();
   };
-  let lower = model.to_lowercase();
-  let parts: Vec<&str> = lower.split('-').collect();
-  let family = if parts.len() > 1 && parts[0] == "claude" { parts[1] } else { parts[0] };
+  let family = model_id::family(Some(model));
   let mut chars = family.chars();
   let family = chars.next().map_or_else(String::new, |first| first.to_uppercase().collect::<String>() + chars.as_str());
   format!("by {family}")
@@ -2545,7 +2544,7 @@ mod tests {
   }
 
   #[test]
-  fn compaction_model_note_names_the_family_as_model_family_does() {
+  fn model_note_names_the_model_family() {
     for (model, note) in
       [("claude", "by Claude"), ("claude-opus-5", "by Opus"), ("Sonnet-X", "by Sonnet"), ("CLAUDE-haiku-5", "by Haiku")]
     {

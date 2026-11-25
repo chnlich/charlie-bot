@@ -4,11 +4,11 @@ use std::fs;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::process::{Output, Stdio};
+use std::process::Output;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use tokio::io::AsyncWriteExt;
+use charliebot_core::git::output_within;
 
 const GIT_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_UNTRACKED_BYTES: u64 = 10 * 1024 * 1024;
@@ -192,41 +192,14 @@ fn git_output(path: &Path, arguments: &[&str], input: Option<Vec<u8>>) -> Result
 
 pub(crate) fn run_git(path: &Path, arguments: &[&str], input: Option<Vec<u8>>) -> Result<Output> {
   // The sweep handlers already run on the blocking pool of the server runtime, so the async `git` subprocess rides
-  // that runtime. The `block_on` call owns the pipe pump and the deadline.
+  // that runtime. The `block_on` call awaits the timed run that the core git module owns.
   tokio::runtime::Handle::current().block_on(async {
-    let mut command = tokio::process::Command::new("git");
-    command
-      .args(arguments)
-      .current_dir(path)
-      .env("GIT_OPTIONAL_LOCKS", "0")
-      .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
-      .stdout(Stdio::piped())
-      .stderr(Stdio::piped())
-      .kill_on_drop(true);
-    let mut child =
-      command.spawn().with_context(|| format!("spawning git {} in {}", arguments.join(" "), path.display()))?;
-    let stdin = child.stdin.take();
-    // The input is written while the output is drained: a git that fills its stdout before it reads all of its stdin
-    // would otherwise block both pipes. A git that exits before reading its input makes the write fail with a broken
-    // pipe. The exit status carries the error.
-    let write = async move {
-      let Some(bytes) = input else {
-        return Ok(());
-      };
-      let mut stdin = stdin.expect("git stdin is piped when input is present");
-      match stdin.write_all(&bytes).await {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
-        Err(error) => Err(anyhow::Error::new(error).context("writing git stdin")),
-      }
-    };
-    let finished = async { tokio::join!(write, child.wait_with_output()) };
-    match tokio::time::timeout(GIT_TIMEOUT, finished).await {
-      Ok((written, output)) => {
-        written?;
-        output.context("waiting for git subprocess")
-      }
-      Err(_) => bail!("git {} timed out in {} after 60 seconds", arguments.join(" "), path.display()),
+    let output = output_within(path, arguments, input, &[("GIT_OPTIONAL_LOCKS", "0")], GIT_TIMEOUT)
+      .await
+      .with_context(|| format!("running git {} in {}", arguments.join(" "), path.display()))?;
+    match output {
+      Some(output) => Ok(output),
+      None => bail!("git {} timed out in {} after 60 seconds", arguments.join(" "), path.display()),
     }
   })
 }

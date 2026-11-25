@@ -1,11 +1,12 @@
 //! Git facts the server shares: the reads it makes in the repository root, the plain run whose exit status and
-//! streams a caller reads, the arguments of the object-existence probe and of the merge-base queries, and the name of
-//! the quarantine directory beside the worktrees.
+//! streams a caller reads, the timed run that an async caller awaits, the arguments of the object-existence probe and
+//! of the merge-base queries, and the name of the quarantine directory beside the worktrees.
 
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 
+use tokio::io::AsyncWriteExt;
 use wait_timeout::ChildExt;
 
 /// The timeout of a best-effort `git rev-parse --short HEAD` read: the server's startup SHA and the CLI's
@@ -52,6 +53,52 @@ pub fn run(repo_root: &Path, args: &[&str], timeout: Duration) -> Option<String>
 /// `-C`, so a missing directory reaches the caller as a failed status that git reports.
 pub fn output(repo_root: &Path, args: &[&str]) -> std::io::Result<std::process::Output> {
   Command::new("git").arg("-C").arg(repo_root).args(args).output()
+}
+
+/// The output of `git <args>` run in `repo_root`, with `stdin` piped in when it is `Some` and `env` set on the child.
+/// `None` means `timeout` passed first. The timeout drops the child, and `kill_on_drop` kills it then. A spawn failure
+/// is the error, and a nonzero exit is not: the caller reads the status.
+///
+/// The input is written while the output is drained, so a git that fills its stdout before it reads all its input
+/// cannot block both pipes. A git that exits before it reads its input fails the write with a broken pipe; the exit
+/// status carries that failure, so the broken pipe is not an error here.
+pub async fn output_within(
+  repo_root: &Path,
+  args: &[&str],
+  stdin: Option<Vec<u8>>,
+  env: &[(&str, &str)],
+  timeout: Duration,
+) -> std::io::Result<Option<Output>> {
+  let mut command = tokio::process::Command::new("git");
+  command
+    .args(args)
+    .current_dir(repo_root)
+    .envs(env.iter().copied())
+    .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .kill_on_drop(true);
+  let mut child = command.spawn()?;
+  let child_stdin = child.stdin.take();
+  let write = async move {
+    let Some(bytes) = stdin else {
+      return Ok(());
+    };
+    let mut child_stdin = child_stdin.expect("git stdin is piped when input is present");
+    match child_stdin.write_all(&bytes).await {
+      Ok(()) => Ok(()),
+      Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+      Err(error) => Err(error),
+    }
+  };
+  let finished = async { tokio::join!(write, child.wait_with_output()) };
+  match tokio::time::timeout(timeout, finished).await {
+    Ok((written, output)) => {
+      written?;
+      output.map(Some)
+    }
+    Err(_) => Ok(None),
+  }
 }
 
 /// The short HEAD sha.
@@ -140,5 +187,21 @@ mod tests {
   fn run_is_none_when_the_command_fails() {
     let not_a_repo = tempfile::tempdir().unwrap();
     assert_eq!(run(not_a_repo.path(), &["rev-parse", "--short", "HEAD"], Duration::from_secs(30)), None);
+  }
+
+  /// A git that outlives the timeout answers `None`, not an error: a caller bounds a hung git with it. The alias sleeps
+  /// five seconds, far past the 200 ms timeout, so the answer does not depend on how fast git starts.
+  #[test]
+  fn output_within_is_none_when_git_outlives_the_timeout() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let outcome = runtime.block_on(output_within(
+      dir.path(),
+      &["-c", "alias.nap=!sleep 5", "nap"],
+      None,
+      &[],
+      Duration::from_millis(200),
+    ));
+    assert!(outcome.unwrap().is_none());
   }
 }

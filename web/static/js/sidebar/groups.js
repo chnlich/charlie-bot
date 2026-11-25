@@ -332,7 +332,7 @@ function sessionRowActiveClass(isActive) {
 // shortened (sessionRowTitle) reads whole on hover, and the rename field, the
 // switch notice and the archive confirmation read the name from the same
 // attribute. updateSidebarSessionName keeps it current on rename.
-function renderSessionRowShell(s, {filter, title, activeClass, options, indicators, line, actions}) {
+function renderSessionRowShell(s, {filter, title, activeClass, options, indicators, line, nameTag, actions}) {
   const extraClass = options.extraClass ? ' ' + options.extraClass : '';
   const extraAttrs = options.extraAttrs ? ' ' + options.extraAttrs : '';
   return `<a href="/?session=${s.id}&filter=${filter}"
@@ -341,7 +341,10 @@ function renderSessionRowShell(s, {filter, title, activeClass, options, indicato
      id="session-${s.id}"${extraAttrs}>
     ${indicators}
     <span class="flex-1 min-w-0">
-      <span class="truncate block session-name" title="${escapeHtmlAttr(s.name)}">${escapeHtml(title)}</span>
+      <span class="flex items-center gap-2">
+        <span class="truncate block session-name" title="${escapeHtmlAttr(s.name)}">${escapeHtml(title)}</span>
+        ${nameTag}
+      </span>
       ${line}
     </span>
     ${actions}
@@ -869,9 +872,9 @@ function renderSessionItem(s, filter, options = {}) {
   // The first registered row line that answers replaces the time line.
   const line = sessionRowLines.reduce((found, render) => found ?? render(s), null)
       ?? renderSessionTimeLine(s, timeIso, timeStr, !!options.staticTime);
-  // A context row dims and carries the active tag after the line, as the mock
-  // shows it. The tag is placed outside the name span so a long name cannot
-  // push it out.
+  // A context row dims and carries the active tag on its name line. The tag
+  // stays beside the name span, not inside it, so a long name truncates before
+  // the tag does, and the time line keeps the column's full width.
   return renderSessionRowShell(s, {
     filter,
     title: sessionRowTitle(s, filter, options.groupHeader),
@@ -879,9 +882,10 @@ function renderSessionItem(s, filter, options = {}) {
     options,
     indicators: lead,
     line,
-    actions: actions + (isContextRow
-      ? '<span class="px-1.5 py-0.5 rounded bg-slate-700 text-[10px] font-medium text-slate-400 flex-shrink-0">active</span>'
-      : ''),
+    nameTag: isContextRow
+      ? '<span class="ml-auto px-1.5 py-0.5 rounded bg-slate-700 text-[10px] leading-none font-medium text-slate-400 flex-shrink-0">active</span>'
+      : '',
+    actions,
   });
 }
 

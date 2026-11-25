@@ -18,6 +18,7 @@ use charliebot_agents::cli_base::CliHost;
 use charliebot_charlie_code::flags;
 use charliebot_cli_common::args as cli_args;
 use charliebot_cli_common::exit::CliExit;
+use charliebot_core::backend_types;
 use charliebot_core::home;
 use charliebot_registry::backend::{BackendFactory, Env, LaunchArgs};
 use clap::Parser;
@@ -43,7 +44,7 @@ const INSTALL_HINT: &str = "uv tool install -e ~/workspace/charlie-code";
 const REINSTALL: &str = "reinstall charlie-code (uv tool install -e ~/workspace/charlie-code)";
 
 #[derive(Parser)]
-#[command(name = "preflight-charlie-code", about = "Preflight a type: charlie-code backend option")]
+#[command(name = "preflight-charlie-code", about = "Preflight a backend option of the Charlie Code type")]
 struct PreflightCli {
   /// The backends.options id to preflight
   backend_id: String,
@@ -68,15 +69,16 @@ fn preflight(backend_id: &str) -> Result<(), String> {
   let config_file = home::display_path(charliebot_core::config::CONFIG_FILENAME);
 
   // Mechanism 1: the config entry exists and is a charlie-code backend.
+  let kind = backend_types::CHARLIE_CODE;
   let Some(option) = cfg.get_backend_option(backend_id) else {
     return Err(format!(
-      "option-missing: add a backends.options entry with id {backend_id} and type charlie-code to {config_file}"
+      "option-missing: add a backends.options entry with id {backend_id} and type {kind} to {config_file}"
     ));
   };
-  if option.backend_type != charliebot_charlie_code::TYPE_NAME {
+  if option.backend_type != kind {
     return Err(format!(
-      "option-missing: backend option {backend_id} has type {}, not charlie-code; \
-       add a backends.options entry with id {backend_id} and type charlie-code to {config_file}",
+      "option-missing: backend option {backend_id} has type {}, not {kind}; \
+       add a backends.options entry with id {backend_id} and type {kind} to {config_file}",
       option.backend_type
     ));
   }

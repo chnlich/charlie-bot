@@ -160,7 +160,7 @@ test('a childless logical tree row leads with an inert slot and no children cont
 
   const row = rowHtml(nav.innerHTML, 'legacy');
   const slotAt = row.indexOf('<span class="w-3 h-3 flex-shrink-0" aria-hidden="true"></span>');
-  const nameAt = row.indexOf('class="truncate block session-name"');
+  const nameAt = row.indexOf('class="truncate flex-1 min-w-0 session-name"');
   assert.ok(slotAt !== -1 && nameAt !== -1 && slotAt < nameAt, 'the inert slot precedes the name');
   assert.doesNotMatch(row, /data-tree-toggle/);
   assert.doesNotMatch(row, /title="0 child tasks"/);
@@ -174,7 +174,7 @@ test('a worker tree row leads with the worker glyph instead of a chevron', () =>
 
   const leaf = rowHtml(nav.innerHTML, 'w-new');
   const glyphAt = leaf.indexOf('title="Worker (implementation leaf)"');
-  const nameAt = leaf.indexOf('class="truncate block session-name"');
+  const nameAt = leaf.indexOf('class="truncate flex-1 min-w-0 session-name"');
   assert.ok(glyphAt !== -1 && nameAt !== -1 && glyphAt < nameAt, 'the worker glyph precedes the name');
   assert.match(leaf, /class="cb-icon text-slate-500 flex-shrink-0" width="12" height="12"[^>]*title="Worker \(implementation leaf\)"/);
   assert.doesNotMatch(leaf, /data-tree-toggle/);

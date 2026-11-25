@@ -352,8 +352,7 @@ function renderSessionRowShell(s, {filter, title, activeClass, options, indicato
     ${indicators}
     <span class="session-row-name flex-1 min-w-0">
       <span class="flex items-center gap-1.5 min-w-0">
-        <span class="truncate block flex-1 min-w-0 session-name"
-              title="${escapeHtmlAttr(s.name)}">${escapeHtml(title)}</span>
+        <span class="truncate flex-1 min-w-0 session-name" title="${escapeHtmlAttr(s.name)}">${escapeHtml(title)}</span>
         ${nameTag}${titleBadges}
       </span>
       ${line}

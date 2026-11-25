@@ -12,7 +12,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { flagsOf } from './before-store.mjs';
-import { METRICS, REPS_OF_SCENARIO, percentile } from './report.mjs';
+import { METRICS, percentile, repsOfMetric } from './report.mjs';
 
 // Bootstrap resamples per metric (design value).
 export const AA_RESAMPLES = 10000;
@@ -66,7 +66,7 @@ function valuesOf(sides, metric) {
     if (side.status !== 'measured') {
       throw new Error(`an A/A side is ${side.status}, not measured; its JSON cannot count as a sample`);
     }
-    values.push(...(side.reps[REPS_OF_SCENARIO[metric.scenario]] ?? []).map(metric.value));
+    values.push(...(side.reps[repsOfMetric(metric)] ?? []).map(metric.value));
   }
   return values;
 }
@@ -75,7 +75,7 @@ function valuesOf(sides, metric) {
 export function analyseAA({ quiet, loaded, random }) {
   const rows = {};
   for (const metric of METRICS) {
-    const row = REPS_OF_SCENARIO[metric.scenario];
+    const row = repsOfMetric(metric);
     const verdict = metricVerdict(valuesOf(quiet, metric), valuesOf(loaded, metric), { random });
     rows[row] ??= { safe: true, metrics: {} };
     rows[row].metrics[metric.id] = verdict;

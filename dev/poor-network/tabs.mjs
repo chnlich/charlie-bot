@@ -464,6 +464,8 @@ export class Tab {
           connectionId: null,
           fromServiceWorker: null,
           fromDiskCache: null,
+          // The body of a POST, as the browser sent it (the page's telemetry carries its counts in it).
+          postData: request.postData ?? null,
         });
         return;
       }
@@ -637,8 +639,10 @@ export class Tabs {
             return browser.sendTo(sessionId, 'Network.enable');
           })
           .catch((error) => {
-            if (error.message === 'Target.attachToTarget: Inspected target navigated or closed' ||
-                error.message === 'Network.enable: Inspected target navigated or closed') {
+            // The target ended before the call answered: Chrome answers a dead target's session with this message,
+            // and a browser close fails every call it still holds. Only the worker's own trace is lost.
+            if (error.message.endsWith(': Inspected target navigated or closed') ||
+                error.message.endsWith(': the browser\'s DevTools pipe was closed')) {
               console.warn('service worker target ' + targetId + ' closed during ' + error.message.split(':')[0]);
               return;
             }

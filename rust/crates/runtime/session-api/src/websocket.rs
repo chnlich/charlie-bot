@@ -17,7 +17,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio::time;
 
-use crate::api::CATCHUP_COMPLETE_FRAME;
+use crate::api::{CATCHUP_COMPLETE_FRAME, ReadyClock, WEB_PROTOCOL};
 use crate::route_support::blocking_store;
 
 const KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -56,34 +56,35 @@ async fn serve_session_socket(features: Arc<FeatureContext>, session_id: String,
     }
   };
 
-  // The page's static asset version rides the handshake too (`web/static/js/websocket.js`). A tab that
-  // stays open across a deploy keeps its old JavaScript, and that JavaScript would keep calling retired
-  // routes. A present value that differs from the server's current version closes with 4409 before the
-  // subscription starts, so the page reloads to the current code.
-  if let Some(page_version) = raw_query_value(&query, "asset_version") {
-    match current_asset_version(&features).await {
-      Ok(server_version) if server_version == page_version => {}
-      Ok(server_version) => {
-        tracing::warn!(
-          session_id,
-          page_version = %page_version,
-          server_version = %server_version,
-          "session_ws_asset_version_stale"
-        );
-        if let Err(close_error) = close_with_code(&mut sender, 4409, "").await {
-          tracing::info!(session_id, reason = %close_error, "session_ws_closed");
-        }
-        return;
-      }
-      Err(error) => {
-        tracing::error!(session_id, error = %error, "session_ws_asset_version_failed");
-        if let Err(close_error) = close_with_code(&mut sender, 1011, "").await {
-          tracing::info!(session_id, reason = %close_error, "session_ws_closed");
-        }
-        return;
-      }
+  // The page's web protocol rides the handshake (`web/static/js/websocket.js`). A page on another protocol, or one
+  // that names none, runs JavaScript this server no longer answers, so it closes with 4409 before the subscription
+  // starts and the page reloads to the current code. A page on this protocol keeps its code across a release.
+  let page_protocol = raw_query_value(&query, "protocol");
+  let server_protocol = WEB_PROTOCOL.to_string();
+  if page_protocol.as_deref() != Some(server_protocol.as_str()) {
+    tracing::warn!(
+      session_id,
+      page_protocol = ?page_protocol,
+      server_protocol = %server_protocol,
+      "session_ws_protocol_stale"
+    );
+    if let Err(close_error) = close_with_code(&mut sender, 4409, "").await {
+      tracing::info!(session_id, reason = %close_error, "session_ws_closed");
     }
+    return;
   }
+  // The catch-up answer names the server's static asset version. A hidden page compares it with its own and swaps
+  // its code once the replay is done.
+  let asset_version = match current_asset_version(&features).await {
+    Ok(version) => version,
+    Err(error) => {
+      tracing::error!(session_id, error = %error, "session_ws_asset_version_failed");
+      if let Err(close_error) = close_with_code(&mut sender, 1011, "").await {
+        tracing::info!(session_id, reason = %close_error, "session_ws_closed");
+      }
+      return;
+    }
+  };
 
   let mut socket = features.store.register_socket();
   let store = Arc::clone(&features.store);
@@ -117,7 +118,8 @@ async fn serve_session_socket(features: Arc<FeatureContext>, session_id: String,
     }
     Ok(Ok(catchup)) => {
       let sent = send_catchup_frames(&mut sender, &catchup.frames, &session_id).await;
-      let complete = catchup_complete_frame(&session_id, HANDSHAKE_SUBSCRIPTION, catchup.total);
+      let complete =
+        catchup_complete_frame(&features, &session_id, HANDSHAKE_SUBSCRIPTION, catchup.total, &asset_version);
       match sender.send(Message::Text(complete.to_string().into())).await {
         Ok(()) => {
           replayed_through = Some(catchup.total);
@@ -129,7 +131,7 @@ async fn serve_session_socket(features: Arc<FeatureContext>, session_id: String,
   }
 
   let mut state = SessionSocketState { session_id, session_subscription, replayed_through };
-  keepalive(&mut sender, &mut receiver, &store, &mut state, &mut sidebar_subscription, &mut socket).await;
+  keepalive(&features, &mut sender, &mut receiver, &store, &mut state, &mut sidebar_subscription, &mut socket).await;
   features.store.unsubscribe(&mut state.session_subscription);
   features.store.unsubscribe(&mut sidebar_subscription);
   tracing::info!(session_id = %state.session_id, "session_ws_disconnected");
@@ -370,14 +372,30 @@ enum CatchupLoad {
 }
 
 /// The `catchup_complete` frame that ends one replay. It names the session and the subscription the replay served,
-/// and `event_total` is the count the replay itself ends at.
-fn catchup_complete_frame(session_id: &str, subscription: u64, event_total: usize) -> Value {
+/// and `event_total` is the count the replay itself ends at. `asset_version` is the server's static asset version
+/// when the answer was built, and `uptime_ms` is the server's uptime when the frame is built.
+fn catchup_complete_frame(
+  features: &FeatureContext,
+  session_id: &str,
+  subscription: u64,
+  event_total: usize,
+  asset_version: &str,
+) -> Value {
   json!({
     "type": CATCHUP_COMPLETE_FRAME,
     "session_id": session_id,
     "subscription": subscription,
     "event_total": event_total,
+    "asset_version": asset_version,
+    "uptime_ms": uptime_ms(features),
   })
+}
+
+/// The server's uptime in milliseconds since its readiness. The server marks readiness before it accepts a socket.
+fn uptime_ms(features: &FeatureContext) -> u64 {
+  let ready =
+    features.startup.require::<ReadyClock>().expect("the server marks its readiness before it accepts sockets");
+  ready.0.elapsed().as_millis() as u64
 }
 
 /// One `subscribe` frame handled in the handshake's order: subscribe the new session before the
@@ -386,6 +404,7 @@ fn catchup_complete_frame(session_id: &str, subscription: u64, event_total: usiz
 /// session or a failed read answers `error` and keeps the previous subscription. Returns `false`
 /// when a send failed and the socket must close.
 async fn handle_subscribe(
+  features: &FeatureContext,
   store: &Arc<Store>,
   sender: &mut futures_util::stream::SplitSink<WebSocket, Message>,
   state: &mut SessionSocketState,
@@ -449,7 +468,18 @@ async fn handle_subscribe(
   // subscription queued the events of the new session while the read ran, and a repeated stream
   // append would concatenate its text a second time.
   state.replayed_through = Some(catchup.total);
-  let complete = catchup_complete_frame(&request.session_id, request.subscription, catchup.total);
+  let asset_version = match current_asset_version(features).await {
+    Ok(version) => version,
+    Err(error) => {
+      tracing::error!(session_id = %request.session_id, error = %error, "session_ws_asset_version_failed");
+      if let Err(close_error) = close_with_code(sender, 1011, "").await {
+        tracing::info!(session_id = %request.session_id, reason = %close_error, "session_ws_closed");
+      }
+      return false;
+    }
+  };
+  let complete =
+    catchup_complete_frame(features, &request.session_id, request.subscription, catchup.total, &asset_version);
   if let Err(error) = sender.send(Message::Text(complete.to_string().into())).await {
     tracing::info!(session_id = %request.session_id, reason = %error, "session_ws_closed");
     return false;
@@ -489,6 +519,7 @@ struct SessionSocketState {
 }
 
 async fn keepalive(
+  features: &FeatureContext,
   sender: &mut futures_util::stream::SplitSink<WebSocket, Message>,
   receiver: &mut futures_util::stream::SplitStream<WebSocket>,
   store: &Arc<Store>,
@@ -569,7 +600,7 @@ async fn keepalive(
       return;
     }
     if let Some(request) = subscribe_request.take()
-      && !handle_subscribe(store, sender, state, request).await
+      && !handle_subscribe(features, store, sender, state, request).await
     {
       return;
     }
@@ -644,7 +675,12 @@ mod tests {
       "session_ws_test_credentials_reload_failed",
       Box::new(move || load_credentials(&credential_home)),
     ));
-    let startup = Arc::new(StartupState::default());
+    let startup = StartupState::default();
+    startup.insert(ReadyClock(std::time::Instant::now())).expect("the ready clock is the startup state's first entry");
+    // The handshake reads the static asset version from the templating. The home has no static tree, so the version
+    // is the git-less empty digest, the same on every read.
+    startup.insert(Templating::new(home.path(), &[])).expect("the test context's templating is its first");
+    let startup = Arc::new(startup);
     (
       crate::test_support::GatedHome::hold(home, permit),
       Arc::new(FeatureContext { config, credentials, store, registry, startup }),
@@ -962,7 +998,12 @@ mod tests {
     (address, server)
   }
 
+  /// A handshake on this server's web protocol, with the query's own parameters.
   async fn connect(address: SocketAddr, session_id: &str, query: &str) -> BufReader<TcpStream> {
+    connect_raw(address, session_id, &format!("{query}&protocol={WEB_PROTOCOL}")).await
+  }
+
+  async fn connect_raw(address: SocketAddr, session_id: &str, query: &str) -> BufReader<TcpStream> {
     let stream = TcpStream::connect(address).await.unwrap();
     let mut reader = BufReader::new(stream);
     let target = if query.is_empty() {
@@ -1033,16 +1074,17 @@ mod tests {
     }
   }
 
-  async fn receive_catchup_complete(reader: &mut BufReader<TcpStream>) {
+  async fn receive_catchup_complete(reader: &mut BufReader<TcpStream>) -> Value {
     time::timeout(Duration::from_secs(1), async {
       loop {
-        if receive_json(reader).await["type"] == "catchup_complete" {
-          return;
+        let frame = receive_json(reader).await;
+        if frame["type"] == "catchup_complete" {
+          return frame;
         }
       }
     })
     .await
-    .expect("catchup completes within one second");
+    .expect("catchup completes within one second")
   }
 
   #[tokio::test]
@@ -1424,36 +1466,51 @@ mod tests {
     );
   }
 
-  /// A handshake whose `asset_version` differs from the server's current static asset version closes
-  /// with 4409 before the subscription starts, so the close frame is the first and only frame.
+  /// A handshake whose `protocol` differs from the server's web protocol closes with 4409 before the subscription
+  /// starts, so the close frame is the first and only frame.
   #[tokio::test]
-  async fn a_stale_asset_version_closes_with_4409_before_any_frame() {
+  async fn a_stale_protocol_closes_with_4409_before_any_frame() {
     let (_home, features) = test_context();
     seed_manager_session(&features, "synthetic", 0).await;
-    let repo_root = tempfile::tempdir().expect("temporary repo root");
-    features.startup.insert(Templating::new(repo_root.path(), &[])).expect("no other Templating was inserted");
     let (address, server) = start_server(Arc::clone(&features)).await;
-    let mut client = connect(address, "synthetic", "cursor=0&asset_version=stale-page-version").await;
+    let mut client = connect_raw(address, "synthetic", &format!("cursor=0&protocol={}", WEB_PROTOCOL + 1)).await;
     match time::timeout(Duration::from_secs(1), receive_frame(&mut client)).await.unwrap().unwrap() {
       ServerFrame::Close(Some(4409)) => {}
-      other => panic!("the stale-asset_version handshake ended with {other:?} instead of the 4409 close"),
+      other => panic!("the stale-protocol handshake ended with {other:?} instead of the 4409 close"),
     }
     server.abort();
     let _ = server.await;
   }
 
-  /// A matching `asset_version` and an absent one both serve the catch-up as before. The matching value
-  /// is the one the same `Templating` renders into the page's `?v=` script URLs.
+  /// A handshake that names no protocol closes with 4409 too: a page that predates the protocol runs code that
+  /// this server's answers no longer fit.
   #[tokio::test]
-  async fn a_matching_or_absent_asset_version_reaches_the_catchup() {
+  async fn a_handshake_without_a_protocol_closes_with_4409() {
     let (_home, features) = test_context();
     seed_manager_session(&features, "synthetic", 0).await;
-    let repo_root = tempfile::tempdir().expect("temporary repo root");
-    features.startup.insert(Templating::new(repo_root.path(), &[])).expect("no other Templating was inserted");
+    let (address, server) = start_server(Arc::clone(&features)).await;
+    let mut client = connect_raw(address, "synthetic", "cursor=0&asset_version=old-page-version").await;
+    match time::timeout(Duration::from_secs(1), receive_frame(&mut client)).await.unwrap().unwrap() {
+      ServerFrame::Close(Some(4409)) => {}
+      other => panic!("the protocol-less handshake ended with {other:?} instead of the 4409 close"),
+    }
+    server.abort();
+    let _ = server.await;
+  }
+
+  /// A page on this protocol is served the catch-up whatever asset version it carries: a release that keeps the
+  /// protocol leaves the page running, and its own version check decides the swap. The answer names the server's
+  /// asset version and its uptime in milliseconds.
+  #[tokio::test]
+  async fn a_matching_protocol_is_served_the_catchup_with_the_server_version_and_uptime() {
+    let (_home, features) = test_context();
+    seed_manager_session(&features, "synthetic", 0).await;
     let current = features.startup.require::<Templating>().unwrap().static_asset_version().unwrap();
     let (address, server) = start_server(Arc::clone(&features)).await;
-    let mut client = connect(address, "synthetic", &format!("cursor=0&asset_version={current}")).await;
-    receive_catchup_complete(&mut client).await;
+    let mut client = connect(address, "synthetic", "cursor=0&asset_version=stale-page-version").await;
+    let complete = receive_catchup_complete(&mut client).await;
+    assert_eq!(complete["asset_version"], current);
+    assert!(complete["uptime_ms"].is_u64(), "the answer carries the uptime in milliseconds: {complete}");
     let mut client = connect(address, "synthetic", "cursor=9").await;
     assert_eq!(receive_json(&mut client).await["type"], "catchup_complete");
     server.abort();

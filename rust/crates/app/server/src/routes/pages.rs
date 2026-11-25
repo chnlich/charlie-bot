@@ -666,6 +666,7 @@ fn index_answer(
     "shell": shell,
     "pending_draft": pending_draft,
     "event_count": event_count,
+    "web_protocol": session_routes::WEB_PROTOCOL,
     "backend_options": cfg.backends.options
       .iter()
       .map(|option| json!({"id": option.id, "label": option.label, "type": option.backend_type}))

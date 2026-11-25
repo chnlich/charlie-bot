@@ -31,8 +31,9 @@ function loadWebsocketContext(extraContext) {
     reconnectDelay: 1000,
     thinkingStart: null,
     // The page global index.html renders next to the ?v= script URLs; websocket.js
-    // sends it as the handshake's asset_version.
+    // is compared with the catch-up's asset_version.
     STATIC_ASSET_VERSION: 'stub-asset-version',
+    WEB_PROTOCOL: 1,
     document: {
       getElementById: () => null,
       // websocket.js announces socket closes, opens, replays and page-load

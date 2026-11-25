@@ -538,3 +538,78 @@ test('a page unload ends the requests that have not finished', async () => {
   const types = page.context.workerMessages.map((message) => message.type);
   assert.deepEqual(types, ['page-request-start', 'page-request-end'], 'the unload ends the open request');
 });
+
+// A reload that replaces the page's code: the worker refreshes the stored shell first, and the page names the cause and
+// navigates only after the refresh answers. The page's events and its navigation share one log, so their order reads
+// straight off it.
+function buildReloadPage() {
+  const page = buildPage();
+  page.context.location.reload = () => page.events.push({type: 'reload'});
+  return page;
+}
+
+test('a code-changing reload refreshes the stored shell, then names its cause and navigates', async () => {
+  const page = buildReloadPage();
+  page.context.reloadAfterRefreshingShell('feature_version');
+  await new Promise((resolve) => setImmediate(resolve));
+  // The refresh names the release the page runs, so a worker of another release refreshes nothing.
+  assert.deepEqual(JSON.parse(JSON.stringify(page.context.workerMessages)), [{
+    type: 'warm', refresh: true, version: 'v2', files: onDemandPaths().map((listed) => listed + '?v=test'),
+  }]);
+  assert.deepEqual(page.events, [], 'no navigation before the worker answers');
+
+  page.context.reply({stored: true, version: 'v2'});
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(page.events.map((event) => event.type), ['charliebot:page-load-cause', 'reload']);
+  assert.deepEqual(JSON.parse(JSON.stringify(page.events[0].detail)), {cause: 'feature_version'});
+});
+
+test('a reload a return cancelled neither names its cause nor navigates', async () => {
+  const page = buildReloadPage();
+  page.context.reloadAfterRefreshingShell('stale_asset', () => false);
+  await new Promise((resolve) => setImmediate(resolve));
+  page.context.reply({stored: true, version: 'v2'});
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(page.events, []);
+});
+
+test('a reload whose shell refresh fails reports the failure and leaves the page as it is', async () => {
+  const page = buildReloadPage();
+  page.context.reloadAfterRefreshingShell('stale_asset');
+  await new Promise((resolve) => setImmediate(resolve));
+  page.context.reply({error: 'shell fetch failed: 503', version: 'v2'});
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(page.events.map((event) => event.type), ['charliebot:offline-shell-refresh-failed']);
+});
+
+// A hidden swap refreshes the shell of the release the page swaps to. The worker of the release before it holds that
+// release's shell and refreshes nothing: the refresh waits for the update, and asks the worker that takes over.
+test('a shell refresh an older release worker answers waits for the update, then asks the one that takes over', async () => {
+  const sent = [];
+  const old = {postMessage: (message, transfer) => sent.push({to: 'old', message, transfer})};
+  const next = {postMessage: (message, transfer) => sent.push({to: 'next', message, transfer})};
+  const registration = {
+    active: old,
+    installing: null,
+    update: async () => {
+      registration.installing = {state: 'activated', addEventListener: () => {}};
+      registration.active = next;
+    },
+  };
+  const page = buildPage({registration});
+  page.context.location.reload = () => page.events.push({type: 'reload'});
+  const channelOf = (entry) => page.context.channels.find((c) => c.port2 === entry.transfer[0]);
+  const replyTo = (entry, data) => channelOf(entry).port1.onmessage({data});
+  const refreshTo = (to) => sent.find((entry) => entry.to === to && entry.message.refresh === true);
+
+  page.context.reloadAfterRefreshingShell('stale_asset');
+  await settled();
+  assert.ok(refreshTo('old'), 'the refresh first goes to the active worker');
+  replyTo(refreshTo('old'), {stored: false, version: 'v1'});
+  await settled();
+  assert.ok(refreshTo('next'), 'the refresh goes to the worker that takes over');
+  assert.deepEqual(page.events, [], 'no navigation before the new release\'s worker answers');
+  replyTo(refreshTo('next'), {stored: true, version: 'v2'});
+  await settled();
+  assert.deepEqual(page.events.map((event) => event.type), ['charliebot:page-load-cause', 'reload']);
+});

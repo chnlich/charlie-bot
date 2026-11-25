@@ -47,8 +47,9 @@ function baseSessionContext(overrides = {}) {
   const context = {
     SESSION_ID: 'session-a',
     // The page global index.html renders next to the ?v= script URLs; websocket.js
-    // sends it as the handshake's asset_version.
+    // is compared with the catch-up's asset_version.
     STATIC_ASSET_VERSION: 'stub-asset-version',
+    WEB_PROTOCOL: 1,
     // index.html's host fact; the displayed-session module restates it in the tab title.
     PAGE_HOSTNAME: 'localhost:8000',
     // index.html's active-session name; the displayed-session module starts from it.

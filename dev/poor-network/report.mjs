@@ -8,6 +8,30 @@ import { CALIBRATION_HOLD_MS, CALIBRATION_REFERENCE, LINK, LIVE_READBACK, TARGET
 
 const BYTES_PER_MS = LINK.bytesPerSecond / 1000;
 
+// A restart cell (restart.mjs) is gated on its wait from the return to the caught-up instant (plan 6 v4 section 4.2).
+// The probe row's wait beside it is reported, not scored. A hidden or frozen cell's capped repetitions are those whose
+// phase never came, and the cap ends them.
+const restartCell = (cell, title) => ({
+  id: cell,
+  reps: cell,
+  title,
+  unit: 'ms',
+  target: TARGETS.restartCatchupMs,
+  value: (rep) => rep.waitMs,
+});
+const hiddenRestartCell = (cell, title) => ({
+  ...restartCell(cell, title),
+  capped: (rep) => rep.capped,
+});
+const probeRowCell = (cell, title) => ({
+  id: `${cell}.probeRow`,
+  reps: cell,
+  title,
+  unit: 'ms',
+  target: null,
+  value: (rep) => rep.probeWaitMs,
+});
+
 // Each metric reads one repetition. Excess metrics are the time beyond the floor a step's bytes need on the link, so
 // their target is the allowance; the rest are compared as they are.
 export const METRICS = Object.freeze([
@@ -235,6 +259,18 @@ export const METRICS = Object.freeze([
     afterOnly: true,
     value: (rep) => rep.offline?.documentBytes,
   },
+  restartCell('restart-visible', 'restart, visible: server ready to caught up'),
+  probeRowCell('restart-visible', 'restart, visible: server ready to probe row (report only)'),
+  hiddenRestartCell('restart-hidden-1', 'restart, hidden, shown 1 s after catch-up: return to caught up'),
+  probeRowCell('restart-hidden-1', 'restart, hidden, shown 1 s after catch-up: return to probe row (report only)'),
+  hiddenRestartCell('restart-hidden-2', 'restart, hidden, shown 0.3 s after the reload navigates: return to caught up'),
+  probeRowCell('restart-hidden-2', 'restart, hidden, shown 0.3 s after reload navigates: return to probe row (report only)'),
+  hiddenRestartCell('restart-hidden-3', 'restart, hidden, shown after the reload loads: return to caught up'),
+  probeRowCell('restart-hidden-3', 'restart, hidden, shown after the reload loads: return to probe row (report only)'),
+  hiddenRestartCell('restart-frozen', 'restart, frozen, shown after the reload loads: return to caught up'),
+  probeRowCell('restart-frozen', 'restart, frozen, shown after the reload loads: return to probe row (report only)'),
+  hiddenRestartCell('restart-1006', 'restart, hidden, 1006 reset, shown after the reload loads: return to caught up'),
+  probeRowCell('restart-1006', 'restart, hidden, 1006 reset, shown after reload loads: return to probe row (report only)'),
 ]);
 
 // The nearest-rank percentile of `values`.
@@ -272,12 +308,17 @@ export const REPS_OF_SCENARIO = Object.freeze({
   1: 'background', 2: 'background', 3: 'background', 4: 'held', 5: 'reset', 6: 'stream', 7: 'tools', 8: 'foryou',
 });
 
+// The rep list a metric reads: a restart cell names its own, every other metric takes its scenario number's.
+export function repsOfMetric(metric) {
+  return metric.reps ?? REPS_OF_SCENARIO[metric.scenario];
+}
+
 // Fills a side's metrics and calibration from its repetitions. The bench writes the side this way, and a before side
 // assembled from stored rows derives the same fields from the rows it holds.
 export function deriveSide(side) {
   side.metrics = {};
   for (const metric of METRICS) {
-    const reps = side.reps[REPS_OF_SCENARIO[metric.scenario]] ?? [];
+    const reps = side.reps[repsOfMetric(metric)] ?? [];
     // A metric whose cell no repetition ran (a null cell, or an after-only cell on the before side) has no row.
     if (reps.some((rep) => metric.value(rep) !== undefined) && side.status === 'measured') {
       side.metrics[metric.id] = summarize(reps, metric);

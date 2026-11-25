@@ -31,6 +31,18 @@ A defect is one of two kinds:
 
 The round clicks each control on the screen it examines.
 
+Every click a round driver makes goes through the click helper, `dev/improve/ux-click-target.mjs` (`clickTarget`). The
+helper resolves the control's selector at the moment of each click, so a click never lands on a position that an earlier
+load or list recorded. The helper refuses a click in these cases:
+
+- no box with a nonzero size appears within the wait that the driver states;
+- the center of the box lies outside the viewport;
+- another element covers the center of the box.
+
+Each refusal names the selector and the reason, and a covering refusal also names the covering element.
+
+A refused click is a driver result, and the evidence records it as one. A refused click is never a click defect by itself.
+
 The round records each click's result in the evidence. A result names whether the click gives a visible effect on that
 screen (a state change, a message or a navigation), and the non-GET requests and the WebSocket frames the click sends.
 

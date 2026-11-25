@@ -139,6 +139,19 @@ bench_lock_waiter_pids() {
   return 0
 }
 
+# _bench_lock_hold_pid: print a pid that /proc/locks lists as holding the bench lock, or nothing when free.
+_bench_lock_hold_pid() {
+  local state pid holder_pid=''
+  while read -r state pid; do
+    if [[ $state == hold ]]; then
+      holder_pid=$pid
+    fi
+  done < <(_bench_lock_entries) || return $?
+  if [[ -n $holder_pid ]]; then
+    printf '%s\n' "$holder_pid"
+  fi
+}
+
 # bench_lock_holder: print the holder of the bench lock as `<pid> start=<ticks> <command line>`, or print nothing
 # when no process holds it. The holder is the process that opened the lock's descriptor, so it lives for the whole
 # hold. The flock helper that took the lock exits at once, and /proc/locks names that helper, so the helper is never
@@ -147,15 +160,11 @@ bench_lock_waiter_pids() {
 # process is not the holder. The lock file is read for its device and inode only, and the lock is never taken or
 # released here.
 bench_lock_holder() {
-  local state pid cand ppid ticks cmdline dev_inode
+  local cand ppid ticks cmdline dev_inode
   local best='' best_ticks=0 holder_pid=''
   local -a candidates=()
   local -A started=() parent=()
-  while read -r state pid; do
-    if [[ $state == hold ]]; then
-      holder_pid=$pid
-    fi
-  done < <(_bench_lock_entries) || return $?
+  holder_pid=$(_bench_lock_hold_pid) || return $?
   [[ -n $holder_pid ]] || return 0
   dev_inode=$(_bench_lock_dev_inode) || return $?
   mapfile -t candidates < <(_bench_lock_fd_holders "$dev_inode")
@@ -179,6 +188,9 @@ bench_lock_holder() {
     fi
   done
   if [[ -z $best ]]; then
+    # The fdinfo scan takes about a second; a lock released during the scan is now free, not unreadable.
+    holder_pid=$(_bench_lock_hold_pid) || return $?
+    [[ -n $holder_pid ]] || return 0
     printf 'bench lock: /proc/locks lists pid %s as the holder, but no process holds the descriptor of %s\n' \
       "$holder_pid" "$BENCH_LOCK_FILE" >&2
     return 1

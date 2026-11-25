@@ -408,6 +408,67 @@ test('a lock-off side names the live holder, not the exited flock helper', { tim
   }
 });
 
+test(
+  'bench_lock_holder returns none when the lock is released mid-scan, and fails when it stays held',
+  { timeout: 60000 },
+  async () => {
+  const home = scratch('pn-lock-home-');
+  const dir = scratch('pn-lock-run-');
+  const binDir = path.join(dir, 'bin');
+  fs.mkdirSync(binDir);
+  const held = path.join(dir, 'held');
+  const body = path.join(dir, 'hold.sh');
+  fs.writeFileSync(body, '#!/usr/bin/env bash\ntouch "$1"\nwhile [[ ! -e "$1.release" ]]; do sleep 0.1; done\n');
+  const holder = sideAttempt(home, body, held);
+  try {
+    await waitFor(() => fs.existsSync(held));
+
+    // Stub grep so the scan always finds zero descriptors while the lock stays held: must fail loudly.
+    const emptyGrep = path.join(binDir, 'grep');
+    fs.writeFileSync(emptyGrep, '#!/usr/bin/env bash\nexit 1\n');
+    fs.chmodSync(emptyGrep, 0o755);
+    const heldEnv = { ...scratchEnv(home), PATH: `${binDir}:${process.env.PATH}` };
+    const stillHeld = spawnSync('bash', ['-c', 'source "$1"; bench_lock_holder', 'bash', LOCK], {
+      env: heldEnv,
+      encoding: 'utf8',
+    });
+    assert.equal(stillHeld.status, 1, stillHeld.stdout);
+    assert.match(stillHeld.stderr, /no process holds the descriptor/);
+
+    // Stub grep so the holder releases the lock during the scan: must return empty with exit 0.
+    const releaseGrep = path.join(dir, 'release-bin');
+    fs.mkdirSync(releaseGrep);
+    const releaseStub = path.join(releaseGrep, 'grep');
+    const lockInode = fs.statSync(path.join(home, LOCK_FILE)).ino;
+    fs.writeFileSync(
+      releaseStub,
+      [
+        '#!/usr/bin/env bash',
+        `touch "${held}.release"`,
+        `while awk -v pat=":${lockInode}$" '$2 == "FLOCK" && $6 ~ pat { found = 1 } END { exit !found }' /proc/locks; do`,
+        '  sleep 0.05',
+        'done',
+        'exit 1',
+        '',
+      ].join('\n'),
+    );
+    fs.chmodSync(releaseStub, 0o755);
+    const releasedEnv = { ...scratchEnv(home), PATH: `${releaseGrep}:${process.env.PATH}` };
+    const released = spawnSync('bash', ['-c', 'source "$1"; bench_lock_holder', 'bash', LOCK], {
+      env: releasedEnv,
+      encoding: 'utf8',
+      timeout: 15000,
+    });
+    assert.equal(released.status, 0, released.stderr);
+    assert.equal(released.stdout, '');
+  } finally {
+    fs.writeFileSync(`${held}.release`, '');
+    await holder.exited;
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('an improve side with the bench lock off records none when the lock file is free', () => {
   const home = scratch('pn-lock-home-');
   const dir = scratch('pn-lock-run-');

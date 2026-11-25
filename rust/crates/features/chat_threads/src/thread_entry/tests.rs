@@ -439,7 +439,6 @@ fn router_command(directory: &TempDir, body: &str, arguments: &[&str]) -> Vec<St
 }
 
 /// The fakechat adapter over an in-memory thread: posts and acks record, and `read_eligible` returns `thread`.
-#[derive(Default)]
 struct FakeAdapter {
   posts: Mutex<Vec<(Value, String, String)>>,
   post_keys: Mutex<HashSet<String>>,
@@ -457,11 +456,27 @@ impl FakeAdapter {
 
   /// An adapter whose every post fails: the platform refuses each write.
   fn refusing_posts() -> Arc<Self> {
-    Arc::new(Self { refuse_posts: true, ..Self::default() })
+    Arc::new(Self {
+      posts: Mutex::new(Vec::new()),
+      post_keys: Mutex::new(HashSet::new()),
+      yield_before_post: false,
+      refuse_posts: true,
+      acks: Mutex::new(Vec::new()),
+      removed: Mutex::new(Vec::new()),
+      thread: Mutex::new(Vec::new()),
+    })
   }
 
   fn with_thread_yield_before_post(messages: &[(&str, &str)], yield_before_post: bool) -> Arc<Self> {
-    let adapter = Self { yield_before_post, ..Self::default() };
+    let adapter = Self {
+      posts: Mutex::new(Vec::new()),
+      post_keys: Mutex::new(HashSet::new()),
+      yield_before_post,
+      refuse_posts: false,
+      acks: Mutex::new(Vec::new()),
+      removed: Mutex::new(Vec::new()),
+      thread: Mutex::new(Vec::new()),
+    };
     *adapter.thread.lock().expect("the thread lock is never poisoned") = messages
       .iter()
       .map(|(id, text)| ThreadMessage {

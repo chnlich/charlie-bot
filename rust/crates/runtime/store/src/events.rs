@@ -10,7 +10,7 @@ use charliebot_core::{fsutil, str_methods, text_repr};
 use memchr::{memchr_iter, memchr2, memchr2_iter};
 use serde_json::Value;
 
-use crate::chat_events::{decode_line, is_chat_events_archive};
+use crate::chat_events::{append_event, decode_line, is_chat_events_archive};
 use crate::compact::CompactValue;
 use crate::event_state::{
   LINE_INDEX_STRIDE, LIVE_RANGE_WALK_BYTE_BUDGET, LineIndex, LiveRangeMemo, ParsedLiveLine, SharedLiveLines,
@@ -93,7 +93,7 @@ impl Store {
     #[cfg(any(test, feature = "write-faults"))]
     self.fail_chat_append(session_id, &event, &path)?;
     let before = file_signature(&path)?.map(|(_, signature)| signature);
-    let appended = ndjson::append(&path, &event);
+    let appended = append_event(&path, &event);
     // The count moves after every attempt: an append whose sync fails can still have written its line.
     self.note_history_change();
     let line_bytes = appended?;

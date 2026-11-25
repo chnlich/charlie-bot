@@ -13,6 +13,7 @@ use charliebot_compat::json::fast_json_bytes;
 use charliebot_core::text_repr::{self, is_truthy, type_name, value_str};
 use charliebot_core::timefmt;
 use charliebot_registry::FeatureContext;
+use charliebot_registry::wiring::{Phase, Service, ServiceContext};
 use flate2::{Compression, GzBuilder};
 use memchr::{memchr, memchr_iter, memchr2, memrchr};
 use serde::Serialize;
@@ -91,6 +92,28 @@ struct BuildPlan {
   paths: Vec<PathBuf>,
   shape: ArtifactShape,
   mode: BuildMode,
+}
+
+/// The registry service for the merge runtime. The runtime starts on its first merge (see `runtime`), so the
+/// service's start and stop do no work.
+pub(crate) struct MergePool;
+
+impl Service for MergePool {
+  fn name(&self) -> &'static str {
+    "merge_pool"
+  }
+
+  fn phase(&self) -> Phase {
+    Phase::Ready
+  }
+
+  fn start<'a>(&'a self, _ctx: ServiceContext) -> futures_util::future::BoxFuture<'a, anyhow::Result<()>> {
+    Box::pin(async { Ok(()) })
+  }
+
+  fn stop<'a>(&'a self) -> futures_util::future::BoxFuture<'a, anyhow::Result<()>> {
+    Box::pin(async { Ok(()) })
+  }
 }
 
 static RUNTIME: OnceLock<Arc<MergeRuntime>> = OnceLock::new();

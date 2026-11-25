@@ -77,6 +77,11 @@ pub const TOKEN_MIN_SECONDS: &str = "14400";
 pub const RUN_TOKEN: &str = "synthetic-run-token";
 pub const REMOTE_HOST: &str = "improve.example.ts.net";
 pub const MOCK_HOME_VERSION: &str = "2";
+/// The pinned Playwright build and its Linux layout, which the round's start check looks for under the runner's home.
+pub const BROWSER_BUILD: &str = "chromium-1248";
+pub const BROWSER_LAYOUT: &str = "chrome-linux-arm64";
+/// The synthetic Chrome that a round's start check runs: it prints a page and exits 0, so the start check passes.
+const BROWSER_PAGE: &str = "#!/usr/bin/env bash\necho '<html><head></head><body></body></html>'\n";
 pub const LOCAL_CONFIG_DIR: &str = "/synthetic/local-claude-config";
 pub const INSTRUCTIONS: &str = "Improve one topic.\n";
 /// The rule file that the commit's `skills/` tree holds, and the line that only a later origin/main holds.
@@ -723,6 +728,9 @@ impl World {
     harness::copy_file(&harness::repo_root().join("dev/push-text-lists.sh"), &repo.join("dev/push-text-lists.sh"));
     let local_home = sandbox.dir("local");
     let remote_home = sandbox.dir("remote");
+    // The round's browser is the pinned build's Chrome under the runner's home, which the start check runs once.
+    let browser_dir = sandbox.dir(&format!("remote/.cache/ms-playwright/{BROWSER_BUILD}/{BROWSER_LAYOUT}"));
+    harness::write_executable(&browser_dir.join("chrome"), BROWSER_PAGE);
     let profile_home = sandbox.dir("profile");
     let git_env: Env = IDENTITY.iter().map(|(name, value)| ((*name).to_string(), (*value).to_string())).collect();
     git(&sandbox, &git_env, &repo, &["init", "-q", "-b", "main"]);
@@ -1154,6 +1162,16 @@ impl World {
 
   pub fn claude_environment(&self) -> Env {
     record_environment(&self.claude_env)
+  }
+
+  /// The pinned build's directory under the runner's home, where the round's start check looks for its Chrome.
+  pub fn browser_build_dir(&self) -> PathBuf {
+    self.remote_home.join(".cache/ms-playwright").join(BROWSER_BUILD)
+  }
+
+  /// The Chrome that the round's start check runs, and that the round exports as `IMPROVE_BROWSER`.
+  pub fn browser_path(&self) -> PathBuf {
+    self.browser_build_dir().join(BROWSER_LAYOUT).join("chrome")
   }
 
   /// The probe answer that the round's environment named, as the round's agent read it from that file.

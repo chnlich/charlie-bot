@@ -352,6 +352,12 @@ fn the_round_environment_names_its_state_sources_and_its_round_home() {
   let launch_dir = env.get("IMPROVE_LAUNCH_DIR").expect("the round's environment names its launch directory");
   assert!(launch_dir.starts_with(&format!("{}/improve/launch/", world.remote_home.display())), "{launch_dir}");
   assert_eq!(env.get("IMPROVE_DIRECTION"), Some(&DIRECTION.to_string()), "{}", run.describe());
+  assert_eq!(
+    env.get("IMPROVE_BROWSER"),
+    Some(&world.browser_path().display().to_string()),
+    "the round's environment does not name the browser its start check ran: {}",
+    run.describe()
+  );
   let kit_dir = env.get("IMPROVE_KIT_DIR").expect("the round's environment names its kit directory");
   assert!(
     Path::new(kit_dir).join("dev/improve/github-post.sh").is_file(),
@@ -986,6 +992,33 @@ fn a_refused_write_boundary_exits_7_and_starts_no_scope() {
   env.insert("FAKE_SANDBOX_REFUSE".to_string(), "1".to_string());
   let run = world.run(&env);
   assert_refused_before_start(&world, &run, "the write boundary does not start");
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_round_whose_browser_does_not_start_exits_7_naming_its_path_and_starts_no_scope() {
+  let world = World::new();
+  let browser = world.browser_path();
+  harness::write_executable(
+    &browser,
+    "#!/usr/bin/env bash\necho 'snap-confine is packaged without necessary permissions' >&2\nexit 1\n",
+  );
+  let run = world.run(&world.env());
+  assert_refused_before_start(&world, &run, &browser.display().to_string());
+  assert!(
+    stderr(&run).contains("snap-confine is packaged without necessary permissions"),
+    "the refusal does not carry the browser's error: {}",
+    run.describe()
+  );
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_round_without_its_pinned_browser_exits_7_naming_the_build_and_starts_no_scope() {
+  let world = World::new();
+  fs::remove_file(world.browser_path()).expect("the synthetic browser");
+  let run = world.run(&world.env());
+  assert_refused_before_start(&world, &run, &world.browser_build_dir().display().to_string());
 }
 
 /// The assertion that the launcher refused a launch with exit 7 before it sent any input, and that stderr

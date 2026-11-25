@@ -113,6 +113,7 @@ server reads data outside the shared mock home, and it stops the round before an
 For each width that the Web UI Screenshots rule in `prompts/task_base.md` names, the round takes a before and an after
 screenshot of each state the change alters, and an after screenshot of each state the change adds. Each pair shows the
 same view before and after the change, so the reader can see the user-facing difference.
+The screenshots and the clicks start the browser that `$IMPROVE_BROWSER` names (`landing.md`, The round's browser).
 
 ## Evidence
 

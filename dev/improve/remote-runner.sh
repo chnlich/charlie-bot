@@ -39,10 +39,10 @@
 # scope, or a round whose review still runs in the scope after its agent exited (stderr names the
 # review); 4 the direction's clone is missing, is not this protocol's clone, or holds uncommitted work
 # that blocks its checkout of origin/main; 5 the previous round of this direction still runs; 7 a round
-# dependency is missing (a login, the review's login, the round's home, the write boundary or a member or review
-# CLI) or the kit, the skills and the charliebot name different revisions, and stderr names it. A member or review
-# CLI exits 7 when the vendor install or the installed `--version` check fails, and stderr names the local version
-# and the version the host runs. Nothing starts on 4, 5 and 7.
+# dependency is missing (a login, the review's login, the round's home, the write boundary, the browser or a member
+# or review CLI) or the kit, the skills and the charliebot name different revisions, and stderr names it. A member or
+# review CLI exits 7 when the vendor install or the installed `--version` check fails, and stderr names the local
+# version and the version the host runs. Nothing starts on 4, 5 and 7.
 #
 # The round reads its direction from this invocation, so the scope name, the boundary and TMPDIR
 # name one direction only. Two rounds of one direction never run together: the scope name refuses
@@ -1119,6 +1119,43 @@ check_boundary_starts() {
     || fail 7 "the write boundary does not start, so the round does not start: ${output:-improve-sandbox printed no diagnostic}"
 }
 
+# The Playwright build whose Chrome every round tool starts. Build 1248 is Google Chrome for Testing 156.0.8078.4, the
+# build the improve host holds under the runner's own home. A Playwright update that drops this build stops every
+# round at its start, which names the path that is missing.
+readonly BROWSER_BUILD='chromium-1248'
+
+# The round's browser: the one executable Chrome of the pinned build under the runner's own home. A round takes no
+# browser from PATH, because the system chromium is a snap wrapper, and snap-confine cannot start under the boundary.
+resolve_round_browser() {
+  local build_dir="$HOME_DIR/.cache/ms-playwright/$BROWSER_BUILD" candidate
+  local -a found=()
+  for candidate in "$build_dir"/chrome-linux*/chrome; do
+    [[ -x $candidate ]] && found+=("$candidate")
+  done
+  case ${#found[@]} in
+    1) printf '%s' "${found[0]}" ;;
+    0) fail 7 "the round's browser is missing: no executable Chrome at $build_dir/chrome-linux*/chrome" ;;
+    *) fail 7 "the round's browser is ambiguous: ${found[*]}" ;;
+  esac
+}
+
+# Start the round's browser once under the write boundary, with the round's TMPDIR, and refuse the round when it does
+# not start: stderr names the path and the error. The profile is a directory this check makes and removes, so the check
+# leaves no file behind. A headless launch that prints the page's HTML and exits 0 is a start.
+check_browser_starts() {  # <browser>
+  local browser=$1 scratch output status=0 error
+  scratch=$(mktemp -d -- "$ROUND_TMPDIR/browser-check.XXXXXXXX") \
+    || fail 1 "cannot make the browser check's directory under $ROUND_TMPDIR"
+  output=$(timeout 60 "$RUNNER_ROOT/bin/improve-sandbox" "$direction" -- "$browser" --headless=new --no-sandbox \
+    --disable-gpu --no-first-run --user-data-dir="$scratch/profile" --dump-dom about:blank 2>"$scratch/stderr") \
+    || status=$?
+  error=$(tail -n 4 -- "$scratch/stderr" | tr '\n' ' ')
+  rm -rf -- "$scratch"
+  if (( status != 0 )) || [[ $output != *'<html'* ]]; then
+    fail 7 "the round's browser does not start: $browser exited $status: ${error:-no stderr}"
+  fi
+}
+
 # End this launch's scope. A round can leave processes behind it -- a test run whose child outlived it, a review
 # that outlived its agent -- and a process left in the scope keeps the unit loaded after the round, so the next
 # fire of the direction finds the unit. The scope ends with the round: every process in its cgroup stops, and the
@@ -1221,6 +1258,9 @@ export IMPROVE_SKILLS_DIR="$RUNNER_ROOT/bin/$commit/skills"
 ensure_member_cli "$kind" "$member_version"
 ensure_member_cli "$review_kind" "$review_version"
 check_boundary_starts
+ROUND_BROWSER=$(resolve_round_browser)
+check_browser_starts "$ROUND_BROWSER"
+export IMPROVE_BROWSER=$ROUND_BROWSER
 export PATH="$RUNNER_ROOT/members/$kind-$member_version/bin:$RUNNER_ROOT/members/$review_kind-$review_version/bin:$RUNNER_ROOT/bin/$commit:$PATH"
 
 # A failed scope is dead: an OOM kill or another fatal end leaves the unit failed, and systemd-run

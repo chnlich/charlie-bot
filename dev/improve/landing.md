@@ -45,6 +45,17 @@ Its state sources are these:
 - the evidence directories under `~/improve/<direction>/evidence/`;
 - git, in the direction's clone and at `origin`.
 
+## The round's browser
+
+Every round tool that starts a browser starts `$IMPROVE_BROWSER`.
+The runner sets it at the round's start. It finds the Chrome of the Playwright build that `remote-runner.sh` pins
+(`BROWSER_BUILD`) under the runner's own home, and it starts that Chrome once under the write boundary, the way the
+round's tools run it.
+A round takes no browser from `PATH`, because the system chromium there is a snap wrapper that cannot start under the
+write boundary.
+A browser that does not start ends the launch with exit 7, and stderr names its path and the error.
+No round changes `HOME` to find a browser.
+
 A `charliebot` command that needs the server exits non-zero in the round.
 When the round's own scan or measurement cannot run, the round stops and names the missing input.
 The round does not reuse an earlier round's result as its current state.

@@ -1413,6 +1413,7 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
+ "tungstenite",
  "zstd",
 ]
 

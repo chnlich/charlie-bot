@@ -54,7 +54,7 @@ pub struct CharlieCodeOption {
 
 impl CharlieCodeOption {
   pub fn from_fields(fields: &Mapping) -> Result<Self, String> {
-    option_model::validate_field_names(fields, SCHEMA, "charlie-code", UnknownOptionFieldStyle::Unknown)?;
+    option_model::validate_field_names(fields, SCHEMA, backend_types::CHARLIE_CODE, UnknownOptionFieldStyle::Unknown)?;
     Ok(Self {
       api_base: optional_text(fields, backend_types::CHARLIE_CODE, API_BASE_KEY)?,
       context_window: optional_positive_int(fields, CONTEXT_WINDOW_KEY)?,
@@ -84,7 +84,7 @@ fn optional_positive_int(fields: &Mapping, name: &str) -> Result<Option<i64>, St
     None => Ok(None),
     Some(value) => match value.as_i64() {
       Some(count) if count > 0 => Ok(Some(count)),
-      _ => Err(format!("charlie-code option {name} must be an integer greater than 0, or null")),
+      _ => Err(format!("{} option {name} must be an integer greater than 0, or null", backend_types::CHARLIE_CODE)),
     },
   }
 }
@@ -99,7 +99,7 @@ fn optional_float(
     None => Ok(None),
     Some(value) => match value.as_f64().filter(|number| valid(*number)) {
       Some(number) => Ok(Some(number)),
-      None => Err(format!("charlie-code option {name} must be {expected}, or null")),
+      None => Err(format!("{} option {name} must be {expected}, or null", backend_types::CHARLIE_CODE)),
     },
   }
 }
@@ -109,7 +109,7 @@ fn flag(fields: &Mapping, name: &str, default: bool) -> Result<bool, String> {
   match fields.get(name) {
     None => Ok(default),
     Some(Value::Bool(flag)) => Ok(*flag),
-    Some(_) => Err(format!("charlie-code option {name} must be a boolean")),
+    Some(_) => Err(format!("{} option {name} must be a boolean", backend_types::CHARLIE_CODE)),
   }
 }
 

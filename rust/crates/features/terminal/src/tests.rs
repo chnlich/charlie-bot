@@ -19,7 +19,7 @@ use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::error::ProtocolError;
 use tokio_tungstenite::tungstenite::{Error, Message};
 
-use crate::{pty, register, serve_attachment, terminal};
+use crate::{pty, register, terminal};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -334,7 +334,7 @@ impl Drop for AbortOnDrop {
 
 async fn test_socket(upgrade: WebSocketUpgrade, uri: axum::http::Uri) -> axum::response::Response {
   let grid = pty::Grid::from_query(uri.query().unwrap_or_default()).expect("the test query names a valid grid");
-  upgrade.on_upgrade(move |socket| serve_attachment(socket, grid))
+  upgrade.on_upgrade(move |socket| terminal::serve_attachment(socket, grid))
 }
 
 async fn send_frame(socket: &mut WebSocketStream<TcpStream>, value: Value) {

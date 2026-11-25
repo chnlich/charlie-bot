@@ -1,4 +1,5 @@
 use axum::extract::ws::WebSocket;
+use charliebot_core::event_types::REQUEST_EXCEPTION_EVENT;
 use charliebot_core::home;
 use data_encoding::HEXLOWER;
 use serde_json::json;
@@ -70,4 +71,24 @@ pub(super) async fn run_terminal_attachment(mut socket: WebSocket, grid: pty::Gr
   };
 
   pty::run_pty_relay(socket, attachment).await
+}
+
+/// The serving of one attachment. Its end is logged: `terminal_ws_disconnected` from the disconnect guard,
+/// then the exception that escaped the handler.
+pub(super) async fn serve_attachment(socket: WebSocket, grid: pty::Grid) {
+  let outcome = {
+    let _disconnected = DisconnectLog;
+    run_terminal_attachment(socket, grid).await
+  };
+  if let Err(error) = outcome {
+    tracing::error!(error = %error, "{}", REQUEST_EXCEPTION_EVENT);
+  }
+}
+
+struct DisconnectLog;
+
+impl Drop for DisconnectLog {
+  fn drop(&mut self) {
+    tracing::info!("terminal_ws_disconnected");
+  }
 }

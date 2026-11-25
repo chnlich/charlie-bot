@@ -6,8 +6,7 @@
 #
 # The rule it enforces is `One general mechanism` in prompts/task_base.md: the execution role alone decides a
 # session's core capabilities, and the origin attaches only a channel or schedule binding. Two groups of names fail:
-# - banned names: the origin gates of the web and cron kinds, and the web UI check isWebSession. isWebSession stays
-#   allowed in the files of WEB_SESSION_ALLOWLIST until Stage 3 removes it;
+# - banned names: the origin gates of the web and cron kinds, and the web UI check isWebSession. No file may name them;
 # - binding names: the thread-origin predicates. They stay allowed only in the files of BINDING_ALLOWLIST.
 # An allowlist entry whose file no longer names its predicate fails as stale, so each removal tightens the list.
 #
@@ -22,26 +21,18 @@ cd "$(git rev-parse --show-toplevel)"
 BANNED_PATTERN='is_web_session|require_web_session|fn turn_owner|\.turn_owner\('
 BANNED_PATTERN+='|is_cron_session|require_cron_session|isWebSession'
 
-# The web UI files that name isWebSession until Stage 3 removes the check.
-WEB_SESSION_ALLOWLIST=(
-  'web/static/js/chat/for-you.js' # TEMPORARY: remove when Stage 3 lands
-  'web/static/js/chat/status-panel.js' # TEMPORARY: remove when Stage 3 lands
-  'web/templates/js/chat/status-panel.js' # TEMPORARY: remove when Stage 3 lands
-)
-
 # Names that read the thread origin.
 BINDING_PATTERN='is_thread_session|require_thread_session|THREAD_SESSION|\.thread_session([^A-Za-z0-9_]|$)'
 
-# Each entry is a channel binding: it defines the thread origin, or it loads or reads the thread session for a reply.
+# Each entry is a channel binding: it defines the thread origin, loads or reads the thread session for a reply, or
+# filters the Threads view on it. The Threads view is a view over the binding, not a core capability.
 BINDING_ALLOWLIST=(
   'rust/crates/runtime/registry/src/thread_origin.rs' # defines the thread origin that the bindings read
   'rust/crates/features/chat_threads/src/thread_entry.rs' # loads the thread session on the platform reply path
   'rust/crates/features/discord/src/discord_commands.rs' # the Discord reply command loads the thread session
   'rust/crates/features/feishu/src/adapter.rs' # the Feishu reply transport loads the thread session
   'rust/crates/features/feishu/src/commands.rs' # the Feishu reply commands load the thread session
-  'rust/crates/features/chat_threads/src/sidebar.rs' # Threads view grouping; TEMPORARY: remove when Stage 3 lands
-  'rust/crates/runtime/session-api/src/listing.rs' # web UI thread_session key; TEMPORARY: remove when Stage 3 lands
-  'web/static/js/chat/for-you.js' # reads the thread_session key; TEMPORARY: remove when Stage 3 lands
+  'rust/crates/features/chat_threads/src/sidebar.rs' # the Threads view filter reads the binding
 )
 
 # Print each hit of one pattern in the tracked sources of the checkout at <root>, one tab-separated line per hit:
@@ -110,17 +101,13 @@ report() {  # <file> <line> <matched text> <text of the line> <banned|binding>
 # Check the tracked sources of the checkout at <root>. Return 1 after printing every failure.
 check_root() {  # <root>
   local status=0 file line token text entry
-  local -A web_seen=() binding_seen=()
+  local -A binding_seen=()
   local banned binding
   banned=$(pattern_hits "$1" "$BANNED_PATTERN")
   binding=$(pattern_hits "$1" "$BINDING_PATTERN")
 
   while IFS=$'\t' read -r file line token text; do
     [[ -n $file ]] || continue
-    if [[ $token == isWebSession ]] && listed "$file" WEB_SESSION_ALLOWLIST; then
-      web_seen[$file]=1
-      continue
-    fi
     report "$file" "$line" "$token" "$text" banned
     status=1
   done <<< "$banned"
@@ -135,13 +122,6 @@ check_root() {  # <root>
     status=1
   done <<< "$binding"
 
-  for entry in "${WEB_SESSION_ALLOWLIST[@]}"; do
-    if [[ -z ${web_seen[$entry]-} ]]; then
-      printf 'stale allowlist entry %s: it no longer names isWebSession; %s\n' "$entry" \
-        'remove it from WEB_SESSION_ALLOWLIST in dev/check-session-origin.sh' >&2
-      status=1
-    fi
-  done
   for entry in "${BINDING_ALLOWLIST[@]}"; do
     if [[ -z ${binding_seen[$entry]-} ]]; then
       printf 'stale allowlist entry %s: it no longer names a thread-origin predicate; %s\n' "$entry" \
@@ -217,11 +197,6 @@ self_test() {
   expect 'a binding entry that no longer names its predicate is stale' "$self_test_dir" 1 \
     "stale allowlist entry $sidebar" || status=1
   git -C "$self_test_dir" checkout -q -- rust web
-
-  local for_you=web/static/js/chat/for-you.js
-  sed -i 's/isWebSession/webSessionCheck/g; s/\.thread_session/.threadKey/g' "$self_test_dir/$for_you"
-  expect 'a web entry that no longer names its predicates is stale' "$self_test_dir" 1 \
-    "stale allowlist entry $for_you" || status=1
 
   return "$status"
 }

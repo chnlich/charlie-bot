@@ -22,6 +22,7 @@ use nix::unistd::{Pid, getpgid};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
+use crate::chat_event_type::{ChatEventType, log_unnamed};
 use crate::compact::CompactValue;
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
@@ -377,20 +378,94 @@ impl RunFacts {
     {
       self.observed_events += 1;
     }
-    match event.get("type").and_then(CompactValue::as_str) {
-      Some(event_types::RUN_FINISHED) => {
+    match ChatEventType::of(event.get("type").and_then(CompactValue::as_str)) {
+      ChatEventType::DiscordReply => {}
+      ChatEventType::SlackReply => {}
+      ChatEventType::WebAskCheck => {}
+      ChatEventType::DraftFailed => {}
+      ChatEventType::DraftRegistered => {}
+      ChatEventType::DraftSent => {}
+      ChatEventType::DiscordAck => {}
+      ChatEventType::WebStatusConfirmed => {}
+      ChatEventType::Assistant => {}
+      ChatEventType::System => {}
+      ChatEventType::ContextCompacted => {}
+      ChatEventType::Result => {}
+      ChatEventType::AgentMessage => {}
+      ChatEventType::AssistantError => {}
+      ChatEventType::BackendOverlayInactive => {}
+      ChatEventType::BackendOverlayUndeclared => {}
+      ChatEventType::BackendSwitched => {}
+      ChatEventType::ChildReport => {}
+      ChatEventType::CloneStart => {}
+      ChatEventType::ContextCompactFailed => {}
+      ChatEventType::HandlerResult => {}
+      ChatEventType::MasterDone => {}
+      ChatEventType::ModelFallbackNotice => {}
+      ChatEventType::PromptChanged => {}
+      ChatEventType::ResumeContextDropped => {}
+      ChatEventType::RunDelivery => {}
+      ChatEventType::RunFinished => {
         if let Some(run_id) = event.get("run_id").and_then(CompactValue::as_str) {
           let outcome = event.get("outcome").and_then(CompactValue::as_str).map(str::to_string);
           self.outcomes.insert(run_id.to_string(), outcome);
         }
       }
-      Some(event_types::RUN_STOP_REQUESTED) => {
+      ChatEventType::RunHeader => {}
+      ChatEventType::RunLaunchWithheld => {}
+      ChatEventType::RunStopRequested => {
         if let Some(run_id) = event.get("run_id").and_then(CompactValue::as_str) {
           let request_id = event.get("request_id").and_then(CompactValue::as_str).map(str::to_string);
           self.stop_requests.entry(run_id.to_string()).or_default().insert(request_id);
         }
       }
-      _ => {}
+      ChatEventType::ScheduledRunSkipped => {}
+      ChatEventType::ScheduledTrigger => {}
+      ChatEventType::SessionAttached => {}
+      ChatEventType::SessionRenamed => {}
+      ChatEventType::TaskCloseRequested => {}
+      ChatEventType::TaskClosed => {}
+      ChatEventType::TaskCreated => {}
+      ChatEventType::TaskDelegated => {}
+      ChatEventType::TaskImported => {}
+      ChatEventType::TaskInputAcknowledged => {}
+      ChatEventType::TaskReopened => {}
+      ChatEventType::TaskTriggered => {}
+      ChatEventType::Thinking => {}
+      ChatEventType::ToolResult => {}
+      ChatEventType::ToolUse => {}
+      ChatEventType::User => {}
+      ChatEventType::WebReply => {}
+      ChatEventType::WebReplyNotice => {}
+      ChatEventType::WebReplyCheck => {}
+      ChatEventType::WebStatus => {}
+      ChatEventType::TurnHooks => {}
+      ChatEventType::ContinuationRan => {}
+      ChatEventType::FeishuAck => {}
+      ChatEventType::SlackAck => {}
+      ChatEventType::InputDelivered => {}
+      ChatEventType::ImproveFailed => {}
+      ChatEventType::ImproveIterationCompleted => {}
+      ChatEventType::Error => {}
+      ChatEventType::Message => {}
+      ChatEventType::Text => {}
+      ChatEventType::QuotaFailover => {}
+      ChatEventType::FeishuReply => {}
+      ChatEventType::PolicyTableChanged => {}
+      ChatEventType::WorkerSummary => {}
+      ChatEventType::RunEnd => {}
+      ChatEventType::RunError => {}
+      ChatEventType::TaskReparented => {}
+      ChatEventType::ClaudeAccountLoginRequired => {}
+      ChatEventType::CommandLifecycle => {}
+      ChatEventType::FeatureEvent => {}
+      ChatEventType::RateLimitEvent => {}
+      ChatEventType::Stream => {}
+      ChatEventType::WebStatusSubtree => {}
+      ChatEventType::Untyped => {}
+      ChatEventType::Unnamed(name) => {
+        log_unnamed("RunFacts::observe", "event type", &name, event.get("id").and_then(CompactValue::as_str));
+      }
     }
   }
 

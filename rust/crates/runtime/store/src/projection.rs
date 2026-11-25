@@ -5,6 +5,7 @@ use charliebot_core::config::BackendsConfig;
 use serde_json::Value;
 
 use crate::aggregator::MessageAggregator;
+use crate::chat_event_type::log_unnamed;
 use crate::event_types::{ChatEvent, SharedChatEvent};
 use crate::hooks::EventRenderer;
 use crate::message_events;
@@ -182,7 +183,9 @@ fn messages_of(deltas: Vec<Value>) -> StoreResult<Vec<Value>> {
           .ok_or_else(|| StoreError::new("message_update names no committed message"))?;
         messages[position] = update;
       }
-      _ => {}
+      Some("stream") => {}
+      None => {}
+      Some(other) => log_unnamed("messages_of", "frame type", other, None),
     }
   }
   Ok(messages)
@@ -228,7 +231,9 @@ fn fold_messages(
         let update = delta.get("message").ok_or_else(|| StoreError::new("message_update is missing its message"))?;
         updates.push(update.clone());
       }
-      _ => {}
+      Some("stream") => {}
+      None => {}
+      Some(other) => log_unnamed("fold_messages", "frame type", other, None),
     }
   }
   Ok((messages, separators, updates))

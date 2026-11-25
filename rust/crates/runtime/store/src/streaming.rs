@@ -10,26 +10,11 @@ use charliebot_core::event_types;
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 
+use crate::chat_event_type::{ChatEventType, log_unnamed};
 use crate::{StoreError, StoreResult};
 
 /// Sidebar channel shared by every connected session view.
 pub const SIDEBAR_CHANNEL: &str = "sidebar";
-
-/// Raw event types whose rendered content is carried by message or stream deltas.
-pub const RAW_EVENTS_REPLACED_BY_DELTAS: &[&str] = &[
-  "assistant",
-  "user",
-  event_types::SCHEDULED_TRIGGER,
-  event_types::CHILD_REPORT,
-  event_types::TASK_CLOSED,
-  event_types::TASK_REOPENED,
-  event_types::WEB_REPLY,
-  event_types::WEB_REPLY_NOTICE,
-  event_types::WEB_STATUS,
-  event_types::WEB_STATUS_CONFIRMED,
-  event_types::WEB_ASK_CHECK,
-  event_types::WEB_REPLY_CHECK,
-];
 
 /// The frame field carrying a streamed draft's commit: the committed message's id, timestamp and event index. The page
 /// rebuilds the assistant message from it, so the frame does not repeat the message's role or streamed-content flag.
@@ -299,24 +284,105 @@ pub fn socket_frames(event: &Value, index: usize, deltas: Vec<Value>) -> StoreRe
   for frame in &mut frames {
     trim_user_echo(frame);
   }
-  let event_type = event.get("type").and_then(Value::as_str);
-  if event_type == Some(event_types::MASTER_DONE) {
-    let position = frames
-      .iter()
-      .position(is_round_separator)
-      .ok_or_else(|| StoreError::new("master_done produced no round separator"))?;
-    let separator = frames.remove(position);
-    let round = &separator["message"];
-    frames.push(json!({
-      "type": event_types::MASTER_DONE,
-      event_types::STILL_THINKING: event.get(event_types::STILL_THINKING).cloned().unwrap_or(Value::Null),
-      "id": round["id"],
-      "timestamp": round["timestamp"],
-      event_types::EVENT_INDEX: index,
-    }));
-  } else if event_type == Some(event_types::RESULT) {
-    frames.push(json!({"type": event_types::RESULT, event_types::EVENT_INDEX: index}));
-  } else if !event_type.is_some_and(|event_type| RAW_EVENTS_REPLACED_BY_DELTAS.contains(&event_type)) {
+  let passes_payload = match ChatEventType::of(event.get("type").and_then(Value::as_str)) {
+    ChatEventType::DiscordReply => true,
+    ChatEventType::SlackReply => true,
+    ChatEventType::WebAskCheck => false,
+    ChatEventType::DraftFailed => true,
+    ChatEventType::DraftRegistered => true,
+    ChatEventType::DraftSent => true,
+    ChatEventType::DiscordAck => true,
+    ChatEventType::WebStatusConfirmed => false,
+    ChatEventType::Assistant => false,
+    ChatEventType::System => true,
+    ChatEventType::ContextCompacted => true,
+    ChatEventType::Result => {
+      frames.push(json!({"type": event_types::RESULT, event_types::EVENT_INDEX: index}));
+      false
+    }
+    ChatEventType::AgentMessage => true,
+    ChatEventType::AssistantError => true,
+    ChatEventType::BackendOverlayInactive => true,
+    ChatEventType::BackendOverlayUndeclared => true,
+    ChatEventType::BackendSwitched => true,
+    ChatEventType::ChildReport => false,
+    ChatEventType::CloneStart => true,
+    ChatEventType::ContextCompactFailed => true,
+    ChatEventType::HandlerResult => true,
+    ChatEventType::MasterDone => {
+      let position = frames
+        .iter()
+        .position(is_round_separator)
+        .ok_or_else(|| StoreError::new("master_done produced no round separator"))?;
+      let separator = frames.remove(position);
+      let round = &separator["message"];
+      frames.push(json!({
+        "type": event_types::MASTER_DONE,
+        event_types::STILL_THINKING: event.get(event_types::STILL_THINKING).cloned().unwrap_or(Value::Null),
+        "id": round["id"],
+        "timestamp": round["timestamp"],
+        event_types::EVENT_INDEX: index,
+      }));
+      false
+    }
+    ChatEventType::ModelFallbackNotice => true,
+    ChatEventType::PromptChanged => true,
+    ChatEventType::ResumeContextDropped => true,
+    ChatEventType::RunDelivery => true,
+    ChatEventType::RunFinished => true,
+    ChatEventType::RunHeader => true,
+    ChatEventType::RunLaunchWithheld => true,
+    ChatEventType::RunStopRequested => true,
+    ChatEventType::ScheduledRunSkipped => true,
+    ChatEventType::ScheduledTrigger => false,
+    ChatEventType::SessionAttached => true,
+    ChatEventType::SessionRenamed => true,
+    ChatEventType::TaskCloseRequested => true,
+    ChatEventType::TaskClosed => false,
+    ChatEventType::TaskCreated => true,
+    ChatEventType::TaskDelegated => true,
+    ChatEventType::TaskImported => true,
+    ChatEventType::TaskInputAcknowledged => true,
+    ChatEventType::TaskReopened => false,
+    ChatEventType::TaskTriggered => true,
+    ChatEventType::Thinking => true,
+    ChatEventType::ToolResult => true,
+    ChatEventType::ToolUse => true,
+    ChatEventType::User => false,
+    ChatEventType::WebReply => false,
+    ChatEventType::WebReplyNotice => false,
+    ChatEventType::WebReplyCheck => false,
+    ChatEventType::WebStatus => false,
+    ChatEventType::TurnHooks => true,
+    ChatEventType::ContinuationRan => true,
+    ChatEventType::FeishuAck => true,
+    ChatEventType::SlackAck => true,
+    ChatEventType::InputDelivered => true,
+    ChatEventType::ImproveFailed => true,
+    ChatEventType::ImproveIterationCompleted => true,
+    ChatEventType::Error => true,
+    ChatEventType::Message => true,
+    ChatEventType::Text => true,
+    ChatEventType::QuotaFailover => true,
+    ChatEventType::FeishuReply => true,
+    ChatEventType::PolicyTableChanged => true,
+    ChatEventType::WorkerSummary => true,
+    ChatEventType::RunEnd => true,
+    ChatEventType::RunError => true,
+    ChatEventType::TaskReparented => true,
+    ChatEventType::ClaudeAccountLoginRequired => true,
+    ChatEventType::CommandLifecycle => true,
+    ChatEventType::FeatureEvent => true,
+    ChatEventType::RateLimitEvent => true,
+    ChatEventType::Stream => true,
+    ChatEventType::WebStatusSubtree => true,
+    ChatEventType::Untyped => true,
+    ChatEventType::Unnamed(name) => {
+      log_unnamed("socket_frames", "event type", &name, event.get("id").and_then(Value::as_str));
+      true
+    }
+  };
+  if passes_payload {
     let mut payload = event.clone();
     let object = payload.as_object_mut().ok_or_else(|| StoreError::new("chat event must be a JSON object"))?;
     object.entry(event_types::EVENT_INDEX).or_insert_with(|| json!(index));

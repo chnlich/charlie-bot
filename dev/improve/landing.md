@@ -24,7 +24,7 @@ A leak-rule hit is the only hit the round rewrites: the round removes the matche
 The script sends nothing on a hit, so the posted text is always text that passed.
 A credential hit stops the round. The kind that the check names is the round's stop reason, and the round writes no rewrite of the text.
 A merge goes through the posting script's `pr-merge`, which refuses a merge whose head lacks a clean verdict,
-refuses a diff that changes a path the Step 3 list names under another branch,
+refuses a diff that changes a path that origin/main has and the Step 3 list names under another branch,
 refuses a web page change whose evidence directory fails the screenshot check, whose pull request body names no
 `View:` line, or whose review record shows no read of a screenshot that the body names, and carries the `View:` lines
 into the squash commit message. Each `View:` line follows the View contract of the Web UI Screenshots rule in
@@ -214,18 +214,21 @@ A clone or record that cannot be read stops the list with an error naming the co
 The runner's own checkout names nothing at all.
 Both computations fetch `origin/main` before they compare a branch against it, because a stale ref would make merged work look live.
 The fetch goes into a ref the reading side owns, `refs/improve/inflight/<direction>` in each clone and `refs/improve/inflight/<branch prefix>` in this host's main checkout, and never into `refs/remotes/origin/main` or `FETCH_HEAD`: the directions start in a burst, so concurrent launches, rounds and operators fetch those shared refs themselves.
-Pick a topic whose files the list does not name.
+Pick a topic whose files the list does not name on a path that origin/main has.
 A file that another branch changes would force that branch to resolve our conflict.
 The claim check covers the final diff, not only the topic's planned files.
 `pr-create` and `pr-merge` read this same list and refuse a diff that changes a path
-the list names under another branch.
+that origin/main has and the list names under another branch.
 Each refusal names the claimed path and its claimant, and nothing is sent or merged.
 The round keeps claimed paths out of its diff rather than sending past a refusal.
 The list is the launch's snapshot, so a claim made after the launch is not in it.
-A path whose only changes are landed commits is not listed. Every listed path prints as `path<TAB>branch`, naming the branch that carries it:
+A path whose only changes are landed commits is not listed. Every listed path prints as `path<TAB>branch`, naming the branch that carries it, and a claim on a path that origin/main has no object at gets a third field, `absent-on-origin-main`:
 - uncommitted work, with the branch of its dirty worktree;
 - an unmerged commit's path, with that commit's branch;
 - an open pull request's file, with its head branch.
+
+A claim on a path absent from origin/main does not block a topic; the list marks it `absent-on-origin-main`.
+The round names each such claim it passes, with its branch, in its report (Step 9) and its pull request body.
 
 List the closed pull requests of this direction and read each `improve-abandoned:` comment:
 
@@ -514,6 +517,7 @@ It names:
 
 - the topic;
 - each dropped worktree and its newest change time from `"$IMPROVE_LAUNCH_DIR/inflight-files-notices.txt"`;
+- each claim marked `absent-on-origin-main` that the round passed, with its branch, as Step 3 requires;
 - the kit revision, which the round reads from `IMPROVE_KIT_REVISION`;
 - the pull-request link;
 - the evidence summary;

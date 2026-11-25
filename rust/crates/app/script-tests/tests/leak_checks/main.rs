@@ -159,10 +159,20 @@ fn post(sandbox: &Sandbox) -> (Env, PathBuf, PathBuf) {
   (env, gh_log, home)
 }
 
-/// Writes the round's in-flight list as the runner writes it at launch: `path<TAB>branch` per claimed path.
-fn write_inflight_list(env: &Env, claims: &[(&str, &str)]) {
-  let list: String = claims.iter().map(|(path, branch)| format!("{path}\t{branch}\n")).collect();
+/// The third field the in-flight list writes on a claim whose path origin/main has no object at.
+const ABSENT_ON_MAIN: &str = "absent-on-origin-main";
+
+/// Writes the round's in-flight list as the runner writes it at launch: one `path<TAB>branch` line per claim, with a
+/// third field on a claim whose path origin/main lacks.
+fn write_inflight_list_lines(env: &Env, lines: &[String]) {
+  let list: String = lines.iter().map(|line| format!("{line}\n")).collect();
   std::fs::write(Path::new(&env["IMPROVE_LAUNCH_DIR"]).join("inflight-files.txt"), list).unwrap();
+}
+
+/// Writes the round's in-flight list for claims on paths that origin/main has: `path<TAB>branch` per claimed path.
+fn write_inflight_list(env: &Env, claims: &[(&str, &str)]) {
+  let lines: Vec<String> = claims.iter().map(|(path, branch)| format!("{path}\t{branch}")).collect();
+  write_inflight_list_lines(env, &lines);
 }
 
 #[test]
@@ -270,10 +280,13 @@ fn a_pr_create_checks_title_and_body() {
 
 #[test]
 #[ignore = "integration"]
-fn a_pr_create_refuses_a_claimed_path_and_allows_a_path_only_its_own_branch_claims() {
+fn a_pr_create_refuses_an_existing_claimed_path_and_allows_own_and_absent_claims() {
   let sandbox = Sandbox::new();
   let (env, gh_log, _home) = post(&sandbox);
   let work = push_repo(&sandbox, &env);
+  // The topic also edits seed.txt, which origin/main has. change.txt, the topic's other path, is not on origin/main.
+  std::fs::write(work.join("seed.txt"), "seed, edited\n").unwrap();
+  git(&env, &work, &["commit", "-q", "-am", "edit the seed"]);
   let body = body_file(&sandbox, "body.md", CLEAN_BODY);
   let create = |env: &Env| {
     let mut command = harness::command("bash", env);
@@ -282,20 +295,22 @@ fn a_pr_create_refuses_a_claimed_path_and_allows_a_path_only_its_own_branch_clai
     run_in(&mut command, &work)
   };
 
-  write_inflight_list(&env, &[("change.txt", OTHER_CLAIMANT)]);
+  write_inflight_list(&env, &[("seed.txt", OTHER_CLAIMANT)]);
   let run = create(&env);
   assert_eq!(run.code, 2, "{}", run.describe());
-  assert!(
-    run.stderr.lines().any(|line| line.contains("change.txt") && line.contains(OTHER_CLAIMANT)),
-    "{}",
-    run.stderr
-  );
+  assert!(run.stderr.lines().any(|line| line.contains("seed.txt") && line.contains(OTHER_CLAIMANT)), "{}", run.stderr);
   assert!(gh_log_lines(&gh_log).is_empty(), "no pull request was created");
 
-  write_inflight_list(&env, &[("change.txt", HEAD_BRANCH), ("docs/unrelated.md", OTHER_CLAIMANT)]);
+  write_inflight_list_lines(&env, &[format!("change.txt\t{OTHER_CLAIMANT}\t{ABSENT_ON_MAIN}")]);
   let run = create(&env);
   assert_eq!(run.code, 0, "{}", run.describe());
   assert!(gh_log_lines(&gh_log)[0].contains("pr create"), "{}", gh_log_lines(&gh_log)[0]);
+
+  write_inflight_list(&env, &[("seed.txt", HEAD_BRANCH), ("docs/unrelated.md", OTHER_CLAIMANT)]);
+  let run = create(&env);
+  assert_eq!(run.code, 0, "{}", run.describe());
+  let creates = gh_log_lines(&gh_log).iter().filter(|line| line.contains("pr create")).count();
+  assert_eq!(creates, 2, "{}", run.describe());
 }
 
 // -- github-post.sh pr-create of the code-style direction --
@@ -1378,6 +1393,18 @@ fn a_pr_merge_refuses_a_diff_that_changes_a_claimed_path_and_names_each_claimant
 fn a_pr_merge_allows_a_diff_claimed_only_by_its_own_branch_or_not_at_all() {
   let world = MergeWorld::new("rust/crates/x/src/lib.rs\n", CLEAN_BODY);
   write_inflight_list(&world.env, &[("rust/crates/x/src/lib.rs", HEAD_BRANCH), ("docs/unrelated.md", OTHER_CLAIMANT)]);
+
+  let run = world.merge(&["5046"]);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert_eq!(world.merge_calls().len(), 1, "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_allows_a_diff_whose_only_claim_is_absent_from_origin_main() {
+  let world = MergeWorld::new("rust/crates/x/src/lib.rs\n", CLEAN_BODY);
+  write_inflight_list_lines(&world.env, &[format!("rust/crates/x/src/lib.rs\t{OTHER_CLAIMANT}\t{ABSENT_ON_MAIN}")]);
 
   let run = world.merge(&["5046"]);
 

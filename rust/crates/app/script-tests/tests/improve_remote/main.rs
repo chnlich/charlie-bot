@@ -235,7 +235,8 @@ fn the_inflight_list_names_its_origin_repository_outside_a_git_checkout() {
   let run = run_inflight_list_from(&world, &env, cwd);
 
   assert_eq!(run.code, 0, "{}", run.describe());
-  assert_eq!(run.stdout, "pr-only.md\tcharliebot/task-open\n", "{}", run.describe());
+  // The fixture's main has no pr-only.md, so the open pull request's claim on it carries the absent field.
+  assert_eq!(run.stdout, "pr-only.md\tcharliebot/task-open\tabsent-on-origin-main\n", "{}", run.describe());
 
   // An origin that names no GitHub repository stops the list with an error naming the condition.
   world.git(&world.repo, &["remote", "set-url", "origin", "not-a-github-origin"]);
@@ -2405,12 +2406,13 @@ fn a_running_rounds_clone_adds_its_checked_out_branchs_files_to_the_list() {
   assert!(world.claude_ran(), "the fake claude did not run:\n{}", run.describe());
   let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
   // Every path the running ux round's clone holds prints with its branch: the committed paths
-  // carry unmerged commits, and the uncommitted and untracked paths are uncommitted work.
+  // carry unmerged commits, and the uncommitted and untracked paths are uncommitted work. The paths
+  // that origin/main lacks carry the absent field; base.md is on origin/main.
   for carried in [
-    format!("committed.md\timprove/{OTHER_DIRECTION}/topic"),
+    format!("committed.md\timprove/{OTHER_DIRECTION}/topic\tabsent-on-origin-main"),
     format!("base.md\timprove/{OTHER_DIRECTION}/topic"),
-    format!("dropped.md\timprove/{OTHER_DIRECTION}/topic"),
-    format!("untracked.md\timprove/{OTHER_DIRECTION}/topic"),
+    format!("dropped.md\timprove/{OTHER_DIRECTION}/topic\tabsent-on-origin-main"),
+    format!("untracked.md\timprove/{OTHER_DIRECTION}/topic\tabsent-on-origin-main"),
   ] {
     assert!(
       list.lines().any(|line| line == carried),
@@ -2433,7 +2435,7 @@ fn an_open_pull_requests_files_appear_in_the_in_flight_list() {
   assert_eq!(run.code, 0, "{}", run.describe());
   let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
   assert!(
-    list.lines().any(|line| line == "pr-only.md\tcharliebot/task-open"),
+    list.lines().any(|line| line == "pr-only.md\tcharliebot/task-open\tabsent-on-origin-main"),
     "the in-flight list misses an open pull request's file:\n{list}"
   );
 }
@@ -2587,8 +2589,8 @@ fn an_unowned_worktree_branch_keeps_all_changed_paths() {
     [
       "base.md\tcharliebot/partial",
       "landed.md\tcharliebot/partial",
-      "together.md\tcharliebot/partial",
-      "unlanded.md\tcharliebot/partial"
+      "together.md\tcharliebot/partial\tabsent-on-origin-main",
+      "unlanded.md\tcharliebot/partial\tabsent-on-origin-main"
     ],
     "the unowned branch loses a changed path:\n{list}"
   );
@@ -2694,7 +2696,7 @@ fn a_running_rounds_clone_keeps_all_changed_paths() {
     [
       format!("base.md\timprove/{OTHER_DIRECTION}/partial"),
       format!("landed.md\timprove/{OTHER_DIRECTION}/partial"),
-      format!("unlanded.md\timprove/{OTHER_DIRECTION}/partial"),
+      format!("unlanded.md\timprove/{OTHER_DIRECTION}/partial\tabsent-on-origin-main"),
     ],
     "the live clone loses a changed path:\n{list}"
   );
@@ -2729,9 +2731,10 @@ fn a_process_in_another_directions_clone_keeps_its_checked_out_branchs_paths() {
   process.wait().expect("reap the clone process");
   assert_eq!(run.code, 0, "{}", run.describe());
   let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
-  for named in
-    [format!("committed.md\timprove/{OTHER_DIRECTION}/live"), format!("dirty.md\timprove/{OTHER_DIRECTION}/live")]
-  {
+  for named in [
+    format!("committed.md\timprove/{OTHER_DIRECTION}/live\tabsent-on-origin-main"),
+    format!("dirty.md\timprove/{OTHER_DIRECTION}/live\tabsent-on-origin-main"),
+  ] {
     assert!(list.lines().any(|line| line == named), "the in-flight list drops the process-held path {named}:\n{list}");
   }
 }
@@ -3178,7 +3181,9 @@ fn a_locked_origin_main_ref_does_not_stop_the_launchers_in_flight_list() {
   let run = harness::run(&mut command);
 
   assert_eq!(run.code, 0, "{}", run.describe());
-  for listed in ["locked.md\tcharliebot/locked", "dirty.md\tcharliebot/locked"] {
+  for listed in
+    ["locked.md\tcharliebot/locked\tabsent-on-origin-main", "dirty.md\tcharliebot/locked\tabsent-on-origin-main"]
+  {
     assert!(run.stdout.lines().any(|line| line == listed), "the in-flight list misses {listed}:\n{}", run.describe());
   }
   assert!(!fetch_head.exists(), "the launcher's in-flight list wrote the shared FETCH_HEAD");
@@ -3222,15 +3227,17 @@ fn an_unowned_worktree_keeps_a_path_that_main_deleted() {
   // No task names this worktree, so its committed and dirty paths stay alongside the open pull request's file.
   // Each path prints with the branch that carries it. An unmerged commit's branch carries its file. The
   // dirty worktree's branch carries its uncommitted paths. An open pull request's head branch carries its file.
+  // main deleted old.md and the fixture has no pr-only.md or fresh.md, so their claims carry the absent field;
+  // live.md is on main, so its claim stays unmarked.
   let mut listed: Vec<&str> = run.stdout.lines().collect();
   listed.sort_unstable();
   assert_eq!(
     listed,
     [
-      "fresh.md\tcharliebot/renamed",
+      "fresh.md\tcharliebot/renamed\tabsent-on-origin-main",
       "live.md\tcharliebot/renamed",
-      "old.md\tcharliebot/renamed",
-      "pr-only.md\tcharliebot/task-open"
+      "old.md\tcharliebot/renamed\tabsent-on-origin-main",
+      "pr-only.md\tcharliebot/task-open\tabsent-on-origin-main"
     ],
     "the in-flight list drops a path from an unowned worktree:\n{}",
     run.describe()
@@ -3333,7 +3340,9 @@ fn an_open_task_keeps_an_unlanded_worktrees_paths_claimed_after_its_run_ends() {
   let run = run_inflight_list(&world);
 
   assert_eq!(run.code, 0, "{}", run.describe());
-  for listed in ["topic.md\tcharliebot/open-task", "dirty.md\tcharliebot/open-task"] {
+  for listed in
+    ["topic.md\tcharliebot/open-task\tabsent-on-origin-main", "dirty.md\tcharliebot/open-task\tabsent-on-origin-main"]
+  {
     assert!(
       run.stdout.lines().any(|line| line == listed),
       "the in-flight list drops the open task's path {listed} after its run ended:\n{}",
@@ -3397,8 +3406,11 @@ fn an_open_pull_request_keeps_a_closed_tasks_worktree_paths_claimed() {
   let run = run_inflight_list_with_env(&world, &env);
 
   assert_eq!(run.code, 0, "{}", run.describe());
-  for listed in ["topic.md\tcharliebot/closed-pr", "dirty.md\tcharliebot/closed-pr", "pr-only.md\tcharliebot/closed-pr"]
-  {
+  for listed in [
+    "topic.md\tcharliebot/closed-pr\tabsent-on-origin-main",
+    "dirty.md\tcharliebot/closed-pr\tabsent-on-origin-main",
+    "pr-only.md\tcharliebot/closed-pr\tabsent-on-origin-main",
+  ] {
     assert!(
       run.stdout.lines().any(|line| line == listed),
       "the open pull request does not keep its worktree path {listed}:\n{}",
@@ -3418,7 +3430,11 @@ fn a_worktree_without_a_task_name_keeps_its_uncommitted_paths_and_drops_its_land
   assert_eq!(run.code, 0, "{}", run.describe());
   // The topic commit is patch-equivalent on main, so its committed path names nothing. The same path's
   // uncommitted change, the staged path and the untracked path print with the branch that carries them.
-  for listed in ["topic.md\tcharliebot/no-task", "staged.md\tcharliebot/no-task", "untracked.md\tcharliebot/no-task"] {
+  for listed in [
+    "topic.md\tcharliebot/no-task",
+    "staged.md\tcharliebot/no-task\tabsent-on-origin-main",
+    "untracked.md\tcharliebot/no-task\tabsent-on-origin-main",
+  ] {
     assert!(
       run.stdout.lines().any(|line| line == listed),
       "the in-flight list drops the unowned worktree path {listed}:\n{}",
@@ -3456,7 +3472,10 @@ fn a_process_in_a_closed_tasks_worktree_keeps_its_paths_claimed() {
   process.kill().expect("stop the worktree process");
   process.wait().expect("reap the worktree process");
   assert_eq!(run.code, 0, "{}", run.describe());
-  for listed in ["topic.md\tcharliebot/with-process", "dirty.md\tcharliebot/with-process"] {
+  for listed in [
+    "topic.md\tcharliebot/with-process\tabsent-on-origin-main",
+    "dirty.md\tcharliebot/with-process\tabsent-on-origin-main",
+  ] {
     assert!(
       run.stdout.lines().any(|line| line == listed),
       "the in-flight list drops the process-held worktree path {listed}:\n{}",
@@ -3517,7 +3536,10 @@ fn an_open_owning_sessions_task_record_keeps_the_worktree_paths_claimed() {
   let run = run_inflight_list(&world);
 
   assert_eq!(run.code, 0, "{}", run.describe());
-  for listed in ["topic.md\tcharliebot/open-record", "dirty.md\tcharliebot/open-record"] {
+  for listed in [
+    "topic.md\tcharliebot/open-record\tabsent-on-origin-main",
+    "dirty.md\tcharliebot/open-record\tabsent-on-origin-main",
+  ] {
     assert!(
       run.stdout.lines().any(|line| line == listed),
       "the in-flight list drops the open task record's path {listed}:\n{}",
@@ -3547,7 +3569,10 @@ fn a_launch_record_naming_the_worktree_claims_nothing() {
   let run = run_inflight_list(&world);
 
   assert_eq!(run.code, 0, "{}", run.describe());
-  for listed in ["topic.md\tcharliebot/launch-record", "dirty.md\tcharliebot/launch-record"] {
+  for listed in [
+    "topic.md\tcharliebot/launch-record\tabsent-on-origin-main",
+    "dirty.md\tcharliebot/launch-record\tabsent-on-origin-main",
+  ] {
     assert!(
       run.stdout.lines().any(|line| line == listed),
       "the in-flight list dropped the launch-record worktree path {listed}:\n{}",
@@ -3665,7 +3690,7 @@ fn a_no_record_worktree_with_one_edit_from_the_last_day_claims_all_its_paths() {
   let run = run_inflight_list(&world);
 
   assert_eq!(run.code, 0, "{}", run.describe());
-  for listed in ["tracked.md\tcharliebot/recent-edit", "untracked.md\tcharliebot/recent-edit"] {
+  for listed in ["tracked.md\tcharliebot/recent-edit", "untracked.md\tcharliebot/recent-edit\tabsent-on-origin-main"] {
     assert!(
       run.stdout.lines().any(|line| line == listed),
       "the in-flight list drops {listed} although one of the worktree's changes is a day old:\n{}",
@@ -3684,7 +3709,10 @@ fn a_no_record_worktree_with_a_commit_ahead_claims_its_paths_whatever_their_age(
   let run = run_inflight_list(&world);
 
   assert_eq!(run.code, 0, "{}", run.describe());
-  for listed in ["topic.md\tcharliebot/ahead-old-edits", "dirty.md\tcharliebot/ahead-old-edits"] {
+  for listed in [
+    "topic.md\tcharliebot/ahead-old-edits\tabsent-on-origin-main",
+    "dirty.md\tcharliebot/ahead-old-edits\tabsent-on-origin-main",
+  ] {
     assert!(
       run.stdout.lines().any(|line| line == listed),
       "the in-flight list drops {listed} from a worktree with an unmerged commit:\n{}",

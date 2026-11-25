@@ -4,8 +4,9 @@
 #   dev/improve/inflight-files.sh <own branch prefix>
 #
 # Print one `path<TAB>branch` line per claimed path: open pull request files, and the
-# committed and uncommitted paths of each worktree branch with a live claimant. The
-# branch is the one that carries the path: uncommitted work prints with the branch of
+# committed and uncommitted paths of each worktree branch with a live claimant. A claimed
+# path that origin/main has no object at carries a third field, `absent-on-origin-main`.
+# The branch is the one that carries the path: uncommitted work prints with the branch of
 # its dirty worktree, a path that an unmerged commit changes prints with that commit's
 # branch, and an open pull request's files print with its head branch. A path whose
 # only branch commits are patch-equivalent on main prints nothing, so a squash-landed
@@ -63,6 +64,28 @@ read_main_patch_ids() {
   done <<<"$ids"
 }
 
+# The third field of a claim whose path origin/main has no object at. A claim without it names a path origin/main has.
+readonly ABSENT_ON_MAIN_FIELD=absent-on-origin-main
+
+# Print one claim as `path<TAB>branch`, with the absent field when origin/main has no object at the path. The lookup
+# runs in the repository at root, any checkout of it, because main_ref lives in the refs that all checkouts share. An
+# unreadable repository stops the script. A missing path is no error: git answers it with the object name and `missing`.
+print_claim() {
+  local root=$1
+  local path=$2
+  local branch=$3
+  local answer
+  if ! answer=$(git -C "$root" cat-file --batch-check='%(objecttype)' <<<"$main_ref:$path"); then
+    printf 'cannot read %s:%s in %s\n' "$main_ref" "$path" "$root" >&2
+    exit 1
+  fi
+  if [[ $answer == "$main_ref:$path missing" ]]; then
+    printf '%s\t%s\t%s\n' "$path" "$branch" "$ABSENT_ON_MAIN_FIELD"
+  else
+    printf '%s\t%s\n' "$path" "$branch"
+  fi
+}
+
 # Print every path changed by one branch since its merge base, as `path<TAB>branch`. A commit whose
 # patch id the shared main map holds is patch-equivalent on main; a commit whose id the map does
 # not hold is an unmerged commit, and every path it touches prints with the branch. A path that only
@@ -107,7 +130,7 @@ list_committed_paths() {
   while IFS= read -r path; do
     [[ -n $path ]] || continue
     if [[ -n ${carried["$path"]:-} || -z ${landed["$path"]:-} ]]; then
-      printf '%s\t%s\n' "$path" "$branch"
+      print_claim "$root" "$path" "$branch"
     fi
   done <<<"$changed_paths"
 }
@@ -134,7 +157,7 @@ list_dirty_paths() {
   listing=$(dirty_paths "$worktree") || exit 1
   while IFS= read -r path; do
     [[ -n $path ]] || continue
-    printf '%s\t%s\n' "$path" "$branch"
+    print_claim "$worktree" "$path" "$branch"
   done <<<"$listing"
 }
 
@@ -477,7 +500,7 @@ list_open_pull_requests() {
     if [[ -n $files ]]; then
       while IFS= read -r file; do
         [[ -n $file ]] || continue
-        printf '%s\t%s\n' "$file" "$head"
+        print_claim "$main_root" "$file" "$head"
       done <<<"$files"
     fi
   done <<<"$pull_requests"

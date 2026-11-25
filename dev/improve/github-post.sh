@@ -44,8 +44,9 @@
 # (dev/improve/code-style-rules.sh). Other directions' pr-create takes no such check.
 #
 # pr-create and pr-merge also refuse a diff that changes a path another branch claims in the round's in-flight list,
-# $IMPROVE_LAUNCH_DIR/inflight-files.txt, the list Step 3 reads. The pull request's own head branch claims nothing for
-# itself. A refusal names each claimed path with its claimant and sends nothing.
+# $IMPROVE_LAUNCH_DIR/inflight-files.txt, the list Step 3 reads. A claim that the list marks absent-on-origin-main does
+# not refuse. The pull request's own head branch claims nothing for itself. A refusal names each claimed path with its
+# claimant and sends nothing.
 #
 # usage:
 #   github-post.sh pr-create --title <title> --body-file <file> [--evidence-dir <dir>] [--draft] [gh pr create args...]
@@ -131,12 +132,13 @@ require_readable() {  # require_readable <path> <what>
 }
 
 # check_inflight_claims <changed paths file> <head branch>: return 1 after naming each path that the diff changes and
-# another branch claims. The claims come from the round's in-flight list, the file the runner writes at launch and
-# Step 3 reads, so the check and the round's own avoidance share one source. The head branch never refuses itself.
+# another branch claims on a path origin/main has. A claim the list marks absent-on-origin-main does not refuse. The
+# claims come from the round's in-flight list, the file the runner writes at launch and Step 3 reads, so the check and
+# the round's own avoidance share one source. The head branch never refuses itself.
 check_inflight_claims() {
   local changed=$1 head=$2
   local -A changed_paths=()
-  local path claimed branch found=0
+  local path claimed branch absent found=0
   [[ -n ${IMPROVE_LAUNCH_DIR:-} ]] || {
     printf 'Cannot check the claims of the pull request: IMPROVE_LAUNCH_DIR is unset; nothing was sent or merged.\n' >&2
     exit 2
@@ -147,9 +149,10 @@ check_inflight_claims() {
     [[ -n $path ]] || continue
     changed_paths["$path"]=1
   done < "$changed"
-  while IFS=$'\t' read -r claimed branch; do
+  while IFS=$'\t' read -r claimed branch absent; do
     [[ -n $claimed && -n ${changed_paths["$claimed"]:-} ]] || continue
     [[ $branch != "$head" ]] || continue
+    [[ $absent != absent-on-origin-main ]] || continue
     printf 'claimed path %s, claimed by %s\n' "$claimed" "$branch" >&2
     found=1
   done < "$list"

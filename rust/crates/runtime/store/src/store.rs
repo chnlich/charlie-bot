@@ -19,7 +19,8 @@ use serde_json::{Map, Value};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::aggregator::{MessageAggregator, builtin_event_types};
+use crate::aggregator::MessageAggregator;
+use crate::chat_event_type::ChatEventType;
 use crate::control::ControlLock;
 use crate::event_state::EventReadCaches;
 use crate::event_types::SharedChatEvent;
@@ -471,7 +472,7 @@ impl Store {
     let runtime_hooks = hooks.runtime_events.ok_or_else(|| StoreError::new("store requires runtime event hooks"))?;
     let mut event_renderers = HashMap::new();
     for (event_type, renderer) in runtime_hooks.event_renderers()? {
-      if builtin_event_types().contains(&event_type.as_str()) {
+      if ChatEventType::of(Some(event_type.as_str())).is_builtin() {
         return Err(StoreError::new(format!("event type {event_type:?} already has a built-in renderer")));
       }
       if event_renderers.insert(event_type.clone(), renderer).is_some() {

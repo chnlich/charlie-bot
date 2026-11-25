@@ -609,9 +609,11 @@ accounting (repaints apart from paints, and the span's counts) run in a sandbox 
 
 Plan 6 v4 section 4.2's return cells. Each repetition publishes one release (a comment appended to the trial tree's
 served `web/static/js/config.js`, then the trial server restarted from its own launch record in `/proc`), posts one
-probe message while the server is down, and times the measured tab's return to its catch-up: the page's first
-`catchup_complete` after its last document started, or after the replacement's `server_ready` when it never reloaded.
-The probe row's paint is reported beside it, not gated.
+probe message after the replacement logs `server_ready`, and times the measured tab's return to its catch-up: the
+page's first `catchup_complete` after its last document started, or after the replacement's `server_ready` when it
+never reloaded.
+The probe row's paint is reported beside it, not gated. The bench waits for the probe session and its follow-on runs to
+finish before another restart and leaves the final server running until the trial wrapper has waited for every run.
 
 | Cell | The tab | Return point | Gated metric (target <= 2000 ms, median) | Report only |
 |---|---|---|---|---|
@@ -624,8 +626,8 @@ The probe row's paint is reported beside it, not gated.
 
 A hidden cell whose phase never comes is shown at the 120 s cap, and its record says `capped: true`. Each repetition's
 `catchupBytes` is the page's own count of its socket replay (the telemetry's `catchup_bytes`). A hidden repetition
-whose count is 0 caught up with nothing to replay, so it is invalid: rerun it. `restart.mjs` starts the replacement
-server and stops it in `bench.mjs`'s `finally`.
+whose count is 0 caught up with nothing to replay, so it is invalid: rerun it. `restart.mjs` restarts the trial server;
+the trial wrapper follows the replacement PID and stops it after every run has ended.
 
 ## Host requirements
 

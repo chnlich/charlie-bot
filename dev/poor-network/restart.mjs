@@ -56,6 +56,14 @@ function servingPid() {
   return serving.pid;
 }
 
+function servingPidFile() {
+  const file = process.env.CHARLIEBOT_SERVE_PID_FILE;
+  if (!file) {
+    throw new Error('CHARLIEBOT_SERVE_PID_FILE must name the trial server pid file');
+  }
+  return file;
+}
+
 // The running server's launch, read from /proc before it stops: the same executable, arguments, environment, working
 // directory and log file its replacement needs.
 function launchOf(pid) {
@@ -118,6 +126,7 @@ function readyTimeSince(log, offset) {
 
 // Stops the serving server and starts the same launch again. Returns the replacement's server_ready time.
 async function restartServer(ctx) {
+  const pidFile = servingPidFile();
   const pid = servingPid();
   const launch = launchOf(pid);
   process.kill(pid, 'SIGTERM');
@@ -130,7 +139,16 @@ async function restartServer(ctx) {
     stdio: ['ignore', out, out],
   });
   fs.closeSync(out);
-  serving = { pid: child.pid, child };
+  await new Promise((resolve, reject) => {
+    child.once('spawn', resolve);
+    child.once('error', reject);
+  });
+  const replacementPid = child.pid;
+  const temporaryPidFile = `${pidFile}.${process.pid}.tmp`;
+  fs.writeFileSync(temporaryPidFile, `${replacementPid}\n`);
+  fs.renameSync(temporaryPidFile, pidFile);
+  child.unref();
+  serving = { pid: replacementPid };
   const readyMs = await poll(async () => readyTimeSince(launch.log, offset), SERVER_READY_TIMEOUT_MS, 'server_ready');
   await poll(async () => {
     try {
@@ -161,6 +179,11 @@ async function servedAssetVersion(ctx, sessionId) {
     throw new Error(`GET the chat page answered ${status}`);
   }
   return assetVersionOf(body);
+}
+
+async function waitForOpenSessionIdle(ctx, sessionId) {
+  const runs = await ctx.api.runs(sessionId);
+  if (runs.length > 0) await ctx.api.waitForIdle(sessionId, SETTLE_TIMEOUT_MS);
 }
 
 // The probe state of the measured page, read in one evaluation. A navigation or a frozen page answers null.
@@ -350,6 +373,7 @@ async function restartRep(ctx, name) {
     if (cell.hidden) {
       await tabs.show(other);
     }
+    await waitForOpenSessionIdle(ctx, sessions.open.id);
     const tag = `restart probe ${Math.random().toString(16).slice(2, 10)}`;
     const bootAt0 = (await readPage(tab, tag)).boot;
     const version0 = await tab.evaluate('STATIC_ASSET_VERSION');
@@ -414,6 +438,7 @@ async function restartRep(ctx, name) {
       'the catch-up that brings the page current',
     );
     const telemetry = await poll(async () => catchupBytesAfter(tab, readyMs), SHOW_TIMEOUT_MS, 'the catch-up telemetry');
+    await ctx.api.waitForIdle(sessions.open.id, SETTLE_TIMEOUT_MS);
     return {
       cell: name,
       serverReadyMs: readyMs - releaseAt,
@@ -441,16 +466,3 @@ async function restartRep(ctx, name) {
 export const RESTART_SCENARIOS = Object.freeze(
   Object.fromEntries(Object.keys(CELLS).map((name) => [name, (ctx) => restartRep(ctx, name)])),
 );
-
-// Stops the replacement server the bench started, if any, so the trial finds no process of its own left running.
-export async function stopRestartServer() {
-  if (serving === null || serving.child === null) {
-    return;
-  }
-  const pid = serving.child.pid;
-  if (alive(pid)) {
-    process.kill(pid, 'SIGTERM');
-    await poll(async () => !alive(pid), SERVER_STOP_TIMEOUT_MS, `server ${pid} to stop`);
-  }
-  serving = null;
-}

@@ -40,7 +40,7 @@ import {
 } from './scenarios.mjs';
 import { expectedTargetsFrom } from './newest-row.mjs';
 import { OPEN_CONDITIONS, formatOpen, openPrepare, openProbe, openScenario } from './open.mjs';
-import { RESTART_SCENARIOS, stopRestartServer } from './restart.mjs';
+import { RESTART_SCENARIOS } from './restart.mjs';
 import { BenchGate, LOCK_TIMEOUT_EXIT, LockWaitTimeout } from './step-gate.mjs';
 import { closeAllLive } from './live.mjs';
 import { RateGateError, Segments, StepCapped } from './segments.mjs';
@@ -562,7 +562,6 @@ async function main() {
   } finally {
     trials.stop();
     try {
-      await stopRestartServer();
       await closeAllLive();
     } catch (caught) {
       status = 'failed';

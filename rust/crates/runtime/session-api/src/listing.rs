@@ -1497,7 +1497,7 @@ pub(crate) fn search_columns_text(
 pub const CHANNEL_PLATFORM: &str = "channel_platform";
 
 /// The metadata rendered as the response model does, excluding `task.goal`. `channel_platform` names the platform of a
-/// chat-thread session, so the web client never reads the platform origin fields itself.
+/// chat-thread session, so a sidebar row never reads the platform origin fields itself.
 pub(crate) fn metadata_value(store: &Store, meta: &SessionMetadata) -> StoreResult<Value> {
   let mut value = store.session_metadata_value(meta);
   remove_task_goal(&mut value);

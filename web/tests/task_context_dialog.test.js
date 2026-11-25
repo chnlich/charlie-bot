@@ -413,3 +413,92 @@ test('an unbound session paints the dialog byte-identical to a dialog without th
   assert.equal(unbound.body.innerHTML, plain.body.innerHTML);
   assert.doesNotMatch(unbound.body.innerHTML, /Scheduled task/);
 });
+
+// The chat_threads package's binding script, on the page after the sidebar namespace. It reads two page helpers: the
+// platform label (chat/shared.js) and the reader's time label (utils.js). The harness stubs both with fixed values, so
+// the tests pin what the section reads from the session. Loading the real chat/shared.js would replace this harness's
+// escapeHtml with one that needs a DOM.
+const CHANNEL_BINDING_JS = readPackageStatic('features', 'chat_threads', 'channel-binding.js');
+
+function loadChannelBindingModule(context) {
+  const labels = {slack: 'Slack', discord: 'Discord', feishu: 'Feishu'};
+  Object.assign(context.Chat, {platformLabel: (platform) => labels[platform]});
+  context.formatTimeLabel = (isoStr) => `at ${isoStr}`;
+  vm.runInContext(CHANNEL_BINDING_JS, context, {filename: 'channel-binding.js'});
+}
+
+// Each platform's stored origin fields as the session detail carries them. The values are synthetic.
+const BINDING_CASES = [
+  {
+    platform: 'Slack',
+    origin: {slack_origin: {team_id: 'T0SYNTH', channel_id: 'C0SYNTH', thread_ts: '1700000000.000100'}},
+    rows: [['Team', 'T0SYNTH'], ['Channel', 'C0SYNTH'], ['Thread', '1700000000.000100']],
+  },
+  {
+    platform: 'Discord',
+    origin: {discord_origin: {guild_id: 'G0SYNTH', parent_channel_id: 'C0SYNTH', thread_id: '900000000000000001'}},
+    rows: [['Guild', 'G0SYNTH'], ['Channel', 'C0SYNTH'], ['Thread', '900000000000000001']],
+  },
+  {
+    platform: 'Feishu',
+    origin: {feishu_origin: {tenant_key: 'tk-SYNTH', chat_id: 'oc_SYNTH', root_id: 'om_SYNTH'}},
+    rows: [['Tenant', 'tk-SYNTH'], ['Chat', 'oc_SYNTH'], ['Root message', 'om_SYNTH']],
+  },
+];
+
+// A thread-bound session shows its stored origin as a read-only section between TASK and the next run context. A stored
+// key the origin lacks (a Feishu thread id before the first bot reply) gets no row.
+for (const {platform, origin, rows} of BINDING_CASES) {
+  test(`a ${platform} thread session paints its stored origin as a read-only Channel binding section`, async () => {
+    const h = buildHarness({
+      '/api/sessions/s1': jsonResponse(200, {...DETAIL, created_at: '2026-11-23T10:29:00Z', ...origin}),
+      '/api/sessions/s1/effective-prompt': jsonResponse(200, PREVIEW),
+    }, {beforeModals: loadChannelBindingModule});
+
+    await h.context.openTaskContextModal('s1');
+
+    const html = h.body.innerHTML;
+    const goal = html.indexOf('Migrate users to the new schema');
+    const section = html.indexOf('Channel binding');
+    const next = html.indexOf('Next run context');
+    assert.ok(goal >= 0 && goal < section && section < next, html);
+    const sectionHtml = html.slice(section, next);
+    assert.match(sectionHtml, new RegExp(`<div class="break-words">${platform}</div>`), 'the platform row');
+    for (const [label, value] of rows) {
+      assert.match(sectionHtml,
+        new RegExp(`>${label}</div><div class="break-words"><span class="font-mono">${value}</span>`));
+    }
+    assert.match(sectionHtml, />Created</, 'the creation time row');
+    assert.match(sectionHtml, new RegExp(`Read-only: the binding is managed in ${platform}\\.`));
+    assert.doesNotMatch(sectionHtml, /<(input|select|textarea|button)\b/, 'the section holds no control');
+  });
+}
+
+test('a Feishu session without a thread id paints no Thread row', async () => {
+  const h = buildHarness({
+    '/api/sessions/s1': jsonResponse(200, {
+      ...DETAIL, feishu_origin: {tenant_key: 'tk-SYNTH', chat_id: 'oc_SYNTH', root_id: 'om_SYNTH'},
+    }),
+    '/api/sessions/s1/effective-prompt': jsonResponse(200, PREVIEW),
+  }, {beforeModals: loadChannelBindingModule});
+
+  await h.context.openTaskContextModal('s1');
+
+  assert.doesNotMatch(h.body.innerHTML, />Thread<\/div>/);
+});
+
+// A session bound to no platform gets the dialog byte-identical to a dialog without the binding package.
+test('a plain web session paints the dialog byte-identical to one without the binding package', async () => {
+  const routes = () => ({
+    '/api/sessions/s1': jsonResponse(200, DETAIL),
+    '/api/sessions/s1/effective-prompt': jsonResponse(200, PREVIEW),
+  });
+  const plain = buildHarness(routes());
+  await plain.context.openTaskContextModal('s1');
+  const web = buildHarness(routes(), {beforeModals: loadChannelBindingModule});
+
+  await web.context.openTaskContextModal('s1');
+
+  assert.equal(web.body.innerHTML, plain.body.innerHTML);
+  assert.doesNotMatch(web.body.innerHTML, /Channel binding/);
+});

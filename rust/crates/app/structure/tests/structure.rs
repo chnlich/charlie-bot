@@ -963,6 +963,7 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_core::repo_root::CREDENTIALS_EXAMPLE_FILE_NAME`; home provisioning seeds it.",
   },
   OwnerRow { name: "sessions", owner: "infra/core", hint: "Use `charliebot_core::config::sessions_dir_in`." },
+  OwnerRow { name: "charliebot_runs", owner: "infra/core", hint: "Use `charliebot_core::ssh::REMOTE_RUNS_DIR`." },
   OwnerRow { name: ".charliebot", owner: "infra/core", hint: "Use `charliebot_core::home::DEFAULT_HOME_DIR_NAME`." },
   OwnerRow { name: "prompt_bodies", owner: "infra/core", hint: "Use `charliebot_core::home::PROMPT_BODIES_DIR_NAME`." },
   OwnerRow {

@@ -13,6 +13,15 @@ pub const CONNECT_TIMEOUT_SECONDS: u32 = 10;
 /// How long a ControlMaster stays up after its last use, in seconds.
 pub const CONTROL_PERSIST_SECONDS: u32 = 1200;
 
+/// The remote directory that holds the files of each launch and of each trigger watch, under the remote home.
+///
+/// `$HOME` is expanded by the remote shell, so the word stays unexpanded here. The launch reads the expanded home back,
+/// so the launch record and the watch targets hold absolute paths. The directory sits under the home, not `/tmp`: a
+/// login pod's `/tmp` is local disk that a pod restart drops, and its home is an export that survives the restart.
+/// One launch stages its log, exit file and PID file in `REMOTE_RUNS_DIR/<launch id>`, and one watch stages its end
+/// files in `REMOTE_RUNS_DIR/watch-<trigger id>`.
+pub const REMOTE_RUNS_DIR: &str = "$HOME/charliebot_runs";
+
 /// `~/.ssh/controlmasters` of the process's home.
 pub fn control_dir() -> PathBuf {
   PathBuf::from(paths::expanduser("~")).join(".ssh").join("controlmasters")

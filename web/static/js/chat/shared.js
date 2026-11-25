@@ -261,20 +261,21 @@ function webBadgeHtml() {
   return badgeHtml('Web', 'bg-slate-700 text-slate-100 border-slate-600');
 }
 
-// The thread entry of FOR_YOU_RULE (the store's for_you::page_rule): the reply role, the platforms, the legacy line
-// prefix, the summon role and the nudge key. The server's is_thread_row reads the same values.
-const THREAD_RULE = FOR_YOU_RULE.thread;
+// The thread entry of FOR_YOU_RULE (the store's for_you::page_rule) holds the reply role, the platforms, the legacy line
+// prefix, the summon role and the nudge key. The server's is_thread_row reads the same values. The rule is read inside
+// each reader, as isErrorRow reads its entry, so a harness that loads this file before the page's rule still loads it.
 
 // A thread reply as the chat shows it, or null for any other message: {platform, content}. A legacy line is a system
 // line that names its platform as `<legacy_prefix><Label>: `. A cached history still holds it, so the reader parses it
 // at read time: the history is never rewritten.
 function threadReplyOf(msg) {
-  if (msg.role === THREAD_RULE.reply_role) return {platform: msg.platform, content: String(msg.content ?? '')};
+  const thread = FOR_YOU_RULE.thread;
+  if (msg.role === thread.reply_role) return {platform: msg.platform, content: String(msg.content ?? '')};
   if (msg.role !== FOR_YOU_RULE.error.role) return null;
   const text = String(msg.content || '');
-  if (!text.startsWith(THREAD_RULE.legacy_prefix)) return null;
-  for (const platform of THREAD_RULE.platforms) {
-    const head = THREAD_RULE.legacy_prefix + platformLabel(platform) + ': ';
+  if (!text.startsWith(thread.legacy_prefix)) return null;
+  for (const platform of thread.platforms) {
+    const head = thread.legacy_prefix + platformLabel(platform) + ': ';
     if (text.startsWith(head)) return {platform, content: text.slice(head.length)};
   }
   return null;
@@ -283,10 +284,11 @@ function threadReplyOf(msg) {
 // The platform of an inbound summon: a summon-role message that carries a platform block without the nudge key. A nudge
 // wakes a session on a thread it already joined, so it is not a summon.
 function summonPlatformOf(msg) {
-  if (msg.role !== THREAD_RULE.summon_role) return null;
-  for (const platform of THREAD_RULE.platforms) {
+  const thread = FOR_YOU_RULE.thread;
+  if (msg.role !== thread.summon_role) return null;
+  for (const platform of thread.platforms) {
     const block = msg[platform];
-    if (block && typeof block === 'object' && !Object.hasOwn(block, THREAD_RULE.nudge_key)) return platform;
+    if (block && typeof block === 'object' && !Object.hasOwn(block, thread.nudge_key)) return platform;
   }
   return null;
 }

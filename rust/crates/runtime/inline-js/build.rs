@@ -1,5 +1,6 @@
 //! Builds the table the library embeds: one row per loader-served `.js` name, with the sha256 of the source the loader
-//! reads for it and, for each compressed name, that source's minified text.
+//! reads for it and, for each compressed name, that source's minified text. It also lists, as SERVED_BODIES, each
+//! compressed name whose static file is the source the row was built from: the module bodies the node suites read.
 //!
 //! A source resolves the way the loader resolves it: the first tree that holds the name wins, in the order web/templates,
 //! the package templates, web/static and the package static trees. Two packages that hold one name in the same tree
@@ -44,18 +45,39 @@ fn main() {
   }
 
   let mut table = String::from("pub static ROWS: &[Row] = &[\n");
+  let mut bodies = String::from("pub static SERVED_BODIES: &[(&str, &str)] = &[\n");
   for name in names {
     let path = resolve(&web, &packages, name);
     let bytes = fs::read(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
     let source = std::str::from_utf8(&bytes).unwrap_or_else(|error| panic!("{}: not UTF-8: {error}", path.display()));
     let sha256 = hex(&Sha256::digest(&bytes));
-    let minified =
-      if names::COMPRESSED.contains(&name) { format!("Some({:?})", minify(&path, source)) } else { "None".to_string() };
+    let minified = if names::COMPRESSED.contains(&name) { Some(minify(&path, source)) } else { None };
+    if let Some(text) = &minified
+      && serves_module_body(&web, name, &sha256)
+    {
+      writeln!(bodies, "  ({name:?}, {text:?}),").expect("writing to a String cannot fail");
+    }
+    let minified = match &minified {
+      Some(text) => format!("Some({text:?})"),
+      None => "None".to_string(),
+    };
     writeln!(table, "  Row {{ name: {name:?}, sha256: {sha256:?}, minified: {minified} }},")
       .expect("writing to a String cannot fail");
   }
   table.push_str("];\n");
-  fs::write(out_dir.join("inline_js_table.rs"), table).expect("OUT_DIR is writable");
+  bodies.push_str("];\n");
+  fs::write(out_dir.join("inline_js_table.rs"), format!("{table}{bodies}")).expect("OUT_DIR is writable");
+}
+
+/// Whether the static file of `name` is the source its row was built from. The loader serves that file's body, so
+/// its minified text stands in for the file in the node suites.
+fn serves_module_body(web: &Path, name: &str, sha256: &str) -> bool {
+  let static_file = web.join("static").join(name);
+  if !static_file.is_file() {
+    return false;
+  }
+  let bytes = fs::read(&static_file).unwrap_or_else(|error| panic!("{}: {error}", static_file.display()));
+  hex(&Sha256::digest(&bytes)) == sha256
 }
 
 /// The file the loader serves for `name`: the first tree that holds it, and one file per package tree.

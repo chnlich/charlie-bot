@@ -7,6 +7,7 @@ use charliebot_core::int_text;
 use charliebot_core::text_repr::value_str;
 use serde_json::{Value, json};
 
+use crate::chat_event_type::{ChatEventType, SystemSubtype, log_unnamed};
 use crate::hooks::EventRenderer;
 use crate::message_events;
 use crate::metadata::{BASE_BRANCH_FIELD, TASK_STATE};
@@ -21,40 +22,6 @@ pub use crate::tool_rows::TOOL_PREVIEW_CHARS;
 // row's check or cross from it, so the content carries only the task and the message.
 const HANDLER_OK_KIND: &str = "handler_ok";
 const HANDLER_ERROR_KIND: &str = "handler_error";
-
-const BUILTIN_EVENT_TYPES: &[&str] = &[
-  event_types::MASTER_DONE,
-  event_types::ASSISTANT_ERROR,
-  event_types::ERROR,
-  event_types::TASK_DELEGATED,
-  event_types::WORKER_SUMMARY,
-  event_types::HANDLER_RESULT,
-  event_types::CONTEXT_COMPACTED,
-  event_types::CONTEXT_COMPACT_FAILED,
-  event_types::RESUME_CONTEXT_DROPPED,
-  event_types::SYSTEM,
-  event_types::CLONE_START,
-  event_types::SCHEDULED_TRIGGER,
-  event_types::AGENT_MESSAGE,
-  event_types::BACKEND_SWITCHED,
-  event_types::QUOTA_FAILOVER,
-  event_types::BACKEND_OVERLAY_INACTIVE,
-  event_types::BACKEND_OVERLAY_UNDECLARED,
-  event_types::MODEL_FALLBACK_NOTICE,
-  event_types::CHILD_REPORT,
-  event_types::RUN_HEADER,
-  event_types::RUN_END,
-  event_types::RUN_ERROR,
-  event_types::RUN_DELIVERY,
-  event_types::TASK_CLOSED,
-  event_types::TASK_REOPENED,
-  event_types::TASK_INPUT_ACKNOWLEDGED,
-];
-
-/// Event types rendered by the built-in message table.
-pub fn builtin_event_types() -> &'static [&'static str] {
-  BUILTIN_EVENT_TYPES
-}
 
 /// Convert raw chat events into committed message and in-progress stream frames.
 ///
@@ -217,16 +184,17 @@ impl MessageAggregator {
     if !event.is_object() {
       return Err(StoreError::new("chat event must be a JSON object"));
     }
-    let event_type = event.field("type").and_then(EventFields::as_str_field);
+    let event_type = ChatEventType::of(event.field("type").and_then(EventFields::as_str_field));
     let event_id =
       event.field("id").filter(|value| is_truthy(*value)).map(event_str).unwrap_or_else(|| format!("legacy:{index}"));
     match event_type {
-      Some(event_types::USER) => self.feed_user(event, index, &event_id),
-      Some(event_types::ASSISTANT) => self.feed_assistant(event, index, &event_id),
-      Some(event_types::TOOL_USE) => self.feed_tool_use(event, index, &event_id),
-      Some(event_types::TOOL_RESULT) => self.feed_tool_result(event, index),
-      Some(event_types::THINKING) => self.feed_thinking(event, index, &event_id),
-      _ => self.feed_rendered(event, event_type, index, &event_id),
+      ChatEventType::User => self.feed_user(event, index, &event_id),
+      ChatEventType::Assistant => self.feed_assistant(event, index, &event_id),
+      ChatEventType::ToolUse => self.feed_tool_use(event, index, &event_id),
+      ChatEventType::ToolResult => self.feed_tool_result(event, index),
+      ChatEventType::Thinking => self.feed_thinking(event, index, &event_id),
+      ChatEventType::Untyped => Ok(Vec::new()),
+      event_type => self.feed_rendered(event, event_type, index, &event_id),
     }
   }
 
@@ -391,31 +359,28 @@ impl MessageAggregator {
     Ok(self.stream_delta())
   }
 
+  /// Renders a record that `feed_at` does not take. A built-in type renders through `render_builtin`. Any other type
+  /// renders through the renderer registered under its name, and a type with none is not shown.
   fn feed_rendered<E: EventFields>(
     &mut self,
     event: &E,
-    event_type: Option<&str>,
+    event_type: ChatEventType,
     index: usize,
     event_id: &str,
   ) -> StoreResult<Vec<Value>> {
-    let Some(event_type) = event_type else { return Ok(Vec::new()) };
-    if event_type == event_types::SYSTEM {
-      if let Some(subtype) = event.field("subtype").and_then(EventFields::as_str_field)
-        && matches!(subtype, event_types::TASK_STARTED | event_types::TASK_PROGRESS | event_types::TASK_NOTIFICATION)
-      {
-        return self.feed_subagent_event(event, subtype);
-      }
-      let Some(mut message) = render_system(event) else { return Ok(Vec::new()) };
-      let mut deltas = self.flush_to_message_delta();
-      add_message_metadata(&mut message, event, index, event_id)?;
-      deltas.push(json!({"type": "message", "message": message}));
-      return Ok(deltas);
+    if event_type == ChatEventType::System {
+      return self.feed_system(event, index, event_id);
     }
-    if !builtin_event_types().contains(&event_type) && !self.event_renderers.contains_key(event_type) {
+    let renderer =
+      event.field("type").and_then(EventFields::as_str_field).and_then(|name| self.event_renderers.get(name).cloned());
+    if !event_type.is_builtin() && renderer.is_none() {
+      if let ChatEventType::Unnamed(name) = &event_type {
+        log_unnamed("feed_rendered", "event type", name, record_id(event));
+      }
       return Ok(Vec::new());
     }
     // A run that ends leaves no subagent running: its cards show stopped, committed drafts included.
-    let ends_run = matches!(event_type, event_types::MASTER_DONE | event_types::RUN_END | event_types::RUN_ERROR);
+    let ends_run = matches!(event_type, ChatEventType::MasterDone | ChatEventType::RunEnd | ChatEventType::RunError);
     let mut deltas = if ends_run { self.tool_rows.end_run() } else { Vec::new() };
     if ends_run {
       // The stop lands in the open draft's rows right before the commit closes it. The live commit leaves out the rows
@@ -426,15 +391,43 @@ impl MessageAggregator {
     if ends_run {
       self.tool_rows.forget_committed();
     }
-    let rendered = if builtin_event_types().contains(&event_type) {
-      render_builtin(&self.backends, event_type, event)?
-    } else {
-      self.event_renderers[event_type].render(&event.to_owned_value())?
+    let rendered = match renderer {
+      Some(renderer) => renderer.render(&event.to_owned_value())?,
+      None => render_builtin(&self.backends, &event_type, event)?,
     };
     let Some(mut message) = rendered else { return Ok(deltas) };
     add_message_metadata(&mut message, event, index, event_id)?;
     deltas.push(json!({"type": "message", "message": message}));
     Ok(deltas)
+  }
+
+  /// A `system` record, by its subtype. A subagent record updates its tool row, and command progress shows a system
+  /// line. The other subtypes, and a record with no subtype, are not shown.
+  fn feed_system<E: EventFields>(&mut self, event: &E, index: usize, event_id: &str) -> StoreResult<Vec<Value>> {
+    let subtype = SystemSubtype::of(event.field("subtype").and_then(EventFields::as_str_field));
+    match subtype {
+      SystemSubtype::TaskStarted | SystemSubtype::TaskProgress | SystemSubtype::TaskNotification => {
+        self.feed_subagent_event(event, subtype)
+      }
+      SystemSubtype::CommandProgress => {
+        let mut message = render_command_progress(event);
+        let mut deltas = self.flush_to_message_delta();
+        add_message_metadata(&mut message, event, index, event_id)?;
+        deltas.push(json!({"type": "message", "message": message}));
+        Ok(deltas)
+      }
+      SystemSubtype::Init
+      | SystemSubtype::CompactBoundary
+      | SystemSubtype::ContextReading
+      | SystemSubtype::Status
+      | SystemSubtype::HangDiagnostics
+      | SystemSubtype::ThinkingTokens
+      | SystemSubtype::Plain => Ok(Vec::new()),
+      SystemSubtype::Unnamed(name) => {
+        log_unnamed("feed_system", "system subtype", &name, record_id(event));
+        Ok(Vec::new())
+      }
+    }
   }
 
   fn flush_to_message_delta(&mut self) -> Vec<Value> {
@@ -536,25 +529,35 @@ impl MessageAggregator {
 
   /// A `task_started`, `task_progress` or `task_notification`: the row that the subagent hangs under takes the
   /// subagent's fields. The event names that row by its tool_use id.
-  fn feed_subagent_event<E: EventFields>(&mut self, event: &E, subtype: &str) -> StoreResult<Vec<Value>> {
+  fn feed_subagent_event<E: EventFields>(&mut self, event: &E, subtype: SystemSubtype) -> StoreResult<Vec<Value>> {
     let tool_use_id = required_str(event, event_types::TOOL_USE_ID)?;
     let usage = subagent_usage(event);
     let mut deltas = match subtype {
-      event_types::TASK_STARTED => {
+      SystemSubtype::TaskStarted => {
         let kind = string_default(event, "subagent_type", "");
         let description = string_default(event, "description", "");
         let prompt = string_default(event, "prompt", "");
         self.tool_rows.update_subagent(tool_use_id, |subagent| subagent.start(&kind, &description, &prompt))
       }
-      event_types::TASK_PROGRESS => {
+      SystemSubtype::TaskProgress => {
         let description = event.field("description").and_then(EventFields::as_str_field);
         self.tool_rows.update_subagent(tool_use_id, |subagent| subagent.progress(description, usage))
       }
-      event_types::TASK_NOTIFICATION => {
+      SystemSubtype::TaskNotification => {
         let status = SubagentStatus::from_notification(&string_default(event, "status", ""))?;
         self.tool_rows.update_subagent(tool_use_id, |subagent| subagent.finish(status, usage))
       }
-      other => return Err(StoreError::new(format!("{other} is not a subagent event"))),
+      other @ (SystemSubtype::Init
+      | SystemSubtype::CompactBoundary
+      | SystemSubtype::ContextReading
+      | SystemSubtype::CommandProgress
+      | SystemSubtype::Status
+      | SystemSubtype::HangDiagnostics
+      | SystemSubtype::ThinkingTokens
+      | SystemSubtype::Plain
+      | SystemSubtype::Unnamed(_)) => {
+        return Err(StoreError::new(format!("{other:?} is not a subagent event")));
+      }
     };
     deltas.extend(self.stream_delta());
     Ok(deltas)
@@ -656,30 +659,31 @@ fn subagent_usage<E: EventFields>(event: &E) -> Usage {
   Usage { tool_uses: count("tool_uses"), duration_ms: count("duration_ms"), total_tokens: count("total_tokens") }
 }
 
-fn render_system<E: EventFields>(event: &E) -> Option<Value> {
-  if event.field("subtype").and_then(EventFields::as_str_field) != Some(event_types::COMMAND_PROGRESS) {
-    return None;
-  }
-  Some(
-    json!({"role": "system", "content": event.field("content").map(EventFields::to_owned_value).unwrap_or_else(|| json!(""))}),
-  )
+/// The system line that a command-progress record shows.
+fn render_command_progress<E: EventFields>(event: &E) -> Value {
+  json!({"role": "system", "content": event.field("content").map(EventFields::to_owned_value).unwrap_or_else(|| json!(""))})
+}
+
+/// The stored event's id, which a log line names as its source.
+fn record_id<E: EventFields>(event: &E) -> Option<&str> {
+  event.field("id").and_then(EventFields::as_str_field)
 }
 
 fn render_builtin<E: EventFields>(
   backends: &BackendsConfig,
-  event_type: &str,
+  event_type: &ChatEventType,
   event: &E,
 ) -> StoreResult<Option<Value>> {
   let rendered = match event_type {
-    event_types::MASTER_DONE => json!({
+    ChatEventType::MasterDone => json!({
       "role": "separator",
       event_types::THINKING_SECONDS: event.field(event_types::THINKING_SECONDS).map(EventFields::to_owned_value).unwrap_or(Value::Null),
     }),
-    event_types::ASSISTANT_ERROR => json!({
+    ChatEventType::AssistantError => json!({
       "role": "system",
       "content": format!("Error: {}", event.field("content").map_or_else(String::new, event_str)),
     }),
-    event_types::ERROR => {
+    ChatEventType::Error => {
       let content = event
         .field("content")
         .filter(|value| is_truthy(*value))
@@ -688,7 +692,7 @@ fn render_builtin<E: EventFields>(
         .unwrap_or_else(|| json!("Unknown error"));
       json!({"role": "system", "content": format!("Error: {}", event_str(&content))})
     }
-    event_types::TASK_DELEGATED => json!({
+    ChatEventType::TaskDelegated => json!({
       "role": event_types::TASK_DELEGATED,
       "content": "Task delegated",
       "thread_id": event.field("thread_id").map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
@@ -701,7 +705,7 @@ fn render_builtin<E: EventFields>(
       // A falsy timestamp falls back to created_at, so both fields absent give null.
       "timestamp": event.field("timestamp").filter(|value| is_truthy(*value)).or_else(|| event.field("created_at")).map(EventFields::to_owned_value).unwrap_or(Value::Null),
     }),
-    event_types::WORKER_SUMMARY => {
+    ChatEventType::WorkerSummary => {
       let mut message = json!({
         "role": event_types::WORKER_SUMMARY,
         "content": event.field("content").map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
@@ -712,7 +716,7 @@ fn render_builtin<E: EventFields>(
       }
       message
     }
-    event_types::HANDLER_RESULT => {
+    ChatEventType::HandlerResult => {
       let kind = if event.field("status").and_then(EventFields::as_str_field) == Some(event_types::HANDLER_STATUS_OK) {
         HANDLER_OK_KIND
       } else {
@@ -724,8 +728,8 @@ fn render_builtin<E: EventFields>(
         "content": format!("{}: {}", string_default(event, "task", ""), string_default(event, "message", "")),
       })
     }
-    event_types::CONTEXT_COMPACTED => render_context_compacted(event)?,
-    event_types::CONTEXT_COMPACT_FAILED => {
+    ChatEventType::ContextCompacted => render_context_compacted(event)?,
+    ChatEventType::ContextCompactFailed => {
       let trigger = event.field("trigger").filter(|value| is_truthy(*value)).and_then(EventFields::as_str_field);
       let note = model_note(event);
       let mut head = trigger.map_or_else(|| "Compaction".to_string(), |trigger| format!("Compaction ({trigger})"));
@@ -738,7 +742,7 @@ fn render_builtin<E: EventFields>(
       let content = error.map_or(head.clone(), |error| format!("{head} — {}", event_str(error)));
       json!({"role": "system", "kind": event_types::CONTEXT_COMPACT_FAILED, "content": content})
     }
-    event_types::RESUME_CONTEXT_DROPPED => {
+    ChatEventType::ResumeContextDropped => {
       let reason = event.field("reason").and_then(EventFields::as_str_field);
       let head = match reason {
         Some(event_types::RESUME_REASON_ANCHOR_MISSING) => "Context not resumed: no previous session anchor was found",
@@ -749,16 +753,16 @@ fn render_builtin<E: EventFields>(
       };
       json!({"role": "system", "content": format!("{head} — started a new conversation")})
     }
-    event_types::CLONE_START => json!({
+    ChatEventType::CloneStart => json!({
       "role": event_types::CLONE_START,
       "content": event.field("parent_session_name").map(EventFields::to_owned_value).unwrap_or_else(|| json!("Unknown session")),
       "parent_session_id": event.field("parent_session_id").map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
     }),
-    event_types::SCHEDULED_TRIGGER => json!({
+    ChatEventType::ScheduledTrigger => json!({
       "role": event_types::SCHEDULED_TRIGGER,
       "content": event.field("content").map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
     }),
-    event_types::AGENT_MESSAGE => {
+    ChatEventType::AgentMessage => {
       let mut obj = json!({
         "role": event_types::AGENT_MESSAGE,
         "content": event.field("content").map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
@@ -772,11 +776,11 @@ fn render_builtin<E: EventFields>(
       }
       obj
     }
-    event_types::BACKEND_SWITCHED => json!({
+    ChatEventType::BackendSwitched => json!({
       "role": "system",
       "content": format!("Backend switched: {} → {}", string_default(event, "from", ""), string_default(event, "to", "")),
     }),
-    event_types::QUOTA_FAILOVER => {
+    ChatEventType::QuotaFailover => {
       let from_backend = string_default(event, "from", "");
       let to_backend = string_default(event, "to", "");
       let recovers_at = event.field(event_types::QUOTA_FAILOVER_RECOVERS_AT).filter(|value| is_truthy(*value));
@@ -811,7 +815,7 @@ fn render_builtin<E: EventFields>(
         .map_or_else(String::new, |summary| format!("; handoff summary {summary}"));
       json!({"role": "system", "content": format!("{head}{recovery}{handoff}")})
     }
-    event_types::BACKEND_OVERLAY_INACTIVE | event_types::BACKEND_OVERLAY_UNDECLARED => {
+    ChatEventType::BackendOverlayInactive | ChatEventType::BackendOverlayUndeclared => {
       let backend = string_default(event, "backend", "");
       if event.field("reason").and_then(EventFields::as_str_field) == Some(event_types::OVERLAY_REASON_UNREADABLE) {
         json!({
@@ -829,26 +833,26 @@ fn render_builtin<E: EventFields>(
         })
       }
     }
-    event_types::MODEL_FALLBACK_NOTICE => {
+    ChatEventType::ModelFallbackNotice => {
       let configured =
         event.field(event_types::CONFIGURED_MODEL).filter(|value| is_truthy(*value)).map(event_str).unwrap_or_default();
       let served = join_strings(event.field(event_types::SERVED_MODELS), event_types::SERVED_MODELS)?;
       json!({"role": "system", "content": format!("Served by {served} (configured {configured})")})
     }
-    event_types::CHILD_REPORT => json!({
+    ChatEventType::ChildReport => json!({
       "role": event_types::CHILD_REPORT,
       "content": event.field("summary").map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
       event_types::CHILD_SESSION_ID: event.field(event_types::CHILD_SESSION_ID).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
       "outcome": event.field("outcome").map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
       (event_types::RESULT_REFS): event.field(event_types::RESULT_REFS).filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!([])),
     }),
-    event_types::RUN_HEADER => render_run_header(event)?,
-    event_types::RUN_END => json!({
+    ChatEventType::RunHeader => render_run_header(event)?,
+    ChatEventType::RunEnd => json!({
       "role": "separator",
       "kind": event_types::RUN_END,
       event_types::THINKING_SECONDS: event.field(event_types::RUN_DURATION_SECONDS).map(EventFields::to_owned_value).unwrap_or(Value::Null),
     }),
-    event_types::RUN_ERROR => {
+    ChatEventType::RunError => {
       let content = event
         .field("content")
         .filter(|value| is_truthy(*value))
@@ -863,7 +867,7 @@ fn render_builtin<E: EventFields>(
         "line_count": text.matches('\n').count() + 1,
       })
     }
-    event_types::RUN_DELIVERY => {
+    ChatEventType::RunDelivery => {
       let task_state = event
         .field(TASK_STATE)
         .filter(|value| is_truthy(*value))
@@ -884,7 +888,7 @@ fn render_builtin<E: EventFields>(
         "run_id": event.field("run_id").filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
       })
     }
-    event_types::TASK_CLOSED => {
+    ChatEventType::TaskClosed => {
       let outcome = event.field("outcome").map(EventFields::to_owned_value).unwrap_or_else(|| json!("completed"));
       let summary = event
         .field("summary")
@@ -894,7 +898,7 @@ fn render_builtin<E: EventFields>(
       let content = format!("Task {}: {}", event_str(&outcome), event_str(&summary)).trim_end().to_string();
       json!({"role": "system", "content": content})
     }
-    event_types::TASK_REOPENED => {
+    ChatEventType::TaskReopened => {
       let reason = event
         .field("reason")
         .filter(|value| is_truthy(*value))
@@ -902,8 +906,52 @@ fn render_builtin<E: EventFields>(
         .unwrap_or_else(|| json!(""));
       json!({"role": "system", "content": format!("Task reopened: {}", event_str(&reason)).trim_end()})
     }
-    event_types::TASK_INPUT_ACKNOWLEDGED => render_task_input_acknowledged(event)?,
-    _ => return Ok(None),
+    ChatEventType::TaskInputAcknowledged => render_task_input_acknowledged(event)?,
+    ChatEventType::DiscordReply
+    | ChatEventType::SlackReply
+    | ChatEventType::WebAskCheck
+    | ChatEventType::DraftFailed
+    | ChatEventType::DraftRegistered
+    | ChatEventType::DraftSent
+    | ChatEventType::DiscordAck
+    | ChatEventType::WebStatusConfirmed
+    | ChatEventType::Assistant
+    | ChatEventType::Result
+    | ChatEventType::PromptChanged
+    | ChatEventType::RunFinished
+    | ChatEventType::RunLaunchWithheld
+    | ChatEventType::RunStopRequested
+    | ChatEventType::ScheduledRunSkipped
+    | ChatEventType::SessionAttached
+    | ChatEventType::SessionRenamed
+    | ChatEventType::TaskCloseRequested
+    | ChatEventType::TaskCreated
+    | ChatEventType::TaskImported
+    | ChatEventType::TaskTriggered
+    | ChatEventType::Thinking
+    | ChatEventType::ToolResult
+    | ChatEventType::ToolUse
+    | ChatEventType::User
+    | ChatEventType::WebReply
+    | ChatEventType::WebReplyNotice
+    | ChatEventType::WebStatus
+    | ChatEventType::TurnHooks
+    | ChatEventType::ContinuationRan
+    | ChatEventType::FeishuAck
+    | ChatEventType::SlackAck
+    | ChatEventType::InputDelivered
+    | ChatEventType::ImproveFailed
+    | ChatEventType::ImproveIterationCompleted
+    | ChatEventType::Message
+    | ChatEventType::Text
+    | ChatEventType::FeishuReply
+    | ChatEventType::PolicyTableChanged
+    | ChatEventType::TaskReparented
+    | ChatEventType::System
+    | ChatEventType::Untyped
+    | ChatEventType::Unnamed(_) => {
+      return Err(StoreError::new(format!("{event_type:?} is not rendered by render_builtin")));
+    }
   };
   Ok(Some(rendered))
 }
@@ -1062,13 +1110,81 @@ fn extract_message_field<E: EventFields>(blocks: &[&E], field: &str) -> StoreRes
 pub fn run_tool_call_count<E: EventFields>(events: &[&E]) -> usize {
   events
     .iter()
-    .map(|event| match event.field("type").and_then(EventFields::as_str_field) {
-      Some(event_types::ASSISTANT) => run_assistant_tool_uses(*event)
+    .map(|event| match ChatEventType::of(event.field("type").and_then(EventFields::as_str_field)) {
+      ChatEventType::Assistant => run_assistant_tool_uses(*event)
         .iter()
         .filter(|block| block.field("name").and_then(EventFields::as_str_field) != Some("ExitPlanMode"))
         .count(),
-      Some(event_types::TOOL_USE) => 1,
-      _ => 0,
+      ChatEventType::ToolUse => 1,
+      ChatEventType::Unnamed(name) => {
+        log_unnamed("run_tool_call_count", "event type", &name, record_id(*event));
+        0
+      }
+      ChatEventType::DiscordReply
+      | ChatEventType::SlackReply
+      | ChatEventType::WebAskCheck
+      | ChatEventType::DraftFailed
+      | ChatEventType::DraftRegistered
+      | ChatEventType::DraftSent
+      | ChatEventType::DiscordAck
+      | ChatEventType::WebStatusConfirmed
+      | ChatEventType::System
+      | ChatEventType::ContextCompacted
+      | ChatEventType::Result
+      | ChatEventType::AgentMessage
+      | ChatEventType::AssistantError
+      | ChatEventType::BackendOverlayInactive
+      | ChatEventType::BackendOverlayUndeclared
+      | ChatEventType::BackendSwitched
+      | ChatEventType::ChildReport
+      | ChatEventType::CloneStart
+      | ChatEventType::ContextCompactFailed
+      | ChatEventType::HandlerResult
+      | ChatEventType::MasterDone
+      | ChatEventType::ModelFallbackNotice
+      | ChatEventType::PromptChanged
+      | ChatEventType::ResumeContextDropped
+      | ChatEventType::RunDelivery
+      | ChatEventType::RunFinished
+      | ChatEventType::RunHeader
+      | ChatEventType::RunLaunchWithheld
+      | ChatEventType::RunStopRequested
+      | ChatEventType::ScheduledRunSkipped
+      | ChatEventType::ScheduledTrigger
+      | ChatEventType::SessionAttached
+      | ChatEventType::SessionRenamed
+      | ChatEventType::TaskCloseRequested
+      | ChatEventType::TaskClosed
+      | ChatEventType::TaskCreated
+      | ChatEventType::TaskDelegated
+      | ChatEventType::TaskImported
+      | ChatEventType::TaskInputAcknowledged
+      | ChatEventType::TaskReopened
+      | ChatEventType::TaskTriggered
+      | ChatEventType::Thinking
+      | ChatEventType::ToolResult
+      | ChatEventType::User
+      | ChatEventType::WebReply
+      | ChatEventType::WebReplyNotice
+      | ChatEventType::WebStatus
+      | ChatEventType::TurnHooks
+      | ChatEventType::ContinuationRan
+      | ChatEventType::FeishuAck
+      | ChatEventType::SlackAck
+      | ChatEventType::InputDelivered
+      | ChatEventType::ImproveFailed
+      | ChatEventType::ImproveIterationCompleted
+      | ChatEventType::Error
+      | ChatEventType::Message
+      | ChatEventType::Text
+      | ChatEventType::QuotaFailover
+      | ChatEventType::FeishuReply
+      | ChatEventType::PolicyTableChanged
+      | ChatEventType::WorkerSummary
+      | ChatEventType::RunEnd
+      | ChatEventType::RunError
+      | ChatEventType::TaskReparented
+      | ChatEventType::Untyped => 0,
     })
     .sum()
 }
@@ -1076,8 +1192,8 @@ pub fn run_tool_call_count<E: EventFields>(events: &[&E]) -> usize {
 /// Return the newest tool row opened by these run events, with its preview and source timestamp.
 pub fn run_last_tool<E: EventFields>(events: &[&E]) -> Option<Value> {
   for event in events.iter().rev() {
-    let call = match event.field("type").and_then(EventFields::as_str_field) {
-      Some(event_types::ASSISTANT) => run_assistant_tool_uses(*event)
+    let call = match ChatEventType::of(event.field("type").and_then(EventFields::as_str_field)) {
+      ChatEventType::Assistant => run_assistant_tool_uses(*event)
         .into_iter()
         .rev()
         .find(|block| block.field("name").and_then(EventFields::as_str_field) != Some("ExitPlanMode"))
@@ -1087,11 +1203,79 @@ pub fn run_last_tool<E: EventFields>(events: &[&E]) -> Option<Value> {
             "input": block.field("input").map(EventFields::to_owned_value).unwrap_or(Value::Null),
           })
         }),
-      Some(event_types::TOOL_USE) => Some(json!({
+      ChatEventType::ToolUse => Some(json!({
         "name": event.field("name").and_then(EventFields::as_str_field).unwrap_or(""),
         "input": event.field("input").map(EventFields::to_owned_value).unwrap_or(Value::Null),
       })),
-      _ => None,
+      ChatEventType::Unnamed(name) => {
+        log_unnamed("run_last_tool", "event type", &name, record_id(*event));
+        None
+      }
+      ChatEventType::DiscordReply
+      | ChatEventType::SlackReply
+      | ChatEventType::WebAskCheck
+      | ChatEventType::DraftFailed
+      | ChatEventType::DraftRegistered
+      | ChatEventType::DraftSent
+      | ChatEventType::DiscordAck
+      | ChatEventType::WebStatusConfirmed
+      | ChatEventType::System
+      | ChatEventType::ContextCompacted
+      | ChatEventType::Result
+      | ChatEventType::AgentMessage
+      | ChatEventType::AssistantError
+      | ChatEventType::BackendOverlayInactive
+      | ChatEventType::BackendOverlayUndeclared
+      | ChatEventType::BackendSwitched
+      | ChatEventType::ChildReport
+      | ChatEventType::CloneStart
+      | ChatEventType::ContextCompactFailed
+      | ChatEventType::HandlerResult
+      | ChatEventType::MasterDone
+      | ChatEventType::ModelFallbackNotice
+      | ChatEventType::PromptChanged
+      | ChatEventType::ResumeContextDropped
+      | ChatEventType::RunDelivery
+      | ChatEventType::RunFinished
+      | ChatEventType::RunHeader
+      | ChatEventType::RunLaunchWithheld
+      | ChatEventType::RunStopRequested
+      | ChatEventType::ScheduledRunSkipped
+      | ChatEventType::ScheduledTrigger
+      | ChatEventType::SessionAttached
+      | ChatEventType::SessionRenamed
+      | ChatEventType::TaskCloseRequested
+      | ChatEventType::TaskClosed
+      | ChatEventType::TaskCreated
+      | ChatEventType::TaskDelegated
+      | ChatEventType::TaskImported
+      | ChatEventType::TaskInputAcknowledged
+      | ChatEventType::TaskReopened
+      | ChatEventType::TaskTriggered
+      | ChatEventType::Thinking
+      | ChatEventType::ToolResult
+      | ChatEventType::User
+      | ChatEventType::WebReply
+      | ChatEventType::WebReplyNotice
+      | ChatEventType::WebStatus
+      | ChatEventType::TurnHooks
+      | ChatEventType::ContinuationRan
+      | ChatEventType::FeishuAck
+      | ChatEventType::SlackAck
+      | ChatEventType::InputDelivered
+      | ChatEventType::ImproveFailed
+      | ChatEventType::ImproveIterationCompleted
+      | ChatEventType::Error
+      | ChatEventType::Message
+      | ChatEventType::Text
+      | ChatEventType::QuotaFailover
+      | ChatEventType::FeishuReply
+      | ChatEventType::PolicyTableChanged
+      | ChatEventType::WorkerSummary
+      | ChatEventType::RunEnd
+      | ChatEventType::RunError
+      | ChatEventType::TaskReparented
+      | ChatEventType::Untyped => None,
     };
     if let Some(call) = call {
       let tool = tool_preview(call);
@@ -1131,8 +1315,8 @@ pub fn run_last_assistant_text<E: EventFields>(events: &[&E]) -> StoreResult<Opt
 /// Return the newest non-empty result or assistant text and its source timestamp.
 pub fn run_last_text<E: EventFields>(events: &[&E]) -> StoreResult<Option<Value>> {
   for event in events.iter().rev() {
-    match event.field("type").and_then(EventFields::as_str_field) {
-      Some(event_types::RESULT) => {
+    match ChatEventType::of(event.field("type").and_then(EventFields::as_str_field)) {
+      ChatEventType::Result => {
         if let Some(text) =
           event.field("result").and_then(EventFields::as_str_field).map(str::trim).filter(|text| !text.is_empty())
         {
@@ -1142,12 +1326,77 @@ pub fn run_last_text<E: EventFields>(events: &[&E]) -> StoreResult<Option<Value>
           })));
         }
       }
-      Some(event_types::ASSISTANT) => {
+      ChatEventType::Assistant => {
         if let Some(text) = run_last_assistant_text::<E>(&[*event])? {
           return Ok(Some(text));
         }
       }
-      _ => {}
+      ChatEventType::Unnamed(name) => log_unnamed("run_last_text", "event type", &name, record_id(*event)),
+      ChatEventType::DiscordReply
+      | ChatEventType::SlackReply
+      | ChatEventType::WebAskCheck
+      | ChatEventType::DraftFailed
+      | ChatEventType::DraftRegistered
+      | ChatEventType::DraftSent
+      | ChatEventType::DiscordAck
+      | ChatEventType::WebStatusConfirmed
+      | ChatEventType::System
+      | ChatEventType::ContextCompacted
+      | ChatEventType::AgentMessage
+      | ChatEventType::AssistantError
+      | ChatEventType::BackendOverlayInactive
+      | ChatEventType::BackendOverlayUndeclared
+      | ChatEventType::BackendSwitched
+      | ChatEventType::ChildReport
+      | ChatEventType::CloneStart
+      | ChatEventType::ContextCompactFailed
+      | ChatEventType::HandlerResult
+      | ChatEventType::MasterDone
+      | ChatEventType::ModelFallbackNotice
+      | ChatEventType::PromptChanged
+      | ChatEventType::ResumeContextDropped
+      | ChatEventType::RunDelivery
+      | ChatEventType::RunFinished
+      | ChatEventType::RunHeader
+      | ChatEventType::RunLaunchWithheld
+      | ChatEventType::RunStopRequested
+      | ChatEventType::ScheduledRunSkipped
+      | ChatEventType::ScheduledTrigger
+      | ChatEventType::SessionAttached
+      | ChatEventType::SessionRenamed
+      | ChatEventType::TaskCloseRequested
+      | ChatEventType::TaskClosed
+      | ChatEventType::TaskCreated
+      | ChatEventType::TaskDelegated
+      | ChatEventType::TaskImported
+      | ChatEventType::TaskInputAcknowledged
+      | ChatEventType::TaskReopened
+      | ChatEventType::TaskTriggered
+      | ChatEventType::Thinking
+      | ChatEventType::ToolResult
+      | ChatEventType::ToolUse
+      | ChatEventType::User
+      | ChatEventType::WebReply
+      | ChatEventType::WebReplyNotice
+      | ChatEventType::WebStatus
+      | ChatEventType::TurnHooks
+      | ChatEventType::ContinuationRan
+      | ChatEventType::FeishuAck
+      | ChatEventType::SlackAck
+      | ChatEventType::InputDelivered
+      | ChatEventType::ImproveFailed
+      | ChatEventType::ImproveIterationCompleted
+      | ChatEventType::Error
+      | ChatEventType::Message
+      | ChatEventType::Text
+      | ChatEventType::QuotaFailover
+      | ChatEventType::FeishuReply
+      | ChatEventType::PolicyTableChanged
+      | ChatEventType::WorkerSummary
+      | ChatEventType::RunEnd
+      | ChatEventType::RunError
+      | ChatEventType::TaskReparented
+      | ChatEventType::Untyped => {}
     }
   }
   Ok(None)
@@ -1709,6 +1958,28 @@ mod tests {
     assert_eq!(deltas[1]["message"]["event_index"], 11);
     assert_eq!(deltas[1]["message"]["role"], "separator");
     assert!(aggregator.pending_draft_message().is_none());
+  }
+
+  #[test]
+  fn an_unnamed_event_type_is_skipped_and_the_replay_goes_on() {
+    let assistant = json!({
+      "type": "assistant",
+      "id": "a",
+      "message": {"content": [{"type": "text", "text": "Hi"}]},
+      "timestamp": "t1",
+    });
+    let done = json!({"type": "master_done", "id": "done", "thinking_seconds": 3, "timestamp": "t2"});
+    let unnamed = json!({"type": "a_writer_added_later", "id": "later", "timestamp": "t1b"});
+    let mut replayed = MessageAggregator::new(0, false, BackendsConfig::default());
+    let mut deltas = replayed.feed(&assistant).unwrap();
+    deltas.extend(replayed.feed(&unnamed).unwrap());
+    deltas.extend(replayed.feed(&done).unwrap());
+    let mut expected = MessageAggregator::new(0, false, BackendsConfig::default());
+    let mut without = expected.feed(&assistant).unwrap();
+    without.extend(expected.feed(&done).unwrap());
+    assert_eq!(deltas.len(), without.len());
+    assert_eq!(deltas[0]["message"]["content"], without[0]["message"]["content"]);
+    assert_eq!(deltas[1]["message"]["role"], "separator");
   }
 
   #[test]

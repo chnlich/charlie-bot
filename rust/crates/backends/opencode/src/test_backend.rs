@@ -1992,7 +1992,7 @@ async fn prompt_waits_for_an_earlier_interrupt_to_settle() {
 async fn one_shot_folds_the_writer_types_it_names_without_a_report() {
   let log = LogCapture::default();
   let _capture = log.install();
-  // Step boundaries and tool calls carry no answer text, so they fold to nothing.
+  // Only the text parts make the answer, so every other named type folds to nothing.
   let stream = concat!(
     r#"{"type":"step_start","timestamp":1,"sessionID":"s1","part":{"type":"step-start"}}"#,
     "\n",
@@ -2000,7 +2000,13 @@ async fn one_shot_folds_the_writer_types_it_names_without_a_report() {
     "\n",
     r#"{"type":"tool","timestamp":3,"sessionID":"s1","part":{"type":"tool"}}"#,
     "\n",
-    r#"{"type":"text","timestamp":4,"sessionID":"s1","part":{"type":"text","text":"answer"}}"#,
+    r#"{"type":"reasoning","timestamp":4,"sessionID":"s1","part":{"type":"reasoning","text":"thinking"}}"#,
+    "\n",
+    r#"{"type":"background_wait","timestamp":5,"sessionID":"s1","jobs":[]}"#,
+    "\n",
+    r#"{"type":"retry","timestamp":6,"sessionID":"s1","attempt":1}"#,
+    "\n",
+    r#"{"type":"text","timestamp":7,"sessionID":"s1","part":{"type":"text","text":"answer"}}"#,
     "\n",
     r#"{"type":"step_finish","timestamp":5,"sessionID":"s1","part":{"type":"step-finish","reason":"stop"}}"#,
     "\n",

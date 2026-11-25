@@ -1155,6 +1155,12 @@ pub(super) async fn collect_one_shot(stdout: impl AsyncRead + Unpin) -> anyhow::
       // The one-shot denies every tool in its config, so no tool output joins the answer.
       Some("tool_use") => {}
       Some("tool") => {}
+      // Reasoning parts hold the model's thinking, and the answer is the text parts alone.
+      Some("reasoning") => {}
+      // A wait notice lists the background jobs that the run waits for, with no answer text.
+      Some("background_wait") => {}
+      // A retried attempt sends its answer text in later events, so the retry notice carries none.
+      Some("retry") => {}
       // An unnamed type fails the run: it may carry answer text, and folding past it would return a partial answer.
       other => bail!(
         "opencode run emitted an event type that the one-shot fold does not name: {}",

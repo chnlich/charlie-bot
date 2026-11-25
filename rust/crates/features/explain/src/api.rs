@@ -196,7 +196,7 @@ mod tests {
       .header(http::header::CONTENT_TYPE, "application/json")
       .body(Body::from(body.unwrap_or_default().to_string()))
       .unwrap();
-    let response = crate::routes(features).oneshot(request).await.unwrap();
+    let response = crate::entry::routes(features).oneshot(request).await.unwrap();
     let status = response.status();
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let value =

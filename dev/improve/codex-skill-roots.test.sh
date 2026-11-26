@@ -3,7 +3,8 @@
 # prompt-input` from the roots that its CODEX_HOME and HOME name: the pinned skills, the bundled skills and the user
 # skills. It honors the codex home's config.toml the way the round's codex does: a bundled root that the config turns
 # off is not listed or installed, and a skill whose path the config turns off is not listed. STUB_CODEX_IGNORES_CONFIG
-# makes the stub ignore the config, which is a codex whose discovery still lists a host skill.
+# makes the stub ignore the config, which is a codex whose discovery still lists a host skill. STUB_CODEX_DROPS_MARKER
+# makes the stub omit the skills section marker, which is a codex whose listing format changed.
 #
 #   dev/improve/codex-skill-roots.test.sh
 set -euo pipefail
@@ -85,11 +86,14 @@ if (( bundled_on )); then
   add_root "$CODEX_HOME/skills/.system"
 fi
 
-text="<skills_instructions>
-## Skills
+text="## Skills
 ### Skill roots${roots_text}
-### Available skills${entries_text}
+### Available skills${entries_text}"
+if [[ -z ${STUB_CODEX_DROPS_MARKER-} ]]; then
+  text="<skills_instructions>
+${text}
 </skills_instructions>"
+fi
 jq -n --arg text "$text" '[{role: "developer", content: [{type: "input_text", text: $text}]}]'
 STUB
 chmod +x -- "$TMP_ROOT/bin/codex"
@@ -126,3 +130,15 @@ status=0
 grep -qF "would list a skill outside $pinned: $home/.agents/skills/host-skill/SKILL.md" "$TMP_ROOT/refused.err" \
   || fail 1 "the start check does not name the host skill path: $(cat -- "$TMP_ROOT/refused.err")"
 printf 'ok: a discovery that lists a host skill refuses the round with exit 7\n'
+
+# A codex whose listing has no skills section marker: the round refuses to start, exit 7, and names the marker, so the
+# missing section is not read as an empty listing.
+codex_home=$TMP_ROOT/codex-home-no-marker
+mkdir -p -- "$codex_home"
+status=0
+(STUB_CODEX_DROPS_MARKER=1 prepare_codex_skill_roots "$codex_home") 2>"$TMP_ROOT/no-marker.err" || status=$?
+[[ $status == 7 ]] || fail 1 "the start check exited $status, not 7: $(cat -- "$TMP_ROOT/no-marker.err")"
+grep -qF "printed no skills section for the codex home $codex_home: the output has no <skills_instructions> marker" \
+  "$TMP_ROOT/no-marker.err" \
+  || fail 1 "the start check does not name the missing marker: $(cat -- "$TMP_ROOT/no-marker.err")"
+printf 'ok: a listing without the skills section marker refuses the round with exit 7\n'

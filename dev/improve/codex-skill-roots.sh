@@ -15,7 +15,8 @@
 # The discovery is codex's own: `codex debug prompt-input` renders the skills section that the agent sees, with no model
 # call. The listing runs in the current directory, which is the round's. The discovery runs twice: the first listing
 # finds the host's skills, and the second is the start check. The check fails the round (exit 7) when the discovery
-# still lists a skill path outside $IMPROVE_SKILLS_DIR, and it names that path.
+# still lists a skill path outside $IMPROVE_SKILLS_DIR, and it names that path. Each listing fails the round (exit 7)
+# when the output has no skills section, so a change in codex's listing format is not read as an empty listing.
 #
 # The file defines functions only. It relies on the runner's `fail` and on $IMPROVE_SKILLS_DIR, which the runner
 # exports.
@@ -29,6 +30,9 @@ codex_skill_listing() {  # <codex home>
   fi
   section=$(jq -r '.. | strings | select(contains("<skills_instructions>"))' <<<"$rendered") \
     || fail 7 "codex discovery printed no JSON for the codex home $home"
+  [[ -n $section ]] \
+    || fail 7 "codex discovery printed no skills section for the codex home $home: the output has no" \
+      "<skills_instructions> marker, so the listing format changed"
   skill_listing=$(skill_entry_paths <<<"$section" | sort -u)
 }
 

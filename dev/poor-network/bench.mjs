@@ -374,9 +374,9 @@ function buildSide({
   return deriveSide(side);
 }
 
-// The served home must be the mock home. The check runs before the bench waits for the lock: the scheduler binds the
-// default cron rows at its first tick, 60 s after the server starts, and each row adds a session to the count the check
-// compares, so a check after a long lock wait would fail a correct home.
+// The served home must be the mock home. The trial binds the default cron tasks before its server starts, so the
+// scheduler's first tick adds no session and the count the check compares is final. The check runs before the bench
+// waits for the lock, so a home of the wrong size fails the side before it queues.
 function checkMockHome(args, api) {
   const check = spawnSync(args.mockHomeBin, ['check', args.mockHome, api.base], { stdio: 'inherit' });
   if (check.status !== 0) {

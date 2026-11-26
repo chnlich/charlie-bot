@@ -107,7 +107,6 @@ fn wait_row(holder_id: String, holder_name: String, login: &HostLogin) -> anyhow
     context: Some(login.detail.lines().next().unwrap_or_default().to_string()),
     link: Some(HOST_AUTH_LINK.to_string()),
     since: UtcDateTime::parse(&login.last_change_at)?,
-    is_derived: true,
   })
 }
 

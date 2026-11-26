@@ -11,13 +11,24 @@ pub const DEFAULT_TIMEZONE: &str = charliebot_core::pacific::ZONE;
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct StepConfig {
+  /// The step's name, unique within its task. A `distinct_backend_from` names an earlier step by this name. A chain
+  /// that stops reports the step by this name.
   pub name: String,
+  /// The file with the step's prompt. A relative path resolves against the repository root, and `~` expands to the home
+  /// directory. The loader reads the file on every load into `prompt`.
   #[serde(default)]
   pub prompt_file: Option<String>,
+  /// The step's prompt text, which the loader fills from `prompt_file`. Change that file, not this key. A host file
+  /// cannot hold `prompt` inline.
   #[serde(default)]
   pub prompt: Option<String>,
+  /// The backend id that runs this step: a `backends.options` id or a `backends.pools` id. The startup check and
+  /// `--check-config` refuse any other id. Absent or empty, the step runs on the bound session's backend.
   #[serde(default)]
   pub backend: Option<String>,
+  /// The name of an earlier step in the same task. Both steps must name a backend. When this step's backend is a pool,
+  /// the pool picks a member that the named step did not run on. When both backends are single backends of the same
+  /// type and model, the chain stops before this step runs.
   #[serde(default)]
   pub distinct_backend_from: Option<String>,
 }
@@ -35,26 +46,50 @@ pub enum TaskMode {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ScheduledTaskConfig {
+  /// The task's name is its cron file's name without the extension. The file must not carry a `name` key; the loader
+  /// refuses one.
   pub name: String,
+  /// The schedule as five space-separated fields: minute, hour, day of month, month and day of week. The task fires at
+  /// each minute that the fields match, read in `timezone`.
   pub cron: String,
+  /// The file with the task's prompt. A relative path resolves against the repository root, and `~` expands to the home
+  /// directory. The loader reads the file on every load into `prompt`.
   #[serde(default)]
   pub prompt_file: Option<String>,
+  /// The git repository that each run of the task works in, as a worktree of it. A `worker` task's session gets the
+  /// round template for a repository when this key is set, and the repo-less template when it is absent.
   #[serde(default)]
   pub repo: Option<String>,
+  /// The time zone that `cron` is read in: an IANA name such as `America/New_York`, or `local` for the host's zone,
+  /// read from `/etc/localtime` when the file loads. Absent, it is `DEFAULT_TIMEZONE`.
   #[serde(default = "default_timezone")]
   pub timezone: String,
+  /// Set `false` to stop the task's fires. The task stays in the cron list with its schedule. Absent, the task is
+  /// enabled.
   #[serde(default = "default_true")]
   pub enabled: bool,
+  /// Set `true` to show a failed last run as needing review. The cron page then shows it in amber, marked "review
+  /// needed", instead of red. The fire and its failure record do not change. Absent, `false`.
   #[serde(default)]
   pub allow_failure: bool,
+  /// The session that the task's fires reach. Absent or empty, the scheduler creates a session for the task on a later
+  /// tick and writes its id into this file. To bind the task to a session that exists, write that session's id here.
   #[serde(default)]
   pub session_id: Option<String>,
+  /// `master` sends the task's own prompt to its session. `worker` sends the task's name and the category template, and
+  /// the session decides the round. Absent, the task works as `worker`. `master` forbids `steps` and `handler`.
   #[serde(default)]
   pub mode: Option<TaskMode>,
+  /// The prompt text. The loader fills it from the file that `prompt_file` names, so change that file, not this key. A
+  /// host file cannot hold `prompt` inline.
   #[serde(default)]
   pub prompt: Option<String>,
+  /// The name of a scheduled handler that a feature registers, such as `disk_sweep`. Each fire runs the handler in
+  /// place of a prompt. A name that no feature registers fails each fire with "Unknown handler".
   #[serde(default)]
   pub handler: Option<String>,
+  /// An ordered list of steps. The steps run one after another in list order, each with its own prompt. The list must
+  /// not be empty, and a task with steps has no `prompt` or `handler`.
   #[serde(default)]
   pub steps: Option<Vec<StepConfig>>,
   /// The host whose ssh login a round of this task runs on: the round starts through the improve launcher on this host,

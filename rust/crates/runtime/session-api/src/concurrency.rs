@@ -19,7 +19,9 @@ use axum::extract::State;
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use bytes::Bytes;
-use charliebot_compat::compression::{MINIMUM_DEFLATE_BYTES, accepts_gzip, gzip_level_four};
+use charliebot_compat::compression::{
+  CachedEncoding, CompressedEncoding, MINIMUM_DEFLATE_BYTES, ResponseEncoding, gzip_level_four, zstd_dynamic_body,
+};
 use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_compat::responses;
 use charliebot_compat::routing::get_only;
@@ -657,16 +659,17 @@ fn requested_range(request: &Request<Body>) -> Result<&'static str, Box<Response
 /// The body that last bucket built, with the inputs whose identities still name it.
 ///
 /// A body's points stand on the buckets' fixed boundaries, so every request inside one bucket builds the same body
-/// from the same run records. The entry holds that body and, once a gzip client asks, its compressed form. A request
-/// the entry answers takes its `Bytes` without a sweep, a body build or a deflate. The records' identity is part of
-/// the key, because a run record written outside the store moves the record set without moving the record generation.
+/// from the same run records. The entry holds that body and, once a compressed client asks, one compressed form. A
+/// request the entry answers takes its `Bytes` without a sweep, a body build or re-compression unless the coding
+/// switched. The records' identity is part of the key, because a run record written outside the store moves the record
+/// set without moving the record generation.
 struct HistoryMemo {
   range: &'static str,
   records: RunRecords,
   to: OffsetDateTime,
   tag: String,
   body: Bytes,
-  gzip: Option<Bytes>,
+  compressed: Option<CachedEncoding>,
 }
 
 static HISTORY_MEMO: LazyLock<Mutex<Option<HistoryMemo>>> = LazyLock::new(|| Mutex::new(None));
@@ -686,24 +689,30 @@ static HISTORY_PROCESS: LazyLock<String> = LazyLock::new(|| {
   format!("{:x}-{start:x}", std::process::id())
 });
 
+struct HistoryAnswer {
+  body: Bytes,
+  compressed: Option<CachedEncoding>,
+  tag: String,
+}
+
 /// The history response, answered from the bucket's memo when its inputs still hold.
 ///
-/// The body's version is the build number of the memo entry that holds it. The gzip form is built on the first
-/// request that accepts gzip, so a client that names none never pays for it.
+/// The body's version is the build number of the memo entry that holds it. The compressed form is built on the first
+/// request that negotiates it, so a client that names none never pays for it.
 async fn history(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
   let range = match requested_range(&request) {
     Ok(range) => range,
     Err(response) => return *response,
   };
-  let gzip = accepts_gzip(request.headers());
+  let encoding = ResponseEncoding::for_request(request.headers());
   let store = Arc::clone(&features.store);
-  match blocking_store(move || history_answer(&store, range, UtcDateTime::now(), gzip)).await {
-    Ok((body, compressed, tag)) => history_response(body, compressed, tag),
+  match blocking_store(move || history_answer(&store, range, UtcDateTime::now(), encoding)).await {
+    Ok(answer) => history_response(answer),
     Err(error) => store_error(error),
   }
 }
 
-/// The body, its gzip form when a gzip client asks, and the tag one history request answers with.
+/// The body, its compressed form when a client negotiates one, and the tag one history request answers with.
 ///
 /// A request inside the bucket the entry holds answers the body it already built. A new bucket or a moved record set
 /// builds the series and takes the next build number for its tag.
@@ -711,8 +720,8 @@ fn history_answer(
   store: &Store,
   range: &'static str,
   now: UtcDateTime,
-  gzip: bool,
-) -> StoreResult<(Bytes, Option<Bytes>, String)> {
+  encoding: ResponseEncoding,
+) -> StoreResult<HistoryAnswer> {
   let (records, _) = all_run_records(store)?;
   let to = bucket_end(now.into_inner(), bucket_seconds(range));
   let mut memo = HISTORY_MEMO.lock().expect("the history memo mutex is not poisoned");
@@ -722,33 +731,38 @@ fn history_answer(
     let body = Bytes::from(series_of(records.as_slice(), range, now).into_body());
     let build = HISTORY_BUILDS.fetch_add(1, Ordering::Relaxed) + 1;
     let tag = format!("\"{range}-{}-{build:x}\"", HISTORY_PROCESS.as_str());
-    *memo = Some(HistoryMemo { range, records, to, tag, body, gzip: None });
+    *memo = Some(HistoryMemo { range, records, to, tag, body, compressed: None });
   }
   let entry = memo.as_mut().expect("the memo holds the entry this request built or found");
-  if gzip && entry.gzip.is_none() && entry.body.len() >= MINIMUM_DEFLATE_BYTES {
-    entry.gzip = Some(Bytes::from(gzip_level_four(&entry.body)));
-  }
-  let compressed = if gzip { entry.gzip.clone() } else { None };
-  Ok((entry.body.clone(), compressed, entry.tag.clone()))
+  let compressed = encoding.compressed().filter(|_| entry.body.len() >= MINIMUM_DEFLATE_BYTES).map(|coding| {
+    let bytes = CachedEncoding::get_or_replace(&mut entry.compressed, coding, |coding| match coding {
+      CompressedEncoding::Gzip => gzip_level_four(&entry.body),
+      CompressedEncoding::Zstd => zstd_dynamic_body(&entry.body),
+    });
+    CachedEncoding { encoding: coding, bytes }
+  });
+  Ok(HistoryAnswer { body: entry.body.clone(), compressed, tag: entry.tag.clone() })
 }
 
-/// The history response, carrying the gzip form when the handler built one for a client that accepts gzip.
+/// The history response, carrying the compressed form when the handler built one for a client that negotiated it.
 ///
-/// A body too small to deflate stays plain, as the transport's own rule has it.
-fn history_response(body: Bytes, compressed: Option<Bytes>, tag: String) -> Response {
-  let mut builder =
-    Response::builder().status(StatusCode::OK).header(header::CONTENT_TYPE, APPLICATION_JSON).header(header::ETAG, tag);
-  let served = match compressed {
+/// A body too small to compress stays plain, as the transport's own rule has it.
+fn history_response(answer: HistoryAnswer) -> Response {
+  let mut builder = Response::builder()
+    .status(StatusCode::OK)
+    .header(header::CONTENT_TYPE, APPLICATION_JSON)
+    .header(header::ETAG, answer.tag);
+  let served = match answer.compressed {
     Some(compressed) => {
       builder = builder
-        .header(header::CONTENT_ENCODING, "gzip")
+        .header(header::CONTENT_ENCODING, compressed.encoding.content_encoding())
         .header(header::VARY, ACCEPT_ENCODING)
-        .header(header::CONTENT_LENGTH, compressed.len());
-      compressed
+        .header(header::CONTENT_LENGTH, compressed.bytes.len());
+      compressed.bytes
     }
     None => {
-      builder = builder.header(header::CONTENT_LENGTH, body.len());
-      body
+      builder = builder.header(header::CONTENT_LENGTH, answer.body.len());
+      answer.body
     }
   };
   builder.body(Body::from(served)).expect("the history response builds")
@@ -1106,6 +1120,13 @@ mod tests {
     let body: Value = serde_json::from_slice(&decoded).expect("the decoded form is JSON");
     assert_eq!(body["range"], "7d");
     assert!(body["points"].as_array().expect("points is a list").len() > 1);
+
+    let zstd_request =
+      Request::builder().uri(HISTORY_PATH).header(header::ACCEPT_ENCODING, "gzip, zstd").body(Body::empty()).unwrap();
+    let zstd_response = history(State(Arc::clone(&features)), zstd_request).await;
+    assert_eq!(zstd_response.headers()[header::CONTENT_ENCODING], "zstd");
+    let zstd_compressed = axum::body::to_bytes(zstd_response.into_body(), usize::MAX).await.expect("zstd body");
+    assert_eq!(zstd::decode_all(&zstd_compressed[..]).unwrap(), plain.as_ref());
   }
 
   /// The route's own stamp text is the store's, fraction and all: the chart's time axis reads these bytes.
@@ -1143,17 +1164,20 @@ mod tests {
   async fn a_repeat_request_in_one_bucket_answers_its_body() {
     let (_home, features) = test_support::feature_context();
     let now = UtcDateTime::now();
-    let (first, first_gzip, first_tag) = history_answer(&features.store, "7d", now, false).unwrap();
-    let (repeat, repeat_gzip, repeat_tag) = history_answer(&features.store, "7d", now, false).unwrap();
-    assert_eq!(first, repeat, "the bucket answers the body it built");
-    assert_eq!(first_tag, repeat_tag);
-    assert!(first_gzip.is_none() && repeat_gzip.is_none(), "a client that names no gzip reads no gzip form");
+    let first = history_answer(&features.store, "7d", now, ResponseEncoding::Identity).unwrap();
+    let repeat = history_answer(&features.store, "7d", now, ResponseEncoding::Identity).unwrap();
+    assert_eq!(first.body, repeat.body, "the bucket answers the body it built");
+    assert_eq!(first.tag, repeat.tag);
+    assert!(
+      first.compressed.is_none() && repeat.compressed.is_none(),
+      "a client that names no compression reads no compressed form"
+    );
 
     let worker = test_support::create_node(&features.store, "history-memo-worker", None, TaskProfile::Worker).await;
     write_running_run(&features.store, &worker.id, "work");
-    let (moved, _, moved_tag) = history_answer(&features.store, "7d", UtcDateTime::now(), false).unwrap();
-    assert_ne!(moved_tag, first_tag, "a moved record set moves the body's version");
-    assert_ne!(moved, first, "the new record reaches the series");
+    let moved = history_answer(&features.store, "7d", UtcDateTime::now(), ResponseEncoding::Identity).unwrap();
+    assert_ne!(moved.tag, first.tag, "a moved record set moves the body's version");
+    assert_ne!(moved.body, first.body, "the new record reaches the series");
   }
 
   /// A run record written to the home reaches the series, at the instant it started.

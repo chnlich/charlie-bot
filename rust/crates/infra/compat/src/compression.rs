@@ -15,6 +15,7 @@
 use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use bytes::Bytes;
 use flate2::write::{DeflateEncoder, GzEncoder};
 use flate2::{Compress, Compression as DeflateLevel, Crc, FlushCompress, Status};
 use http::{HeaderMap, header};
@@ -61,12 +62,144 @@ pub const SKIP_MEDIA_PREFIXES: &[&str] = &[
   "application/font-woff",
 ];
 
-/// Whether the request's `Accept-Encoding` names gzip, so its response takes the gzip form of the body.
+/// The weight a request's `Accept-Encoding` gives `coding`, or `None` when the header names no positive weight for it.
 ///
-/// The first value is the one read, as [`header_text`] returns it. A request that names no coding, or names only
-/// another one, takes the plain body.
-pub fn accepts_gzip(headers: &HeaderMap) -> bool {
-  header_text(headers, &header::ACCEPT_ENCODING).contains("gzip")
+/// A coding named without a weight has full weight and `q=0` forbids it, so `gzip;q=0` is not acceptable. The wildcard
+/// is not consulted: a request that names no coding of its own takes the identity body, as it did before this
+/// negotiation existed. The first `Accept-Encoding` value is the one read, as [`header_text`] returns it.
+pub fn accepted_weight(headers: &HeaderMap, coding: &str) -> Option<f32> {
+  let accept = header_text(headers, &header::ACCEPT_ENCODING);
+  let mut weight = None;
+  for form in accept.split(',') {
+    let mut parameters = form.split(';');
+    let name = parameters.next().unwrap_or_default().trim();
+    if !name.eq_ignore_ascii_case(coding) {
+      continue;
+    }
+    let mut value = 1.0f32;
+    for parameter in parameters {
+      if let Some(weight) = parameter.trim().strip_prefix("q=") {
+        value = weight.trim().parse().unwrap_or(0.0);
+      }
+    }
+    weight = Some(value);
+  }
+  weight.filter(|value| *value > 0.0)
+}
+
+/// A compressed response encoding, excluding identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CompressedEncoding {
+  Gzip,
+  Zstd,
+}
+
+impl CompressedEncoding {
+  /// The HTTP `Content-Encoding` header value for this coding.
+  pub fn content_encoding(self) -> &'static str {
+    match self {
+      Self::Gzip => "gzip",
+      Self::Zstd => "zstd",
+    }
+  }
+}
+
+/// One cached compressed form of a body, tagged by its coding so switching codings replaces the buffer rather than
+/// retaining multiple compressed copies per version.
+#[derive(Clone)]
+pub struct CachedEncoding {
+  pub encoding: CompressedEncoding,
+  pub bytes: Bytes,
+}
+
+impl CachedEncoding {
+  /// Returns the cached bytes when they carry `encoding`, or builds and stores them via `encode`.
+  pub fn get_or_replace(
+    slot: &mut Option<Self>,
+    encoding: CompressedEncoding,
+    encode: impl FnOnce(CompressedEncoding) -> Vec<u8>,
+  ) -> Bytes {
+    if let Some(cached) = slot.as_ref()
+      && cached.encoding == encoding
+    {
+      return cached.bytes.clone();
+    }
+    let bytes = Bytes::from(encode(encoding));
+    *slot = Some(Self { encoding, bytes: bytes.clone() });
+    bytes
+  }
+}
+
+/// The encoding a response body travels in: the smallest form the request names as acceptable.
+///
+/// A form with a higher weight wins, and equal weights take `Zstd` over `Gzip`, because zstd's form is smaller.
+/// A form the request does not name, or names with `q=0`, is not acceptable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ResponseEncoding {
+  Identity,
+  Gzip,
+  Zstd,
+}
+
+impl ResponseEncoding {
+  /// The encoding a request's `Accept-Encoding` prefers among the forms a response keeps.
+  pub fn for_request(headers: &HeaderMap) -> ResponseEncoding {
+    match (accepted_weight(headers, "zstd"), accepted_weight(headers, "gzip")) {
+      (Some(zstd), Some(gzip)) if zstd >= gzip => ResponseEncoding::Zstd,
+      (_, Some(_)) => ResponseEncoding::Gzip,
+      (Some(_), None) => ResponseEncoding::Zstd,
+      (None, None) => ResponseEncoding::Identity,
+    }
+  }
+
+  /// The compressed coding when the request accepts compression, or `None` for identity.
+  pub fn compressed(self) -> Option<CompressedEncoding> {
+    match self {
+      Self::Identity => None,
+      Self::Gzip => Some(CompressedEncoding::Gzip),
+      Self::Zstd => Some(CompressedEncoding::Zstd),
+    }
+  }
+}
+
+/// Incremental compressor for streamed responses whose whole body is not buffered.
+pub enum StreamCompressor {
+  Gzip(GzEncoder<Vec<u8>>),
+  Zstd(zstd::stream::write::Encoder<'static, Vec<u8>>),
+}
+
+impl StreamCompressor {
+  /// Starts a stream compressor for `encoding` at the fast streaming level.
+  pub fn new(encoding: CompressedEncoding) -> Self {
+    match encoding {
+      CompressedEncoding::Gzip => Self::Gzip(GzEncoder::new(Vec::new(), flate2::Compression::new(1))),
+      CompressedEncoding::Zstd => {
+        Self::Zstd(zstd::stream::write::Encoder::new(Vec::new(), ZSTD_FAST_LEVEL).expect("a zstd encoder builds"))
+      }
+    }
+  }
+
+  /// Compresses `chunk` and returns any output bytes produced so far.
+  pub fn push(&mut self, chunk: &[u8]) -> Vec<u8> {
+    match self {
+      Self::Gzip(encoder) => {
+        encoder.write_all(chunk).expect("writing to a Vec cannot fail");
+        std::mem::take(encoder.get_mut())
+      }
+      Self::Zstd(encoder) => {
+        encoder.write_all(chunk).expect("writing to a Vec cannot fail");
+        std::mem::take(encoder.get_mut())
+      }
+    }
+  }
+
+  /// Flushes and finalizes the compressed stream.
+  pub fn finish(self) -> Vec<u8> {
+    match self {
+      Self::Gzip(encoder) => encoder.finish().expect("finishing into a Vec cannot fail"),
+      Self::Zstd(encoder) => encoder.finish().expect("finishing into a Vec cannot fail"),
+    }
+  }
 }
 
 /// The level-1 gzip form of *data*. The output is deterministic for equal input, with the gzip header's mtime
@@ -103,6 +236,25 @@ pub fn gzip_memoized_body(data: &[u8]) -> Vec<u8> {
   let mut forms = MEMOIZED_LEVELS.iter().map(|level| compress(data, *level));
   let first = forms.next().expect("MEMOIZED_LEVELS is not empty");
   forms.fold(first, |smallest, form| if form.len() < smallest.len() { form } else { smallest })
+}
+
+/// The zstd level of a large or unmemoized body compressed at request time.
+pub const ZSTD_FAST_LEVEL: i32 = 3;
+
+/// The level-3 zstd form of a large or unmemoized body.
+pub fn zstd_fast_body(data: &[u8]) -> Vec<u8> {
+  zstd::encode_all(data, ZSTD_FAST_LEVEL).expect("compressing into a Vec cannot fail")
+}
+
+/// The zstd level of a dynamic API body whose version can change between requests.
+///
+/// On multi-megabyte session listings, bootstrap payloads, and event tails, level 9 runs faster than gzip level 8/9
+/// while keeping compressed bytes smaller than gzip; level 19 would stall each cache miss for over a second.
+pub const ZSTD_DYNAMIC_LEVEL: i32 = ZSTD_HEAD_LEVEL;
+
+/// The level-9 zstd form of a dynamic API body.
+pub fn zstd_dynamic_body(data: &[u8]) -> Vec<u8> {
+  zstd::encode_all(data, ZSTD_DYNAMIC_LEVEL).expect("compressing into a Vec cannot fail")
 }
 
 /// The zstd level of a body a memo serves on every repeat request.
@@ -262,13 +414,57 @@ mod tests {
   use super::*;
 
   #[test]
-  fn a_request_takes_gzip_only_when_its_accept_encoding_names_it() {
-    let mut headers = HeaderMap::new();
-    assert!(!accepts_gzip(&headers), "a request naming no coding takes the plain body");
-    headers.insert(header::ACCEPT_ENCODING, "br, deflate".parse().unwrap());
-    assert!(!accepts_gzip(&headers), "another coding leaves the body plain");
-    headers.insert(header::ACCEPT_ENCODING, "gzip, deflate".parse().unwrap());
-    assert!(accepts_gzip(&headers), "a coding list that names gzip takes the gzip form");
+  fn a_request_negotiates_response_encoding_by_weight_with_zstd_preferred_on_ties() {
+    let headers = |value: &'static str| {
+      let mut headers = HeaderMap::new();
+      if !value.is_empty() {
+        headers.insert(header::ACCEPT_ENCODING, value.parse().unwrap());
+      }
+      headers
+    };
+    assert_eq!(ResponseEncoding::for_request(&headers("")), ResponseEncoding::Identity);
+    assert_eq!(ResponseEncoding::for_request(&headers("br, deflate")), ResponseEncoding::Identity);
+    assert_eq!(ResponseEncoding::for_request(&headers("gzip, deflate")), ResponseEncoding::Gzip);
+    assert_eq!(ResponseEncoding::for_request(&headers("gzip, deflate, br, zstd")), ResponseEncoding::Zstd);
+    assert_eq!(ResponseEncoding::for_request(&headers("zstd;q=0.5, gzip;q=1")), ResponseEncoding::Gzip);
+    assert_eq!(ResponseEncoding::for_request(&headers("gzip;q=0, zstd")), ResponseEncoding::Zstd);
+    assert_eq!(ResponseEncoding::for_request(&headers("gzip;q=0")), ResponseEncoding::Identity);
+    assert_eq!(ResponseEncoding::for_request(&headers("zstd;q=0, gzip;q=0.2")), ResponseEncoding::Gzip);
+  }
+
+  #[test]
+  fn a_stream_compressor_round_trips_both_gzip_and_zstd() {
+    let chunks: [&[u8]; 3] = [b"alpha ", b"beta ", b"gamma"];
+    let mut gzip = StreamCompressor::new(CompressedEncoding::Gzip);
+    let mut gzip_bytes = Vec::new();
+    for chunk in chunks {
+      gzip_bytes.extend_from_slice(&gzip.push(chunk));
+    }
+    gzip_bytes.extend_from_slice(&gzip.finish());
+    let mut decoded_gzip = String::new();
+    flate2::read::GzDecoder::new(gzip_bytes.as_slice()).read_to_string(&mut decoded_gzip).unwrap();
+    assert_eq!(decoded_gzip, "alpha beta gamma");
+
+    let mut zstd = StreamCompressor::new(CompressedEncoding::Zstd);
+    let mut zstd_bytes = Vec::new();
+    for chunk in chunks {
+      zstd_bytes.extend_from_slice(&zstd.push(chunk));
+    }
+    zstd_bytes.extend_from_slice(&zstd.finish());
+    let decoded_zstd = zstd::decode_all(zstd_bytes.as_slice()).unwrap();
+    assert_eq!(decoded_zstd, b"alpha beta gamma");
+  }
+
+  #[test]
+  fn cached_encoding_replaces_the_kept_buffer_when_the_coding_switches() {
+    let mut slot = None;
+    let gz = CachedEncoding::get_or_replace(&mut slot, CompressedEncoding::Gzip, |_| b"gz".to_vec());
+    assert_eq!(gz.as_ref(), b"gz");
+    let gz_again = CachedEncoding::get_or_replace(&mut slot, CompressedEncoding::Gzip, |_| panic!("cache hit"));
+    assert_eq!(gz_again, gz);
+    let zstd = CachedEncoding::get_or_replace(&mut slot, CompressedEncoding::Zstd, |_| b"zst".to_vec());
+    assert_eq!(zstd.as_ref(), b"zst");
+    assert_eq!(slot.as_ref().unwrap().encoding, CompressedEncoding::Zstd);
   }
 
   #[test]

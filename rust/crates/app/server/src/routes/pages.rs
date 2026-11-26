@@ -13,7 +13,7 @@ use bytes::Bytes;
 use charliebot_agents::model_pool::{MISSING_BACKEND_OPTION, POOL_MEMBER_FIELD};
 use charliebot_agents::pool_display::session_metadata_shown;
 use charliebot_cli_common::route;
-use charliebot_compat::compression::{PageTail, gzip_memoized_body, zstd_memoized_body};
+use charliebot_compat::compression::{PageTail, ResponseEncoding, gzip_memoized_body, zstd_memoized_body};
 use charliebot_compat::mimetypes;
 use charliebot_compat::mimetypes_table::TEXT_HTML;
 use charliebot_compat::responses::{self, Failure};
@@ -130,41 +130,8 @@ struct PageTailEntry {
   tail: PageTail,
 }
 
-/// The encoding a page body travels in: the smallest form of the body the request names as acceptable.
-///
-/// A client that accepts zstd takes it, because zstd's form of a page is smaller than gzip's; the page's gzip form is
-/// unchanged for every other client.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PageEncoding {
-  Identity,
-  Gzip,
-  Zstd,
-}
-
-impl PageEncoding {
-  /// The encoding a request's `Accept-Encoding` prefers among the forms a page body keeps.
-  ///
-  /// A form with a higher weight wins, and equal weights take the smaller form. A form the request does not name, or
-  /// names with `q=0`, is not acceptable. The transport reads the same weights through [`gzip::accepted_weight`], so a
-  /// client that forbids gzip takes the identity body from both.
-  fn for_request(headers: &HeaderMap) -> PageEncoding {
-    match (gzip::accepted_weight(headers, "zstd"), gzip::accepted_weight(headers, "gzip")) {
-      (Some(zstd), Some(gzip)) if zstd >= gzip => PageEncoding::Zstd,
-      (_, Some(_)) => PageEncoding::Gzip,
-      (Some(_), None) => PageEncoding::Zstd,
-      (None, None) => PageEncoding::Identity,
-    }
-  }
-
-  /// The `Content-Encoding` this encoding names, for the forms a body travels compressed in.
-  fn content_encoding(self) -> &'static str {
-    match self {
-      PageEncoding::Gzip => "gzip",
-      PageEncoding::Zstd => "zstd",
-      PageEncoding::Identity => unreachable!("an identity page body travels whole"),
-    }
-  }
-}
+/// The encoding a page body travels in: the shared response-encoding negotiation.
+type PageEncoding = ResponseEncoding;
 
 /// A page body's compressed form and the `Content-Encoding` it names.
 #[derive(Clone)]
@@ -324,14 +291,16 @@ impl PageBodyMemo {
     let entry = entries.get_mut(index).expect("the page body entry matched or was built");
     let body = entry.body.clone();
     let tail = entry.tail.clone();
-    let compressed = if encoding != PageEncoding::Identity && body.len() >= gzip::MINIMUM_SIZE {
+    let compressed = if let Some(coding) = encoding.compressed()
+      && body.len() >= gzip::MINIMUM_SIZE
+    {
       let slot = match encoding {
         PageEncoding::Gzip => &mut entry.gzip,
         PageEncoding::Zstd => &mut entry.zstd,
         PageEncoding::Identity => unreachable!("an identity page body travels whole"),
       };
       let bytes = slot.get_or_insert_with(|| compressed_page(name, &body, &tail, encoding, tails)).clone();
-      Some(PageCompressed { encoding: encoding.content_encoding(), bytes })
+      Some(PageCompressed { encoding: coding.content_encoding(), bytes })
     } else {
       None
     };
@@ -1600,17 +1569,61 @@ mod tests {
     assert_eq!(PageEncoding::for_request(&headers("gzip;q=0")), PageEncoding::Identity);
   }
 
-  #[test]
-  fn a_client_that_forbids_gzip_takes_the_identity_page_from_both_layers() {
-    let headers = |value: &'static str| {
-      let mut headers = HeaderMap::new();
-      headers.insert(header::ACCEPT_ENCODING, HeaderValue::from_static(value));
-      headers
+  #[tokio::test]
+  async fn a_client_that_forbids_gzip_takes_the_identity_page_from_both_layers() {
+    let template = Arc::new(page_html());
+    let plain_app = axum::Router::new()
+      .route(
+        "/",
+        axum::routing::get({
+          let template = Arc::clone(&template);
+          move |req: Request<Body>| async move {
+            let mut memo = PageBodyMemo::default();
+            let encoding = PageEncoding::for_request(req.headers());
+            let (body, compressed) = memo.body("home.html", &template, &[], None, None, encoding).unwrap();
+            page_response(body, compressed, StatusCode::OK)
+          }
+        }),
+      )
+      .layer(axum::middleware::from_fn(crate::gzip::layer));
+
+    let send = |app: axum::Router, accept_encoding: &'static str| async move {
+      app
+        .oneshot(
+          Request::builder()
+            .method(Method::GET)
+            .uri("/")
+            .header(header::ACCEPT_ENCODING, accept_encoding)
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap()
     };
-    assert_eq!(PageEncoding::for_request(&headers("gzip;q=0")), PageEncoding::Identity);
-    assert_eq!(gzip::Responder::for_request(&headers("gzip;q=0")), gzip::Responder::Identity);
-    assert_eq!(PageEncoding::for_request(&headers("gzip")), PageEncoding::Gzip);
-    assert_eq!(gzip::Responder::for_request(&headers("gzip")), gzip::Responder::Gzip);
+
+    let forbidden = send(plain_app, "gzip;q=0").await;
+    assert!(forbidden.headers().get(header::CONTENT_ENCODING).is_none());
+    assert_eq!(body_text(forbidden).await, *template);
+
+    let passthrough_app = axum::Router::new()
+      .route(
+        "/",
+        axum::routing::get({
+          let template = Arc::clone(&template);
+          move || async move { page_response(Bytes::from(template.as_str().to_string()), None, StatusCode::OK) }
+        }),
+      )
+      .layer(axum::middleware::from_fn(crate::gzip::layer));
+
+    let transport_forbidden = send(passthrough_app.clone(), "gzip;q=0").await;
+    assert!(transport_forbidden.headers().get(header::CONTENT_ENCODING).is_none());
+    assert_eq!(body_text(transport_forbidden).await, *template);
+
+    let transport_gzip = send(passthrough_app.clone(), "gzip").await;
+    assert_eq!(transport_gzip.headers()[header::CONTENT_ENCODING], "gzip");
+
+    let transport_zstd = send(passthrough_app, "gzip, zstd").await;
+    assert_eq!(transport_zstd.headers()[header::CONTENT_ENCODING], "zstd");
   }
 
   #[tokio::test]

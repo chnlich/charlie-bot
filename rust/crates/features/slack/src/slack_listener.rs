@@ -61,10 +61,12 @@ pub async fn handle_app_mention(
   let team_id = truthy_text(event.get("team"))
     .or_else(|| truthy_text(event.get("team_id")))
     .ok_or_else(|| ThreadReplyError::failure("Slack app_mention has no team id"))?;
-  if is_colleague && !colleague_admitted(&client, slack_config, channel_id, thread_ts, user).await {
+  let session_id = summon_session_id(team_id, channel_id, thread_ts);
+  if is_colleague
+    && !colleague_admitted(features, &client, slack_config, channel_id, thread_ts, user, Some(&session_id)).await
+  {
     return Ok(None);
   }
-  let session_id = summon_session_id(team_id, channel_id, thread_ts);
   let label = format!("Slack #{}", client.get_channel_name(channel_id).await.as_deref().unwrap_or(channel_id));
   let origin = json!({"team_id": team_id, "channel_id": channel_id, "thread_ts": thread_ts});
   let block = json!({
@@ -116,13 +118,13 @@ pub async fn handle_thread_message(
   let team_id = truthy_text(event.get("team"))
     .or_else(|| truthy_text(event.get("team_id")))
     .ok_or_else(|| ThreadReplyError::failure("Slack message has no team id"))?;
+  let session_id = summon_session_id(team_id, channel_id, thread_ts);
   if is_colleague {
     let sender = required_text(event, "user")?;
-    if !colleague_admitted(&client, slack_config, channel_id, thread_ts, sender).await {
+    if !colleague_admitted(features, &client, slack_config, channel_id, thread_ts, sender, Some(&session_id)).await {
       return Ok(None);
     }
   }
-  let session_id = summon_session_id(team_id, channel_id, thread_ts);
   let adapter: Arc<dyn ThreadAdapter> = Arc::new(SlackThreadAdapter::with_client(Arc::clone(features), client));
   let channel_id = channel_id.to_string();
   thread_entry::follow_message(&adapter, features, &session_id, message_ts, move |origin| {
@@ -769,6 +771,24 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn a_failed_colleague_summon_admission_sends_one_owner_dm_and_starts_no_summon() {
+    let home = Home::new();
+    let api = FakeApi::start(&[]).await;
+    api.set_members_error(json!({"ok": false, "error": "missing_scope", "needed": "mpim:read"}));
+
+    let accepted = handle_app_mention(&colleague_mention(), &home.features, Arc::clone(&api.client)).await.unwrap();
+
+    assert_eq!(accepted, None);
+    assert!(home.features.store.get_session(&summon_session_id("T_TEST", "C_TEST", TS)).await.unwrap().is_none());
+    assert!(home.launches().is_empty());
+    let dms = home.owner_dms();
+    assert_eq!(dms.len(), 1, "one owner DM reports the failed admission: {dms:?}");
+    for expected in ["colleague message admission", "C_TEST", TS, COLLEAGUE, "missing_scope", "mpim:read"] {
+      assert!(dms[0].contains(expected), "owner DM lacks {expected}: {}", dms[0]);
+    }
+  }
+
+  #[tokio::test]
   async fn colleague_follow_message_that_is_not_admitted_arms_no_follow() {
     let home = Home::new();
     let api = FakeApi::start(&[]).await;
@@ -814,6 +834,36 @@ mod tests {
     let armed = backfill_followed_threads(&home.features, Arc::clone(&api.client)).await.unwrap();
     assert_eq!(armed, 1, "an admitted colleague message arms the follow");
     assert_eq!(triggers.list_triggers(&session_id).await.unwrap().len(), 1);
+  }
+
+  #[tokio::test]
+  async fn backfill_sends_one_owner_dm_when_the_colleague_gate_read_fails() {
+    let home = Home::new();
+    let api = FakeApi::start(&[]).await;
+    let session_id = summon_session_id("T_TEST", "C_TEST", TS);
+    home.thread_session(&session_id, TS).await;
+    home
+      .features
+      .store
+      .append_chat_event(&session_id, json!({"type": "agent_message", "slack": {"sender_user_id": COLLEAGUE}}))
+      .await
+      .unwrap();
+    home.features.startup.insert(Arc::new(FixedClientGate(Arc::clone(&api.client))) as Arc<dyn ColleagueGate>).unwrap();
+    api.set_thread_messages(vec![
+      json!({"ts": TS, "user": "U_ALLOWED", "text": "status?"}),
+      json!({"ts": LATER_TS, "user": COLLEAGUE, "text": "help"}),
+    ]);
+    api.set_replies_error_on_call(2, json!({"ok": false, "error": "channel_not_found"}));
+
+    let armed = backfill_followed_threads(&home.features, Arc::clone(&api.client)).await.unwrap();
+
+    assert_eq!(armed, 0, "a failed colleague gate read does not arm a follow");
+    let dms = home.owner_dms();
+    assert_eq!(dms.len(), 1, "one owner DM reports the gate read failure: {dms:?}");
+    for expected in ["follow wake admission", "C_TEST", TS, COLLEAGUE, "channel_not_found"] {
+      assert!(dms[0].contains(expected), "owner DM lacks {expected}: {}", dms[0]);
+    }
+    assert!(dms[0].contains(&format!("https://charlie.synthetic.test/?session={session_id}")));
   }
 
   #[tokio::test]

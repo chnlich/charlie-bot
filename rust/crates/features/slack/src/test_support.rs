@@ -18,7 +18,7 @@ use charliebot_core::credentials::load_credentials;
 use charliebot_core::hot_reload::HotReload;
 use charliebot_registry::colleague_gate::ColleagueGate;
 use charliebot_registry::store_hooks::store_hooks;
-use charliebot_registry::{FeatureContext, StartupState};
+use charliebot_registry::{FeatureContext, Registry, RegistryError, StartupState};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
 use charliebot_store::{CreateTask, Store, TaskCaller};
 use charliebot_tasks::completion::TaskCompletion;
@@ -96,6 +96,30 @@ pub(crate) struct Home {
   _dir: TempDir,
   pub features: Arc<FeatureContext>,
   pub executor: Arc<RecordingExecutor>,
+  owner_dms: Arc<Mutex<Vec<String>>>,
+}
+
+pub(crate) struct RecordedOwnerDms(Arc<Mutex<Vec<String>>>);
+
+pub(crate) fn record_owner_dm<'a>(
+  features: &'a FeatureContext,
+  text: &'a str,
+) -> BoxFuture<'a, anyhow::Result<String>> {
+  Box::pin(async move {
+    features
+      .startup
+      .require::<RecordedOwnerDms>()?
+      .0
+      .lock()
+      .expect("the owner DM recorder is never poisoned")
+      .push(text.to_string());
+    Ok("synthetic-owner-dm-ts".to_string())
+  })
+}
+
+/// The Slack package's registration with the owner DM recorder, so a test reads the DMs the gate sends.
+pub(crate) fn register_for_test(registry: &mut Registry) -> Result<(), RegistryError> {
+  crate::entry::register_with_owner_dm(registry, record_owner_dm)
 }
 
 impl Home {
@@ -111,7 +135,7 @@ impl Home {
     let dir = tempfile::tempdir().expect("the synthetic home exists");
     std::fs::write(
       dir.path().join("config.yaml"),
-      "slack:\n  allowed_user_ids:\n    - U_ALLOWED\n  colleague_user_ids:\n    - U_COLLEAGUE\n",
+      "server:\n  public_url: https://charlie.synthetic.test\nslack:\n  allowed_user_ids:\n    - U_ALLOWED\n  colleague_user_ids:\n    - U_COLLEAGUE\n",
     )
     .expect("the synthetic config writes");
     std::fs::write(
@@ -121,7 +145,7 @@ impl Home {
     .expect("the synthetic credentials write");
 
     let mut registry = charliebot_registry::Registry::new();
-    registry.register_package("features.slack", crate::register).expect("the Slack package registers");
+    registry.register_package("features.slack", register_for_test).expect("the Slack package registers");
     let registry = Arc::new(registry);
     let mut loaded = registry.load_config(dir.path()).expect("the synthetic Slack config loads");
     loaded.backends.options.push(BackendOption {
@@ -155,8 +179,10 @@ impl Home {
       "slack_test_credentials_reload_failed",
       Box::new(move || load_credentials(&credential_home)),
     ));
-    let startup = StartupState::default();
-    let features = Arc::new(FeatureContext { config, credentials, store, registry, startup: Arc::new(startup) });
+    let owner_dms = Arc::new(Mutex::new(Vec::new()));
+    let startup = Arc::new(StartupState::default());
+    startup.insert(RecordedOwnerDms(Arc::clone(&owner_dms))).expect("the owner DM recorder inserts once");
+    let features = Arc::new(FeatureContext { config, credentials, store, registry, startup });
 
     let executor = Arc::new(RecordingExecutor::default());
     if with_dispatch {
@@ -174,7 +200,7 @@ impl Home {
         .expect("trigger manager inserts once");
     }
 
-    Self { _dir: dir, features, executor }
+    Self { _dir: dir, features, executor, owner_dms }
   }
 
   pub(crate) fn clear_slack_credentials(&self) {
@@ -217,6 +243,10 @@ impl Home {
   pub(crate) fn launches(&self) -> Vec<(String, Vec<Value>)> {
     self.executor.launches.lock().expect("the test launch log is never poisoned").clone()
   }
+
+  pub(crate) fn owner_dms(&self) -> Vec<String> {
+    self.owner_dms.lock().expect("the owner DM recorder is never poisoned").clone()
+  }
 }
 
 #[derive(Clone, Copy)]
@@ -231,8 +261,11 @@ pub(crate) struct FakeState {
   calls: Mutex<Vec<(String, String, Value)>>,
   thread_messages: Mutex<Vec<Value>>,
   member_pages: Mutex<Vec<Vec<String>>>,
-  members_unreadable: AtomicBool,
-  replies_unreadable: AtomicBool,
+  members_error: Mutex<Option<Value>>,
+  replies_error: Mutex<Option<Value>>,
+  replies_error_on_call: AtomicUsize,
+  replies_http_status: AtomicUsize,
+  replies_calls: AtomicUsize,
   posts: Mutex<Vec<Value>>,
   plans: Mutex<VecDeque<SocketPlan>>,
   open_failures: AtomicUsize,
@@ -309,13 +342,26 @@ impl FakeApi {
       pages.iter().map(|page| page.iter().map(|id| id.to_string()).collect()).collect();
   }
 
-  /// Makes every `conversations.members` call fail as a channel the bot cannot read does (`channel_not_found`).
-  pub(crate) fn set_members_unreadable(&self) {
-    self.state.members_unreadable.store(true, Ordering::SeqCst);
+  pub(crate) fn set_members_error(&self, error: Value) {
+    *self.state.members_error.lock().expect("the member error slot is never poisoned") = Some(error);
   }
 
   pub(crate) fn set_replies_unreadable(&self) {
-    self.state.replies_unreadable.store(true, Ordering::SeqCst);
+    self.set_replies_error(json!({"ok": false, "error": "channel_not_found"}));
+  }
+
+  pub(crate) fn set_replies_error(&self, error: Value) {
+    *self.state.replies_error.lock().expect("the replies error slot is never poisoned") = Some(error);
+    self.state.replies_error_on_call.store(0, Ordering::SeqCst);
+  }
+
+  pub(crate) fn set_replies_error_on_call(&self, call: usize, error: Value) {
+    *self.state.replies_error.lock().expect("the replies error slot is never poisoned") = Some(error);
+    self.state.replies_error_on_call.store(call, Ordering::SeqCst);
+  }
+
+  pub(crate) fn set_replies_http_failure(&self, status: u16) {
+    self.state.replies_http_status.store(status as usize, Ordering::SeqCst);
   }
 
   pub(crate) fn calls(&self) -> Vec<(String, String, Value)> {
@@ -417,28 +463,39 @@ async fn reaction(State(state): State<Arc<FakeState>>, request: Request<Body>) -
 async fn thread_replies(
   State(state): State<Arc<FakeState>>,
   Query(query): Query<std::collections::HashMap<String, String>>,
-) -> Json<Value> {
+) -> Response {
   state.record("GET", "/api/conversations.replies", json!(query));
-  if state.replies_unreadable.load(Ordering::SeqCst) {
-    return Json(json!({"ok": false, "error": "channel_not_found"}));
+  let call = state.replies_calls.fetch_add(1, Ordering::SeqCst) + 1;
+  let status = state.replies_http_status.load(Ordering::SeqCst);
+  if status != 0 {
+    return (
+      StatusCode::from_u16(status as u16).expect("the synthetic status is valid"),
+      "synthetic transport failure",
+    )
+      .into_response();
+  }
+  let failure_call = state.replies_error_on_call.load(Ordering::SeqCst);
+  let error = state.replies_error.lock().expect("the replies error slot is never poisoned").clone();
+  if let Some(error) = error.filter(|_| failure_call == 0 || failure_call == call) {
+    return Json(error).into_response();
   }
   let messages = state.thread_messages.lock().expect("the fake thread is never poisoned").clone();
-  Json(json!({"ok": true, "messages": messages, "has_more": false}))
+  Json(json!({"ok": true, "messages": messages, "has_more": false})).into_response()
 }
 
 async fn channel_members(
   State(state): State<Arc<FakeState>>,
   Query(query): Query<std::collections::HashMap<String, String>>,
-) -> Json<Value> {
+) -> Response {
   state.record("GET", "/api/conversations.members", json!(query));
-  if state.members_unreadable.load(Ordering::SeqCst) {
-    return Json(json!({"ok": false, "error": "channel_not_found"}));
+  if let Some(error) = state.members_error.lock().expect("the member error slot is never poisoned").clone() {
+    return Json(error).into_response();
   }
   let pages = state.member_pages.lock().expect("the fake member pages are never poisoned").clone();
   let index = query.get("cursor").and_then(|cursor| cursor.strip_prefix("page-")?.parse::<usize>().ok()).unwrap_or(0);
   let members = pages.get(index).cloned().unwrap_or_default();
   let next_cursor = if index + 1 < pages.len() { format!("page-{}", index + 1) } else { String::new() };
-  Json(json!({"ok": true, "members": members, "response_metadata": {"next_cursor": next_cursor}}))
+  Json(json!({"ok": true, "members": members, "response_metadata": {"next_cursor": next_cursor}})).into_response()
 }
 
 async fn channel_info(

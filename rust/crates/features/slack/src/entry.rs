@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField, ThreadSlot, validate_thread_slot};
+use charliebot_registry::registry::OwnerDmFn;
 use charliebot_registry::{FeatureContext, Registry, RegistryError};
 use charliebot_store::metadata::SUCCESSOR_SESSION_ID;
 use futures_util::future::BoxFuture;
@@ -23,6 +24,10 @@ const THREAD_SLOT: ThreadSlot = ThreadSlot {
 
 /// `register`: the service, the routes and the package's other registrations, in server order.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
+  register_with_owner_dm(registry, post_owner_dm)
+}
+
+pub(crate) fn register_with_owner_dm(registry: &mut Registry, owner_dm: OwnerDmFn) -> Result<(), RegistryError> {
   registry.service(Arc::new(SlackService::default()))?;
   registry.router(api::routes, api::matches)?;
   registry.draft_platform("slack", draft::platform_factory())?;
@@ -43,7 +48,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.thread_origin_field("slack", THREAD_SLOT.origin_field)?;
   registry.turn_contribution("slack", Arc::new(SlackTurnContribution))?;
   registry.user_dm(post_user_dm)?;
-  registry.owner_dm(post_owner_dm)
+  registry.owner_dm(owner_dm)
 }
 
 fn post_user_dm<'a>(

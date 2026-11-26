@@ -24,6 +24,11 @@ pub(crate) const COLLEAGUE_REFUSAL: &str =
 /// The key of the summon block that holds the Slack id of the message's sender.
 pub(crate) const SENDER_USER_ID: &str = "sender_user_id";
 
+const MESSAGE_ADMISSION_CHECK: &str = "colleague message admission";
+const FOLLOW_WAKE_CHECK: &str = "follow wake admission";
+const AGENT_WORK_CHECK: &str = "delegation route check";
+const RUN_READ_ONLY_CHECK: &str = "run read-only check";
+
 /// Whether `message` is a human message from one of `ids`.
 pub(crate) fn sent_by(message: &Value, ids: &[String]) -> bool {
   message.get("subtype").is_none_or(Value::is_null)
@@ -35,11 +40,13 @@ pub(crate) fn sent_by(message: &Value, ids: &[String]) -> bool {
 /// must be listed; an operator must be a member of the channel, read page by page; and the thread must hold an
 /// operator message or a message that mentions an operator. A failed Slack read logs an error and drops the message.
 pub(crate) async fn colleague_admitted(
+  features: &FeatureContext,
   client: &SlackClient,
   config: &SlackConfig,
   channel: &str,
   thread_ts: &str,
   sender: &str,
+  session_id: Option<&str>,
 ) -> bool {
   if !config.colleague_user_ids.iter().any(|id| id == sender) {
     return false;
@@ -58,6 +65,8 @@ pub(crate) async fn colleague_admitted(
         sender,
         error = %format!("{error:#}"),
       );
+      notify_read_failure(features, MESSAGE_ADMISSION_CHECK, channel, thread_ts, Some(sender), session_id, &error)
+        .await;
       false
     }
   }
@@ -99,6 +108,107 @@ fn thread_of(origin: &Value) -> Result<(&str, &str)> {
   Ok((channel, thread_ts))
 }
 
+fn colleague_sender<'a>(event: &'a Value, colleagues: &[String]) -> Option<&'a str> {
+  let sender = event.get(SLACK.name)?.get(SENDER_USER_ID)?.as_str()?;
+  colleagues.iter().any(|id| id == sender).then_some(sender)
+}
+
+fn latest_colleague_sender(events: &[Value], colleagues: &[String]) -> Option<String> {
+  events.iter().rev().find_map(|event| colleague_sender(event, colleagues).map(str::to_string))
+}
+
+fn run_colleague_sender(events: &[Value], input_ids: &[String], colleagues: &[String]) -> Option<String> {
+  input_ids
+    .iter()
+    .rev()
+    .find_map(|input_id| {
+      events
+        .iter()
+        .find(|event| event.get("id").and_then(Value::as_str) == Some(input_id.as_str()))
+        .and_then(|event| colleague_sender(event, colleagues))
+        .map(str::to_string)
+    })
+    .or_else(|| latest_colleague_sender(events, colleagues))
+}
+
+fn session_colleague_sender(features: &FeatureContext, session_id: &str, colleagues: &[String]) -> Option<String> {
+  match features.store.load_all_facts_view_sync(session_id) {
+    Ok(events) => {
+      let events = events.iter().map(|event| event.event_value()).collect::<Vec<_>>();
+      latest_colleague_sender(&events, colleagues)
+    }
+    Err(error) => {
+      tracing::warn!(
+        event = "slack_colleague_sender_lookup_failed",
+        session = session_id,
+        error = %error,
+      );
+      None
+    }
+  }
+}
+
+async fn session_link(features: &FeatureContext, session_id: &str) -> Option<String> {
+  match features.store.get_session(session_id).await {
+    Ok(Some(_)) => {}
+    Ok(None) => return None,
+    Err(error) => {
+      tracing::warn!(
+        event = "slack_colleague_session_link_lookup_failed",
+        session = session_id,
+        error = %error,
+      );
+      return None;
+    }
+  }
+  let config = match features.config.get() {
+    Ok(config) => config,
+    Err(error) => {
+      tracing::warn!(
+        event = "slack_colleague_session_link_config_failed",
+        session = session_id,
+        error = %error,
+      );
+      return None;
+    }
+  };
+  config
+    .server
+    .public_url
+    .as_deref()
+    .map(|public_url| format!("{}/?session={session_id}", public_url.trim_end_matches('/')))
+}
+
+async fn notify_read_failure(
+  features: &FeatureContext,
+  check: &str,
+  channel: &str,
+  thread_ts: &str,
+  colleague_user_id: Option<&str>,
+  session_id: Option<&str>,
+  error: &anyhow::Error,
+) {
+  let colleague_user_id = colleague_user_id.unwrap_or("unavailable");
+  let mut text = format!(
+    "CharlieBot Slack colleague check failed: {check}\nChannel: {channel}\nThread ts: {thread_ts}\nColleague Slack user: {colleague_user_id}\n",
+  );
+  if let Some(session_id) = session_id
+    && let Some(link) = session_link(features, session_id).await
+  {
+    text.push_str(&format!("Session: <{link}|Open CharlieBot session>\n"));
+  }
+  text.push_str(&format!("Slack error: {error:#}"));
+
+  let sent = match features.registry.owner_dm_sender() {
+    Ok(send) => send(features, &text).await,
+    Err(error) => Err(error),
+  };
+  match sent {
+    Ok(ts) => tracing::info!(ts = %ts, check, "slack_colleague_failure_dm_sent"),
+    Err(error) => tracing::warn!(error = %error, check, "slack_colleague_failure_dm_failed"),
+  }
+}
+
 /// Whether the request of run `run_id` must be refused: its inputs are not all the operator's, its session is a Slack
 /// thread, and a colleague has posted in that thread.
 pub(crate) async fn colleague_thread_refuses(
@@ -106,6 +216,7 @@ pub(crate) async fn colleague_thread_refuses(
   client: Option<&SlackClient>,
   session_id: &str,
   run_id: &str,
+  check: &str,
 ) -> Result<bool> {
   let config = features.config.get().context("load config")?;
   let slack = config.section::<SlackConfig>(NAME);
@@ -138,7 +249,15 @@ pub(crate) async fn colleague_thread_refuses(
     None => Some(SlackClient::from_features(features).context("load Slack client")?),
   };
   let client = client.or(owned_client.as_ref()).expect("the Slack client is available");
-  let messages = client.get_thread_replies(channel, thread_ts).await?;
+  let colleague_user_id = run_colleague_sender(&events, &run.input_event_ids, &slack.colleague_user_ids);
+  let messages = match client.get_thread_replies(channel, thread_ts).await {
+    Ok(messages) => messages,
+    Err(error) => {
+      notify_read_failure(features, check, channel, thread_ts, colleague_user_id.as_deref(), Some(session_id), &error)
+        .await;
+      return Err(error);
+    }
+  };
   Ok(messages.iter().any(|message| sent_by(message, &slack.colleague_user_ids)))
 }
 
@@ -155,7 +274,23 @@ async fn follow_wake_admitted(features: &FeatureContext, client: &SlackClient, s
   let config = features.config.get().context("load config")?;
   let slack = config.section::<SlackConfig>(NAME);
   let watermark = meta.extra(SLACK.watermark_field).and_then(Value::as_str);
-  let messages = client.get_thread_replies(channel, thread_ts).await?;
+  let colleague_user_id = session_colleague_sender(features, session_id, &slack.colleague_user_ids);
+  let messages = match client.get_thread_replies(channel, thread_ts).await {
+    Ok(messages) => messages,
+    Err(error) => {
+      notify_read_failure(
+        features,
+        FOLLOW_WAKE_CHECK,
+        channel,
+        thread_ts,
+        colleague_user_id.as_deref(),
+        Some(session_id),
+        &error,
+      )
+      .await;
+      return Err(error);
+    }
+  };
   let unread_colleague = messages.iter().find(|message| {
     sent_by(message, &slack.colleague_user_ids)
       && watermark.is_none_or(|watermark| {
@@ -166,7 +301,7 @@ async fn follow_wake_admitted(features: &FeatureContext, client: &SlackClient, s
     return Ok(true);
   };
   let sender = colleague.get("user").and_then(Value::as_str).context("the colleague message has no user")?;
-  Ok(colleague_admitted(client, slack, channel, thread_ts, sender).await)
+  Ok(colleague_admitted(features, client, slack, channel, thread_ts, sender, Some(session_id)).await)
 }
 
 /// The refusal detail of an agent-work request, or None when the request may proceed. Operator callers always proceed;
@@ -179,7 +314,7 @@ pub(crate) async fn refuse_work_with(
   let CallerIdentity::Agent { claims } = caller else {
     return None;
   };
-  match colleague_thread_refuses(features, client, &claims.session_id, &claims.run_id).await {
+  match colleague_thread_refuses(features, client, &claims.session_id, &claims.run_id, AGENT_WORK_CHECK).await {
     Ok(true) => Some(COLLEAGUE_REFUSAL),
     Ok(false) => None,
     Err(error) => {
@@ -202,7 +337,7 @@ pub(crate) async fn run_read_only_with(
   session_id: &str,
   run_id: &str,
 ) -> bool {
-  match colleague_thread_refuses(features, client, session_id, run_id).await {
+  match colleague_thread_refuses(features, client, session_id, run_id, RUN_READ_ONLY_CHECK).await {
     Ok(read_only) => read_only,
     Err(error) => {
       tracing::error!(
@@ -289,7 +424,10 @@ mod tests {
 
   use charliebot_core::run_token::RunTokenClaims;
   use charliebot_registry::colleague_gate::ColleagueGate;
+  use charliebot_store::trigger_files::TriggerStatus;
+  use charliebot_triggers::triggers::TriggerManager;
   use serde_json::{Value, json};
+  use tokio::net::TcpListener;
 
   use super::*;
   use crate::test_support::{FakeApi, FixedClientGate, Home};
@@ -305,83 +443,140 @@ mod tests {
     json!({"ts": ts, "user": user, "text": text})
   }
 
-  async fn admitted(api: &FakeApi, sender: &str, thread_ts: &str) -> bool {
-    colleague_admitted(&api.client, &config(), CHANNEL, thread_ts, sender).await
+  async fn admitted(home: &Home, api: &FakeApi, sender: &str, thread_ts: &str, session_id: Option<&str>) -> bool {
+    colleague_admitted(&home.features, &api.client, &config(), CHANNEL, thread_ts, sender, session_id).await
+  }
+
+  fn assert_one_owner_dm(home: &Home, expected: &[&str]) -> String {
+    let messages = home.owner_dms();
+    assert_eq!(messages.len(), 1, "one owner DM is sent: {messages:?}");
+    let message = messages.into_iter().next().expect("the owner DM is present");
+    for expected in expected {
+      assert!(message.contains(expected), "owner DM lacks {expected}: {message}");
+    }
+    message
   }
 
   #[tokio::test]
   async fn colleague_message_is_admitted_when_the_operator_is_a_member_and_has_spoken() {
+    let home = Home::new();
     let api = FakeApi::start(&[]).await;
     api.set_member_pages(&[&["U_OTHER", "U_ALLOWED"]]);
     api.set_thread_messages(vec![
       message(THREAD, "U_ALLOWED", "status?"),
       message("1700000000.000200", "U_COLLEAGUE", "why?"),
     ]);
-    assert!(admitted(&api, "U_COLLEAGUE", THREAD).await);
+    assert!(admitted(&home, &api, "U_COLLEAGUE", THREAD, None).await);
+    assert!(home.owner_dms().is_empty());
   }
 
   #[tokio::test]
   async fn a_top_level_colleague_message_that_mentions_the_operator_admits_itself() {
+    let home = Home::new();
     let api = FakeApi::start(&[]).await;
     api.set_member_pages(&[&["U_ALLOWED"]]);
     api.set_thread_messages(vec![message(THREAD, "U_COLLEAGUE", "<@U_ALLOWED> help")]);
-    assert!(admitted(&api, "U_COLLEAGUE", THREAD).await);
+    assert!(admitted(&home, &api, "U_COLLEAGUE", THREAD, None).await);
   }
 
   #[tokio::test]
   async fn a_top_level_colleague_message_without_a_mention_is_dropped() {
+    let home = Home::new();
     let api = FakeApi::start(&[]).await;
     api.set_member_pages(&[&["U_ALLOWED"]]);
     api.set_thread_messages(vec![message(THREAD, "U_COLLEAGUE", "help")]);
-    assert!(!admitted(&api, "U_COLLEAGUE", THREAD).await);
+    assert!(!admitted(&home, &api, "U_COLLEAGUE", THREAD, None).await);
   }
 
   #[tokio::test]
   async fn the_operator_on_the_second_member_page_is_admitted() {
+    let home = Home::new();
     let api = FakeApi::start(&[]).await;
     api.set_member_pages(&[&["U_OTHER_ONE"], &["U_OTHER_TWO", "U_ALLOWED"]]);
     api.set_thread_messages(vec![message(THREAD, "U_ALLOWED", "status?")]);
-    assert!(admitted(&api, "U_COLLEAGUE", THREAD).await);
+    assert!(admitted(&home, &api, "U_COLLEAGUE", THREAD, None).await);
   }
 
   #[tokio::test]
   async fn a_channel_without_the_operator_drops_the_message_even_with_the_operator_in_the_thread() {
+    let home = Home::new();
     let api = FakeApi::start(&[]).await;
     api.set_member_pages(&[&["U_OTHER_ONE"], &["U_OTHER_TWO"]]);
     api.set_thread_messages(vec![message(THREAD, "U_ALLOWED", "status?")]);
-    assert!(!admitted(&api, "U_COLLEAGUE", THREAD).await);
+    assert!(!admitted(&home, &api, "U_COLLEAGUE", THREAD, None).await);
   }
 
   #[tokio::test]
   async fn an_unreadable_member_list_drops_the_message() {
+    let home = Home::new();
     let api = FakeApi::start(&[]).await;
-    api.set_members_unreadable();
+    api.set_members_error(json!({"ok": false, "error": "missing_scope", "needed": "mpim:read"}));
     api.set_thread_messages(vec![message(THREAD, "U_ALLOWED", "status?")]);
-    assert!(!admitted(&api, "U_COLLEAGUE", THREAD).await);
+    assert!(!admitted(&home, &api, "U_COLLEAGUE", THREAD, None).await);
+    let dm = assert_one_owner_dm(
+      &home,
+      &["colleague message admission", CHANNEL, THREAD, "U_COLLEAGUE", "missing_scope", "mpim:read"],
+    );
+    assert!(!dm.contains("synthetic-bot") && !dm.contains("synthetic-app"));
   }
 
   #[tokio::test]
   async fn an_unreadable_multi_person_dm_thread_drops_the_message() {
+    let home = Home::new();
     let api = FakeApi::start(&[]).await;
     api.set_member_pages(&[&["U_ALLOWED"]]);
     api.set_replies_unreadable();
 
-    assert!(!colleague_admitted(&api.client, &config(), "G_TEST", THREAD, "U_COLLEAGUE").await);
+    assert!(!colleague_admitted(&home.features, &api.client, &config(), "G_TEST", THREAD, "U_COLLEAGUE", None).await);
+    assert_one_owner_dm(&home, &["colleague message admission", "G_TEST", THREAD, "U_COLLEAGUE", "channel_not_found"]);
+  }
+
+  #[tokio::test]
+  async fn a_connection_failure_sends_one_owner_dm_and_drops_summon_admission() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("the synthetic listener binds");
+    let address = listener.local_addr().expect("the synthetic listener has an address");
+    let server = tokio::spawn(async move {
+      let (connection, _) = listener.accept().await.expect("the synthetic request connects");
+      drop(connection);
+    });
+    let http = charliebot_compat::http_client::client(&charliebot_compat::http_client::Settings {
+      https_proxy: None,
+      no_proxy: Some("127.0.0.1,localhost".to_string()),
+      cert_file: None,
+    })
+    .expect("the Slack test HTTP client builds");
+    let client = SlackClient::with_client(
+      http,
+      "synthetic-bot".to_string(),
+      "synthetic-app".to_string(),
+      format!("http://{address}/api/"),
+    );
+    let home = Home::new();
+
+    assert!(!colleague_admitted(&home.features, &client, &config(), CHANNEL, THREAD, "U_COLLEAGUE", None).await);
+    server.await.expect("the synthetic request was accepted");
+    let dm = assert_one_owner_dm(&home, &["colleague message admission", CHANNEL, THREAD, "U_COLLEAGUE"]);
+    let error = dm.split_once("Slack error: ").expect("the DM includes the Slack error").1;
+    assert!(!error.trim().is_empty());
+    assert!(!dm.contains("synthetic-bot") && !dm.contains("synthetic-app"));
   }
 
   #[tokio::test]
   async fn an_unlisted_sender_is_dropped_without_a_slack_read() {
+    let home = Home::new();
     let api = FakeApi::start(&[]).await;
     api.set_member_pages(&[&["U_ALLOWED"]]);
     api.set_thread_messages(vec![message(THREAD, "U_ALLOWED", "status?")]);
-    assert!(!admitted(&api, "U_STRANGER", THREAD).await);
+    assert!(!admitted(&home, &api, "U_STRANGER", THREAD, None).await);
     assert!(api.calls().is_empty(), "no Slack read happens for an unlisted sender");
+    assert!(home.owner_dms().is_empty());
   }
 
   async fn thread_home(api: &FakeApi, messages: Vec<Value>) -> (Home, String) {
     let home = Home::new();
     let session_id = crate::slack_listener::summon_session_id("T_TEST", CHANNEL, THREAD);
     home.thread_session(&session_id, THREAD).await;
+    append(&home, &session_id, summon("evt-colleague-source", "U_COLLEAGUE")).await;
     api.set_thread_messages(messages);
     home.features.startup.insert(Arc::new(FixedClientGate(Arc::clone(&api.client))) as Arc<dyn ColleagueGate>).unwrap();
     (home, session_id)
@@ -422,6 +617,81 @@ mod tests {
         .unwrap()
         .admits_wake(&home.features, &session_id, &label)
         .await
+    );
+    assert!(home.owner_dms().is_empty());
+  }
+
+  #[tokio::test]
+  async fn a_failed_follow_wake_sends_one_owner_dm_and_still_drops_the_wake() {
+    let api = FakeApi::start(&[]).await;
+    let (home, session_id) = thread_home(&api, vec![message(THREAD, "U_COLLEAGUE", "help")]).await;
+    api.set_replies_unreadable();
+    let label = format!("slack-thread-follow floor={THREAD}");
+
+    let admitted = home
+      .features
+      .startup
+      .get::<Arc<dyn ColleagueGate>>()
+      .unwrap()
+      .admits_wake(&home.features, &session_id, &label)
+      .await;
+
+    assert!(!admitted);
+    assert_one_owner_dm(
+      &home,
+      &[
+        "follow wake admission",
+        CHANNEL,
+        THREAD,
+        "U_COLLEAGUE",
+        "channel_not_found",
+        &format!("https://charlie.synthetic.test/?session={session_id}"),
+      ],
+    );
+  }
+
+  #[tokio::test]
+  async fn a_failed_follow_timer_read_sends_one_dm_and_cancels_before_dispatch() {
+    let api = FakeApi::start(&[]).await;
+    let (home, session_id) = thread_home(&api, vec![message(THREAD, "U_COLLEAGUE", "help")]).await;
+    api.set_replies_unreadable();
+    let triggers = home.features.startup.require::<Arc<TriggerManager>>().unwrap();
+    let label = format!("slack-thread-follow floor={THREAD}");
+    let trigger = triggers
+      .create_trigger(&session_id, 0, &label, None, None, None, false)
+      .await
+      .expect("the synthetic follow timer is created");
+
+    let cancelled = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+      loop {
+        let current = triggers
+          .list_triggers(&session_id)
+          .await
+          .expect("the follow timer can be read")
+          .into_iter()
+          .find(|current| current.id == trigger.id)
+          .expect("the follow timer remains recorded");
+        if current.status == TriggerStatus::Cancelled {
+          break current;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+      }
+    })
+    .await
+    .expect("the failed colleague gate cancels the due timer");
+
+    assert_eq!(cancelled.fire_reason.as_deref(), Some("colleague message not admitted"));
+    assert!(home.launches().is_empty(), "a refused timer starts no run");
+    assert_one_owner_dm(
+      &home,
+      &[
+        "follow wake admission",
+        CHANNEL,
+        THREAD,
+        "U_COLLEAGUE",
+        "channel_not_found",
+        &format!("https://charlie.synthetic.test/?session={session_id}"),
+      ],
     );
   }
 
@@ -477,6 +747,7 @@ mod tests {
     append(&home, &session_id, summon("evt-colleague-summon", "U_COLLEAGUE")).await;
     let caller = run_caller(&home, &session_id, &["evt-colleague-summon"]);
     assert_eq!(refuse_work_with(&home.features, Some(&api.client), &caller).await, Some(COLLEAGUE_REFUSAL));
+    assert!(home.owner_dms().is_empty());
   }
 
   #[tokio::test]
@@ -542,7 +813,44 @@ mod tests {
     api.set_replies_unreadable();
     append(&home, &session_id, summon("evt-colleague-summon", "U_COLLEAGUE")).await;
     let caller = run_caller(&home, &session_id, &["evt-colleague-summon"]);
-    assert_eq!(refuse_work_with(&home.features, Some(&api.client), &caller).await, Some(COLLEAGUE_REFUSAL));
+    let response = charliebot_registry::colleague_gate::refuse_colleague_work(&home.features, &caller)
+      .await
+      .expect("a failed route check returns a refusal");
+    assert_eq!(response.status(), axum::http::StatusCode::FORBIDDEN);
+    assert_one_owner_dm(
+      &home,
+      &[
+        "delegation route check",
+        CHANNEL,
+        THREAD,
+        "U_COLLEAGUE",
+        "channel_not_found",
+        &format!("https://charlie.synthetic.test/?session={session_id}"),
+      ],
+    );
+  }
+
+  #[tokio::test]
+  async fn an_http_error_in_the_run_check_sends_one_dm_and_keeps_the_run_read_only() {
+    let api = FakeApi::start(&[]).await;
+    let (home, session_id) = thread_home(&api, vec![message(THREAD, "U_ALLOWED", "status?")]).await;
+    api.set_replies_http_failure(503);
+    append(&home, &session_id, summon("evt-colleague-summon", "U_COLLEAGUE")).await;
+    let caller = run_caller(&home, &session_id, &["evt-colleague-summon"]);
+    let CallerIdentity::Agent { claims } = caller else { unreachable!("a run caller is an agent") };
+
+    assert!(run_read_only_with(&home.features, Some(&api.client), &session_id, &claims.run_id).await);
+    assert_one_owner_dm(
+      &home,
+      &[
+        "run read-only check",
+        CHANNEL,
+        THREAD,
+        "U_COLLEAGUE",
+        "503",
+        &format!("https://charlie.synthetic.test/?session={session_id}"),
+      ],
+    );
   }
 
   #[tokio::test]
@@ -584,9 +892,10 @@ mod tests {
     for (input_ids, read_only) in shapes {
       let caller = run_caller(&home, &session_id, input_ids);
       let CallerIdentity::Agent { claims } = &caller else { unreachable!("a run caller is an agent") };
-      let predicate = colleague_thread_refuses(&home.features, Some(&api.client), &session_id, &claims.run_id)
-        .await
-        .expect("the predicate answers");
+      let predicate =
+        colleague_thread_refuses(&home.features, Some(&api.client), &session_id, &claims.run_id, RUN_READ_ONLY_CHECK)
+          .await
+          .expect("the predicate answers");
       let refused = refuse_work_with(&home.features, Some(&api.client), &caller).await.is_some();
       assert_eq!(predicate, read_only, "{input_ids:?}");
       assert_eq!(refused, read_only, "{input_ids:?}");

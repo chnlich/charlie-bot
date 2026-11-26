@@ -932,9 +932,10 @@ copy_seed_sessions() {
 }
 
 # bind_seeded_cron_tasks NAMES: binds each cron task of the trial home that holds no session to the seed's first bound
-# manager session, the one its first fixture task binds. The seed copy binds every task it carries, so a file with no
-# session is a default that disable-cron-tasks seeded from the commit's list. Bound before the server starts, it gives
-# the scheduler no session to create.
+# manager session: the one its first fixture task binds, or its first session when the seed carries no cron fixture (the
+# bench's view and search homes). The seed copy binds every task it carries, so a file with no session is a default that
+# disable-cron-tasks seeded from the commit's list. Bound before the server starts, it gives the scheduler no session to
+# create.
 bind_seeded_cron_tasks() {
   local name file bound_session=
   local cron_dir="$TRIAL_CB_HOME/config.d/cron.d"
@@ -949,12 +950,13 @@ bind_seeded_cron_tasks() {
       continue
     fi
     if [[ -z $bound_session ]]; then
-      bound_session=$(jq -r '.cron_tasks[0].session_id // empty' "$SEED_HOME/manifest.json") || {
+      bound_session=$(jq -r '.cron_tasks[0].session_id // .sessions[0].id // empty' "$SEED_HOME/manifest.json") || {
         printf 'FAIL serve CronBound: cannot read the seed manifest %s\n' "$SEED_HOME/manifest.json"
         return 1
       }
       if [[ -z $bound_session ]]; then
-        printf 'FAIL serve CronBound: the seed binds no session for the default task %s\n' "$name"
+        printf 'FAIL serve CronBound: the seed manifest %s lists no session to bind %s\n' \
+          "$SEED_HOME/manifest.json" "$name"
         return 1
       fi
     fi

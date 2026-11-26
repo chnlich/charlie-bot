@@ -437,16 +437,16 @@ plan_stored_rows() {
     --root "$store_root" --loadsafe "$load_safe_file" --stale "$1"
 }
 
-# The mock home holds the view's rows that the bench's own sessions and the default cron tasks' sessions do not:
-# VIEW.rows less BENCH_SESSIONS less DEFAULT_CRON_ROWS, each one a session of the mock's active corpus, with a task spec
-# sized to the live view's rows (the view shape). The mock binary is the tree's own.
+# The mock home holds the view's rows that the bench's own sessions do not: VIEW.rows less BENCH_SESSIONS, each one a
+# session of the mock's active corpus, with a task spec sized to the live view's rows (the view shape). The trial binds
+# the default cron tasks to one of those sessions, so they add no row. The mock binary is the tree's own.
 (cd "$tree/rust" && cargo build --release --locked -p charliebot-mock-home)
 mock_bin="$tree/rust/target/release/mock-home"
 [[ -x $mock_bin ]] || die 1 "the build did not produce mock-home"
 mock_version=$("$mock_bin" version)
 mock_sessions=$(node -e '
   import(process.argv[1]).then((profile) => {
-    process.stdout.write(String(profile.VIEW.rows - profile.BENCH_SESSIONS - profile.DEFAULT_CRON_ROWS));
+    process.stdout.write(String(profile.VIEW.rows - profile.BENCH_SESSIONS));
   });
 ' "file://$BENCH_DIR/profile.mjs")
 # A run that names the search scenario takes the search home instead: the view home's sessions plus the search view's

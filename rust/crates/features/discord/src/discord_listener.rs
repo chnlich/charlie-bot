@@ -13,7 +13,6 @@ use charliebot_chat_threads::thread_entry::{self, Summon, ThreadAdapter, ThreadM
 use charliebot_compat::http_client;
 use charliebot_compat::ws_client::{self, CloseFrame, Message as WsMessage, Options, Receiver, Sender};
 use charliebot_core::config::CharlieBotConfig;
-use charliebot_core::credentials::BOT_TOKEN_FIELD;
 use charliebot_core::event_types::MENTION_ID;
 use charliebot_core::str_methods;
 use charliebot_registry::FeatureContext;
@@ -77,7 +76,7 @@ impl Bot {
   /// token fails the call.
   pub fn client(&self) -> anyhow::Result<DiscordClient> {
     let credentials = self.features.credentials.get()?;
-    let token = credentials.require("discord", BOT_TOKEN_FIELD)?;
+    let token = crate::config::require_bot_token(&credentials)?;
     Ok(DiscordClient::new(http_client::client(&http_client::Settings::from_env())?, self.base_url.clone(), token))
   }
 
@@ -451,7 +450,8 @@ async fn run_listener(features: Arc<FeatureContext>) -> anyhow::Result<()> {
   let bot = Bot::new(Arc::clone(&features), crate::discord_client::BASE_URL);
   let client = Arc::new(bot.client()?);
   let _trigger_manager = features.startup.require::<Arc<TriggerManager>>()?;
-  let token = features.credentials.get()?.require("discord", BOT_TOKEN_FIELD)?;
+  let credentials = features.credentials.get()?;
+  let token = crate::config::require_bot_token(&credentials)?;
   let options = Options {
     open_timeout: ws_client::WEBSOCKETS_16_DEFAULTS.open_timeout,
     close_timeout: Some(CLOSE_TIMEOUT),

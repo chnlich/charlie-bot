@@ -1,7 +1,7 @@
 //! The Discord gateway service and its configuration gate.
 
 use charliebot_chat_threads::channel_service::{ChannelService, ChatChannel};
-use charliebot_core::credentials::{BOT_TOKEN_FIELD, CredentialValue, Credentials};
+use charliebot_core::credentials::{CredentialValue, Credentials};
 use charliebot_registry::FeatureContext;
 
 use crate::config::DiscordConfig;
@@ -12,7 +12,7 @@ use crate::discord_listener::DiscordListener;
 pub(crate) type DiscordService = ChannelService<DiscordListener>;
 
 impl ChatChannel for DiscordListener {
-  const NAME: &'static str = "discord";
+  const NAME: &'static str = crate::config::NAME;
 
   fn listener() -> Self {
     DiscordListener
@@ -26,8 +26,7 @@ impl ChatChannel for DiscordListener {
 }
 
 fn configured(config: &DiscordConfig, credentials: &Credentials) -> bool {
-  credentials.get(DiscordListener::NAME, BOT_TOKEN_FIELD).is_some_and(CredentialValue::is_truthy)
-    && !config.allowed_users.is_empty()
+  crate::config::bot_token(credentials).is_some_and(CredentialValue::is_truthy) && !config.allowed_users.is_empty()
 }
 
 #[cfg(test)]

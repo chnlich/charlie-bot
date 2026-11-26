@@ -1,7 +1,7 @@
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::ErrorKind;
 use std::net::TcpStream;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -14,7 +14,6 @@ use charliebot_core::str_methods;
 use charliebot_core::text_repr;
 use charliebot_registry::FeatureContext;
 use futures_util::future::BoxFuture;
-use nix::errno::Errno;
 use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
 use serde_json::{Map, Value, json};
@@ -37,6 +36,9 @@ static RENDERER: OnceLock<Mutex<Option<WarmRenderer>>> = OnceLock::new();
 /// blocking pool, so a fake set on the test thread would not reach them. A path is unique to one test's fixture.
 #[cfg(test)]
 static TEST_HEIGHTS: Mutex<Vec<(PathBuf, i32)>> = Mutex::new(Vec::new());
+
+#[cfg(test)]
+static RENDERER_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 struct WarmRenderer {
   chrome_bin: PathBuf,
@@ -159,8 +161,6 @@ impl WarmRenderer {
       .arg("about:blank")
       .stdout(Stdio::null())
       .stderr(Stdio::from(stderr))
-      // The browser leads its own process group, so `close` stops the child processes that Chrome forks.
-      .process_group(0)
       .spawn();
     self.process = match child {
       Ok(child) => Some(child),
@@ -369,24 +369,18 @@ impl WarmRenderer {
     if let Some(socket) = self.socket.take() {
       drop(socket);
     }
-    if let Some(mut process) = self.process.take() {
-      kill_browser_group(process.id())?;
-      let deadline = Instant::now() + HEADLESS_TEARDOWN_WAIT;
-      while process.try_wait()?.is_none() {
-        if Instant::now() >= deadline {
-          return Err(anyhow!(
-            "timed out after {}s waiting for headless renderer to exit",
-            HEADLESS_TEARDOWN_WAIT.as_secs()
-          ));
-        }
-        thread::sleep(Duration::from_millis(50));
-      }
+    if let Some(mut process) = self.process.take()
+      && process.try_wait()?.is_none()
+    {
+      process.kill().context("could not stop the headless renderer browser")?;
+      process.wait().context("could not wait for the headless renderer browser")?;
     }
     if let Some(user_data_dir) = self.user_data_dir.take() {
       let path = user_data_dir.path().to_path_buf();
-      if let Err(error) = user_data_dir.close() {
-        tracing::warn!(path = %path.display(), error = %error, "headless_renderer_tempdir_remove_failed");
-      }
+      end_renderer_processes(&path)?;
+      user_data_dir
+        .close()
+        .with_context(|| format!("could not remove headless renderer profile {}", path.display()))?;
     }
     self.stderr_path = None;
     self.session = None;
@@ -432,14 +426,28 @@ pub(crate) fn close_renderer() -> anyhow::Result<()> {
   Ok(())
 }
 
-/// The close of the renderer at shutdown, on the blocking pool.
-pub(crate) fn close_headless_renderer_at_shutdown(
-  _features: Arc<FeatureContext>,
-) -> BoxFuture<'static, anyhow::Result<()>> {
-  Box::pin(async move {
-    tokio::task::spawn_blocking(close_renderer).await??;
-    Ok(())
-  })
+/// The server lifecycle hook that closes the process-wide renderer on every stop path.
+pub(crate) struct RendererLifecycle;
+
+impl charliebot_registry::wiring::Service for RendererLifecycle {
+  fn name(&self) -> &'static str {
+    "headless_renderer"
+  }
+
+  fn phase(&self) -> charliebot_registry::wiring::Phase {
+    charliebot_registry::wiring::Phase::Early
+  }
+
+  fn start<'a>(&'a self, _ctx: charliebot_registry::wiring::ServiceContext) -> BoxFuture<'a, anyhow::Result<()>> {
+    Box::pin(async { Ok(()) })
+  }
+
+  fn stop<'a>(&'a self) -> BoxFuture<'a, anyhow::Result<()>> {
+    Box::pin(async {
+      tokio::task::spawn_blocking(close_renderer).await??;
+      Ok(())
+    })
+  }
 }
 
 /// The startup sweep that ends the renderer browsers an ended server or CLI left behind, on the blocking pool.
@@ -447,7 +455,7 @@ pub(crate) fn sweep_headless_renderer_orphans_at_startup(
   _features: Arc<FeatureContext>,
 ) -> BoxFuture<'static, anyhow::Result<()>> {
   Box::pin(async move {
-    tokio::task::spawn_blocking(end_orphaned_renderers).await?;
+    tokio::task::spawn_blocking(end_orphaned_renderers).await??;
     Ok(())
   })
 }
@@ -456,85 +464,191 @@ pub(crate) fn sweep_headless_renderer_orphans_at_startup(
 pub(crate) struct ProcessRecord {
   pid: u32,
   parent_pid: u32,
-  /// The file name of `/proc/<pid>/exe`.
-  exe_name: String,
+  start_time: u64,
+  state: char,
+  /// The executable file name, read when argv carries a renderer profile.
+  exe_name: Option<String>,
   argv: Vec<String>,
 }
 
-/// Whether `process` is a renderer browser that an ended server or CLI left behind. Such a browser is a `chrome`
-/// main process (no `--type=` argument) whose user-data directory is one of the renderer's temp profiles and whose
-/// parent is init. Every other Chrome stays untouched. That includes a Chrome with a different user-data directory,
-/// such as a worker's measurement browser. It also includes a renderer browser whose parent process is still alive,
-/// such as the live server's own renderer or a running CLI's.
-fn is_orphaned_renderer(process: &ProcessRecord) -> bool {
-  process.exe_name == "chrome"
-    && process.parent_pid == 1
-    && process.argv.iter().all(|argument| !argument.starts_with("--type="))
-    && process.argv.iter().any(|argument| {
-      argument
-        .strip_prefix("--user-data-dir=")
-        .and_then(|directory| Path::new(directory).file_name())
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.starts_with(RENDERER_TEMP_PREFIX))
-    })
+/// Whether `process` is a renderer browser whose parent chain has no live CharlieBot server.
+fn is_orphaned_renderer(process: &ProcessRecord, processes: &HashMap<u32, &ProcessRecord>) -> bool {
+  is_renderer_browser(process) && !renderer_has_live_server_ancestor(process, processes)
 }
 
-/// The sweep that ends every orphaned renderer browser and removes its temp profile, logging
-/// `headless_renderer_orphans_ended` with the count. A failed kill or removal is logged with its path and error, and
-/// the sweep continues with the next browser.
-pub(crate) fn end_orphaned_renderers() {
+fn is_renderer_browser(process: &ProcessRecord) -> bool {
+  let argv0_name =
+    process.argv.first().and_then(|argument| Path::new(argument).file_name()).and_then(|name| name.to_str());
+  (process.exe_name.as_deref() == Some("chrome") || argv0_name == Some("chrome"))
+    && process.state != 'Z'
+    && process.state != 'X'
+    && process.argv.iter().all(|argument| !argument.starts_with("--type="))
+    && renderer_user_data_dir(&process.argv).is_some()
+}
+
+fn renderer_has_live_server_ancestor(process: &ProcessRecord, processes: &HashMap<u32, &ProcessRecord>) -> bool {
+  let mut parent_pid = process.parent_pid;
+  let mut visited = HashSet::new();
+  while parent_pid > 0 && visited.insert(parent_pid) {
+    let Some(parent) = processes.get(&parent_pid) else { return false };
+    let argv0_name =
+      parent.argv.first().and_then(|argument| Path::new(argument).file_name()).and_then(|name| name.to_str());
+    if (parent.exe_name.as_deref() == Some("charliebot-server") || argv0_name == Some("charliebot-server"))
+      && parent.state != 'Z'
+      && parent.state != 'X'
+    {
+      return true;
+    }
+    parent_pid = parent.parent_pid;
+  }
+  false
+}
+
+/// Ends each renderer whose server is gone and removes its profile. Read and cleanup errors are logged and returned.
+pub(crate) fn end_orphaned_renderers() -> anyhow::Result<()> {
+  let processes = match read_process_records() {
+    Ok(processes) => processes,
+    Err(error) => {
+      tracing::error!(error = format!("{error:#}"), "headless_renderer_process_scan_failed");
+      tracing::info!(count = 0, complete = false, "headless_renderer_orphans_ended");
+      return Err(error);
+    }
+  };
+  end_orphaned_renderers_from(&processes).map(|_| ())
+}
+
+fn end_orphaned_renderers_from(processes: &[ProcessRecord]) -> anyhow::Result<usize> {
+  let by_pid: HashMap<u32, &ProcessRecord> = processes.iter().map(|process| (process.pid, process)).collect();
+  let mut profiles = BTreeSet::new();
+  for process in processes.iter().filter(|process| is_orphaned_renderer(process, &by_pid)) {
+    let profile = renderer_user_data_dir(&process.argv)
+      .ok_or_else(|| anyhow!("renderer browser {} has no renderer user-data directory", process.pid))?;
+    profiles.insert(PathBuf::from(profile));
+  }
+
   let mut ended = 0;
-  for orphan in read_process_records().into_iter().filter(is_orphaned_renderer) {
-    match end_orphaned_renderer(&orphan) {
+  let mut failures = Vec::new();
+  for profile in profiles {
+    match end_orphaned_renderer(&profile) {
       Ok(()) => ended += 1,
       Err(error) => {
-        let path = renderer_user_data_dir(&orphan.argv);
-        tracing::warn!(pid = orphan.pid, path, error = format!("{error:#}"), "headless_renderer_orphan_end_failed")
+        tracing::error!(
+          path = %profile.display(),
+          error = format!("{error:#}"),
+          "headless_renderer_orphan_end_failed"
+        );
+        failures.push(format!("{}: {error:#}", profile.display()));
       }
     }
   }
   tracing::info!(count = ended, "headless_renderer_orphans_ended");
+  if failures.is_empty() {
+    Ok(ended)
+  } else {
+    Err(anyhow!("could not end {} headless renderer orphan(s): {}", failures.len(), failures.join("; ")))
+  }
 }
 
-/// The end of `orphan`: its process group is killed, the group's exit is waited for, and the browser's user-data
-/// directory is removed.
-fn end_orphaned_renderer(orphan: &ProcessRecord) -> anyhow::Result<()> {
-  let group = read_process_group(orphan.pid)?;
-  kill_browser_group(group)?;
-  let deadline = Instant::now() + HEADLESS_TEARDOWN_WAIT;
-  while process_group_has_members(group) {
-    if Instant::now() >= deadline {
-      return Err(anyhow!("process group {group} still has members after {}s", HEADLESS_TEARDOWN_WAIT.as_secs()));
+/// Ends every process whose command line names `profile`, waits for those processes, and removes the profile.
+fn end_orphaned_renderer(profile: &Path) -> anyhow::Result<()> {
+  end_renderer_processes(profile)?;
+  match fs::remove_dir_all(profile) {
+    Ok(()) => {}
+    Err(error) if error.kind() == ErrorKind::NotFound => {
+      tracing::debug!(path = %profile.display(), "headless_renderer_profile_already_removed");
     }
-    thread::sleep(Duration::from_millis(50));
-  }
-  let user_data_dir =
-    renderer_user_data_dir(&orphan.argv).ok_or_else(|| anyhow!("the browser's argv names no user-data directory"))?;
-  if let Err(error) = fs::remove_dir_all(user_data_dir) {
-    tracing::warn!(path = user_data_dir, error = %error, "headless_renderer_orphan_tempdir_remove_failed");
+    Err(error) => {
+      return Err(error).with_context(|| format!("could not remove renderer profile {}", profile.display()));
+    }
   }
   Ok(())
 }
 
-/// The user-data directory the browser's argv names, if it names one.
+fn end_renderer_processes(profile: &Path) -> anyhow::Result<()> {
+  let deadline = Instant::now() + HEADLESS_TEARDOWN_WAIT;
+  loop {
+    let processes = read_process_records()?;
+    let matching: Vec<&ProcessRecord> =
+      processes.iter().filter(|process| process_uses_renderer_profile(process, profile)).collect();
+    if matching.is_empty() {
+      return Ok(());
+    }
+    for process in matching {
+      kill_renderer_process(process, profile)?;
+    }
+    if Instant::now() >= deadline {
+      return Err(anyhow!(
+        "processes using renderer profile {} remain after {}s",
+        profile.display(),
+        HEADLESS_TEARDOWN_WAIT.as_secs()
+      ));
+    }
+    thread::sleep(Duration::from_millis(50));
+  }
+}
+
+fn kill_renderer_process(process: &ProcessRecord, profile: &Path) -> anyhow::Result<()> {
+  let Some(current) = read_process_record(process.pid)? else { return Ok(()) };
+  if current.start_time != process.start_time {
+    return Err(anyhow!("process {} changed while ending renderer profile {}", process.pid, profile.display()));
+  }
+  if !process_uses_renderer_profile(&current, profile) {
+    return Err(anyhow!("process {} no longer names renderer profile {}", process.pid, profile.display()));
+  }
+  let pid = Pid::from_raw(i32::try_from(process.pid).context("renderer pid does not fit a signal pid")?);
+  match signal::kill(pid, Signal::SIGKILL) {
+    Ok(()) | Err(nix::errno::Errno::ESRCH) => Ok(()),
+    Err(error) => Err(error).with_context(|| format!("could not kill renderer process {}", process.pid)),
+  }
+}
+
+fn process_uses_renderer_profile(process: &ProcessRecord, profile: &Path) -> bool {
+  process.argv.iter().any(|argument| {
+    let value = argument.strip_prefix("--user-data-dir=").or_else(|| argument.split_once('=').map(|(_, value)| value));
+    value.is_some_and(|value| Path::new(value).starts_with(profile)) || Path::new(argument).starts_with(profile)
+  })
+}
+
+/// The renderer profile the browser's argv names, if its directory has the renderer prefix.
 fn renderer_user_data_dir(argv: &[String]) -> Option<&str> {
-  argv.iter().find_map(|argument| argument.strip_prefix("--user-data-dir="))
+  argv.iter().find_map(|argument| {
+    argument.strip_prefix("--user-data-dir=").filter(|directory| {
+      Path::new(directory)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with(RENDERER_TEMP_PREFIX))
+    })
+  })
 }
 
-/// Every process `/proc` shows, as far as this user can read it. A process that exited while the sweep read, a kernel
-/// thread, and another user's process stay out.
-fn read_process_records() -> Vec<ProcessRecord> {
-  let Ok(entries) = fs::read_dir("/proc") else { return Vec::new() };
-  entries
-    .flatten()
-    .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok().and_then(read_process_record))
-    .collect()
+/// Every readable process with a command line, returning an error for any process that could not be inspected.
+fn read_process_records() -> anyhow::Result<Vec<ProcessRecord>> {
+  let entries = fs::read_dir("/proc").context("could not list /proc")?;
+  let mut processes = Vec::new();
+  for entry in entries {
+    let entry = entry.context("could not read a /proc directory entry")?;
+    let Some(pid) = entry.file_name().to_str().and_then(|name| name.parse::<u32>().ok()) else { continue };
+    match read_process_record(pid) {
+      Ok(Some(process)) => processes.push(process),
+      Ok(None) => tracing::debug!(pid, "headless_renderer_process_disappeared_during_scan"),
+      Err(error) => {
+        tracing::error!(pid, error = format!("{error:#}"), "headless_renderer_process_read_failed");
+        return Err(error).with_context(|| format!("could not inspect process {pid}"));
+      }
+    }
+  }
+  Ok(processes)
 }
 
-fn read_process_record(pid: u32) -> Option<ProcessRecord> {
-  let exe = fs::read_link(format!("/proc/{pid}/exe")).ok()?;
-  let exe_name = exe.file_name()?.to_str()?.to_owned();
-  let argv_raw = fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+fn read_process_record(pid: u32) -> anyhow::Result<Option<ProcessRecord>> {
+  let argv_raw = match fs::read(format!("/proc/{pid}/cmdline")) {
+    Ok(argv) => argv,
+    Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+    Err(error) => return Err(error).with_context(|| format!("could not read /proc/{pid}/cmdline")),
+  };
+  if argv_raw.is_empty() {
+    return Ok(None);
+  }
   // Chrome rewrites its argv into one space-joined string, so each NUL-separated part splits on spaces too.
   let mut argv = Vec::new();
   for part in argv_raw.split(|byte| *byte == 0) {
@@ -545,31 +659,46 @@ fn read_process_record(pid: u32) -> Option<ProcessRecord> {
       argv.push(argument.to_owned());
     }
   }
-  let stat = read_stat_text(pid).ok()?;
-  let mut fields = stat_fields_after_command(&stat)?.split_whitespace();
-  let parent_pid = fields.nth(1)?.parse().ok()?;
-  Some(ProcessRecord { pid, parent_pid, exe_name, argv })
-}
-
-/// The process group of `pid`, from `/proc/<pid>/stat`. The renderer browser leads its own group. An older
-/// launcher's browser keeps the ended launcher's group, whose remaining members are its fellow leftovers.
-fn read_process_group(pid: u32) -> anyhow::Result<u32> {
-  let stat = read_stat_text(pid).context("the browser's proc stat is unreadable")?;
-  let mut fields = stat_fields_after_command(&stat)
-    .ok_or_else(|| anyhow!("the browser's proc stat has no command delimiter"))?
-    .split_whitespace();
-  fields
-    .nth(2)
-    .ok_or_else(|| anyhow!("the browser's proc stat has no process group field"))?
+  let exe_name = if argv.iter().any(|argument| argument.contains(RENDERER_TEMP_PREFIX)) {
+    let exe = match fs::read_link(format!("/proc/{pid}/exe")) {
+      Ok(exe) => exe,
+      Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+      Err(error) => return Err(error).with_context(|| format!("could not read /proc/{pid}/exe")),
+    };
+    Some(
+      exe
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| anyhow!("/proc/{pid}/exe has no UTF-8 file name"))?
+        .to_owned(),
+    )
+  } else {
+    None
+  };
+  let stat = match read_stat_text(pid) {
+    Ok(stat) => stat,
+    Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+    Err(error) => return Err(error).with_context(|| format!("could not read /proc/{pid}/stat")),
+  };
+  let fields: Vec<&str> = stat_fields_after_command(&stat)
+    .ok_or_else(|| anyhow!("/proc/{pid}/stat has no command delimiter"))?
+    .split_whitespace()
+    .collect();
+  let state = fields
+    .first()
+    .and_then(|field| field.chars().next())
+    .ok_or_else(|| anyhow!("/proc/{pid}/stat has no process state"))?;
+  let parent_pid = fields
+    .get(1)
+    .ok_or_else(|| anyhow!("/proc/{pid}/stat has no parent pid"))?
     .parse()
-    .context("the browser's process group is not a number")
-}
-
-/// Whether `group` still has a member: signal 0 probes membership, and `ESRCH` alone says it has none.
-fn process_group_has_members(group: u32) -> bool {
-  let Ok(encoded) = i32::try_from(group) else { return false };
-  let result = unsafe { libc::kill(-encoded, 0) };
-  result == 0 || (result == -1 && Errno::last() != Errno::ESRCH)
+    .with_context(|| format!("/proc/{pid}/stat has an invalid parent pid"))?;
+  let start_time = fields
+    .get(19)
+    .ok_or_else(|| anyhow!("/proc/{pid}/stat has no process start time"))?
+    .parse()
+    .with_context(|| format!("/proc/{pid}/stat has an invalid process start time"))?;
+  Ok(Some(ProcessRecord { pid, parent_pid, start_time, state, exe_name, argv }))
 }
 
 fn is_load_event(value: &Value) -> bool {
@@ -609,22 +738,14 @@ fn charliebot_whitespace(character: char) -> bool {
   str_methods::is_whitespace(character)
 }
 
-/// SIGKILL to the process group `group` ids. The renderer's launch makes the browser its own group leader. The group
-/// has members while Chrome's child processes run. It has none once they are gone, which is not an error.
-fn kill_browser_group(group: u32) -> anyhow::Result<()> {
-  let encoded = Pid::from_raw(i32::try_from(group)?);
-  match signal::killpg(encoded, Signal::SIGKILL) {
-    Ok(()) | Err(Errno::ESRCH) => Ok(()),
-    Err(error) => Err(error.into()),
-  }
-}
-
 #[cfg(test)]
 mod tests {
   use std::fs;
-  use std::io::{BufRead, BufReader};
+  use std::os::unix::process::CommandExt;
   use std::thread::JoinHandle;
 
+  use charliebot_registry::lifespan::{Lifespan, StartupOutcome};
+  use charliebot_registry::startup_timing::StartupClock;
   use serde_json::{Value, json};
   use tungstenite::accept;
 
@@ -647,6 +768,20 @@ mod tests {
         {"exit": 0},
       ]),
     )
+  }
+
+  fn crashpad_stub(directory: &Path, name: &str) -> PathBuf {
+    let stub = directory.join(name);
+    fs::create_dir(&stub).expect("the crashpad stub directory is created");
+    let program = stub.join("chrome_crashpad_handler");
+    std::os::unix::fs::symlink(charliebot_shell_harness::built_binary("chrome-stub"), &program)
+      .expect("the fake links to the helper");
+    fs::write(
+      stub.join(charliebot_core::paths::PROBE_FILE_NAME),
+      json!({"chrome_crashpad_handler": [{"sleep_ms": 60000}, {"exit": 0}]}).to_string(),
+    )
+    .expect("the crashpad steps are written");
+    program
   }
 
   fn cdp_server(listener: std::net::TcpListener, count: usize, height: &str) -> JoinHandle<()> {
@@ -741,62 +876,230 @@ mod tests {
     !matches!(state, Some('Z' | 'X'))
   }
 
-  /// A process record with the fields the orphan sweep reads, for selection tests without a real orphan.
+  /// A process record for an ownership predicate test.
   fn process_record(pid: u32, parent_pid: u32, exe_name: &str, argv: &[&str]) -> ProcessRecord {
     ProcessRecord {
       pid,
       parent_pid,
-      exe_name: exe_name.to_owned(),
+      start_time: 1,
+      state: 'S',
+      exe_name: Some(exe_name.to_owned()),
       argv: argv.iter().map(|argument| argument.to_string()).collect(),
     }
   }
 
   #[test]
-  fn the_orphan_sweep_selects_only_init_parented_renderer_mains() {
+  fn the_orphan_sweep_uses_server_ownership_and_the_renderer_profile() {
+    let systemd = process_record(815, 1, "systemd", &[]);
+    let server = process_record(52, 1, "charliebot-server", &[]);
     let orphan = process_record(
       100,
-      1,
+      systemd.pid,
       "chrome",
       &["/opt/google/chrome/chrome", "--headless", "--user-data-dir=/tmp/headless-render-abc", "about:blank"],
     );
-    assert!(is_orphaned_renderer(&orphan));
-
-    let live_parent = process_record(100, 4242, "chrome", &["--user-data-dir=/tmp/headless-render-abc"]);
-    assert!(!is_orphaned_renderer(&live_parent), "a renderer browser with a live parent stays");
-
-    let other_profile = process_record(100, 1, "chrome", &["--user-data-dir=/tmp/panel-measure-abc"]);
-    assert!(!is_orphaned_renderer(&other_profile), "a Chrome with another user-data directory stays");
-
+    let live = process_record(
+      101,
+      server.pid,
+      "chrome",
+      &["/opt/google/chrome/chrome", "--headless", "--user-data-dir=/tmp/headless-render-def", "about:blank"],
+    );
+    let other_profile = process_record(
+      102,
+      systemd.pid,
+      "chrome",
+      &["/opt/google/chrome/chrome", "--user-data-dir=/tmp/panel-measure-abc"],
+    );
     let renderer_child =
-      process_record(101, 100, "chrome", &["--type=renderer", "--user-data-dir=/tmp/headless-render-abc"]);
-    assert!(!is_orphaned_renderer(&renderer_child), "a renderer child process stays");
+      process_record(103, systemd.pid, "chrome", &["--type=renderer", "--user-data-dir=/tmp/headless-render-ghi"]);
+    let not_chrome = process_record(104, systemd.pid, "sleep", &["--user-data-dir=/tmp/headless-render-jkl"]);
+    let process_refs = [&systemd, &server, &orphan, &live, &other_profile, &renderer_child, &not_chrome];
+    let by_pid: HashMap<u32, &ProcessRecord> = process_refs.iter().map(|process| (process.pid, *process)).collect();
 
-    let not_chrome = process_record(102, 1, "sleep", &["--user-data-dir=/tmp/headless-render-abc"]);
-    assert!(!is_orphaned_renderer(&not_chrome), "a non-chrome executable stays");
+    assert!(is_orphaned_renderer(&orphan, &by_pid));
+    assert!(!is_orphaned_renderer(&live, &by_pid), "a renderer with a live server ancestor stays");
+    assert!(!is_orphaned_renderer(&other_profile, &by_pid), "other Chrome profiles stay");
+    assert!(!is_orphaned_renderer(&renderer_child, &by_pid), "Chrome renderer children are not roots");
+    assert!(!is_orphaned_renderer(&not_chrome, &by_pid), "non-Chrome processes are not roots");
   }
 
   #[test]
-  #[ignore = "integration"]
-  fn renderer_close_kills_the_whole_process_group() {
-    let mut browser = Command::new("sh")
-      .args(["-c", "sleep 300 & echo $!; wait"])
+  fn startup_sweep_ends_reparented_renderer_and_crashpad_but_keeps_live_server_tree() {
+    let mut non_server_parent = Command::new("sleep").arg("60").spawn().expect("the subreaper stand-in starts");
+    let directory = tempfile::tempdir().expect("the test directory exists");
+    let orphan_profile = Builder::new().prefix(RENDERER_TEMP_PREFIX).tempdir().expect("the orphan profile exists");
+    let live_profile = Builder::new().prefix(RENDERER_TEMP_PREFIX).tempdir().expect("the live profile exists");
+    let orphan_directory = directory.path().join("orphan");
+    let live_directory = directory.path().join("live");
+    fs::create_dir(&orphan_directory).unwrap();
+    fs::create_dir(&live_directory).unwrap();
+    let orphan_browser_bin = chrome_program(&orphan_directory, json!([{"sleep_ms": 60000}, {"exit": 0}]));
+    let live_browser_bin = chrome_program(&live_directory, json!([{"sleep_ms": 60000}, {"exit": 0}]));
+    let orphan_crashpad_bin = crashpad_stub(directory.path(), "orphan_crashpad");
+    let live_crashpad_bin = crashpad_stub(directory.path(), "live_crashpad");
+    let mut orphan_browser = Command::new(orphan_browser_bin)
+      .arg("--headless")
+      .arg(format!("--user-data-dir={}", orphan_profile.path().display()))
       .process_group(0)
-      .stdout(Stdio::piped())
+      .stdout(Stdio::null())
+      .stderr(Stdio::null())
       .spawn()
-      .expect("the shell starts");
-    let mut line = String::new();
-    BufReader::new(browser.stdout.take().expect("the shell's output is piped"))
-      .read_line(&mut line)
-      .expect("the shell reports its background child");
-    let child: i32 = line.trim().parse().expect("the background child's pid is a number");
-    let mut renderer = WarmRenderer::new(PathBuf::from("unused"));
-    renderer.process = Some(browser);
-    renderer.close().expect("close stops the browser's group");
+      .expect("the orphan browser starts");
+    let mut orphan_crashpad = Command::new(orphan_crashpad_bin)
+      .arg(format!("--database={}/Crashpad", orphan_profile.path().display()))
+      .process_group(0)
+      .stdout(Stdio::null())
+      .stderr(Stdio::null())
+      .spawn()
+      .expect("the orphan crashpad handler starts");
+    let mut live_browser = Command::new(live_browser_bin)
+      .arg("--headless")
+      .arg(format!("--user-data-dir={}", live_profile.path().display()))
+      .process_group(0)
+      .stdout(Stdio::null())
+      .stderr(Stdio::null())
+      .spawn()
+      .expect("the live server browser starts");
+    let mut live_crashpad = Command::new(live_crashpad_bin)
+      .arg(format!("--database={}/Crashpad", live_profile.path().display()))
+      .process_group(0)
+      .stdout(Stdio::null())
+      .stderr(Stdio::null())
+      .spawn()
+      .expect("the live server crashpad handler starts");
+    let orphan_browser_pid = orphan_browser.id();
+    let orphan_crashpad_pid = orphan_crashpad.id();
+    let live_browser_pid = live_browser.id();
+    let live_crashpad_pid = live_crashpad.id();
+    let test_pid = std::process::id();
+    read_process_record(test_pid).unwrap().expect("the test process has a proc record");
+    let parent = read_process_record(non_server_parent.id()).unwrap().expect("the stand-in parent has a proc record");
+
     let deadline = Instant::now() + Duration::from_secs(5);
-    while process_alive(child) && Instant::now() < deadline {
+    let mut processes = loop {
+      let processes = read_process_records().expect("the process table is readable");
+      let ready = [orphan_browser_pid, orphan_crashpad_pid, live_browser_pid, live_crashpad_pid]
+        .iter()
+        .all(|pid| processes.iter().any(|process| process.pid == *pid));
+      if ready {
+        break processes;
+      }
+      assert!(Instant::now() < deadline, "the renderer processes did not enter /proc");
+      thread::sleep(Duration::from_millis(10));
+    };
+    for process in &mut processes {
+      if process.pid == orphan_browser_pid || process.pid == orphan_crashpad_pid {
+        process.parent_pid = if process.pid == orphan_browser_pid { parent.pid } else { orphan_browser_pid };
+      }
+      if process.pid == live_browser_pid || process.pid == live_crashpad_pid {
+        process.parent_pid = if process.pid == live_browser_pid { test_pid } else { live_browser_pid };
+      }
+      if process.pid == test_pid {
+        process.exe_name = Some("charliebot-server".to_owned());
+        process.parent_pid = 1;
+      }
+      if process.pid == parent.pid {
+        process.parent_pid = 1;
+      }
+    }
+
+    let orphan_browser_record = processes.iter().find(|process| process.pid == orphan_browser_pid).unwrap();
+    let live_browser_record = processes.iter().find(|process| process.pid == live_browser_pid).unwrap();
+    let by_pid: HashMap<u32, &ProcessRecord> = processes.iter().map(|process| (process.pid, process)).collect();
+    assert!(is_orphaned_renderer(orphan_browser_record, &by_pid));
+    assert!(!is_orphaned_renderer(live_browser_record, &by_pid));
+    assert_ne!(
+      nix::unistd::getpgid(Some(Pid::from_raw(orphan_browser_pid as i32))).unwrap(),
+      nix::unistd::getpgid(Some(Pid::from_raw(orphan_crashpad_pid as i32))).unwrap(),
+      "the crashpad handler uses a separate process group"
+    );
+
+    assert_eq!(end_orphaned_renderers_from(&processes).unwrap(), 1);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while (process_alive(orphan_browser_pid as i32) || process_alive(orphan_crashpad_pid as i32))
+      && Instant::now() < deadline
+    {
       thread::sleep(Duration::from_millis(10));
     }
-    assert!(!process_alive(child), "close left the browser's child {child} running");
+    assert!(!process_alive(orphan_browser_pid as i32));
+    assert!(!process_alive(orphan_crashpad_pid as i32));
+    assert!(!orphan_profile.path().exists());
+    assert!(live_profile.path().exists());
+    assert!(live_browser.try_wait().unwrap().is_none(), "the live server browser was ended");
+    assert!(live_crashpad.try_wait().unwrap().is_none(), "the live server crashpad handler was ended");
+
+    orphan_browser.wait().unwrap();
+    orphan_crashpad.wait().unwrap();
+    live_browser.kill().unwrap();
+    live_browser.wait().unwrap();
+    live_crashpad.kill().unwrap();
+    live_crashpad.wait().unwrap();
+    non_server_parent.kill().unwrap();
+    non_server_parent.wait().unwrap();
+    live_profile.close().unwrap();
+  }
+
+  #[tokio::test]
+  async fn registered_lifecycle_closes_warm_renderer_and_its_crashpad_handler() {
+    let _serial = RENDERER_TEST_LOCK.lock().await;
+    let (_home, features) = crate::test_support::features();
+    let mut clock = StartupClock::new(Instant::now());
+    let mut lifespan = match Lifespan::start(features, &mut clock).await.unwrap() {
+      StartupOutcome::Ready(lifespan) => lifespan,
+      StartupOutcome::Stopped(_) => panic!("the test lifecycle stopped during startup"),
+    };
+    let directory = tempfile::tempdir().expect("the test directory exists");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("the DevTools port binds");
+    let port = listener.local_addr().expect("the DevTools address is available").port();
+    let chrome = chrome_stub(directory.path(), port, &directory.path().join("launches.txt"));
+    let server = cdp_server(listener, 1, "800");
+    assert_eq!(render_height(&chrome, "file:///synthetic/page.html").unwrap(), 800);
+    let profile = RENDERER
+      .get()
+      .expect("render_height created the renderer")
+      .lock()
+      .unwrap()
+      .as_ref()
+      .expect("the renderer is warm")
+      .user_data_dir
+      .as_ref()
+      .expect("the renderer has a profile")
+      .path()
+      .to_path_buf();
+    let crashpad_bin = crashpad_stub(directory.path(), "lifecycle_crashpad");
+    let mut crashpad = Command::new(crashpad_bin)
+      .arg(format!("--database={}/Crashpad", profile.display()))
+      .process_group(0)
+      .stdout(Stdio::null())
+      .stderr(Stdio::null())
+      .spawn()
+      .expect("the crashpad handler starts");
+    let crashpad_pid = crashpad.id();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while read_process_record(crashpad_pid)
+      .unwrap()
+      .is_none_or(|process| !process_uses_renderer_profile(&process, &profile))
+      && Instant::now() < deadline
+    {
+      thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+      read_process_record(crashpad_pid)
+        .unwrap()
+        .is_some_and(|process| process_uses_renderer_profile(&process, &profile)),
+      "the crashpad handler command line names the renderer profile"
+    );
+
+    let shutdown = lifespan.shutdown().await;
+    assert!(shutdown.error.is_none(), "renderer lifecycle stop failed: {:?}", shutdown.error);
+    server.join().unwrap();
+    assert!(!profile.exists(), "the renderer profile remains after lifecycle shutdown");
+    assert!(!process_alive(crashpad_pid as i32), "the renderer crashpad handler remains after shutdown");
+    crashpad.wait().unwrap();
+    assert!(
+      read_process_records().unwrap().iter().all(|process| !process_uses_renderer_profile(process, &profile)),
+      "a process with the renderer profile in argv remains after shutdown"
+    );
   }
 
   #[test]
@@ -809,8 +1112,6 @@ mod tests {
     let server = cdp_server(listener, 1, "800");
     let mut renderer = WarmRenderer::new(chrome);
     assert_eq!(renderer.render_height("file:///synthetic/page.html").unwrap(), 800);
-    let browser = Pid::from_raw(renderer.process.as_ref().unwrap().id().try_into().unwrap());
-    assert_eq!(nix::unistd::getpgid(Some(browser)).unwrap(), browser, "close kills the browser's own group");
     let profile = renderer.user_data_dir.as_ref().unwrap().path().to_path_buf();
     renderer.close().unwrap();
     server.join().unwrap();

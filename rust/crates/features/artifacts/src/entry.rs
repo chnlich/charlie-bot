@@ -26,7 +26,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.plan_registry(plans::read_session_plans)?;
   registry.recovery_step("headless_renderer_orphans", headless_render::sweep_headless_renderer_orphans_at_startup)?;
   registry.fork_assertions(artifact_check::registered_fork_assertions)?;
-  registry.let_go_step("headless_renderer", headless_render::close_headless_renderer_at_shutdown)
+  registry.service(Arc::new(headless_render::RendererLifecycle))
 }
 
 /// The close of the process-wide headless renderer.

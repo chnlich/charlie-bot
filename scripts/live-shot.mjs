@@ -220,13 +220,13 @@ async function gateProbeStatus(url) {
   }
 }
 
-// Refuses a capture that is not the app: the view must answer 200, it must not answer 200 without the key, and the
-// rendered page must show neither the access-key login page nor the app's access-key prompt.
+// Refuses a capture that is not the app: the view must answer 200, the keyless access-gate probe must answer 401, and
+// the rendered page must show neither the access-key login page nor the app's access-key prompt.
 function refuseNonAppPage(status, facts, gateStatus) {
   if (facts.loginForm) throw new Error('the page is the access-key login page, not the app');
   if (status !== 200) throw new Error(`the view answered ${status ?? 'with no status'}, not 200`);
-  if (gateStatus === 200) {
-    throw new Error('the view answers 200 without the access key, so the page is not the CharlieBot app');
+  if (gateStatus !== 401) {
+    throw new Error(`the page is not the CharlieBot app: the keyless access-gate probe answered ${gateStatus}, not 401`);
   }
   if (facts.accessPrompt) throw new Error("the app's access-key prompt covers the page, so the key was not accepted");
 }

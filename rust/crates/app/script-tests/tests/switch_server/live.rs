@@ -310,6 +310,17 @@ if (!localStorage.getItem('charliebot_access_key')) {
 }
 </script>"#;
 
+/// A CharlieBot page that renders with a key but gets an unexpected status from the keyless access-gate probe.
+fn unexpected_gate_status() -> Respond {
+  Arc::new(|_target, head| {
+    if carries_key(head) {
+      (200, "text/html", APP_PAGE.to_string())
+    } else {
+      (503, "text/html", "Service Unavailable".to_string())
+    }
+  })
+}
+
 /// The view answers late, and its page opens the access-key prompt when the page holds no key. Requests without the
 /// key get the login page; the keyed view answers after 1.5 s.
 fn slow_view() -> Respond {
@@ -436,6 +447,26 @@ fn test_a_capture_of_an_unrelated_200_page_fails_and_writes_no_picture() {
   assert_eq!(run.code, 1, "{}", run.describe());
   assert!(run.stderr.contains("the page is not the CharlieBot app"), "{}", run.describe());
   assert!(!out.exists(), "a page outside the app is never written as a picture: {}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_a_capture_rejects_an_unexpected_keyless_access_gate_status() {
+  let sandbox = Sandbox::new();
+  let listener = TcpListener::bind("127.0.0.1:0").expect("a port");
+  let port = listener.local_addr().expect("the port").port();
+  let _seen = stand_in_origin(listener, unexpected_gate_status());
+  let out = sandbox.dir("shots").join("view.png");
+
+  let run = run_live_shot(&sandbox, &format!("http://127.0.0.1:{port}"), VIEW, &out);
+
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(run.stderr.contains("keyless access-gate probe answered 503, not 401"), "{}", run.describe());
+  assert!(
+    !out.exists(),
+    "a page with an unexpected access-gate status is never written as a picture: {}",
+    run.describe()
+  );
 }
 
 #[test]

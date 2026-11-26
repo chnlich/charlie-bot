@@ -83,7 +83,7 @@ impl MidturnCodec for ClaudeMidturnCodec {
 
   fn observe(&mut self, raw: &Value) -> anyhow::Result<Observed> {
     if raw.get("type").and_then(Value::as_str) == Some(event_types::RESULT) {
-      let succeeded = raw.get("is_error") != Some(&Value::Bool(true));
+      let succeeded = raw.get(event_types::IS_ERROR) != Some(&Value::Bool(true));
       return Ok(Observed { events: vec![raw.clone()], signals: vec![MidturnSignal::TurnEnded { succeeded }] });
     }
     if raw.get("type").and_then(Value::as_str) != Some(event_types::USER)

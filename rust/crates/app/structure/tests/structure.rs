@@ -33,13 +33,14 @@ const CHAT_CHANNELS: [&str; 3] = ["slack", "discord", "feishu"];
 ///
 /// A runtime crate depends only on its own layer or a lower layer. The table must cover every runtime crate and name
 /// no missing one.
-const RUNTIME_LAYERS: [(&str, usize); 9] = [
+const RUNTIME_LAYERS: [(&str, usize); 10] = [
   ("store", 1),
   ("registry", 2),
   ("user_text_checks", 3),
   ("usage", 3),
   ("backend_check", 3),
   ("agents", 4),
+  ("acp", 5),
   ("tasks", 5),
   ("triggers", 6),
   ("session-api", 7),
@@ -2959,6 +2960,7 @@ fn the_checks_find_each_break() {
     stale_layer_failures(&groups),
     vec![
       "user_text_checks: names no runtime module; remove it from the layer table.".to_string(),
+      "acp: names no runtime module; remove it from the layer table.".to_string(),
       "session-api: names no runtime module; remove it from the layer table.".to_string(),
     ],
     "case 5: the layer table names a crate that does not exist"

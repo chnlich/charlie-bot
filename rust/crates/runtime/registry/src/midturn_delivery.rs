@@ -26,8 +26,6 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::watch;
 
-use crate::backend::Translate;
-
 /// The `backend_kwargs` key that turns the live user-input path on for one Run. The backend's
 /// `midturn_launch_kwargs` writes it, and the task dispatcher reads it before binding the process, so both match this
 /// name instead of spelling it.
@@ -379,15 +377,6 @@ pub fn bind_process(state: Arc<DeliveryState>) {
   let entry = registry.entry(state.run_id.clone()).or_default();
   entry.state = Some(state);
   entry.processes += 1;
-}
-
-/// The translator of a run with live input: each raw event goes through the codec (`DeliveryState::observe`).
-pub struct MidturnTranslate(pub Arc<DeliveryState>);
-
-impl Translate for MidturnTranslate {
-  fn translate(&mut self, raw: Value) -> anyhow::Result<Vec<Value>> {
-    self.0.observe(&raw)
-  }
 }
 
 /// Whether a manager session takes live user input. Its turn is a manager turn of a manager profile.

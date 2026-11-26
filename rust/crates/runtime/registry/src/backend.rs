@@ -3,6 +3,8 @@
 use std::any::type_name;
 use std::sync::Arc;
 
+use serde_json::Value;
+
 pub use crate::member_failure::MemberFailure;
 pub use crate::registry::{
   AGENTS_INSTRUCTIONS_FILE_NAME, AgentBackend, BackendFactory, BackendLifecycle, BackendReadingLimitsFn, BackendTraits,
@@ -14,6 +16,15 @@ pub use crate::registry::{
   ResumeStyle, RetryAfter, RunningTurnsFn, ServeProcessSpec, ServeTransport, ServeTurn, ServeTurnArgs, ServeTurnResult,
   SessionContextStateFn, Translate, TransportKind, UsageResolver, UsageResolverConstructor, UsageResolverHost,
 };
+
+/// The translator of a run with live input: each raw event goes through the codec (`DeliveryState::observe`).
+pub struct MidturnTranslate(pub Arc<crate::midturn_delivery::DeliveryState>);
+
+impl Translate for MidturnTranslate {
+  fn translate(&mut self, raw: Value) -> anyhow::Result<Vec<Value>> {
+    self.0.observe(&raw)
+  }
+}
 
 /// The Claude account config directory: the `backend_kwargs` key the option launch writes and the Claude factory
 /// reads, and the field the resolve answer carries the same directory under.

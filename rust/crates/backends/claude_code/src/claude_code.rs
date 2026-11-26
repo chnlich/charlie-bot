@@ -35,7 +35,8 @@ use charliebot_core::web_search::{MCP_PATH, MCP_SERVER_NAME, TOOL_NAME};
 use super::claude_launch;
 use super::login_dirs;
 use super::midturn_delivery::ClaudeMidturnCodec;
-use charliebot_registry::midturn_delivery::{DeliveryState, MidturnTranslate};
+use charliebot_registry::backend::MidturnTranslate;
+use charliebot_registry::midturn_delivery::DeliveryState;
 
 pub const HEADLESS_DISALLOWED_TOOLS: &str = concat!(
   "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Workflow,SendMessage,ListAgents,",

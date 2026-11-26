@@ -218,7 +218,7 @@ impl AcpCodec {
           event_types::TOOL_USE_ID: update.get("toolCallId").cloned().unwrap_or(Value::Null),
           "type": event_types::TOOL_RESULT,
           "content": output,
-          "is_error": status == Some("failed"),
+          (event_types::IS_ERROR): status == Some("failed"),
         })]
       }
       _ => Vec::new(),

@@ -396,13 +396,6 @@ pub fn probe_input(page_text: &str, questions: &str, trigger: &str) -> anyhow::R
   ))
 }
 
-/// The system prompt and the five questions one Waiting on you item is cold-read with, read fresh from
-/// `prompts/cold_read.md` (`load_ask_texts`).
-pub fn load_ask_texts(repo: &Path) -> anyhow::Result<(String, String)> {
-  let row = row(ASK).expect("the ask row is registered");
-  load_prompt_pair(repo, row.system_section, row.questions_section)
-}
-
 /// The ask probe's whole input: the item JSON, the host-served page text with every `data:` URI replaced by a size
 /// placeholder and its VISIBLE TEXT block when there is a page, then the questions (`ask_probe_input`), joined by blank
 /// lines.
@@ -415,13 +408,6 @@ pub fn ask_probe_input(item: &Value, linked_page: Option<&str>, questions: &str)
   }
   pieces.push(questions.to_string());
   Ok(pieces.join("\n\n"))
-}
-
-/// The system prompt and the questions one web reply is cold-read with, read fresh from `prompts/cold_read.md`
-/// (`load_reply_texts`).
-pub fn load_reply_texts(repo: &Path) -> anyhow::Result<(String, String)> {
-  let row = row(REPLY).expect("the reply row is registered");
-  load_prompt_pair(repo, row.system_section, row.questions_section)
 }
 
 /// The whole input for a cold read of plain text, followed by its questions (`text_probe_input`).

@@ -4,6 +4,7 @@
 //! status field of each session.
 
 mod api;
+mod cold_read_record;
 pub mod audit;
 pub mod cli;
 mod entry;
@@ -43,12 +44,13 @@ mod tests {
     assert_eq!(routers.len(), 1);
     assert!(routers[0].claims("/api/internal/web/reply"));
     assert!(routers[0].claims("/api/internal/web/reply/unread"));
-    assert!(routers[0].claims("/api/internal/web/reply-check"));
+    assert!(routers[0].claims("/api/internal/web/cold-read-check"));
     assert!(routers[0].claims("/api/internal/web/dialog"));
     assert!(routers[0].claims("/api/internal/web/status"));
     assert!(routers[0].claims("/api/internal/web/status/confirm"));
     assert!(routers[0].claims("/api/internal/web/status/unread"));
-    assert!(routers[0].claims("/api/internal/web/ask-check"));
+    assert!(!routers[0].claims("/api/internal/web/reply-check"));
+    assert!(!routers[0].claims("/api/internal/web/ask-check"));
     assert!(!routers[0].claims("/api/internal/web"));
     assert!(!routers[0].claims("/api/internal/web/status/extra"));
   }
@@ -107,9 +109,10 @@ mod tests {
     let (status, body) = home
       .send(
         Method::POST,
-        "/api/internal/web/ask-check",
+        "/api/internal/web/cold-read-check",
         Some(json!({
           "session_id": sid,
+          "name": "ask",
           "item": item.clone(),
           "backend": "haiku",
           "answer": "Deploy.",
@@ -137,16 +140,18 @@ mod tests {
     let (status, body) = home
       .send(
         Method::POST,
-        "/api/internal/web/ask-check",
-        Some(json!({"session_id": sid, "item": 5, "backend": "haiku", "answer": "Deploy."})),
+        "/api/internal/web/cold-read-check",
+        Some(json!({"session_id": sid, "name": "ask", "item": 5, "backend": "haiku", "answer": "Deploy."})),
       )
       .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(body["detail"][0]["type"], "dict_type");
     assert_eq!(body["detail"][0]["loc"], json!(["body", "item"]));
 
-    let ask_checks = home.events(&sid).into_iter().filter(|event| event["type"] == "web_ask_check").collect::<Vec<_>>();
+    let ask_checks =
+      home.events(&sid).into_iter().filter(|event| event["type"] == "cold_read_check").collect::<Vec<_>>();
     assert_eq!(ask_checks.len(), 1);
+    assert_eq!(ask_checks[0]["name"], "ask");
     assert_eq!(ask_checks[0]["backend"], "haiku");
     assert_eq!(ask_checks[0]["answer"], "Deploy.");
   }
@@ -189,9 +194,10 @@ mod tests {
     let (status, body) = home
       .send(
         Method::POST,
-        "/api/internal/web/reply-check",
+        "/api/internal/web/cold-read-check",
         Some(json!({
           "session_id": sid,
+          "name": "reply",
           "text": bare_hash_text,
           "backend": "code-assertions",
           "findings": code_findings,
@@ -270,8 +276,8 @@ mod tests {
     let (status, _) = home
       .send(
         Method::POST,
-        "/api/internal/web/ask-check",
-        Some(json!({"session_id": sid, "item": item.clone(), "backend": "haiku", "answer": "Deploy."})),
+        "/api/internal/web/cold-read-check",
+        Some(json!({"session_id": sid, "name": "ask", "item": item.clone(), "backend": "haiku", "answer": "Deploy."})),
       )
       .await;
     assert_eq!(status, StatusCode::OK);

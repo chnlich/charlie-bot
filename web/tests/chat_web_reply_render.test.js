@@ -39,6 +39,38 @@ test('a web reply check draws nothing and does not reach the unknown-role error'
   assert.equal(html, '');
 });
 
+test('a reply cold-read check draws nothing, under its own role and the legacy role', () => {
+  const context = loadChatRendering();
+  for (const message of [
+    {role: 'cold_read_check', name: 'reply', id: 'c1', content: 'web reply check', timestamp: null},
+    {role: 'web_reply_check', id: 'c2', content: 'web reply check', timestamp: null},
+  ]) {
+    assert.equal(context.renderMessage(message, 'sess-1'), '', message.role);
+  }
+});
+
+test('an item cold-read check renders as the centered pill, under its own role and the legacy role', () => {
+  const context = loadChatRendering();
+  for (const message of [
+    {role: 'cold_read_check', name: 'ask', id: 'c1', content: 'Cold read of a Waiting on you item', timestamp: null},
+    {role: 'cold_read_check', name: 'settle', id: 'c2', content: 'Cold read of the kept Waiting on you items', timestamp: null},
+    {role: 'web_ask_check', id: 'c3', content: 'Cold read of a Waiting on you item', timestamp: null},
+  ]) {
+    const html = context.renderMessage(message, 'sess-1');
+    assert.ok(html.includes('data-message-role="' + message.role + '"'), message.role);
+    assert.ok(html.includes('justify-center'), message.role);
+    assert.ok(html.includes('rounded-full'), message.role);
+    assert.ok(html.includes(context.escapeHtml(message.content)), message.role);
+  }
+});
+
+test('the For you view lists the cold-read checks under no role', () => {
+  const {FOR_YOU_RULE} = require('./read_static');
+  for (const role of ['cold_read_check', 'web_ask_check', 'web_reply_check']) {
+    assert.ok(!FOR_YOU_RULE.roles.includes(role), role);
+  }
+});
+
 // The usage lines and the reason that a failed charlie-code run writes to its error row.
 const ERROR_TEXT = "Error: Agent error: Usage: charlie-code [OPTIONS]\n"
     + "Try 'charlie-code --help' for help.\n\n"

@@ -1004,8 +1004,11 @@ function renderMessage(msg, sessionId) {
       + titleAttr + ">"
       + "<span class=\"whitespace-pre-wrap break-words\">" + escapeHtml(msg.content) + "</span></div></div>";
   }
+  // A `cold_read_check` line records the audit of one check's text. A reply check's findings ride on the reply, so
+  // its marker draws nothing; the legacy `web_reply_check` line draws nothing the same way.
+  if (msg.role === "cold_read_check" && msg.name === "reply") return "";
   // A web_status change and a cold read of a waiting item read as a system line. The For you view folds both instead.
-  if (msg.role === "system" || msg.role === "web_status" || msg.role === "web_ask_check") {
+  if (msg.role === "system" || msg.role === "web_status" || msg.role === "web_ask_check" || msg.role === "cold_read_check") {
     var titleAttr = msg.timestamp ? " title=\"" + formatBubbleTime(msg.timestamp) + "\"" : "";
     var handlerMark = Object.hasOwn(HANDLER_MARK_ICONS, msg.kind) ? cbIcon(HANDLER_MARK_ICONS[msg.kind], 12) + " " : "";
     return openMessageWrapper("flex justify-center", msg) + "<div class=\"bg-slate-700/50 text-slate-400 text-xs px-3 py-1.5 rounded-full max-w-[85%] overflow-hidden truncate\"" + titleAttr + ">"

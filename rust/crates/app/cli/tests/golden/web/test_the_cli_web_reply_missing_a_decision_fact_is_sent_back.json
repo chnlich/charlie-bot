@@ -1,76 +1,77 @@
 {
-  "argv": [
-    "web",
-    "reply",
-    "--file",
-    "{root}/reply.md",
-    "--session",
-    "abc"
-  ],
-  "cwd": "{root}",
-  "env": {
-    "PATH": "{root}/bin",
-    "HOME": "{root}/user",
-    "CHARLIEBOT_REPO_ROOT": "{repo}"
+ "argv": [
+  "web",
+  "reply",
+  "--file",
+  "{root}/reply.md",
+  "--session",
+  "abc"
+ ],
+ "cwd": "{root}",
+ "env": {
+  "PATH": "{root}/bin",
+  "HOME": "{root}/user",
+  "CHARLIEBOT_REPO_ROOT": "{repo}"
+ },
+ "files": {
+  "home/config.yaml": "server:\n  port: {port}\nbackends:\n  pools:\n    - {id: pool, label: Pool, rule: rotate, members: [claude-light]}\n  calls:\n    worker: pool\n    improve: pool\n    verify: pool\n    review: pool\n    cold_read: pool\n    probe: pool\n    autoname: pool\n    triage: pool\n  options:\n    - id: claude-light\n      label: CC Light\n      type: cc-claude\n      model: claude-light-test\n",
+  "bin/claude": "#!/bin/sh\n/bin/cat > /dev/null\nprintf '%s\\n' '(1) none' '(2) none' '(3) The cost of waiting under option B is not stated.'\n",
+  "reply.md": "建议部署方案 A。回复「B」则改为等待。"
+ },
+ "responses": [
+  {
+   "status": 200,
+   "body": {
+    "unread": true,
+    "code_findings": []
+   }
   },
-  "files": {
-    "home/config.yaml": "server:\n  port: {port}\nbackends:\n  pools:\n    - {id: pool, label: Pool, rule: rotate, members: [claude-light]}\n  calls:\n    worker: pool\n    improve: pool\n    verify: pool\n    review: pool\n    cold_read: pool\n    probe: pool\n    autoname: pool\n    triage: pool\n  options:\n    - id: claude-light\n      label: CC Light\n      type: cc-claude\n      model: claude-light-test\n",
-    "bin/claude": "#!/bin/sh\n/bin/cat > /dev/null\nprintf '%s\\n' '(1) none' '(2) none' '(3) The cost of waiting under option B is not stated.'\n",
-    "reply.md": "建议部署方案 A。回复「B」则改为等待。"
-  },
-  "responses": [
-    {
-      "status": 200,
-      "body": {
-        "unread": true,
-        "code_findings": []
-      }
-    },
-    {
-      "status": 200,
-      "body": {
-        "reply_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-      }
-    }
-  ],
-  "expect": {
-    "stdout": "FAIL: The cost of waiting under option B is not stated\nNothing was posted.\n",
-    "stderr": "",
-    "exit": 3,
-    "requests": [
-      {
-        "method": "POST",
-        "path": "/api/internal/web/reply/unread",
-        "query": "",
-        "headers": {
-          "Authorization": null,
-          "X-CharlieBot-Caller-Session": null,
-          "Content-Type": "application/json"
-        },
-        "body": {
-          "session_id": "abc",
-          "text": "建议部署方案 A。回复「B」则改为等待。"
-        }
-      },
-      {
-        "method": "POST",
-        "path": "/api/internal/web/reply-check",
-        "query": "",
-        "headers": {
-          "Authorization": null,
-          "X-CharlieBot-Caller-Session": null,
-          "Content-Type": "application/json"
-        },
-        "body": {
-          "session_id": "abc",
-          "text": "建议部署方案 A。回复「B」则改为等待。",
-          "backend": "claude-light",
-          "findings": [
-            "The cost of waiting under option B is not stated"
-          ],
-          "answer": "(1) none\n(2) none\n(3) The cost of waiting under option B is not stated."
-        }
-      }
-    ]
+  {
+   "status": 200,
+   "body": {
+    "reply_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+   }
   }
+ ],
+ "expect": {
+  "stdout": "FAIL: The cost of waiting under option B is not stated\nNothing was posted.\n",
+  "stderr": "",
+  "exit": 3,
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/api/internal/web/reply/unread",
+    "query": "",
+    "headers": {
+     "Authorization": null,
+     "X-CharlieBot-Caller-Session": null,
+     "Content-Type": "application/json"
+    },
+    "body": {
+     "session_id": "abc",
+     "text": "建议部署方案 A。回复「B」则改为等待。"
+    }
+   },
+   {
+    "method": "POST",
+    "path": "/api/internal/web/cold-read-check",
+    "query": "",
+    "headers": {
+     "Authorization": null,
+     "X-CharlieBot-Caller-Session": null,
+     "Content-Type": "application/json"
+    },
+    "body": {
+     "session_id": "abc",
+     "text": "建议部署方案 A。回复「B」则改为等待。",
+     "backend": "claude-light",
+     "findings": [
+      "The cost of waiting under option B is not stated"
+     ],
+     "answer": "(1) none\n(2) none\n(3) The cost of waiting under option B is not stated.",
+     "name": "reply"
+    }
+   }
+  ]
+ }
 }

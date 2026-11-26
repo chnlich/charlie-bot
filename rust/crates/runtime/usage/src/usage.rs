@@ -143,6 +143,7 @@ impl UsageFold {
           | event_types::TOOL_USE
           | event_types::TURN_HOOKS
           | event_types::USER
+          | event_types::COLD_READ_CHECK
           | event_types::WEB_ASK_CHECK
           | event_types::WEB_REPLY
           | event_types::WEB_REPLY_CHECK

@@ -954,6 +954,7 @@ fn render_builtin<E: EventFields>(
     ChatEventType::DiscordReply
     | ChatEventType::SlackReply
     | ChatEventType::WebAskCheck
+    | ChatEventType::ColdReadCheck
     | ChatEventType::DraftFailed
     | ChatEventType::DraftRegistered
     | ChatEventType::DraftSent
@@ -1194,6 +1195,7 @@ pub fn run_tool_call_count<E: EventFields>(events: &[&E]) -> usize {
       ChatEventType::DiscordReply
       | ChatEventType::SlackReply
       | ChatEventType::WebAskCheck
+    | ChatEventType::ColdReadCheck
       | ChatEventType::DraftFailed
       | ChatEventType::DraftRegistered
       | ChatEventType::DraftSent
@@ -1312,6 +1314,7 @@ pub fn run_last_tool<E: EventFields>(events: &[&E]) -> Option<Value> {
       ChatEventType::DiscordReply
       | ChatEventType::SlackReply
       | ChatEventType::WebAskCheck
+    | ChatEventType::ColdReadCheck
       | ChatEventType::DraftFailed
       | ChatEventType::DraftRegistered
       | ChatEventType::DraftSent
@@ -1460,6 +1463,7 @@ pub fn run_last_text<E: EventFields>(events: &[&E]) -> StoreResult<Option<Value>
       ChatEventType::DiscordReply
       | ChatEventType::SlackReply
       | ChatEventType::WebAskCheck
+    | ChatEventType::ColdReadCheck
       | ChatEventType::DraftFailed
       | ChatEventType::DraftRegistered
       | ChatEventType::DraftSent

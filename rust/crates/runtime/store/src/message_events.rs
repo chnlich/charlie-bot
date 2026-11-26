@@ -154,6 +154,7 @@ fn interval_scan<'a, E: EventFields + 'a>(events: impl IntoIterator<Item = &'a E
       ChatEventType::DiscordReply => {}
       ChatEventType::SlackReply => {}
       ChatEventType::WebAskCheck => {}
+      ChatEventType::ColdReadCheck => {}
       ChatEventType::DraftFailed => {}
       ChatEventType::DraftRegistered => {}
       ChatEventType::DraftSent => {}

@@ -289,6 +289,7 @@ pub fn socket_frames(event: &Value, index: usize, deltas: Vec<Value>) -> StoreRe
     ChatEventType::DiscordReply => true,
     ChatEventType::SlackReply => true,
     ChatEventType::WebAskCheck => false,
+    ChatEventType::ColdReadCheck => false,
     ChatEventType::DraftFailed => true,
     ChatEventType::DraftRegistered => true,
     ChatEventType::DraftSent => true,
@@ -703,6 +704,18 @@ mod tests {
         "commit": {"id": "draft", "timestamp": "t", "event_index": 7},
       })]
     );
+  }
+
+  #[test]
+  fn a_cold_read_check_is_not_sent_to_the_socket_under_any_of_its_names() {
+    for event in [
+      json!({"type": "cold_read_check", "name": "ask", "content": "Cold read of a Waiting on you item"}),
+      json!({"type": "cold_read_check", "name": "settle", "content": "Cold read of the kept Waiting on you items"}),
+      json!({"type": "web_ask_check", "content": "Cold read of a Waiting on you item"}),
+      json!({"type": "web_reply_check", "content": "web reply check"}),
+    ] {
+      assert!(socket_frames(&event, 4, Vec::new()).unwrap().is_empty(), "{}", event["type"]);
+    }
   }
 
   #[test]

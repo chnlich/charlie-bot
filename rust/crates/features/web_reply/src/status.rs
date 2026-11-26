@@ -1,7 +1,8 @@
 //! A web session's status: the Goal, Remaining, Now and Waiting on you items
 //! that `charliebot web status` sets and reads. A set stores the items its JSON object names, records one `web_status`
-//! event and tells every ancestor page. A set refuses a Waiting on you item until a cold read of it is recorded. A read
-//! lists the open descendants whose status holds Waiting on you items and the open children that hold a Now.
+//! event and tells every ancestor page. A set refuses a Waiting on you item until a cold read of it is recorded, and a
+//! kept item until a `settle` cold read of the turn's record follows the turn's last input. A read lists the open
+//! descendants whose status holds Waiting on you items and the open children that hold a Now.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -12,7 +13,7 @@ use charliebot_agents::model_pool::POOL_MEMBER_FIELD;
 use charliebot_compat::file_urls;
 use charliebot_compat::file_urls::ScanContext;
 use charliebot_core::config::sessions_dir_in;
-use charliebot_core::event_types::{WEB_ASK_CHECK, WEB_REPLY, WEB_STATUS, WEB_STATUS_CONFIRMED};
+use charliebot_core::event_types::{WEB_REPLY, WEB_STATUS, WEB_STATUS_CONFIRMED};
 use charliebot_core::json_loads::{self, LoadError};
 use charliebot_core::str_methods;
 use charliebot_core::text_repr::{JsonStyle, json_dumps};
@@ -21,11 +22,13 @@ use charliebot_store::compact::CompactValue;
 use charliebot_store::control_events::SOURCE_SESSION_ID_FIELD;
 use charliebot_store::metadata::{SessionMetadata, SessionStatus, TaskApprover, UtcDateTime};
 use charliebot_store::{Store, session_channel};
+use charliebot_tasks::{cold_read, session_turn};
 use charliebot_user_text_checks as user_text_checks;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::audit;
+use crate::cold_read_record;
 use crate::json_input::replace_unrepresentable_numbers;
 use crate::metadata::WaitingItem;
 use crate::plan_links::{self, PlanLinks};
@@ -62,7 +65,6 @@ const NOT_A_WAITING_ITEM: &str = "Input should be a valid dictionary or instance
 const FIELD_REQUIRED: &str = "Field required";
 const EXTRA_FORBIDDEN: &str = "Extra inputs are not permitted";
 const NOW_BUDGET_CHARS: usize = 200;
-const ASK_CHECK_CONTENT: &str = "Cold read of a Waiting on you item";
 const ITEM_SHA256: &str = "item_sha256";
 /// The item fields that only the server writes; a set file carries neither.
 const SERVER_WRITTEN_ITEM_FIELDS: [&str; 2] = ["since", "since_exact"];
@@ -368,16 +370,71 @@ fn item_sha256(item: &WaitingItem) -> Result<String, WebReplyError> {
   Ok(charliebot_store::control_events::sha256_bytes_hex(&bytes))
 }
 
-/// The item digests that a `web_ask_check` event recorded, each one a cold read the set may store the item after.
-async fn read_ask_digests(features: &FeatureContext, session_id: &str) -> Result<HashSet<String>, WebReplyError> {
+/// The item digests that records of the cold-read check `name` wrote, each one a read the set may store the item
+/// after.
+async fn read_item_digests(
+  features: &FeatureContext,
+  session_id: &str,
+  name: &str,
+) -> Result<HashSet<String>, WebReplyError> {
   let events = reply::load_events(features, session_id).await?;
-  Ok(
-    events
-      .iter()
-      .filter(|event| event.get("type").and_then(CompactValue::as_str) == Some(WEB_ASK_CHECK))
-      .filter_map(|event| event.get(ITEM_SHA256).and_then(CompactValue::as_str).map(str::to_string))
-      .collect(),
-  )
+  let mut digests = HashSet::new();
+  for event in events.iter() {
+    let event: &charliebot_store::ChatEvent = event;
+    if cold_read_record::cold_read_record_name(event) == Some(name)
+      && let Some(digest) = event.get(ITEM_SHA256).and_then(CompactValue::as_str)
+    {
+      digests.insert(digest.to_string());
+    }
+  }
+  Ok(digests)
+}
+
+/// The item digests that a `settle` record in `turn` wrote after `since`: the turn's last input, or, for a turn with
+/// no input event, anywhere in the turn since the previous `master_done`.
+fn settle_digests(turn: &[Value], since: Option<UtcDateTime>) -> HashSet<String> {
+  let mut digests = HashSet::new();
+  for event in turn {
+    if cold_read_record::cold_read_record_name(event) != Some(cold_read::SETTLE) {
+      continue;
+    }
+    if let Some(since) = since {
+      let written = event["timestamp"].as_str().and_then(|text| UtcDateTime::parse(text).ok());
+      if written.is_none_or(|written| written <= since) {
+        continue;
+      }
+    }
+    if let Some(digest) = event[ITEM_SHA256].as_str() {
+      digests.insert(digest.to_string());
+    }
+  }
+  digests
+}
+
+/// The incoming waiting items the stored status already holds: each kept item needs a `settle` record before a set
+/// may store it again. An item whose digest cannot be read is left to the page-link refusal that names it.
+fn kept_items(items: &[WaitingItem], stored: &[WaitingItem]) -> Vec<WaitingItem> {
+  let stored_digests: HashSet<String> = stored.iter().filter_map(|item| item_sha256(item).ok()).collect();
+  items
+    .iter()
+    .filter(|item| item_sha256(item).is_ok_and(|digest| stored_digests.contains(&digest)))
+    .cloned()
+    .collect()
+}
+
+/// The kept items that still need a `settle` cold read: the incoming items the stored status keeps, whose digest has
+/// no `settle` record written after the turn's last input.
+fn settle_items(items: &[WaitingItem], stored: &[WaitingItem], turn: &[Value]) -> Vec<WaitingItem> {
+  let recorded = settle_digests(turn, session_turn::last_input_at(turn));
+  let mut settle = Vec::new();
+  for item in kept_items(items, stored) {
+    if let Ok(digest) = item_sha256(&item)
+      && !recorded.contains(&digest)
+    {
+      settle.push(item);
+    }
+  }
+  settle
 }
 
 /// Refuse a waiting item with no non-blank context before its digest is checked.
@@ -445,11 +502,12 @@ fn unread_items(items: &[WaitingItem], read_digests: &HashSet<String>) -> Result
     .collect()
 }
 
-/// Record one cold read of `raw_item` and return its digest. The read's answer is the item's readability record; a
-/// blank answer records nothing.
-pub async fn record_ask_check(
+/// Record one cold read of a Waiting on you item under the check `name` and return its digest. The read's answer is
+/// the item's readability record; a blank answer records nothing.
+pub async fn record_item_check(
   features: &FeatureContext,
   session_id: &str,
+  name: &str,
   raw_item: &Value,
   backend: &str,
   answer: &str,
@@ -460,24 +518,36 @@ pub async fn record_ask_check(
   if answer.trim().is_empty() {
     return Err(WebReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, "the cold-read answer is blank".to_string()));
   }
-  features
-    .store
-    .persist_and_broadcast(
-      session_id,
-      json!({
-        "type": WEB_ASK_CHECK,
-        "content": ASK_CHECK_CONTENT,
-        ITEM_SHA256: &digest,
-        "backend": backend,
-        "answer": answer,
-      }),
-    )
-    .await?;
-  tracing::info!(session = %session_id, backend, "web_ask_check_recorded");
+  cold_read_record::record(
+    features,
+    session_id,
+    cold_read_record::CheckRecord {
+      name,
+      backend,
+      answer: Some(answer),
+      digest_field: ITEM_SHA256,
+      digest: &digest,
+      findings: None,
+      run: None,
+    },
+  )
+  .await?;
   Ok(json!({ITEM_SHA256: digest}))
 }
 
-/// Return the waiting items in `text` whose current digest has no matching ask-check event.
+/// Record one cold read of one Waiting on you item.
+pub async fn record_ask_check(
+  features: &FeatureContext,
+  session_id: &str,
+  raw_item: &Value,
+  backend: &str,
+  answer: &str,
+) -> Result<Value, WebReplyError> {
+  record_item_check(features, session_id, cold_read::ASK, raw_item, backend, answer).await
+}
+
+/// Return the waiting items in `text` whose current digest has no matching ask-check event, the kept items that still
+/// need a settle cold read, and the turn's record when `settle` is non-empty.
 pub async fn unread_waiting(features: &FeatureContext, session_id: &str, text: &str) -> Result<Value, WebReplyError> {
   let meta = reply::require_manager_session(features, session_id).await?;
   let patch = parse_patch(text)?;
@@ -487,18 +557,24 @@ pub async fn unread_waiting(features: &FeatureContext, session_id: &str, text: &
   let items = patch.waiting.as_deref().unwrap_or_default();
   require_waiting_context(items)?;
   let stored = stored_status(&meta)?;
+  let stored_waiting = stored.as_ref().map(effective_waiting).unwrap_or_default();
   let prospective = match patch.waiting.as_deref() {
     Some(items) => items.to_vec(),
-    None => stored.map(|status| status.waiting).unwrap_or_default(),
+    None => stored_waiting.clone(),
   };
   let page_refusals = page_link_refusals(&prospective);
   if !page_refusals.is_empty() {
     return Err(WebReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, page_link_refusal_detail(&page_refusals)));
   }
   require_current_plan_links(features, &prospective, &scan_context)?;
-  let read_digests = read_ask_digests(features, session_id).await?;
+  let read_digests = read_item_digests(features, session_id, cold_read::ASK).await?;
   let unread = unread_items(items, &read_digests)?;
-  Ok(json!({"unread": unread}))
+  let turn = session_turn::current_turn(features, session_id)?;
+  let settle = settle_items(items, &stored_waiting, &turn);
+  if settle.is_empty() {
+    return Ok(json!({"unread": unread}));
+  }
+  Ok(json!({"unread": unread, "settle": settle, "turn_text": session_turn::turn_text(&turn)}))
 }
 
 /// `Text` for a present value: the non-blank string it holds, or a problem for a blank string or any other type.
@@ -681,7 +757,7 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
   if let Some(items) = patch.waiting.as_deref()
     && !items.is_empty()
   {
-    let read_digests = read_ask_digests(features, session_id).await?;
+    let read_digests = read_item_digests(features, session_id, cold_read::ASK).await?;
     for (index, item) in items.iter().enumerate() {
       let digest = match item_sha256(item) {
         Ok(digest) => digest,
@@ -690,6 +766,18 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
       };
       if !read_digests.contains(&digest) {
         refusal_details.push(format!("Waiting on you item {:?} needs a cold read", item.text));
+        refused = true;
+      }
+    }
+    let turn = session_turn::current_turn(features, session_id)?;
+    let recorded = settle_digests(&turn, session_turn::last_input_at(&turn));
+    for item in kept_items(items, &stored_waiting) {
+      let Ok(digest) = item_sha256(&item) else { continue };
+      if !recorded.contains(&digest) {
+        refusal_details.push(format!(
+          "Waiting on you item {:?} was kept, so it needs a cold read of this turn's record",
+          item.text
+        ));
         refused = true;
       }
     }
@@ -987,6 +1075,7 @@ mod tests {
   use std::time::Duration;
 
   use axum::http::Method;
+  use charliebot_core::event_types::COLD_READ_CHECK;
   use charliebot_store::Subscription;
   use serde_json::json;
 
@@ -1049,6 +1138,36 @@ mod tests {
     )
     .await
     .expect("the waiting item cold read records");
+  }
+
+  /// Records the settle cold read of the kept waiting item a second status set names.
+  async fn check_kept_item(home: &Home, session_id: &str, text: &str) {
+    record_item_check(
+      &home.features,
+      session_id,
+      cold_read::SETTLE,
+      &waiting_item(text),
+      "synthetic-haiku",
+      "The record leaves the item open.",
+    )
+    .await
+    .expect("the kept item settle read records");
+  }
+
+  /// The ask cold-read records of the session's log.
+  fn ask_checks(home: &Home, session_id: &str) -> Vec<Value> {
+    home.events(session_id)
+      .into_iter()
+      .filter(|event| event["type"] == COLD_READ_CHECK && event["name"] == cold_read::ASK)
+      .collect()
+  }
+
+  /// The settle cold-read records of the session's log.
+  fn settle_checks(home: &Home, session_id: &str) -> Vec<Value> {
+    home.events(session_id)
+      .into_iter()
+      .filter(|event| event["type"] == COLD_READ_CHECK && event["name"] == cold_read::SETTLE)
+      .collect()
   }
 
   fn waiting_click(session_id: &str, version: &str, since: &str, position: usize) -> Value {
@@ -1856,9 +1975,10 @@ mod tests {
     let (status, _) = home
       .send(
         Method::POST,
-        "/api/internal/web/ask-check",
+        "/api/internal/web/cold-read-check",
         Some(json!({
           "session_id": sid,
+          "name": "ask",
           "item": item.clone(),
           "backend": "synthetic-haiku",
           "answer": "(1) Browse. (2) Wait.",
@@ -1949,19 +2069,21 @@ mod tests {
 
     let digest = item_sha256(&parse_item(&item).unwrap()).unwrap();
     assert_eq!(response, json!({"item_sha256": digest}));
-    let checks = home.events(&sid).into_iter().filter(|event| event["type"] == WEB_ASK_CHECK).collect::<Vec<_>>();
+    let checks = ask_checks(&home, &sid);
     assert_eq!(checks.len(), 1);
     assert_eq!(
       json!({
         "type": checks[0]["type"],
+        "name": checks[0]["name"],
         "content": checks[0]["content"],
         "item_sha256": checks[0]["item_sha256"],
         "backend": checks[0]["backend"],
         "answer": checks[0]["answer"],
       }),
       json!({
-        "type": WEB_ASK_CHECK,
-        "content": ASK_CHECK_CONTENT,
+        "type": COLD_READ_CHECK,
+        "name": cold_read::ASK,
+        "content": "Cold read of a Waiting on you item",
         "item_sha256": digest,
         "backend": "haiku",
         "answer": answer,
@@ -1971,7 +2093,7 @@ mod tests {
     assert!(reply::for_you_entries(&home.features.store, &events).unwrap().is_empty());
     let compact = events.iter().map(charliebot_store::ChatEvent::from_value).collect::<Vec<_>>();
     let messages = home.features.store.events_to_messages(&compact).expect("the ask-check event renders");
-    assert!(messages.iter().any(|message| message["role"] == WEB_ASK_CHECK));
+    assert!(messages.iter().any(|message| message["role"] == COLD_READ_CHECK && message["name"] == cold_read::ASK));
   }
 
   #[tokio::test]
@@ -2104,6 +2226,7 @@ mod tests {
     record_ask_check(&home.features, &sid, &fixed_b, "synthetic-haiku", "The step is approved.")
       .await
       .expect("the corrected link gets a current cold read");
+    check_kept_item(&home, &sid, "Keep the first action").await;
     let updated = set_status(&home.features, &sid, &json!({"waiting": [&a, &fixed_b]}).to_string())
       .await
       .expect("the corrected complete list stores");
@@ -2180,7 +2303,7 @@ mod tests {
     );
     assert_eq!(stored(&home, &sid).await, Value::Null);
     assert!(status_events(&home, &sid).is_empty());
-    assert_eq!(home.events(&sid).iter().filter(|event| event["type"] == WEB_ASK_CHECK).count(), 1);
+    assert_eq!(ask_checks(&home, &sid).len(), 1);
   }
 
   #[tokio::test]
@@ -2213,7 +2336,7 @@ mod tests {
       assert!(matches!(error, WebReplyError::Refused { status: StatusCode::UNPROCESSABLE_ENTITY, .. }));
       assert_eq!(stored(&home, &sid).await, Value::Null);
       assert!(status_events(&home, &sid).is_empty());
-      assert!(home.events(&sid).iter().all(|event| event["type"] != WEB_ASK_CHECK));
+      assert!(ask_checks(&home, &sid).is_empty());
     }
 
     let home = Home::new();
@@ -2268,7 +2391,7 @@ mod tests {
     assert!(matches!(error, WebReplyError::Refused { status: StatusCode::CONFLICT, .. }));
     assert_eq!(stored(&home, &sid).await, Value::Null);
     assert!(status_events(&home, &sid).is_empty());
-    assert_eq!(home.events(&sid).iter().filter(|event| event["type"] == WEB_ASK_CHECK).count(), 1);
+    assert_eq!(ask_checks(&home, &sid).len(), 1);
   }
 
   #[tokio::test]
@@ -2436,7 +2559,7 @@ mod tests {
         }
         assert_eq!(stored(&home, &sid).await, Value::Null, "{endpoint} {field}");
         assert!(status_events(&home, &sid).is_empty(), "{endpoint} {field}");
-        assert!(home.events(&sid).iter().all(|event| event["type"] != WEB_ASK_CHECK), "{endpoint} {field}");
+        assert!(ask_checks(&home, &sid).is_empty(), "{endpoint} {field}");
       }
     }
   }
@@ -2590,6 +2713,16 @@ mod tests {
     record_ask_check(&home.features, session_id, &item, "synthetic-haiku", "continue is recommended.")
       .await
       .expect("the item cold read records");
+    record_item_check(
+      &home.features,
+      session_id,
+      cold_read::SETTLE,
+      &item,
+      "synthetic-haiku",
+      "The record leaves the item open.",
+    )
+    .await
+    .expect("the settle cold read records");
     set_status(&home.features, session_id, &json!({"waiting": [item]}).to_string()).await.expect("the set stores")
   }
 
@@ -2900,6 +3033,184 @@ mod tests {
 
       assert_eq!(without_item_times(&saved["waiting"]), json!([item]));
       assert_eq!(without_item_times(&stored(&home, sid).await["waiting"]), json!([item]));
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // settle: the kept items are read against the turn's record
+  // -------------------------------------------------------------------------
+
+  /// A `settle` record for `item` at `timestamp`, as the cold-read route writes it.
+  async fn append_settle_record(home: &Home, session_id: &str, item: &Value, timestamp: &str) {
+    let digest = item_sha256(&parse_item(item).expect("the item validates")).expect("the item digests");
+    home.append(
+      session_id,
+      json!({
+        "type": COLD_READ_CHECK,
+        "name": cold_read::SETTLE,
+        "content": "Cold read of the kept Waiting on you items",
+        ITEM_SHA256: digest,
+        "backend": "synthetic-haiku",
+        "answer": "The record leaves the item open.",
+        "timestamp": timestamp,
+      }),
+    )
+    .await;
+  }
+
+  /// Stores the one waiting item under test with its ask record, then answers the status the session stores.
+  async fn store_one_item(home: &Home, session_id: &str, item: &Value) {
+    record_ask_check(&home.features, session_id, item, "synthetic-haiku", "The item is ready.")
+      .await
+      .expect("the item cold read records");
+    set_status(&home.features, session_id, &json!({"waiting": [item]}).to_string()).await.expect("the item stores");
+  }
+
+  #[tokio::test]
+  async fn the_unread_query_names_each_kept_item_and_carries_the_bounded_turn_record() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let item = waiting_item("Decide the layout");
+    store_one_item(&home, &sid, &item).await;
+    home
+      .append(
+        &sid,
+        json!({"type": "assistant", "timestamp": "2026-01-01T00:00:01Z",
+          "message": {"content": [{"type": "text", "text": "The layout is chosen."}]}}),
+      )
+      .await;
+
+    let unread = unread_waiting(&home.features, &sid, &json!({"waiting": [item.clone()]}).to_string())
+      .await
+      .expect("the unread query answers");
+
+    assert_eq!(unread["unread"], json!([]));
+    let settle = unread["settle"].as_array().expect("the answer names the kept items");
+    assert_eq!(settle.len(), 1);
+    assert_eq!(settle[0]["text"], json!("Decide the layout"));
+    let turn_text = unread["turn_text"].as_str().expect("the answer carries the turn record");
+    assert!(turn_text.contains("agent: The layout is chosen."), "{turn_text}");
+    assert!(!turn_text.contains("cold_read_check"), "the record excludes the cold-read records: {turn_text}");
+    assert!(!turn_text.contains("Status updated"), "the record carries the status payload, not its line: {turn_text}");
+  }
+
+  #[tokio::test]
+  async fn a_settle_record_after_the_last_input_clears_the_kept_item() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let item = waiting_item("Decide the layout");
+    store_one_item(&home, &sid, &item).await;
+    append_settle_record(&home, &sid, &item, "2026-01-01T00:00:05Z").await;
+
+    let unread = unread_waiting(&home.features, &sid, &json!({"waiting": [item]}).to_string())
+      .await
+      .expect("the unread query answers");
+
+    assert_eq!(unread, json!({"unread": []}), "a read kept item is neither unread nor a settle item");
+  }
+
+  #[tokio::test]
+  async fn a_settle_record_before_the_turns_last_input_leaves_the_item_kept() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let item = waiting_item("Decide the layout");
+    store_one_item(&home, &sid, &item).await;
+    home.launch_run(&sid, "run-1", &["u1"], "2026-01-01T00:00:10Z");
+    home.append(&sid, json!({"type": "user", "id": "u1", "content": "What now?", "timestamp": "2026-01-01T00:00:09Z"}))
+      .await;
+    append_settle_record(&home, &sid, &item, "2026-01-01T00:00:05Z").await;
+
+    let before = unread_waiting(&home.features, &sid, &json!({"waiting": [item.clone()]}).to_string())
+      .await
+      .expect("the unread query answers");
+    assert_eq!(before["settle"].as_array().map(Vec::len), Some(1), "a read from before the input does not settle it");
+
+    append_settle_record(&home, &sid, &item, "2026-01-01T00:00:11Z").await;
+    let after = unread_waiting(&home.features, &sid, &json!({"waiting": [item]}).to_string())
+      .await
+      .expect("the unread query answers");
+    assert_eq!(after, json!({"unread": []}));
+  }
+
+  #[tokio::test]
+  async fn a_set_that_names_a_kept_item_refuses_until_its_settle_record_exists() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let item = waiting_item("Decide the layout");
+    store_one_item(&home, &sid, &item).await;
+    let events = status_events(&home, &sid).len();
+
+    let error = set_status(&home.features, &sid, &json!({"waiting": [item.clone()]}).to_string())
+      .await
+      .expect_err("a kept item needs its settle read");
+    let detail = detail(error);
+    assert!(detail.contains("was kept, so it needs a cold read of this turn's record"), "{detail}");
+    assert_eq!(status_events(&home, &sid).len(), events, "the refusal stores nothing");
+
+    append_settle_record(&home, &sid, &item, "2026-01-01T00:00:05Z").await;
+    assert_eq!(settle_checks(&home, &sid).len(), 1, "the settle record exists before the second set");
+    set_status(&home.features, &sid, &json!({"waiting": [item]}).to_string()).await.expect("the read item stores");
+  }
+
+  /// The session-api router's answer to one GET request.
+  async fn session_api_get(home: &Home, uri: &str) -> Value {
+    use tower::ServiceExt as _;
+    let request =
+      axum::http::Request::builder().uri(uri).body(axum::body::Body::empty()).expect("the request builds");
+    let response = charliebot_session_api::routes(&home.features)
+      .oneshot(request)
+      .await
+      .expect("the session-api router is infallible");
+    assert_eq!(response.status(), StatusCode::OK, "{uri}");
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.expect("the body reads");
+    serde_json::from_slice(&bytes).expect("the body is JSON")
+  }
+
+  #[tokio::test]
+  async fn the_turn_record_and_the_settle_list_stay_out_of_every_browser_route() {
+    let home = Home::new();
+    // The status poll's body memo is process-global, so this test's session name must differ from every other
+    // test's: a shared deterministic session id would let one home's answer serve the other's request.
+    let sid = home.manager("cold-read-isolation", None).await;
+    let item = waiting_item("Decide the layout");
+    store_one_item(&home, &sid, &item).await;
+    let secret = "the-unstated-settling-fact";
+    home
+      .append(
+        &sid,
+        json!({"type": "assistant", "timestamp": "2026-01-01T00:00:01Z",
+          "message": {"content": [{"type": "text", "text": secret}]}}),
+      )
+      .await;
+
+    let (status, unread) = home
+      .send(
+        Method::POST,
+        "/api/internal/web/status/unread",
+        Some(json!({"session_id": sid, "text": json!({"waiting": [item]}).to_string()})),
+      )
+      .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(unread["settle"].is_array(), "{unread}");
+    assert!(unread["turn_text"].as_str().is_some_and(|text| text.contains(secret)), "{unread}");
+
+    let (status, internal) =
+      home.send(Method::GET, &format!("/api/internal/web/status?session_id={sid}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let bodies = vec![
+      internal,
+      session_api_get(&home, &format!("/api/sessions/{sid}/bootstrap")).await,
+      session_api_get(&home, &format!("/api/sessions/{sid}/events?before=100&limit=40")).await,
+      session_api_get(&home, &format!("/api/sessions/{sid}")).await,
+      session_api_get(&home, "/api/sessions/").await,
+      session_api_get(&home, &format!("/api/sessions/status?ids={sid}")).await,
+      session_api_get(&home, "/api/sessions/search?q=layout").await,
+    ];
+    for body in bodies {
+      // The conversation itself is public to the page; the assembled turn record and the settle list are not.
+      let text = body.to_string();
+      assert!(!text.contains("turn_text"), "{text}");
+      assert!(!text.contains("\"settle\""), "{text}");
     }
   }
 }

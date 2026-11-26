@@ -128,7 +128,7 @@ status_text() { # goal now waiting_json
 }
 
 # Store one session's status. Every Waiting on you item needs a recorded cold read before the server
-# stores it, so each unread item first gets one ask-check.
+# stores it, so each unread item first gets one `ask` cold-read record.
 set_status() { # sid text
   local sid=$1 text=$2 body unread item answer payload
   body=$(jq -n --arg sid "$sid" --arg text "$text" '{session_id: $sid, text: $text}')
@@ -136,8 +136,8 @@ set_status() { # sid text
   while IFS= read -r item; do
     answer="The item's context reads as its description states."
     payload=$(jq -n --arg sid "$sid" --argjson item "$item" --arg backend "readme-demo" --arg answer "$answer" \
-      '{session_id: $sid, item: $item, backend: $backend, answer: $answer}')
-    api POST /api/internal/web/ask-check "$payload" >/dev/null
+      '{session_id: $sid, name: "ask", item: $item, backend: $backend, answer: $answer}')
+    api POST /api/internal/web/cold-read-check "$payload" >/dev/null
   done < <(jq -c '.[]' <<<"$unread")
   api POST /api/internal/web/status "$body" >/dev/null
 }

@@ -16,7 +16,7 @@ use std::time::Duration;
 use anyhow::Context;
 use charliebot_core::RepoRoot;
 use charliebot_core::event_types::{
-  AGENT_MESSAGE, CHILD_REPORT, CHILD_SESSION_ID, INPUT_EVENT_ID, MASTER_DONE, TURN_HOOKS, TURN_HOOKS_ID,
+  AGENT_MESSAGE, CHILD_REPORT, CHILD_SESSION_ID, INPUT_EVENT_ID, TURN_HOOKS, TURN_HOOKS_ID,
   WEB_REPLY_NOTICE, WEB_STATUS,
 };
 use charliebot_core::text_repr::field_text;
@@ -25,7 +25,7 @@ use charliebot_registry::colleague_gate;
 use charliebot_registry::turn::{CheckResult, TurnContribution, TurnInput};
 use charliebot_store::MessageProvenance;
 use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
-use charliebot_store::reply_order::{self, Receipt};
+use charliebot_store::reply_order::Receipt;
 use serde_json::{Value, json};
 
 use crate::completion::TaskCompletion;
@@ -125,21 +125,13 @@ struct SessionLog {
 
 fn read_log(features: &FeatureContext, session_id: &str) -> anyhow::Result<SessionLog> {
   let loaded = features.store.load_chat_events_shared_sync(session_id)?;
-  let receipts = reply_order::running_receipts(&features.store, session_id, loaded.as_slice())?;
-  let mut events: Vec<Value> = loaded.iter().map(|event| event.as_ref().to_value()).collect();
-  let status = events
+  let status = loaded
     .iter()
     .rev()
-    .find(|event| event["type"] == WEB_STATUS)
-    .map_or(Value::Null, |event| event[WEB_STATUS].clone());
-  let start = events.iter().rposition(|event| event["type"] == MASTER_DONE).map_or(0, |index| index + 1);
-  let mut turn = events.split_off(start);
-  for event in &mut turn {
-    let Some(id) = event["id"].as_str() else { continue };
-    if let Some(receipt) = receipts.iter().find(|receipt| receipt.input_event_id == id) {
-      event["received_at"] = json!(receipt.at.to_str());
-    }
-  }
+    .find(|event| event.get("type").and_then(charliebot_store::CompactValue::as_str) == Some(WEB_STATUS))
+    .and_then(|event| event.get(WEB_STATUS))
+    .map_or(Value::Null, charliebot_store::CompactValue::to_value);
+  let turn = crate::session_turn::split_turn(features, session_id, loaded.as_slice())?;
   Ok(SessionLog { turn, status })
 }
 

@@ -13,7 +13,7 @@ use charliebot_store::metadata::UtcDateTime;
 use serde_json::{Map, Value, json};
 
 use crate::turn_contribution::WebReplyTurnContribution;
-use crate::{api, sidebar};
+use crate::{api, cold_read_record, sidebar};
 
 /// `register`: the `/api/internal` router, then the turn and sidebar contributions, then the
 /// web-reply status field of each session.
@@ -111,12 +111,11 @@ pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
     .route("/api/internal/web/reply", post_only(api::post_reply))
     .route("/api/internal/web/reply/unread", post_only(api::post_reply_unread))
-    .route("/api/internal/web/reply-check", post_only(api::post_reply_check))
+    .route("/api/internal/web/cold-read-check", post_only(cold_read_record::post_cold_read_check))
     .route("/api/internal/web/dialog", get_only(api::get_dialog))
     .route("/api/internal/web/status", refuse_other_methods(post(api::post_status).get(api::get_status), "POST"))
     .route("/api/internal/web/status/confirm", post_only(api::post_status_confirm))
     .route("/api/internal/web/status/unread", post_only(api::post_status_unread))
-    .route("/api/internal/web/ask-check", post_only(api::post_ask_check))
     .with_state(Arc::clone(features))
 }
 
@@ -127,11 +126,10 @@ fn matches(path: &str) -> bool {
     path,
     "/api/internal/web/reply"
       | "/api/internal/web/reply/unread"
-      | "/api/internal/web/reply-check"
+      | "/api/internal/web/cold-read-check"
       | "/api/internal/web/dialog"
       | "/api/internal/web/status"
       | "/api/internal/web/status/confirm"
       | "/api/internal/web/status/unread"
-      | "/api/internal/web/ask-check"
   )
 }

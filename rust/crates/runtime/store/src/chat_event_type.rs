@@ -20,6 +20,7 @@ use charliebot_core::event_types;
 pub(crate) enum ChatEventType {
   DiscordReply,
   SlackReply,
+  ColdReadCheck,
   WebAskCheck,
   DraftFailed,
   DraftRegistered,
@@ -123,6 +124,7 @@ impl ChatEventType {
       None => Self::Untyped,
       Some(event_types::DISCORD_REPLY) => Self::DiscordReply,
       Some(event_types::SLACK_REPLY) => Self::SlackReply,
+      Some(event_types::COLD_READ_CHECK) => Self::ColdReadCheck,
       Some(event_types::WEB_ASK_CHECK) => Self::WebAskCheck,
       Some(event_types::DRAFT_FAILED) => Self::DraftFailed,
       Some(event_types::DRAFT_REGISTERED) => Self::DraftRegistered,
@@ -249,6 +251,7 @@ impl ChatEventType {
       | Self::RunError => true,
       Self::DiscordReply
       | Self::SlackReply
+      | Self::ColdReadCheck
       | Self::WebAskCheck
       | Self::DraftFailed
       | Self::DraftRegistered

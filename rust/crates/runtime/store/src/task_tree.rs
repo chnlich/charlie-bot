@@ -2733,6 +2733,7 @@ fn lifecycle_state_of(event: &ChatEvent) -> Option<TaskState> {
     ChatEventType::DiscordReply => None,
     ChatEventType::SlackReply => None,
     ChatEventType::WebAskCheck => None,
+    ChatEventType::ColdReadCheck => None,
     ChatEventType::DraftFailed => None,
     ChatEventType::DraftRegistered => None,
     ChatEventType::DraftSent => None,
@@ -3041,6 +3042,7 @@ fn fold_task_facts_from(
       ChatEventType::DiscordReply => {}
       ChatEventType::SlackReply => {}
       ChatEventType::WebAskCheck => {}
+      ChatEventType::ColdReadCheck => {}
       ChatEventType::DraftFailed => {}
       ChatEventType::DraftRegistered => {}
       ChatEventType::DraftSent => {}
@@ -3142,6 +3144,7 @@ fn fold_task_facts_from(
       ChatEventType::DiscordReply => {}
       ChatEventType::SlackReply => {}
       ChatEventType::WebAskCheck => {}
+      ChatEventType::ColdReadCheck => {}
       ChatEventType::DraftFailed => {}
       ChatEventType::DraftRegistered => {}
       ChatEventType::DraftSent => {}
@@ -3474,6 +3477,7 @@ fn admits_input(event: &ChatEvent) -> bool {
     ChatEventType::DiscordReply => false,
     ChatEventType::SlackReply => false,
     ChatEventType::WebAskCheck => false,
+    ChatEventType::ColdReadCheck => false,
     ChatEventType::DraftFailed => false,
     ChatEventType::DraftRegistered => false,
     ChatEventType::DraftSent => true,

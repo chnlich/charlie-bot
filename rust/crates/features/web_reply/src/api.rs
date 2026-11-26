@@ -161,55 +161,6 @@ pub async fn post_reply_unread(State(features): State<Arc<FeatureContext>>, requ
   )
 }
 
-/// `POST /api/internal/web/reply-check`: records a cold read of a web reply.
-pub async fn post_reply_check(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
-  let (parts, stream) = request.into_parts();
-  let body = match request_body::read(&parts.headers, stream).await {
-    Ok(body) => body,
-    Err(response) => return *response,
-  };
-  let model = match ReplyCheck::validate(&body) {
-    Ok(model) => model,
-    Err(response) => return *response,
-  };
-  let identity = match caller::resolve_caller(&parts.headers, &features) {
-    Ok(identity) => identity,
-    Err(response) => return response,
-  };
-  if let Some(refusal) = refuse_colleague_work(&features, &identity).await {
-    return refusal;
-  }
-  answer(
-    reply::record_reply_check(
-      &features,
-      &model.session_id,
-      &model.text,
-      &model.backend,
-      &model.findings,
-      model.answer.as_deref(),
-      identity.claims().map(|claims| claims.run_id.as_str()),
-    )
-    .await,
-  )
-}
-
-/// `POST /api/internal/web/ask-check`: records a cold read of one Waiting on you item.
-pub async fn post_ask_check(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
-  let (parts, stream) = request.into_parts();
-  let body = match request_body::read(&parts.headers, stream).await {
-    Ok(body) => body,
-    Err(response) => return *response,
-  };
-  let model = match AskCheck::validate(&body) {
-    Ok(model) => model,
-    Err(response) => return *response,
-  };
-  if let Some(refusal) = guard_agent_work(&features, &parts.headers).await {
-    return refusal;
-  }
-  answer(status::record_ask_check(&features, &model.session_id, &model.item, &model.backend, &model.answer).await)
-}
-
 /// `GET /api/internal/web/status?session_id=`: the session's status and its waiting descendants.
 pub async fn get_status(
   State(features): State<Arc<FeatureContext>>,
@@ -265,25 +216,6 @@ const SESSION_TEXT_BODY: BodyModel = BodyModel::required(SESSION_TEXT_FIELDS).fo
 const SESSION_ID_FIELDS: &[Field] = &[Field::required("session_id", FieldType::String)];
 const SESSION_ID_BODY: BodyModel = BodyModel::required(SESSION_ID_FIELDS).forbid_extra();
 
-/// The fields of `WebAskCheckRequest` in declaration order.
-const ASK_CHECK_FIELDS: &[Field] = &[
-  Field::required("session_id", FieldType::String),
-  Field::required("item", FieldType::Dictionary),
-  Field::required("backend", FieldType::String),
-  Field::required("answer", FieldType::String),
-];
-const ASK_CHECK_BODY: BodyModel = BodyModel::required(ASK_CHECK_FIELDS).forbid_extra();
-
-/// The fields of `WebReplyCheckRequest` in declaration order.
-const REPLY_CHECK_FIELDS: &[Field] = &[
-  Field::required("session_id", FieldType::String),
-  Field::required("text", FieldType::String),
-  Field::required("backend", FieldType::String),
-  Field::required("findings", FieldType::StringList),
-  Field::optional("answer", FieldType::NullableString),
-];
-const REPLY_CHECK_BODY: BodyModel = BodyModel::required(REPLY_CHECK_FIELDS).forbid_extra();
-
 /// The validated `WebReplyRequest`.
 struct ReplyRequest {
   session_id: String,
@@ -328,61 +260,6 @@ impl SessionId {
   fn validate(body: &RequestBody) -> Result<Self, Box<Response>> {
     let fields = body.declared_fields(&SESSION_ID_BODY)?;
     Ok(Self { session_id: text_field(&fields, "session_id") })
-  }
-}
-
-/// The validated `WebAskCheckRequest`.
-struct AskCheck {
-  session_id: String,
-  item: Value,
-  backend: String,
-  answer: String,
-}
-
-impl AskCheck {
-  /// Validates the body against `ASK_CHECK_BODY`, which requires an object for `item` and forbids extra keys.
-  fn validate(body: &RequestBody) -> Result<Self, Box<Response>> {
-    let mut fields = body.declared_fields(&ASK_CHECK_BODY)?;
-    let session_id = text_field(&fields, "session_id");
-    let item = fields.remove("item").expect("a validated dictionary is present");
-    let backend = text_field(&fields, "backend");
-    let answer = text_field(&fields, "answer");
-    Ok(Self { session_id, item, backend, answer })
-  }
-}
-
-/// The validated `WebReplyCheckRequest`.
-struct ReplyCheck {
-  session_id: String,
-  text: String,
-  backend: String,
-  findings: Vec<String>,
-  answer: Option<String>,
-}
-
-impl ReplyCheck {
-  /// Validates the body against `REPLY_CHECK_BODY`.
-  fn validate(body: &RequestBody) -> Result<Self, Box<Response>> {
-    let mut fields = body.declared_fields(&REPLY_CHECK_BODY)?;
-    let session_id = text_field(&fields, "session_id");
-    let text = text_field(&fields, "text");
-    let backend = text_field(&fields, "backend");
-    let findings = match fields.remove("findings") {
-      Some(Value::Array(items)) => items
-        .into_iter()
-        .map(|item| match item {
-          Value::String(text) => text,
-          _ => unreachable!("a validated findings item is a string"),
-        })
-        .collect(),
-      _ => unreachable!("a validated findings is a list"),
-    };
-    let answer = match fields.remove("answer") {
-      Some(Value::String(answer)) => Some(answer),
-      Some(Value::Null) | None => None,
-      Some(_) => unreachable!("a validated answer is a string or null"),
-    };
-    Ok(Self { session_id, text, backend, findings, answer })
   }
 }
 
@@ -642,13 +519,14 @@ mod tests {
       ("/api/internal/web/status", json!({"session_id": session_id, "text": "{\"goal\": \"g\"}"})),
       ("/api/internal/web/status/confirm", json!({"session_id": session_id})),
       (
-        "/api/internal/web/ask-check",
-        json!({"session_id": session_id, "item": {"text": "t", "context": "c"}, "backend": "b", "answer": "a"}),
+        "/api/internal/web/cold-read-check",
+        json!({"session_id": session_id, "name": "ask", "item": {"text": "t", "context": "c"}, "backend": "b",
+          "answer": "a"}),
       ),
       ("/api/internal/web/reply", json!({"session_id": session_id, "text": "hi"})),
       (
-        "/api/internal/web/reply-check",
-        json!({"session_id": session_id, "text": "hi", "backend": "b", "findings": []}),
+        "/api/internal/web/cold-read-check",
+        json!({"session_id": session_id, "name": "reply", "text": "hi", "backend": "b", "findings": []}),
       ),
     ];
     for (path, body) in &writes {

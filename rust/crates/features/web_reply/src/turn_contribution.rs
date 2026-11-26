@@ -9,7 +9,9 @@ use std::sync::Arc;
 use anyhow::Context;
 use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
-use charliebot_core::event_types::{WEB_ASK_CHECK, WEB_REPLY, WEB_REPLY_CHECK, WEB_REPLY_NOTICE, WEB_STATUS};
+use charliebot_core::event_types::{
+  COLD_READ_CHECK, WEB_ASK_CHECK, WEB_REPLY, WEB_REPLY_CHECK, WEB_REPLY_NOTICE, WEB_STATUS,
+};
 use charliebot_core::run_kind::RunKind;
 use charliebot_core::str_methods;
 use charliebot_registry::FeatureContext;
@@ -78,8 +80,9 @@ impl TurnContribution for WebReplyTurnContribution {
       (WEB_REPLY, web_reply_message),
       (WEB_REPLY_NOTICE, web_reply_notice_message),
       (WEB_STATUS, web_status_message),
-      (WEB_ASK_CHECK, web_ask_check_message),
-      (WEB_REPLY_CHECK, web_reply_check_message),
+      (COLD_READ_CHECK, cold_read_check_message),
+      (WEB_ASK_CHECK, cold_read_check_message),
+      (WEB_REPLY_CHECK, cold_read_check_message),
     ]
   }
 
@@ -133,14 +136,11 @@ fn web_status_message(event: &Value) -> Value {
   json!({"role": WEB_STATUS, "content": content(event), (WEB_STATUS): event.get(WEB_STATUS)})
 }
 
-/// The chat line of a `web_ask_check` event.
-fn web_ask_check_message(event: &Value) -> Value {
-  json!({"role": WEB_ASK_CHECK, "content": content(event)})
-}
-
-/// The chat line of a `web_reply_check` event.
-fn web_reply_check_message(event: &Value) -> Value {
-  json!({"role": WEB_REPLY_CHECK, "content": content(event)})
+/// The chat line of a cold-read check: the check's name and its content, whether the record is the unified
+/// `cold_read_check` or a legacy `web_ask_check` / `web_reply_check`.
+fn cold_read_check_message(event: &Value) -> Value {
+  let name = crate::cold_read_record::cold_read_record_name(event).unwrap_or_default();
+  json!({"role": COLD_READ_CHECK, "name": name, "content": content(event)})
 }
 
 /// The event's `content`, or `""` when the event has none (`event.get("content", "")`).
@@ -325,5 +325,21 @@ mod tests {
   fn web_status_without_content_or_status_renders_empty_and_null() {
     let event = json!({});
     assert_eq!(web_status_message(&event).to_string(), r#"{"role":"web_status","content":"","web_status":null}"#);
+  }
+
+  /// The unified record and both legacy types render through one branch, which names the check and keeps the content.
+  #[test]
+  fn every_cold_read_check_renders_its_name_under_the_one_role() {
+    for (event, name) in [
+      (json!({"type": COLD_READ_CHECK, "name": "settle", "content": "Cold read of the kept Waiting on you items"}),
+        "settle"),
+      (json!({"type": WEB_REPLY_CHECK, "content": "web reply check"}), "reply"),
+      (json!({"type": WEB_ASK_CHECK, "content": "Cold read of a Waiting on you item"}), "ask"),
+    ] {
+      let message = cold_read_check_message(&event);
+      assert_eq!(message["role"], COLD_READ_CHECK);
+      assert_eq!(message["name"], name);
+      assert_eq!(message["content"], event["content"]);
+    }
   }
 }

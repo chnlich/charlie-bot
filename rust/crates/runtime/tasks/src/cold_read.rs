@@ -32,11 +32,94 @@ const REPLY_QUESTIONS_SECTION: &str = "reply_questions";
 /// The Now-status prompt pair under `prompts/cold_read.md`.
 pub const NOW_SYSTEM_SECTION: &str = "now_system_prompt";
 pub const NOW_QUESTIONS_SECTION: &str = "now_questions";
+/// The settle prompt pair under `prompts/cold_read.md`.
+pub const SETTLE_SYSTEM_SECTION: &str = "settle_system_prompt";
+pub const SETTLE_QUESTIONS_SECTION: &str = "settle_questions";
 /// The question counts of the Now-status and web-reply prompt pairs.
 pub const NOW_QUESTION_COUNT: usize = 1;
 pub const REPLY_QUESTION_COUNT: usize = 3;
 /// The bounded timeout for one cold read probe attempt.
 pub const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The name of each registered cold read. A `cold_read_check` event carries its check's name.
+pub const PAGE: &str = "page";
+pub const REPLY: &str = "reply";
+pub const ASK: &str = "ask";
+pub const SETTLE: &str = "settle";
+pub const NOW: &str = "now";
+
+/// What a caller does with a cold read's answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefusalRule {
+  /// The answer is a report for the caller: nothing is recorded and nothing is refused.
+  None,
+  /// Findings hold the first submission; a second submission posts without a server-side refusal.
+  HoldOnFindings,
+  /// The answer is recorded and the command refuses to store until the record exists.
+  RequireRecord,
+  /// The answer is recorded for each kept item and the store is refused until a record follows the turn's last input.
+  RequireRecordSinceInput,
+  /// Findings refuse the command; nothing is recorded.
+  RefuseOnFindings,
+}
+
+/// One row of the cold-read registry: the check's name, its prompt pair under `prompts/cold_read.md`, and what a
+/// caller does with its answer.
+pub struct ColdReadRow {
+  pub name: &'static str,
+  pub system_section: &'static str,
+  pub questions_section: &'static str,
+  pub refusal: RefusalRule,
+}
+
+/// The registry: every command-side cold read, one row each.
+pub const REGISTRY: [ColdReadRow; 5] = [
+  ColdReadRow {
+    name: PAGE,
+    system_section: SYSTEM_SECTION,
+    questions_section: QUESTIONS_SECTION,
+    refusal: RefusalRule::None,
+  },
+  ColdReadRow {
+    name: REPLY,
+    system_section: REPLY_SYSTEM_SECTION,
+    questions_section: REPLY_QUESTIONS_SECTION,
+    refusal: RefusalRule::HoldOnFindings,
+  },
+  ColdReadRow {
+    name: ASK,
+    system_section: ASK_SYSTEM_SECTION,
+    questions_section: ASK_QUESTIONS_SECTION,
+    refusal: RefusalRule::RequireRecord,
+  },
+  ColdReadRow {
+    name: SETTLE,
+    system_section: SETTLE_SYSTEM_SECTION,
+    questions_section: SETTLE_QUESTIONS_SECTION,
+    refusal: RefusalRule::RequireRecordSinceInput,
+  },
+  ColdReadRow {
+    name: NOW,
+    system_section: NOW_SYSTEM_SECTION,
+    questions_section: NOW_QUESTIONS_SECTION,
+    refusal: RefusalRule::RefuseOnFindings,
+  },
+];
+
+/// The registry row named `name`, or `None` for a name no row carries.
+pub fn row(name: &str) -> Option<&'static ColdReadRow> {
+  REGISTRY.iter().find(|row| row.name == name)
+}
+
+impl ColdReadRow {
+  /// The system prompt and questions of this row, read fresh from `prompts/cold_read.md`.
+  pub fn prompt_pair(&self, repo: &Path) -> anyhow::Result<(String, String)> {
+    load_prompt_pair(repo, self.system_section, self.questions_section)
+  }
+}
+
+/// The names a `cold_read_check` event may carry: the registry's recorded rows, in registry order.
+pub const RECORDED_NAMES: &[&str] = &[REPLY, ASK, SETTLE];
 /// The item JSON an ask probe carries: non-ASCII characters unescaped, two-space indentation.
 const ITEM_JSON: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ",", key_separator: ": ", indent: Some(2) };
@@ -78,7 +161,8 @@ pub fn load_prompt_pair(
 
 /// The system prompt and questions for the artifact-page check, read fresh from `prompts/cold_read.md`.
 pub fn load_texts(repo: &Path) -> anyhow::Result<(String, String)> {
-  load_prompt_pair(repo, SYSTEM_SECTION, QUESTIONS_SECTION)
+  let row = row(PAGE).expect("the page row is registered");
+  load_prompt_pair(repo, row.system_section, row.questions_section)
 }
 
 /// The block a probe adds after the full source: the text the reader sees at page open, folded blocks closed.
@@ -315,7 +399,8 @@ pub fn probe_input(page_text: &str, questions: &str, trigger: &str) -> anyhow::R
 /// The system prompt and the five questions one Waiting on you item is cold-read with, read fresh from
 /// `prompts/cold_read.md` (`load_ask_texts`).
 pub fn load_ask_texts(repo: &Path) -> anyhow::Result<(String, String)> {
-  load_prompt_pair(repo, ASK_SYSTEM_SECTION, ASK_QUESTIONS_SECTION)
+  let row = row(ASK).expect("the ask row is registered");
+  load_prompt_pair(repo, row.system_section, row.questions_section)
 }
 
 /// The ask probe's whole input: the item JSON, the host-served page text with every `data:` URI replaced by a size
@@ -335,12 +420,19 @@ pub fn ask_probe_input(item: &Value, linked_page: Option<&str>, questions: &str)
 /// The system prompt and the questions one web reply is cold-read with, read fresh from `prompts/cold_read.md`
 /// (`load_reply_texts`).
 pub fn load_reply_texts(repo: &Path) -> anyhow::Result<(String, String)> {
-  load_prompt_pair(repo, REPLY_SYSTEM_SECTION, REPLY_QUESTIONS_SECTION)
+  let row = row(REPLY).expect("the reply row is registered");
+  load_prompt_pair(repo, row.system_section, row.questions_section)
 }
 
 /// The whole input for a cold read of plain text, followed by its questions (`text_probe_input`).
 pub fn text_probe_input(text: &str, questions: &str) -> String {
   format!("{text}\n\n{questions}")
+}
+
+/// The settle probe's whole input: the kept items as JSON, then the turn's record, then the questions
+/// (`settle_probe_input`), joined by blank lines.
+pub fn settle_probe_input(items: &Value, turn_text: &str, questions: &str) -> String {
+  format!("{}\n\n{turn_text}\n\n{questions}", text_repr::json_dumps(items, &ITEM_JSON))
 }
 
 /// The findings parsed from a numbered cold-read answer with `question_count` questions.
@@ -1041,5 +1133,62 @@ BBBB
       load_prompt_pair(repo.path(), NOW_SYSTEM_SECTION, NOW_QUESTIONS_SECTION).unwrap(),
       ("Now system".to_string(), "Now question".to_string())
     );
+  }
+
+  /// The registry's rows in order, each with the refusal rule the plan fixes for it.
+  #[test]
+  fn the_registry_names_every_check_with_its_refusal_rule() {
+    let expected = [
+      (PAGE, RefusalRule::None),
+      (REPLY, RefusalRule::HoldOnFindings),
+      (ASK, RefusalRule::RequireRecord),
+      (SETTLE, RefusalRule::RequireRecordSinceInput),
+      (NOW, RefusalRule::RefuseOnFindings),
+    ];
+    assert_eq!(REGISTRY.len(), expected.len());
+    for ((name, refusal), registered) in expected.into_iter().zip(REGISTRY.iter()) {
+      let found = row(name).expect("each registered name resolves to its row");
+      assert_eq!((found.name, found.refusal), (registered.name, registered.refusal));
+      assert_eq!((registered.name, registered.refusal), (name, refusal));
+    }
+    assert!(row("unknown-check").is_none());
+    assert_eq!(RECORDED_NAMES, [REPLY, ASK, SETTLE]);
+  }
+
+  /// Every registry row's prompt pair resolves from the sections it names, and no row shares a section with another.
+  #[test]
+  fn every_registry_row_reads_its_own_prompt_pair() {
+    let repo = tempfile::tempdir().unwrap();
+    let prompt_dir = repo.path().join("prompts");
+    std::fs::create_dir_all(&prompt_dir).unwrap();
+    let sections = REGISTRY
+      .iter()
+      .flat_map(|row| {
+        [
+          format!("<!-- section: {} -->\n{} system", row.system_section, row.name),
+          format!("<!-- section: {} -->\n{} questions", row.questions_section, row.name),
+        ]
+      })
+      .collect::<Vec<_>>()
+      .join("\n");
+    std::fs::write(prompt_dir.join(PROMPT_FILENAME), sections).unwrap();
+
+    let mut used = std::collections::HashSet::new();
+    for registered in &REGISTRY {
+      let (system, questions) = registered.prompt_pair(repo.path()).unwrap();
+      assert_eq!(system, format!("{} system", registered.name));
+      assert_eq!(questions, format!("{} questions", registered.name));
+      assert!(used.insert(registered.system_section), "{} shares a section", registered.name);
+      assert!(used.insert(registered.questions_section), "{} shares a section", registered.name);
+    }
+  }
+
+  #[test]
+  fn the_settle_probe_input_is_the_items_then_the_turn_record_then_the_questions() {
+    let items = serde_json::json!([{"text": "Decide", "context": "The line waits."}]);
+    let input = settle_probe_input(&items, "[2026-01-01T00:00:00] agent: done", "questions");
+    assert!(input.starts_with("[\n  {"), "{input}");
+    assert!(input.contains("\"text\": \"Decide\""), "{input}");
+    assert!(input.ends_with("\n\n[2026-01-01T00:00:00] agent: done\n\nquestions"), "{input}");
   }
 }

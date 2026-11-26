@@ -390,6 +390,7 @@ impl RunFacts {
       ChatEventType::DiscordReply => {}
       ChatEventType::SlackReply => {}
       ChatEventType::WebAskCheck => {}
+      ChatEventType::ColdReadCheck => {}
       ChatEventType::DraftFailed => {}
       ChatEventType::DraftRegistered => {}
       ChatEventType::DraftSent => {}

@@ -10,7 +10,7 @@ use axum::http::StatusCode;
 use charliebot_compat::file_urls;
 use charliebot_core::event_types::EventFields;
 use charliebot_core::event_types::{
-  AGENT_MESSAGE, INPUT_EVENT_ID, NUDGE_OF, USER, WEB_REPLY, WEB_REPLY_CHECK, WEB_REPLY_NOTICE,
+  AGENT_MESSAGE, INPUT_EVENT_ID, NUDGE_OF, USER, WEB_REPLY, WEB_REPLY_NOTICE,
 };
 use charliebot_core::paths;
 use charliebot_core::regex_classes::compile_automata_regex;
@@ -24,9 +24,12 @@ use charliebot_store::for_you;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
 use charliebot_store::reply_order::{self, Receipt};
 use charliebot_store::{SESSION_NOT_FOUND_DETAIL, SharedChatEvent, Store, StoreError};
+use charliebot_tasks::cold_read;
 use charliebot_user_text_checks::{self as user_text_checks, UserTextChecks, UserTextChecksConfig};
 use regex::{Captures, Regex};
 use serde_json::{Value, json};
+
+use crate::cold_read_record;
 
 /// The web reply rules file under `prompts/`.
 pub const RULES_FILE: &str = "web_reply.md";
@@ -294,7 +297,7 @@ pub fn reply_sha256(text: &str) -> String {
   charliebot_store::control_events::sha256_bytes_hex(text.as_bytes())
 }
 
-/// The findings of a recorded `web_reply_check` event for this reply attempt, if any check has been recorded.
+/// The findings of a recorded reply check for this reply attempt, if any check has been recorded.
 pub async fn checked_reply_findings(
   features: &FeatureContext,
   session_id: &str,
@@ -312,7 +315,8 @@ pub async fn checked_reply_findings(
       (None, None) => event.get(REPLY_SHA256).and_then(CompactValue::as_str) == Some(digest),
       _ => unreachable!("a reply index is present exactly when a run id is present"),
     };
-    if event.get("type").and_then(CompactValue::as_str) == Some(WEB_REPLY_CHECK) && matches {
+    let record: &charliebot_store::ChatEvent = event;
+    if cold_read_record::cold_read_record_name(record) == Some(cold_read::REPLY) && matches {
       let findings = event
         .get("findings")
         .and_then(CompactValue::as_array)
@@ -386,28 +390,26 @@ pub async fn record_reply_check(
 ) -> Result<Value, WebReplyError> {
   require_manager_session(features, session_id).await?;
   let digest = reply_sha256(text);
-  let reply_index = if let Some(run_id) = run_id {
+  let run = if let Some(run_id) = run_id {
     let events = load_events(features, session_id).await?;
-    Some(run_reply_index(events.iter().map(SharedChatEvent::as_ref), run_id))
+    Some((run_id, run_reply_index(events.iter().map(SharedChatEvent::as_ref), run_id)))
   } else {
     None
   };
-  let mut event = json!({
-    "type": WEB_REPLY_CHECK,
-    "content": "web reply check",
-    REPLY_SHA256: &digest,
-    "backend": backend,
-    "findings": findings,
-  });
-  if let (Some(run_id), Some(reply_index)) = (run_id, reply_index) {
-    event["run_id"] = json!(run_id);
-    event["reply_index"] = json!(reply_index);
-  }
-  if let Some(answer) = answer {
-    event["answer"] = json!(answer);
-  }
-  features.store.persist_and_broadcast(session_id, event).await?;
-  tracing::info!(session = %session_id, backend, count = findings.len(), "web_reply_check_recorded");
+  cold_read_record::record(
+    features,
+    session_id,
+    cold_read_record::CheckRecord {
+      name: cold_read::REPLY,
+      backend,
+      answer,
+      digest_field: REPLY_SHA256,
+      digest: &digest,
+      findings: Some(findings),
+      run,
+    },
+  )
+  .await?;
   Ok(json!({ REPLY_SHA256: digest }))
 }
 

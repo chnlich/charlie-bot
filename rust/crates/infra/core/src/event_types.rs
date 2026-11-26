@@ -109,6 +109,10 @@ pub const TURN_HOOKS: &str = "turn_hooks";
 pub const TURN_HOOKS_ID: &str = "turn_hooks_id";
 pub const WEB_ASK_CHECK: &str = "web_ask_check";
 pub const WEB_REPLY_CHECK: &str = "web_reply_check";
+/// One cold read of a command-side check, named by its registry row in `cold_read.rs` (`reply`, `ask`, `settle`).
+/// The legacy `web_ask_check` and `web_reply_check` records keep their names; every reader maps them to `ask` and
+/// `reply` through the web reply package's `cold_read_record_name`.
+pub const COLD_READ_CHECK: &str = "cold_read_check";
 pub const CONTEXT_COMPACTED: &str = "context_compacted";
 pub const CONTEXT_COMPACT_FAILED: &str = "context_compact_failed";
 pub const RESUME_CONTEXT_DROPPED: &str = "resume_context_dropped";

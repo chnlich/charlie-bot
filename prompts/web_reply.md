@@ -38,6 +38,8 @@ The For-you view shows your web replies and hides the rest of your turn output.
 
 - When the turn received an input and Waiting on you holds items, store a `web status set` whose Waiting on you list
   is the list as it stands after the last input.
+- When that status set prints the cold read of the kept items against this turn's record, act on each item before the
+  next set: remove a settled item, rewrite a changed item, and keep an open item.
 - Otherwise, end the turn with the session status that matches what the turn did: store a `web status set` for a change
   to Goal, Remaining, Now or Waiting on you, and a `web status confirm` for an unchanged status.
 - A child session keeps its own progress in its own **Now**.

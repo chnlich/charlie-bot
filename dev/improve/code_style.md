@@ -17,7 +17,18 @@ A change to a web page takes its screenshots and serve trial from landing.md's W
 
 ## Rules
 
-The rules of a round are the lines of `$IMPROVE_SKILLS_DIR/writing-style/genres/code.md`.
+The rules of a round are Google's style guide for the language of the files it changes.
+The kit pins that text in `$IMPROVE_KIT_DIR/dev/improve/google-styleguide/`, a copy of google/styleguide at the
+revision its `REVISION` file names.
+The pinned guide alone is the round's rule source, and a guide revision changes only by a kit change.
+
+- `.js` and `.mjs` files: `google-styleguide/jsguide.md`
+- `.html` and `.css` files: `google-styleguide/htmlcssguide.md`
+- `.sh` files: `google-styleguide/shellguide.md`
+
+A file whose language has no guide in that list gets no topic.
+Rust files get no code-style topic: rustfmt and clippy hold the repository's Rust code in CI, and the pinned set
+carries no Rust guide. `rust/` stays in the Scope for the direction's file ownership.
 Earlier rounds' pull requests, reports and evidence are not a rule source.
 
 ## Topics
@@ -40,7 +51,10 @@ The two counts show that the rule now holds and that the topic is complete.
 
 The pull request's body names each rule it applies on its own line, in this form:
 
-    Rule: writing-style/genres/code.md:<line> "<that line of the rule file, without its surrounding whitespace>"
+    Rule: google-styleguide/<guide file>:<first line>[-<last line>] "<the exact words of those lines>"
 
-`<line>` is the 1-based line number in the rule file.
-`pr-create` refuses a body that names no rule, and a body whose quote differs from its cited line.
+`<guide file>` is one of the files in the Rules list.
+`<first line>` and `<last line>` are 1-based line numbers in that pinned file.
+The words are the cited lines joined with one space, with each run of whitespace collapsed to one space and both ends
+trimmed.
+`pr-create` refuses a body that names no rule, and a body whose quote differs from the cited lines.

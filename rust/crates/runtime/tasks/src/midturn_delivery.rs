@@ -8,11 +8,11 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use charliebot_agents::backend_types;
+use charliebot_agents::backend_types::{self, BuiltBackend};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types;
 use charliebot_core::text_repr::field_text;
-use charliebot_registry::backend::LaunchArgs;
+use charliebot_registry::backend::{AgentBackend, LaunchArgs};
 use charliebot_registry::context::FeatureContext;
 use charliebot_registry::midturn_delivery::{is_gated_turn, offer as offer_write};
 use charliebot_store::ChatEvent;
@@ -107,6 +107,49 @@ pub async fn claim_finish_inputs(
   dispatcher.claim_echoed_user_inputs(&meta.id, run_id, &delivered).await
 }
 
+/// Resumes `backend`'s live-input state from `log_dir` when present and returns its translator.
+pub fn translator_from_backend(backend: &dyn AgentBackend, log_dir: Option<&Path>) -> anyhow::Result<FreshTranslate> {
+  if let (Some(state), Some(dir)) = (backend.midturn_state(), log_dir) {
+    state.set_run_dir(dir)?;
+    state.resume(dir, 0)?;
+  }
+  let mut translator = backend.translator();
+  Ok(Box::new(move |event| translator.translate(event)))
+}
+
+/// Builds and resumes a manager Run's backend for post-restart follow, returning `None` when the backend cannot be
+/// constructed.
+pub fn build_resumed_backend(
+  features: &FeatureContext,
+  cfg: &CharlieBotConfig,
+  option: &BackendOption,
+  meta: &SessionMetadata,
+  run_id: &str,
+  log_dir: &Path,
+) -> anyhow::Result<Option<BuiltBackend>> {
+  let launch = match features.registry.lifecycle_for(&option.backend_type) {
+    Ok(lifecycle) => {
+      let backend_kwargs = lifecycle.midturn_launch_kwargs(meta, true, RunKind::ManagerTurn, Some(run_id))?;
+      LaunchArgs { backend_kwargs, log_dir: Some(log_dir.to_path_buf()), ..LaunchArgs::default() }
+    }
+    // A type no package registered has no lifecycle and no mid-turn input path; the build below reports it.
+    Err(_) => LaunchArgs { log_dir: Some(log_dir.to_path_buf()), ..LaunchArgs::default() },
+  };
+  match backend_types::build_backend(std::sync::Arc::clone(&features.registry), option, cfg, launch) {
+    Ok(built) => {
+      if let Some(state) = built.backend.midturn_state() {
+        state.set_run_dir(log_dir)?;
+        state.resume(log_dir, 0)?;
+      }
+      Ok(Some(built))
+    }
+    Err(error) => {
+      tracing::warn!(target: "charliebot_tasks", backend = %option.id, error = %error, "master_cc_resume_translate_unresolved");
+      Ok(None)
+    }
+  }
+}
+
 /// Build the fresh raw-log translator used to follow or reconcile one Run (`midturn_delivery.fresh_translate`).
 ///
 /// Stateful translates require one instance per scan. A gated web manager turn's replay lines need the gated backend's
@@ -132,10 +175,7 @@ pub fn fresh_translate(
     Err(_) => LaunchArgs::default(),
   };
   match backend_types::build_backend(std::sync::Arc::clone(&features.registry), option, cfg, launch) {
-    Ok(built) => {
-      let mut translator = built.backend.translator();
-      Ok(Box::new(move |event| translator.translate(event)))
-    }
+    Ok(built) => translator_from_backend(built.backend.as_ref(), log_dir),
     Err(error) => {
       tracing::warn!(target: "charliebot_tasks", backend = %option.id, error = %error, "master_cc_resume_translate_unresolved");
       Ok(Box::new(|event| Ok(vec![event])))

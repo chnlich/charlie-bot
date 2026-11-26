@@ -203,6 +203,22 @@ impl DeliveryState {
     }
   }
 
+  /// Reattaches a reopened live input (such as a named pipe) after a server restart.
+  pub async fn reattach_stdin(
+    &self,
+    stdin: Box<dyn AsyncWrite + Send + Unpin>,
+    exited: ExitedProbe,
+  ) -> anyhow::Result<()> {
+    let mut writer = self.writer.lock().await;
+    if self.released.load(Ordering::Acquire) || writer.closed {
+      return Ok(());
+    }
+    writer.exited = Some(exited);
+    writer.stdin = Some(stdin);
+    self.initial_written.0.send_replace(true);
+    Ok(())
+  }
+
   /// Writes the Run's initial prompt with its stdin left open. `exited` reports the child's exit.
   pub async fn write_prompt(
     &self,
@@ -293,17 +309,19 @@ impl DeliveryState {
 
   /// Applies a candidate turn end under the write lock. The input closes only when no written request still awaits its
   /// answer; otherwise the candidate lapses, and the answer that clears the last request signals it again.
+  ///
+  /// When a resumed or drained Run holds no open stdin handle, settling still records the closed state and status so
+  /// post-restart follows and scans observe the turn end.
   pub async fn settle_turn(&self) -> anyhow::Result<()> {
     let Some(succeeded) = self.turn.lock().expect("mid-turn turn mutex is not poisoned").candidate.take() else {
       return Ok(());
     };
-    self.wait_initial_written().await;
+    if self.writer.lock().await.stdin.is_some() {
+      self.wait_initial_written().await;
+    }
     let mut writer = self.writer.lock().await;
     if writer.closed || self.released.load(Ordering::Acquire) {
       return Ok(());
-    }
-    if writer.stdin.is_none() {
-      bail!("Run {} has no subprocess stdin to close", self.run_id);
     }
     if !self.codec.lock().expect("mid-turn codec mutex is not poisoned").turn_may_end() {
       return Ok(());

@@ -20,7 +20,7 @@ use charliebot_registry::backend::{
 use charliebot_registry::context::FeatureContext;
 use charliebot_store::StoreError;
 use charliebot_store::metadata::{NATIVE_BACKEND, SessionMetadata, UtcDateTime};
-use charliebot_store::run_records::{CURSOR_NAME, RAW_LOG_NAME, RunKind, STDERR_LOG_NAME};
+use charliebot_store::run_records::{CURSOR_NAME, MIDTURN_INPUT_FIFO_NAME, RAW_LOG_NAME, RunKind, STDERR_LOG_NAME};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 
@@ -956,6 +956,7 @@ pub(crate) async fn run_cc(
   let mut refusal_resets_at = None;
   if let Err(error) = launches {
     if error.downcast_ref::<TurnCancelled>().is_some() {
+      charliebot_registry::midturn_delivery::release_run(&process.item.task_run.run_id);
       let covered = cancelled.lock().expect("cancel state mutex is not poisoned").unwrap_or(false);
       tracing::warn!(target: "charliebot_tasks", session = %session_id, action = if covered { "let_go" } else { "terminate" }, "master_cc_cancelled");
     } else if let Some(refusal) = error.downcast_ref::<charliebot_registry::backend::LaunchRefused>() {
@@ -1115,8 +1116,19 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
   )
   .await?;
   let cursor_read = cursor::read_raw_cursor(&cursor_path);
-  let mut translate_stream =
-    build_fresh_translate(&features, &cfg, Some(&option), &resume_meta, &resume_run_id, &log_dir)?;
+  let resumed =
+    crate::midturn_delivery::build_resumed_backend(&features, &cfg, &option, &resume_meta, &resume_run_id, &log_dir)?;
+  let (mut translate_stream, midturn_state, input_fifo, midturn_run_id) = match resumed {
+    Some(built) => {
+      let state = built.backend.midturn_state();
+      let input_fifo = built.backend.input_is_fifo();
+      let midturn_run_id = built.backend.midturn_run_id();
+      let mut translator = built.backend.translator();
+      let translate: crate::midturn_delivery::FreshTranslate = Box::new(move |event| translator.translate(event));
+      (translate, state, input_fifo, midturn_run_id)
+    }
+    None => (Box::new(|event| Ok(vec![event])) as crate::midturn_delivery::FreshTranslate, None, false, None),
+  };
   let replay_path = raw_path.clone();
   let prefix = tokio::task::spawn_blocking(move || {
     charliebot_agents::transport::recovery::raw_events_before_cursor(&replay_path, cursor_read)
@@ -1126,6 +1138,27 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
   for raw in prefix {
     translate_stream(raw)?;
   }
+  if let Some(state) = &midturn_state {
+    state.settle_turn().await?;
+    if is_alive() && midturn_run_id.is_some() && state.turn_status().is_none() && input_fifo {
+      let fifo_path = log_dir.join(MIDTURN_INPUT_FIFO_NAME);
+      match charliebot_agents::transport::spawn::open_fifo_writer(&fifo_path) {
+        Ok(writer) => {
+          let alive_probe = Arc::clone(&is_alive);
+          state.reattach_stdin(Box::new(writer), Arc::new(move || !alive_probe())).await?;
+          charliebot_registry::midturn_delivery::bind_process(Arc::clone(state));
+        }
+        Err(error) if !is_alive() => {
+          tracing::debug!(target: "charliebot_tasks", run_id = %resume_run_id, error = %error, "master_cc_resume_fifo_exited");
+        }
+        Err(error) => {
+          return Err(error).with_context(|| format!("reopening mid-turn input pipe {}", fifo_path.display()));
+        }
+      }
+    }
+  }
+  let stopped_after_turn =
+    Arc::new(AtomicBool::new(input_fifo && midturn_state.as_ref().is_some_and(|state| state.turn_status().is_some())));
   let cancel = item.cancel.clone();
   // The resume follow's acknowledgements join the item's web-reply binding like a fresh turn's do. The item keeps its
   // own ids: the follow's acknowledgements go to a copy, so the item keeps its ids when the follow fails.
@@ -1149,6 +1182,10 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
     },
     None => (None, Duration::ZERO),
   };
+  let handler_state = midturn_state.clone();
+  let handler_stopped_after_turn = Arc::clone(&stopped_after_turn);
+  let follow_stopped_after_turn = Arc::clone(&stopped_after_turn);
+  let follow_is_alive = Arc::clone(&is_alive);
   let follow_result = follow::tail_follow_events(
     &raw_path,
     move |raw| {
@@ -1167,7 +1204,12 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
         let events = Arc::clone(&persisted_events);
         let ack_ids = Arc::clone(&stream_ack_ids);
         let ack_run_id = ack_run_id.clone();
+        let handler_state = handler_state.clone();
+        let handler_stopped_after_turn = Arc::clone(&handler_stopped_after_turn);
         async move {
+          if let Some(state) = &handler_state {
+            state.settle_turn().await.map_err(|error| std::io::Error::other(error.to_string()))?;
+          }
           tracker.lock().expect("run timing mutex is not poisoned").on_event(&event);
           crate::midturn_delivery::record_ack(
             &mut ack_ids.lock().expect("resume acknowledgement mutex is not poisoned"),
@@ -1181,11 +1223,14 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
             .map_err(|error| std::io::Error::other(error.to_string()))?;
           *cc_session_id.lock().expect("native session id mutex is not poisoned") = cc_session_id_value;
           events.lock().expect("resume event mutex is not poisoned").push(event);
+          if input_fifo && handler_state.as_ref().is_some_and(|state| state.turn_status().is_some()) {
+            handler_stopped_after_turn.store(true, Ordering::Release);
+          }
           Ok(())
         }
       }
     },
-    move || is_alive() && !*cancel.borrow(),
+    move || follow_is_alive() && !*cancel.borrow() && !follow_stopped_after_turn.load(Ordering::Acquire),
     Some(&cursor_path),
     cursor_read,
     POST_RESULT_TIMEOUT,
@@ -1219,6 +1264,7 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
   // The follow's acknowledgements join the item before any relayed turn records its own.
   item.user_event_ids = std::mem::take(&mut *ack_ids.lock().expect("resume acknowledgement mutex is not poisoned"));
   if cancelled {
+    charliebot_registry::midturn_delivery::release_run(&resume_run_id);
     // A resume follow owns no process handle. A covered run only drops this follower; an uncovered process is
     // terminated using the persisted identity, as the fresh-turn cancellation path does.
     error_msg = None;
@@ -1274,7 +1320,9 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
         host_boot,
       );
       if alive() {
-        tracing::warn!(target: "charliebot_tasks", session = %metadata.id, pid, "master_cc_resumed_run_hung_after_result");
+        if !stopped_after_turn.load(Ordering::Acquire) {
+          tracing::warn!(target: "charliebot_tasks", session = %metadata.id, pid, "master_cc_resumed_run_hung_after_result");
+        }
         charliebot_agents::transport::kill::kill_group_escalating(pid, alive).await;
       }
     }

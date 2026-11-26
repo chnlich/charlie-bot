@@ -704,9 +704,15 @@ fn fifo_stdin(path: &Path) -> io::Result<(OwnedFd, Option<AgentPipeWriter>)> {
     }
   }
   let child_end = OpenOptions::new().read(true).write(true).open(path)?;
+  let writer = open_fifo_writer(path)?;
+  Ok((OwnedFd::from(child_end), Some(writer)))
+}
+
+/// Opens the write end of an existing named pipe in nonblocking mode, for a child that already holds it open.
+pub fn open_fifo_writer(path: &Path) -> io::Result<AgentPipeWriter> {
   let parent_end = OpenOptions::new().write(true).custom_flags(libc::O_NONBLOCK).open(path)?;
   set_nonblocking(parent_end.as_raw_fd())?;
-  Ok((OwnedFd::from(child_end), Some(AgentPipeWriter::new(OwnedFd::from(parent_end))?)))
+  AgentPipeWriter::new(OwnedFd::from(parent_end))
 }
 
 fn piped_stdin() -> io::Result<(OwnedFd, Option<AgentPipeWriter>)> {

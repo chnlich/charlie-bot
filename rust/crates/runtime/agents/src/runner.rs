@@ -203,6 +203,11 @@ impl AgentRunner {
       }
     };
     tokio::fs::create_dir_all(&log_dir).await?;
+    let raw_path = log_dir.join(RAW_LOG_NAME);
+    let stderr_path = log_dir.join(STDERR_LOG_NAME);
+    let cursor_path = log_dir.join(charliebot_store::run_records::CURSOR_NAME);
+    // Rotate any prior process's raw output and mid-turn ledger before loading this process's ledger state.
+    rotate_stale_transport(&log_dir, &raw_path, &stderr_path, &cursor_path)?;
     let mut backend = self.backend.lock().await;
     let transport = backend.transport();
     backend.prepare_transport(&log_dir)?;
@@ -243,10 +248,6 @@ impl AgentRunner {
       drop(backend);
       return self.run_serve(request, serve, &command, final_env, &log_dir).await;
     }
-    let raw_path = log_dir.join(RAW_LOG_NAME);
-    let stderr_path = log_dir.join(STDERR_LOG_NAME);
-    let cursor_path = log_dir.join(charliebot_store::run_records::CURSOR_NAME);
-    rotate_stale_transport(&log_dir, &raw_path, &stderr_path, &cursor_path)?;
     let buffer_limit = self.launch.buffer_limit.unwrap_or(follow::DEFAULT_BUFFER_LIMIT);
     let original_program = command.first().context("backend command is empty")?.clone();
     let (program, args): (std::ffi::OsString, Vec<std::ffi::OsString>) =
@@ -328,16 +329,26 @@ impl AgentRunner {
       self.graceful_shutdown(&active, kill::KILL_ESCALATION_GRACE, "backend_terminate_timeout").await?;
     }
 
+    let turn_stopped = Arc::new(AtomicBool::new(false));
+    let stdin_failed = Arc::new(AtomicBool::new(false));
     if let Some(prompt) = midturn_prompt {
       let stdin = stdin_slot.take().context("agent stdin was not piped")?;
       let exited: ExitedProbe = {
         let exit = active.exit.clone();
         Arc::new(move || exit.borrow().is_some())
       };
+      let stdin_failed_task = Arc::clone(&stdin_failed);
       stdin_task = Some(match backend.write_stdin_prompt(Box::new(stdin), exited, &prompt, &request.cwd) {
-        Some(write) => {
-          tokio::spawn(async move { write.await.map_err(|error| std::io::Error::other(error.to_string())) })
-        }
+        Some(write) => tokio::spawn(async move {
+          let result = write.await.map_err(|error| std::io::Error::other(format!("{error:#}")));
+          if result.is_err() {
+            stdin_failed_task.store(true, Ordering::Release);
+            if input_fifo {
+              kill::kill_process_group(pid, nix::sys::signal::Signal::SIGTERM);
+            }
+          }
+          result
+        }),
         None => bail!("a mid-turn backend writes its own stdin prompt"),
       });
     }
@@ -348,14 +359,25 @@ impl AgentRunner {
     let translate = move |raw| translator.translate(raw);
     let exit_receiver = active.exit.clone();
     let follow_active = Arc::clone(&active);
-    let is_alive = move || !follow_active.detached.load(Ordering::Acquire) && exit_receiver.borrow().is_none();
+    let follow_turn_stopped = Arc::clone(&turn_stopped);
+    let follow_stdin_failed = Arc::clone(&stdin_failed);
+    let is_alive = move || {
+      !follow_active.detached.load(Ordering::Acquire)
+        && exit_receiver.borrow().is_none()
+        && !follow_turn_stopped.load(Ordering::Acquire)
+        && !follow_stdin_failed.load(Ordering::Acquire)
+    };
     let handler = request.on_event.clone();
     let hook_backend = &self.backend;
+    let handler_state = midturn_state.clone();
+    let handler_turn_stopped = Arc::clone(&turn_stopped);
     follow::tail_follow_events(
       &raw_path,
       translate,
       move |event| {
         let handler = handler.clone();
+        let handler_state = handler_state.clone();
+        let handler_turn_stopped = Arc::clone(&handler_turn_stopped);
         async move {
           {
             // The backend hook runs before the consumer sees the event, like `tail_follow_events(on_event=...)`.
@@ -364,7 +386,11 @@ impl AgentRunner {
               hook.await.map_err(|error| std::io::Error::other(error.to_string()))?;
             }
           }
-          handler(event).await.map_err(|error| std::io::Error::other(error.to_string()))
+          handler(event).await.map_err(|error| std::io::Error::other(error.to_string()))?;
+          if input_fifo && handler_state.as_ref().is_some_and(|state| state.turn_status().is_some()) {
+            handler_turn_stopped.store(true, Ordering::Release);
+          }
+          Ok(())
         }
       },
       is_alive,
@@ -390,19 +416,34 @@ impl AgentRunner {
     let stdin_error = finish_stdin(stdin_task, request.cleanup_timeout, pid).await.err();
     let mut hang_diagnostics = None;
     let mut stopped_after_turn = false;
-    let mut exit_code = match wait_for_exit(&active, request.cleanup_timeout).await? {
-      Some(code) => Some(code),
-      None => {
-        tracing::warn!(target: "charliebot_agents", pid, "backend_wait_timeout_after_result");
-        hang_diagnostics = Some(capture_process_diagnostics(pid).await);
-        self.graceful_shutdown(&active, request.cleanup_timeout, "backend_sigkill_after_result").await?;
-        stopped_after_turn = true;
-        wait_for_exit(&active, request.cleanup_timeout).await?
+    let mut exit_code = if turn_stopped.load(Ordering::Acquire) && !self.terminated.load(Ordering::Acquire) {
+      stopped_after_turn = true;
+      match wait_for_exit(&active, Duration::ZERO).await? {
+        Some(code) => Some(code),
+        None => {
+          let grace = request.cleanup_timeout.min(kill::KILL_ESCALATION_GRACE);
+          self.graceful_shutdown(&active, grace, "backend_sigkill_after_result").await?;
+          wait_for_exit(&active, request.cleanup_timeout).await?
+        }
+      }
+    } else {
+      match wait_for_exit(&active, request.cleanup_timeout).await? {
+        Some(code) => Some(code),
+        None => {
+          tracing::warn!(target: "charliebot_agents", pid, "backend_wait_timeout_after_result");
+          hang_diagnostics = Some(capture_process_diagnostics(pid).await);
+          self.graceful_shutdown(&active, request.cleanup_timeout, "backend_sigkill_after_result").await?;
+          stopped_after_turn = true;
+          wait_for_exit(&active, request.cleanup_timeout).await?
+        }
       }
     };
     // A process the runtime stopped after its codec ended the turn ends as success: the stop is the run's close, not
     // a failure. A process that exited without the turn end keeps its own exit code.
-    if stopped_after_turn && let Some(succeeded) = midturn_state.as_ref().and_then(|state| state.turn_status()) {
+    if stopped_after_turn
+      && !self.terminated.load(Ordering::Acquire)
+      && let Some(succeeded) = midturn_state.as_ref().and_then(|state| state.turn_status())
+    {
       exit_code = Some(if succeeded { 0 } else { 1 });
     }
     if let Some(code) = exit_code {

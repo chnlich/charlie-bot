@@ -5,7 +5,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
@@ -34,8 +34,9 @@ use charliebot_core::text_repr::{self, JsonStyle};
 use charliebot_core::timefmt;
 use charliebot_registry::backend::{
   BackendLifecycle, EXTRA_FLAGS_BACKEND_KWARG, Env, IMPROVE_TOKEN_SHORT_EXIT, Launch, LaunchArgs, LaunchContext,
-  LaunchKind, LaunchWatch, RemoteLaunch, RetryAfter, ServeTransport, Translate,
+  LaunchKind, LaunchWatch, RemoteLaunch, RetryAfter, ServeTransport,
 };
+use charliebot_registry::midturn_delivery::DeliveryState;
 use charliebot_store::metadata::{EXIT_CODE_FIELD, SessionMetadata, ThreadMetadata};
 use charliebot_store::run_records::{CURSOR_NAME, RAW_LOG_NAME, RunKind, STDERR_LOG_NAME, event_line};
 use charliebot_store::{Store, run_logs};
@@ -294,7 +295,11 @@ impl Worker {
     let cursor_path = self.data_dir.join(CURSOR_NAME);
     let sink = self.open_sink()?;
     // Replay the delivered prefix through a dedicated translator to restore stateful backend accumulators.
-    let mut translator = self.build_backend(None, false)?.backend.translator();
+    let built = self.build_backend(None, false)?;
+    let midturn_state = built.backend.midturn_state();
+    let input_fifo = built.backend.input_is_fifo();
+    let mut translator =
+      crate::midturn_delivery::translator_from_backend(built.backend.as_ref(), Some(&self.data_dir))?;
     let cursor_offset = cursor::read_raw_cursor(&cursor_path);
     let replay_path = raw_path.clone();
     let prefix = tokio::task::spawn_blocking(move || {
@@ -303,7 +308,10 @@ impl Worker {
     .await
     .context("joining OpenCode translator prefix replay")??;
     for raw in prefix {
-      translator.translate(raw)?;
+      translator(raw)?;
+    }
+    if let Some(state) = &midturn_state {
+      state.settle_turn().await?;
     }
     let buffer_limit = charliebot_agents::transport::final_stdout::event_buffer_limit(
       &self.data_dir,
@@ -324,6 +332,8 @@ impl Worker {
     };
     let follow = ResumeFollow {
       translator,
+      midturn_state,
+      input_fifo,
       cursor_offset,
       is_alive,
       on_silence,
@@ -391,6 +401,8 @@ impl Worker {
     let cursor_path = self.data_dir.join(CURSOR_NAME);
     let ResumeFollow {
       translator,
+      midturn_state,
+      input_fifo,
       cursor_offset,
       is_alive,
       on_silence,
@@ -403,22 +415,38 @@ impl Worker {
     let watch = tokio::sync::Mutex::new(watch);
     let reject_transport = serve_transport.clone();
     let mut translator = translator;
+    let stopped_after_turn = Arc::new(AtomicBool::new(
+      input_fifo && midturn_state.as_ref().is_some_and(|state| state.turn_status().is_some()),
+    ));
+    let handler_state = midturn_state.clone();
+    let handler_stopped_after_turn = Arc::clone(&stopped_after_turn);
+    let follow_stopped_after_turn = Arc::clone(&stopped_after_turn);
     let followed = follow::tail_follow_events(
       &raw_path,
       move |raw| {
         if let Some(transport) = &reject_transport {
           transport.reject_event(&raw)?;
         }
-        translator.translate(raw)
+        translator(raw)
       },
       |event| {
         let sink = Arc::clone(sink);
         let failure = Arc::clone(&failure);
         let watch = &watch;
+        let handler_state = handler_state.clone();
+        let handler_stopped_after_turn = Arc::clone(&handler_stopped_after_turn);
         async move {
+          if let Some(state) = &handler_state {
+            state.settle_turn().await.map_err(|error| std::io::Error::other(error.to_string()))?;
+          }
           let mut watch = watch.lock().await;
           match handle_event(&sink, event, watch.as_deref_mut(), account).await {
-            Ok(_) => Ok(()),
+            Ok(_) => {
+              if input_fifo && handler_state.as_ref().is_some_and(|state| state.turn_status().is_some()) {
+                handler_stopped_after_turn.store(true, Ordering::Release);
+              }
+              Ok(())
+            }
             Err(error) => {
               // A quota rejection is the run's ending, and its event is already in the events log: the follow
               // checkpoints the line and hands the error to the end handling.
@@ -432,7 +460,7 @@ impl Worker {
       },
       {
         let alive = Arc::clone(&is_alive);
-        move || alive()
+        move || alive() && !follow_stopped_after_turn.load(Ordering::Acquire)
       },
       Some(&cursor_path),
       cursor_offset,
@@ -472,22 +500,27 @@ impl Worker {
     let exit_code = if follow_failed {
       -1
     } else {
-      let mut scanned = self.build_backend(None, false)?.backend.translator();
-      let (events, _, exit_code) = recovery::scan_result_exit(&raw_path, move |raw| scanned.translate(raw))?;
+      let built = self.build_backend(None, false)?;
+      let scanned = crate::midturn_delivery::translator_from_backend(built.backend.as_ref(), Some(&self.data_dir))?;
+      let (events, _, exit_code) = recovery::scan_result_exit(&raw_path, scanned)?;
       // The full log also holds the failure delivered before the re-attach, which the follow does not replay.
       for event in &events {
         sink.record_failure(event);
       }
       exit_code
     };
-    // The follow ends with a live process only on the post-result timeout, so a live process here outlived its result.
-    // Its diagnostics are captured before its group is killed.
+    // The follow ends with a live process only on the post-result timeout or an expected FIFO turn-end stop.
     let hang_diagnostics = if is_alive() {
       let pid = self.thread.lock().expect("thread metadata mutex is not poisoned").pid;
       let pid = pid.context("a live resumed run has no recorded pid")?;
-      let diagnostics = capture_process_diagnostics(pid).await;
-      kill::kill_group_escalating(pid, || is_alive()).await;
-      Some(diagnostics)
+      if stopped_after_turn.load(Ordering::Acquire) {
+        kill::kill_group_escalating(pid, || is_alive()).await;
+        None
+      } else {
+        let diagnostics = capture_process_diagnostics(pid).await;
+        kill::kill_group_escalating(pid, || is_alive()).await;
+        Some(diagnostics)
+      }
     } else {
       None
     };
@@ -926,7 +959,9 @@ impl RunProcess for WorkerProcess<'_> {
 /// What the follow of a resumed run's first process needs: the translator that replays the delivered prefix, the cursor
 /// where the follow starts, and the liveness and silence checks of that process.
 struct ResumeFollow {
-  translator: Box<dyn Translate>,
+  translator: crate::midturn_delivery::FreshTranslate,
+  midturn_state: Option<Arc<DeliveryState>>,
+  input_fifo: bool,
   cursor_offset: u64,
   is_alive: Arc<dyn Fn() -> bool + Send + Sync>,
   on_silence: Option<SilenceCallback>,

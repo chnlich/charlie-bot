@@ -1569,10 +1569,13 @@ impl TaskExecutionAdapter {
     };
     let launch = LaunchArgs { log_dir: log_dir.map(Path::to_path_buf), ..LaunchArgs::default() };
     match backend_types::build_backend(Arc::clone(&self.features.registry), option, &cfg, launch) {
-      Ok(built) => {
-        let mut translate = built.backend.translator();
-        Box::new(move |event| translate.translate(event))
-      }
+      Ok(built) => match crate::midturn_delivery::translator_from_backend(built.backend.as_ref(), log_dir) {
+        Ok(translate) => translate,
+        Err(error) => {
+          tracing::warn!(target: "charliebot_tasks", backend = %option.id, error = %error, "task_run_translate_unresolved");
+          Box::new(|event| Ok(vec![event]))
+        }
+      },
       Err(error) => {
         tracing::warn!(target: "charliebot_tasks", backend = %option.id, error = %error, "task_run_translate_unresolved");
         Box::new(|event| Ok(vec![event]))

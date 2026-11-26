@@ -149,7 +149,7 @@ pub fn ensure_store(memory_dir: &Path) -> anyhow::Result<()> {
 }
 
 fn git_init(memory_dir: &Path) -> anyhow::Result<()> {
-  let output = charliebot_core::git::output(memory_dir, &["init"])
+  let output = charliebot_core::git::output(memory_dir, &["init"], &[])
     .with_context(|| format!("run git init in {}", memory_dir.display()))?;
   if !output.status.success() {
     let mut text = String::from_utf8_lossy(&output.stdout).into_owned();

@@ -136,7 +136,7 @@ fn diff_path(memory_dir: &Path, base: &str, head: &str) -> String {
 }
 
 fn run_git(cwd: &Path, args: &[&str]) -> ProposalResult<GitOutput> {
-  let output = charliebot_core::git::output(cwd, args).map_err(|error| {
+  let output = charliebot_core::git::output(cwd, args, &[]).map_err(|error| {
     ProposalError::Cli(CliExit::error(format!("run git {} in {}: {error}", args.join(" "), cwd.display())))
   })?;
   let stdout = String::from_utf8(output.stdout)

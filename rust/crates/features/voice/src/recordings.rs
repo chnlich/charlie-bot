@@ -19,6 +19,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 
+use charliebot_compat::urlquote::query_value;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::fsutil;
 use charliebot_store::{layout, metadata};
@@ -381,22 +382,6 @@ pub(crate) fn parse_list_limit(query: &str) -> Result<usize, String> {
     Ok(limit) if (1..=MAX_LIST_LIMIT).contains(&limit) => Ok(limit),
     _ => Err(format!("limit must be an integer from 1 to {MAX_LIST_LIMIT}, got {}", text_lossy(&raw))),
   }
-}
-
-/// The first value of one query parameter, `+` as space, percent-decoded.
-pub(crate) fn query_value(query: &str, target: &str) -> Option<String> {
-  query
-    .split('&')
-    .filter_map(|pair| {
-      let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-      let key = key.replace('+', " ");
-      let key = percent_encoding::percent_decode_str(&key).decode_utf8_lossy();
-      (key == target).then(|| {
-        let value = value.replace('+', " ");
-        percent_encoding::percent_decode_str(&value).decode_utf8_lossy().into_owned()
-      })
-    })
-    .next_back()
 }
 
 /// A stem file's name minus its row-creating extension. Only the `.wav` and the `.json` of a run list it, so a

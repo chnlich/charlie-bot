@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use axum::http::request::Parts;
 use axum::response::Response;
 use charliebot_compat::responses;
+use charliebot_compat::urlquote::query_value;
 use charliebot_core::paths;
 use charliebot_core::text_repr;
 use charliebot_registry::pages::STATIC_URL_PREFIX;
@@ -88,13 +89,6 @@ fn comment_target<'a>(session_id: &'a str, metadata: &'a SessionMetadata) -> &'a
     TaskProfile::Worker => metadata.task_parent_id.as_deref().unwrap_or(session_id),
     TaskProfile::Manager => session_id,
   }
-}
-
-fn query_value(query: &str, key: &str) -> Option<String> {
-  url::form_urlencoded::parse(query.as_bytes())
-    .filter(|(name, _)| name == key)
-    .map(|(_, value)| value.into_owned())
-    .last()
 }
 
 fn resolve_target(sessions_dir: &Path, path: &str, diff_param: Option<&str>) -> ViewResult<Option<(PathBuf, String)>> {

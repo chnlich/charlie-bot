@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use axum::response::Response;
+use charliebot_compat::urlquote::query_value;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::text_repr;
 use charliebot_registry::{FeatureContext, WebSocketRequest};
@@ -18,7 +19,6 @@ use crate::api::{DEVICE_FIELDS, Transcribed, log_voice_transcribed};
 use crate::audio::{AudioQueue, PREVIEW_QUEUE_SECONDS};
 use crate::config::VoiceSettings;
 use crate::recordings;
-use crate::recordings::query_value;
 use crate::transcription::{self, Backend, TranscriptEvent, TranscriptKind};
 
 type SocketWriter = Arc<Mutex<SplitSink<WebSocket, Message>>>;

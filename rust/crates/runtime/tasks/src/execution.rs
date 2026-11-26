@@ -3,8 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fs;
-use std::fs::OpenOptions;
-use std::io::{BufRead, Write};
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
 #[cfg(feature = "test-hooks")]
 use std::sync::atomic::AtomicUsize;
@@ -2902,15 +2901,7 @@ impl TaskExecutionAdapter {
     if let Some(quota_exhausted) = quota_exhausted {
       event.insert(event_types::QUOTA_EXHAUSTED.to_string(), json!(quota_exhausted));
     }
-    let mut file = OpenOptions::new()
-      .create(true)
-      .append(true)
-      .open(&event_path)
-      .with_context(|| format!("opening {}", event_path.display()))?;
-    file
-      .write_all(&run_records::event_line(&Value::Object(event)))
-      .with_context(|| format!("writing {}", event_path.display()))?;
-    file.flush().with_context(|| format!("flushing {}", event_path.display()))?;
+    worker::append_run_event_to_path(&event_path, &Value::Object(event))?;
     self
       .features
       .store

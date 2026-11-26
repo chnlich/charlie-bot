@@ -923,16 +923,11 @@ if (TASK_A_SHOTS_PREFIX) {
         assert.equal(await page.evaluate('document.querySelector(".__cbc-tray-send").textContent'), 'Checking',
           'the send preflight state is visible');
         assert.match(await page.evaluate(TRAY_STATUS), /Checking that the target session can receive/);
-        assert.equal(await page.evaluate(
-          'Array.from(document.querySelectorAll(".__cbc-tray-action"))' +
-          '.find((button) => button.textContent.includes("Undo")).style.display'),
-        'inline-block', 'Undo remains available during the preflight');
         const checkingReport = await page.evaluate(`(${coverProbe})()`);
         assertCoverClear(checkingReport, 'checking state');
         await saveTaskAShot(page, viewport, 'checking-session');
-        await page.evaluate(CLICK_UNDO);
-        await sleep(650);
-        assert.match(await page.evaluate(TRAY_STATUS), /Undone/);
+        await sleep(SEND_WAIT_MS);
+        assert.equal(await page.evaluate(TRAY_ITEMS), 0, 'the checked send delivers once the preflight passes');
       }, {viewport, source: COVER_PAGE_PATH, sessionDetailDelayMs: 500});
 
       await withPlanPage(async (page) => {

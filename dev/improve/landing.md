@@ -192,6 +192,9 @@ names (The round's browser, above).
 The launch forwards the member's login for one round only.
 A subscription member's access token travels to the host with the round, and its refresh token stays on the launching host.
 The host keeps the token in the launch's `member-credential` file, mode 600, and the runner removes that file when the round ends.
+Beside a subscription login the launch sends its config directory and its token's expiry as two non-secret records, `MEMBER_LOGIN` and `REVIEW_LOGIN`.
+The host writes them to the launch's `logins` file, which the server reads so that a token renewal leaves a login that a live round holds alone.
+A launch directory without a usable `logins` file holds every login until its round is done or 8 hours after its start.
 
 - A Claude subscription round receives the token as `CLAUDE_CODE_OAUTH_TOKEN`.
 - A codex round runs under `CODEX_HOME=/tmp/improve-<direction>/codex-home`, whose `auth.json` holds the access token and an empty `refresh_token`.

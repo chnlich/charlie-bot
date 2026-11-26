@@ -4,7 +4,7 @@
   ],
   "expect": {
     "stdout": "",
-    "stderr": "charliebot: unknown subcommand 'no-such-command'. Available subcommands: artifact, backend, backup, compaction-context, config, delegate, discord, disk-sweep, feishu, files, gc-trash, github, google, improve, kill-guard, land, linear, memory, plan, preflight-charlie-code, publish, read-budget, release-helper, router, scan-guard, screenshots, session, setup, slack, switch-helper, taste, triage, usage, voice, wait-guard, web\n",
+    "stderr": "charliebot: unknown subcommand 'no-such-command'. Available subcommands: artifact, backend, backup, ci-wait, compaction-context, config, delegate, discord, disk-sweep, feishu, files, gc-trash, github, google, improve, kill-guard, land, linear, memory, plan, preflight-charlie-code, publish, read-budget, release-helper, router, scan-guard, screenshots, session, setup, slack, switch-helper, taste, triage, usage, voice, wait-guard, web\n",
     "exit": 2,
     "requests": []
   }

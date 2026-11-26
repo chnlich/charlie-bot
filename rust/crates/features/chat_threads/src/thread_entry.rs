@@ -22,7 +22,7 @@
 //!   `backfill_lost_summons`.
 //! - Summon and follow side: `Summon` (the arguments of `accept_summon`), `accept_summon`, `consume_mention`,
 //!   `ensure_group`, `armed_follow_triggers`, `cancel_armed_follow_triggers`, `arm_follow_trigger`,
-//!   `revive_and_arm_follow`, `follow_message`, `backfill_followed_threads`.
+//!   `archived_for_follow`, `follow_message`, `backfill_followed_threads`.
 //! - Link checks: `assert_no_file_server_links`, `application_route_links`, `operator_only_note`.
 //!
 //! Runtime handles come from `FeatureContext`: the store (sessions, chat events, slots, task creation), the
@@ -1652,7 +1652,8 @@ fn unrouted_backend(cfg: &CharlieBotConfig) -> Option<String> {
 
 /// Accept one summon: resolve the session, persist the summon, fire the round, and light the ack (`accept_summon`).
 /// The session is created as a manager root named `<label> <local time>` and born with the origin, or reused. A
-/// session archived by the operator is unarchived and its task-tree change broadcast. Returns the session id.
+/// session archived by the operator is unarchived and its task-tree change broadcast, and an archived task chain is
+/// reopened before the mention's input is admitted. Returns the session id.
 pub async fn accept_summon(
   adapter: &Arc<dyn ThreadAdapter>,
   features: &Arc<FeatureContext>,
@@ -1740,10 +1741,13 @@ pub async fn accept_summon(
     }
   }
 
-  consume_mention(platform, features, session_id, mention_id).await?;
-  ensure_group(platform, features, session_id, summon.label).await;
   let dispatcher =
     features.startup.require::<charliebot_tasks::dispatch::Dispatcher>().map_err(ThreadReplyError::failure)?;
+  // A mention reopens an archived chain, an archived ancestor's included, before its input is admitted. A non-mention
+  // message never reaches this path, so an archived session takes no input from one (`follow_message`).
+  dispatcher.reopen_chain_for_input(session_id, &request_id, &format!("{} mention", platform.name)).await?;
+  consume_mention(platform, features, session_id, mention_id).await?;
+  ensure_group(platform, features, session_id, summon.label).await;
   let stored = dispatcher
     .admit_input(
       session_id,
@@ -1777,27 +1781,19 @@ pub async fn accept_summon(
   Ok(session_id.to_string())
 }
 
-/// Revive an archived thread session, then arm its follow trigger (`revive_and_arm_follow`). An archived session is
-/// unarchived first, because `create_trigger` rejects an archived session. The unarchive is logged and broadcast.
-pub async fn revive_and_arm_follow(
-  platform: &ThreadPlatform,
-  features: &FeatureContext,
-  meta: &SessionMetadata,
-  floor: &str,
-  log_fields: &Value,
-) -> Result<Option<PendingTrigger>, ThreadReplyError> {
-  let session_id = meta.id.as_str();
+/// Whether a session is archived, by its own status or by an archived task ancestor. A non-mention message to an
+/// archived session is skipped: only a mention reopens it (`accept_summon`).
+async fn archived_for_follow(features: &FeatureContext, meta: &SessionMetadata) -> Result<bool, ThreadReplyError> {
   if meta.status == SessionStatus::Archived {
-    features.store.unarchive_session(session_id).await?;
-    let event = format!("{}_follow_session_unarchived", platform.name);
-    tracing::info!(%event, session = session_id, thread = %log_fields);
-    features.store.broadcast_task_tree_changed(session_id).await?;
+    return Ok(true);
   }
-  arm_follow_trigger(platform, features, session_id, floor, log_fields).await
+  let session_id = meta.id.clone();
+  blocking(features, move |store| store.archived_of(&session_id)).await
 }
 
 /// Arm the session's follow trigger for one eligible thread message. The session id when armed (`follow_message`).
-/// The session must exist, its origin must pass `origin_matches`, and the message id must sort above the watermark.
+/// The session must exist, its origin must pass `origin_matches`, the message id must sort above the watermark, and the
+/// session must not be archived: a non-mention message never reopens an archived session.
 pub async fn follow_message(
   adapter: &Arc<dyn ThreadAdapter>,
   features: &Arc<FeatureContext>,
@@ -1820,7 +1816,12 @@ pub async fn follow_message(
     return Ok(None);
   }
   let log_fields = adapter.log_fields(&adapter.address_of(origin));
-  let trigger = revive_and_arm_follow(platform, features, &meta, message_id, &log_fields).await?;
+  if archived_for_follow(features, &meta).await? {
+    let event = format!("{}_follow_skipped_archived", platform.name);
+    tracing::info!(%event, session = session_id, thread = %log_fields);
+    return Ok(None);
+  }
+  let trigger = arm_follow_trigger(platform, features, session_id, message_id, &log_fields).await?;
   Ok(trigger.map(|_| session_id.to_string()))
 }
 
@@ -1832,17 +1833,19 @@ pub async fn backfill_followed_threads(
 ) -> Result<usize, ThreadReplyError> {
   let platform = adapter.platform();
   let config = features.config.get().map_err(ThreadReplyError::failure)?;
-  let (active, archived) = blocking(features, |store| {
-    Ok((store.list_sessions_readonly(SessionStatus::Active)?, store.list_sessions_readonly(SessionStatus::Archived)?))
-  })
-  .await?;
+  let active = blocking(features, |store| store.list_sessions_readonly(SessionStatus::Active)).await?;
   let mut armed = 0;
-  for meta in active.iter().chain(archived.iter()) {
+  for meta in &active {
     let Some(origin) = origin_of(meta, platform) else {
       continue;
     };
     let log_fields = adapter.log_fields(&adapter.address_of(origin));
     let outcome: Result<Option<PendingTrigger>, ThreadReplyError> = async {
+      if archived_for_follow(features, meta).await? {
+        let event = format!("{}_follow_skipped_archived", platform.name);
+        tracing::info!(%event, session = %meta.id, thread = %log_fields);
+        return Ok(None);
+      }
       let unread = unread_messages(adapter.as_ref(), origin, &config, watermark_of(meta, platform).as_deref()).await?;
       let Some(first) = unread.first() else {
         return Ok(None);
@@ -1854,7 +1857,7 @@ pub async fn backfill_followed_threads(
         tracing::info!(%event, session = %meta.id, thread = %log_fields);
         return Ok(None);
       }
-      revive_and_arm_follow(platform, features, meta, &first.id, &log_fields).await
+      arm_follow_trigger(platform, features, &meta.id, &first.id, &log_fields).await
     }
     .await;
     match outcome {

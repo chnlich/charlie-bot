@@ -23,7 +23,7 @@ use charliebot_store::metadata::{SessionMetadata, SessionStatus, TaskProfile, Ut
 use charliebot_store::reply_order::Receipt;
 use charliebot_store::trigger_files::PendingTrigger;
 use charliebot_store::{CreateTask, SIDEBAR_CHANNEL, Store, StoreResult, Subscription, TaskCaller};
-use charliebot_tasks::completion::TaskCompletion;
+use charliebot_tasks::completion::{ArchiveAuthority, TaskCompletion};
 use charliebot_tasks::dispatch::{DispatchExecutor, Dispatcher};
 use charliebot_triggers::triggers::TriggerManager;
 use futures_util::future::BoxFuture;
@@ -342,6 +342,40 @@ impl Home {
       .insert(Arc::new(TriggerManager::new(Arc::clone(&features))))
       .expect("the trigger manager inserts once");
     Self { _dir: dir, features, executor }
+  }
+
+  /// The thread session `s1` as a child of the manager `p1`, with `p1` and its subtree archived by the operator. The
+  /// archive is task-level: `s1`'s own metadata stays active.
+  async fn archived_ancestor_session(&self) {
+    let parent = CreateTask {
+      request_id: "root-p1".to_string(),
+      task_parent_id: None,
+      profile: TaskProfile::Manager,
+      task: None,
+      name: Some("session p1".to_string()),
+      backend: None,
+      group: None,
+      session_id: Some("p1".to_string()),
+    };
+    self.features.store.create_task(parent, TaskCaller::System, Map::new()).await.expect("the parent is created");
+    let child = CreateTask {
+      request_id: "root-s1".to_string(),
+      task_parent_id: Some("p1".to_string()),
+      profile: TaskProfile::Manager,
+      task: None,
+      name: Some("session s1".to_string()),
+      backend: None,
+      group: None,
+      session_id: Some("s1".to_string()),
+    };
+    let slots = Map::from_iter([("fakechat_origin".to_string(), origin())]);
+    self.features.store.create_task(child, TaskCaller::System, slots).await.expect("the child is created");
+    let completion = self.features.startup.require::<TaskCompletion>().expect("the completion is in startup");
+    completion
+      .archive_subtree("p1", Some("archive-p1"), "archived by the user", &[], &[], &ArchiveAuthority::Operator)
+      .await
+      .expect("the subtree archives");
+    assert!(self.features.store.archived_of("s1").expect("the archive state reads"));
   }
 
   /// A manager session `session_id`, created as the summon path creates one, with `origin` in its slot.
@@ -1443,7 +1477,7 @@ async fn follow_message_drops_below_the_watermark_and_arms_above_it() {
 }
 
 #[tokio::test]
-async fn follow_message_revives_an_archived_session_and_arms_after_the_unarchive() {
+async fn follow_message_skips_an_archived_session_without_reopening_it() {
   let home = Home::new();
   home.thread_session("s1", origin()).await;
   home.features.store.archive_session("s1").await.unwrap();
@@ -1453,12 +1487,25 @@ async fn follow_message_revives_an_archived_session_and_arms_after_the_unarchive
 
   let armed = follow_message(&adapter, &home.features, "s1", "105", |candidate| *candidate == expected).await.unwrap();
 
-  assert_eq!(armed.as_deref(), Some("s1"));
-  assert_eq!(home.meta("s1").await.status, SessionStatus::Active);
+  assert_eq!(armed, None);
+  assert_eq!(home.meta("s1").await.status, SessionStatus::Archived);
   let frames = home.sidebar_frames(&mut sidebar).await;
-  assert!(frames.iter().any(is_unarchive_frame), "{frames:?}");
-  // The unarchive lands before the arm: create_trigger rejects an archived session, so the arm's record proves the order.
-  assert_eq!(home.triggers("s1").await.len(), 1);
+  assert!(frames.iter().all(|frame| !is_unarchive_frame(frame)), "{frames:?}");
+  assert!(home.triggers("s1").await.is_empty());
+}
+
+#[tokio::test]
+async fn follow_message_skips_a_session_archived_by_an_ancestor() {
+  let home = Home::new();
+  home.archived_ancestor_session().await;
+  let adapter: Arc<dyn ThreadAdapter> = FakeAdapter::with_thread(&[]);
+  let expected = origin();
+
+  let armed = follow_message(&adapter, &home.features, "s1", "105", |candidate| *candidate == expected).await.unwrap();
+
+  assert_eq!(armed, None);
+  assert!(home.features.store.archived_of("s1").unwrap());
+  assert!(home.triggers("s1").await.is_empty());
 }
 
 /// Whether a sidebar frame is the task-tree change that announces the unarchive of session s1. The frame names only
@@ -1489,7 +1536,7 @@ async fn accept_summon_unarchive_broadcasts_the_task_tree_change() {
 }
 
 #[tokio::test]
-async fn backfill_revives_an_archived_session_with_unread_messages() {
+async fn backfill_skips_an_archived_session_with_unread_messages() {
   let home = Home::new();
   home.thread_session("s1", origin()).await;
   home.features.store.archive_session("s1").await.unwrap();
@@ -1499,12 +1546,11 @@ async fn backfill_revives_an_archived_session_with_unread_messages() {
 
   let armed_count = backfill_followed_threads(&dyn_adapter, &home.features).await.unwrap();
 
-  assert_eq!(armed_count, 1);
-  assert_eq!(home.meta("s1").await.status, SessionStatus::Active);
+  assert_eq!(armed_count, 0);
+  assert_eq!(home.meta("s1").await.status, SessionStatus::Archived);
   let frames = home.sidebar_frames(&mut sidebar).await;
-  assert!(frames.iter().any(is_unarchive_frame), "{frames:?}");
-  let labels: Vec<String> = home.triggers("s1").await.into_iter().map(|record| record.message).collect();
-  assert_eq!(labels, ["fakechat-thread-follow floor=105"]);
+  assert!(frames.iter().all(|frame| !is_unarchive_frame(frame)), "{frames:?}");
+  assert!(home.triggers("s1").await.is_empty());
 }
 
 #[tokio::test]
@@ -1538,6 +1584,22 @@ async fn backfill_leaves_an_archived_session_without_unread_archived() {
   assert_eq!(armed_count, 0);
   assert_eq!(home.meta("s1").await.status, SessionStatus::Archived);
   assert!(home.triggers("s1").await.is_empty());
+}
+
+#[tokio::test]
+async fn accept_summon_reopens_an_archived_ancestor_chain_and_admits_the_mention() {
+  let home = Home::new();
+  home.archived_ancestor_session().await;
+  let adapter = FakeAdapter::with_thread(&[]);
+  let dyn_adapter: Arc<dyn ThreadAdapter> = adapter.clone();
+  let (origin_value, block) = (origin(), summon_block());
+
+  let sid = accept_summon(&dyn_adapter, &home.features, summon(&origin_value, &block)).await.unwrap();
+
+  assert_eq!(sid, "s1");
+  assert!(!home.features.store.archived_of("s1").unwrap());
+  settle(|| home.launches().len() == 1 && adapter.acks.lock().unwrap().len() == 1).await;
+  assert_eq!(home.launches().len(), 1);
 }
 
 #[tokio::test]

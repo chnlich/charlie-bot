@@ -438,6 +438,17 @@ impl Dispatcher {
     Value::Object(decision)
   }
 
+  /// Reopen the archived chain that holds `session_id`, through the restore an operator's message runs, so that an
+  /// input from an external thread mention is admitted to it. An open node has no chain and reopens nothing.
+  pub async fn reopen_chain_for_input(
+    &self,
+    session_id: &str,
+    request_id: &str,
+    reason: &str,
+  ) -> StoreResult<Vec<String>> {
+    self.sequence_completion.restore_chain(session_id, request_id, reason).await
+  }
+
   /// Dispatch the parent's newly delivered report through its durable input queue.
   pub async fn wake_parent(&self, parent_id: &str, _report: &ChatEvent) -> StoreResult<bool> {
     self.dispatch_pending(parent_id).await?;

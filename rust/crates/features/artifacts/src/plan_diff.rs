@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::LazyLock;
 
 use charliebot_core::str_methods;
-use charliebot_html::{EscapeContext, EventKind, StreamEvent, escape, parse_with, unescape};
+use charliebot_html::{BLOCK_TAGS, EscapeContext, EventKind, StreamEvent, escape, parse_with, unescape};
 use regex::Regex;
 
 use crate::sequence_diff::{Opcode, OpcodeTag, opcodes};
@@ -13,50 +13,6 @@ use crate::sequence_diff::{Opcode, OpcodeTag, opcodes};
 pub use charliebot_html::VOID_TAGS;
 
 const IGNORED_TAGS: &[&str] = &["head", "style", "script", "template", "noscript", "title"];
-const BLOCK_TAGS: &[&str] = &[
-  "address",
-  "article",
-  "aside",
-  "blockquote",
-  "body",
-  "caption",
-  "dd",
-  "details",
-  "dialog",
-  "div",
-  "dl",
-  "dt",
-  "fieldset",
-  "figcaption",
-  "figure",
-  "footer",
-  "form",
-  "h1",
-  "h2",
-  "h3",
-  "h4",
-  "h5",
-  "h6",
-  "header",
-  "hgroup",
-  "hr",
-  "li",
-  "main",
-  "nav",
-  "ol",
-  "p",
-  "pre",
-  "section",
-  "summary",
-  "table",
-  "tbody",
-  "td",
-  "tfoot",
-  "th",
-  "thead",
-  "tr",
-  "ul",
-];
 const CBD_STYLE: &str = ".cbd-header { margin: 0 0 14px; padding: 8px 12px; border: 1px solid #d9dfe6; border-radius: 7px; background: #fff8df; color: #7a5a00; font-weight: 600; }\n\
 .cbd-header::before { content: attr(data-cbd-header); }\n\
 ins.cbd-ins { background: rgba(46, 160, 67, .18); text-decoration: none; }\n\

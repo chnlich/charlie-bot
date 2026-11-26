@@ -14,7 +14,7 @@ use charliebot_agents::cli_host::CliHost;
 use charliebot_agents::{backend_types, one_shot_text};
 use charliebot_core::config::CallClass;
 use charliebot_core::text_repr::{self, JsonStyle};
-use charliebot_html::{EventKind, folds_at_open, parse_with};
+use charliebot_html::{BLOCK_TAGS, EventKind, folds_at_open, parse_with};
 use charliebot_registry::backend::LaunchArgs;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -84,51 +84,14 @@ pub fn load_texts(repo: &Path) -> anyhow::Result<(String, String)> {
 /// The block a probe adds after the full source: the text the reader sees at page open, folded blocks closed.
 pub const VISIBLE_TEXT_HEADER: &str = "VISIBLE TEXT";
 
-/// The elements that start and end a line in the visible text. Text joined across inline elements stays on one line;
-/// each of these elements begins and ends its own line.
-const BLOCK_TAGS: &[&str] = &[
-  "address",
-  "article",
-  "aside",
-  "blockquote",
-  "body",
-  "br",
-  "dd",
-  "details",
-  "div",
-  "dl",
-  "dt",
-  "fieldset",
-  "figcaption",
-  "figure",
-  "footer",
-  "form",
-  "h1",
-  "h2",
-  "h3",
-  "h4",
-  "h5",
-  "h6",
-  "head",
-  "header",
-  "hr",
-  "li",
-  "main",
-  "nav",
-  "ol",
-  "p",
-  "pre",
-  "section",
-  "summary",
-  "table",
-  "tbody",
-  "td",
-  "tfoot",
-  "th",
-  "thead",
-  "tr",
-  "ul",
-];
+/// The non-block elements that also end a line of visible text: a line break, and the page head.
+const LINE_END_TAGS: &[&str] = &["br", "head"];
+
+/// Whether a visible-text line ends at this element. Each block element and each line-end element begins and ends its
+/// own line, so text joined across inline elements stays on one line.
+fn ends_line(tag: &str) -> bool {
+  BLOCK_TAGS.contains(&tag) || LINE_END_TAGS.contains(&tag)
+}
 
 /// Ends the visible text's current line, unless it is already at a line start.
 fn end_line(text: &mut String) {
@@ -173,7 +136,7 @@ pub fn visible_text(page_text: &str) -> anyhow::Result<String> {
         "style" | "script" => (false, false),
         _ => (parent_content, parent_content),
       };
-      let block = BLOCK_TAGS.contains(&tag.as_str());
+      let block = ends_line(&tag);
       if block {
         end_line(&mut text);
       }
@@ -188,7 +151,7 @@ pub fn visible_text(page_text: &str) -> anyhow::Result<String> {
       if let Some(position) = (1..frames.len()).rev().find(|&position| frames[position].tag == tag) {
         frames.truncate(position);
       }
-      if BLOCK_TAGS.contains(&tag) {
+      if ends_line(tag) {
         end_line(&mut text);
       }
     }
@@ -709,10 +672,11 @@ mod tests {
   #[test]
   fn visible_text_puts_each_block_element_on_its_own_line() {
     let page = "<ul><li>「keep」: keep the file.</li><li>「delete」: delete the file.</li></ul>\
-                <div><p>Inline <b>text</b> stays.</p></div>";
+                <div><p>Inline <b>text</b> stays.</p></div>\
+                <p>Before <dialog>Shown</dialog> <hgroup>Heading</hgroup> after</p>";
     assert_eq!(
       visible_text(page).unwrap(),
-      "「keep」: keep the file.\n「delete」: delete the file.\nInline text stays."
+      "「keep」: keep the file.\n「delete」: delete the file.\nInline text stays.\nBefore\nShown\nHeading\nafter"
     );
   }
 

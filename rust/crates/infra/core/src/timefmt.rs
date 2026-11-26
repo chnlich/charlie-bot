@@ -5,9 +5,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
-use time::OffsetDateTime;
 use time::format_description::{self, BorrowedFormatItem};
 use time::macros::format_description;
+use time::{OffsetDateTime, UtcOffset};
 
 /// The current UTC time: `YYYY-MM-DDTHH:MM:SS.ffffff+00:00`, without the fraction when the
 /// microsecond is zero.
@@ -44,6 +44,14 @@ pub fn isoformat(moment: OffsetDateTime) -> String {
     (true, true) => ISO_FRACTION_OFFSET_SECONDS,
   };
   moment.format(format).expect("a datetime formats as isoformat")
+}
+
+const COMPACT_UTC: &[BorrowedFormatItem<'static>] = format_description!("[year][month][day]T[hour][minute][second]");
+
+/// The compact UTC stamp of `moment`: `YYYYMMDDTHHMMSS` of the UTC clock, with no zone marker. A caller that names
+/// the zone in its output appends `Z`.
+pub fn compact_utc(moment: OffsetDateTime) -> String {
+  moment.to_offset(UtcOffset::UTC).format(COMPACT_UTC).expect("a datetime formats as a compact UTC stamp")
 }
 
 /// An HTTP date: `Sun, 18 Oct 2026 07:15:40 GMT`.

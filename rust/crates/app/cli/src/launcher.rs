@@ -16,24 +16,19 @@ use std::time::{Duration, Instant};
 use charliebot_core::{
   proc_status,
   ssh::{self, REMOTE_RUNS_DIR},
-  text_repr,
+  text_repr, timefmt,
 };
 use nix::errno::Errno;
 use nix::sys::signal::{Signal, killpg};
 use nix::sys::wait::waitpid;
 use nix::unistd::{Pid, setsid};
 use time::OffsetDateTime;
-use time::format_description::BorrowedFormatItem;
-use time::macros::format_description;
 
 /// The remote home variable that `REMOTE_RUNS_DIR` starts with.
 const REMOTE_HOME: &str = "$HOME";
 
 /// The bound on one ssh start and on one remote kill.
 const SSH_LAUNCH_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// The time part of a launch id: `%Y%m%dT%H%M%S` of the UTC start.
-const LAUNCH_TIME: &[BorrowedFormatItem<'static>] = format_description!("[year][month][day]T[hour][minute][second]");
 
 /// One started wrapper: the watched PID, its host (None = local), and the two paths its wake reads.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -57,7 +52,7 @@ pub enum LaunchError {
 pub fn mint_launch_id(started_at: OffsetDateTime) -> String {
   let mut random = [0u8; 3];
   getrandom::fill(&mut random).expect("the OS random source is available");
-  let stamp = started_at.format(LAUNCH_TIME).expect("a UTC datetime formats as a launch id");
+  let stamp = timefmt::compact_utc(started_at);
   let hex: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
   format!("{stamp}-{hex}")
 }

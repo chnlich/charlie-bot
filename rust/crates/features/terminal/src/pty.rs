@@ -252,7 +252,10 @@ impl PtyAttachment {
       ws_ypixel: 0,
     };
     let mut attachment = PtyAttachment { session_id: session_id.to_string(), pid: None, fd: -1, closed: false };
+    // SAFETY: `winsize` is a live `Winsize` for the whole call, and `None` passes no terminal attributes.
     match unsafe { forkpty(&winsize, None::<&Termios>) }.map_err(|error| os_error(&io::Error::from(error), None))? {
+      // SAFETY: `execve` gets `path`, `argv_ptrs` and `env_ptrs`, which were built before the fork and live in this
+      // frame. The block ends in `_exit`, so the child never returns to the parent's code.
       ForkptyResult::Child => unsafe {
         libc::execve(path.as_ptr(), argv_ptrs.as_ptr(), env_ptrs.as_ptr());
         let error_number = *libc::__errno_location();
@@ -268,6 +271,8 @@ impl PtyAttachment {
       }
     }
     attachment.set_winsize(grid.rows, grid.cols).map_err(resize_failure_text)?;
+    // SAFETY: the parent arm set `attachment.fd` to the open PTY master from `forkpty`, and the borrow is used
+    // only by the `fcntl` calls below, before this function returns.
     let fd = unsafe { BorrowedFd::borrow_raw(attachment.fd) };
     let flags = fcntl(fd, FcntlArg::F_GETFL).map_err(|error| os_error(&io::Error::from(error), None))?;
     let flags = OFlag::from_bits_truncate(flags) | OFlag::O_NONBLOCK;
@@ -281,6 +286,8 @@ impl PtyAttachment {
     if self.closed || self.fd < 0 || data.is_empty() {
       return;
     }
+    // SAFETY: the guard above returns while `closed` is set or `fd` is negative, so `self.fd` is this
+    // attachment's open PTY master, and `data` is a live slice of `data.len()` bytes.
     if unsafe { libc::write(self.fd, data.as_ptr().cast(), data.len()) } < 0 {
       tracing::warn!(
         session_id = %self.session_id,
@@ -301,6 +308,8 @@ impl PtyAttachment {
     let rows = u16::try_from(rows).map_err(|_| ResizeFailure::PackedValue)?;
     let cols = u16::try_from(cols).map_err(|_| ResizeFailure::PackedValue)?;
     let size = Winsize { ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 };
+    // SAFETY: `self.fd` is the open PTY master: `spawn` sets it before the first call, and `resize` returns
+    // while it is closed or negative. `size` lives across the call.
     unsafe { pty_set_winsize(self.fd, &size) }.map_err(|error| ResizeFailure::Io(io::Error::from(error)))?;
     Ok(())
   }
@@ -369,6 +378,8 @@ async fn pump_pty_to_channel(fd: RawFd, session_id: String, sender: UnboundedSen
     let mut readable = pty.readable().await?;
     let result = readable.try_io(|registered| {
       let mut chunk = vec![0; PTY_READ_CHUNK];
+      // SAFETY: `chunk` is a zeroed buffer of `chunk.len()` bytes, and `registered` wraps the descriptor that the
+      // relay closes only after it aborts and joins this pump.
       let count = unsafe { libc::read(registered.get_ref().as_raw_fd(), chunk.as_mut_ptr().cast(), chunk.len()) };
       if count < 0 {
         return Err(io::Error::last_os_error());

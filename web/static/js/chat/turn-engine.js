@@ -431,12 +431,15 @@
     }
 
     flatEstimate(seg) {
+      // One gap per row: the segment's own gap from the list (space-y-3), then
+      // the 0.75rem between each later row (styles.css `.turn-flat > * + *`).
+      // Both are 0.75rem, so the row count times the one gap source is the sum.
       let height = 0;
       seg.entries.forEach((entry) => {
         height += OPEN_BASE_EST
           + Math.max(1, Math.ceil(contentChars(entry) / CHARS_PER_LINE_EST)) * LINE_HEIGHT_EST;
       });
-      return height + this.rowGap();
+      return height + seg.entries.length * this.rowGap();
     }
 
     heightOf(seg) {

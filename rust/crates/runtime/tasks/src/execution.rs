@@ -1141,6 +1141,9 @@ impl TaskExecutionAdapter {
     Ok(Some(event))
   }
 
+  /// Whether the worker's next run continues a successful `Review` run. The routed return and
+  /// `inherit_worker_continuation` both read this one check, so a return never fires on a run the continuation makes a
+  /// `Review`.
   fn is_review_continuation(&self, meta: &SessionMetadata, task: &TaskFacts, runs: &RunFacts) -> StoreResult<bool> {
     let Some(latest) = self.features.store.list_run_records_sync(&meta.id)?.last().cloned() else {
       return Ok(false);
@@ -1165,10 +1168,7 @@ impl TaskExecutionAdapter {
     run.base_branch = latest.base_branch.clone();
     run.branch_name = latest.branch_name.clone();
     run.worktree_path = latest.worktree_path.clone();
-    if latest.kind == RunKind::Review
-      && facts.runs.terminal_outcome(&latest.id)? == Some(RunOutcomeKind::Success)
-      && !self.blocked_report_sent(meta)?
-    {
+    if self.is_review_continuation(meta, facts.task()?, &facts.runs)? {
       run.kind = RunKind::Review;
       run.review_of_run_id = latest.review_of_run_id;
       run.backend = latest.backend;

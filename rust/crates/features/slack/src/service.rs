@@ -25,8 +25,9 @@ impl ChatChannel for SlackListener {
 }
 
 fn configured(config: &SlackConfig, credentials: &Credentials) -> bool {
-  credentials.get(crate::config::NAME, BOT_TOKEN_FIELD).is_some_and(CredentialValue::is_truthy)
-    && credentials.get(crate::config::NAME, "app_token").is_some_and(CredentialValue::is_truthy)
+  crate::config::credential_value(credentials, BOT_TOKEN_FIELD).is_some_and(CredentialValue::is_truthy)
+    && crate::config::credential_value(credentials, crate::config::APP_TOKEN_FIELD)
+      .is_some_and(CredentialValue::is_truthy)
     && !config.allowed_user_ids.is_empty()
 }
 

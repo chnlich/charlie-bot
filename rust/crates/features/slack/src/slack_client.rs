@@ -55,13 +55,12 @@ impl SlackClient {
   /// The process client, built from the current feature credentials.
   pub fn from_features(features: &FeatureContext) -> Result<Self> {
     let credentials = features.credentials.get().context("load Slack credentials")?;
-    let app_token = credentials
-      .get("slack", "app_token")
+    let app_token = crate::config::credential_value(&credentials, crate::config::APP_TOKEN_FIELD)
       .map(charliebot_core::credentials::CredentialValue::value_str)
       .unwrap_or_default();
     Ok(Self::with_client(
       http_client::client(&Settings::from_env())?,
-      credentials.require("slack", BOT_TOKEN_FIELD)?,
+      crate::config::require_credential(&credentials, BOT_TOKEN_FIELD)?,
       app_token,
       API_BASE.to_string(),
     ))

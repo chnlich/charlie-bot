@@ -17,6 +17,7 @@ use crate::draft_target;
 use crate::slack_client::{
   API_BASE, AUTH_TEST, CHANNEL, CHAT_POST_MESSAGE, CONVERSATIONS_OPEN, TEXT, THREAD_TS, USERS,
 };
+use crate::token::TokenKind;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -32,7 +33,7 @@ impl SlackDraftSender {
   /// The sender built from the live Slack user token, over a fresh HTTP client.
   pub fn from_context(context: &DraftContext) -> anyhow::Result<Self> {
     let credentials = context.credentials.get()?;
-    let token = credentials.require("slack", "user_token")?;
+    let token = crate::config::require_credential(&credentials, TokenKind::User.key())?;
     let http = http_client::client(&Settings::from_env())?;
     Ok(Self::with_client(http, API_BASE.to_string(), token, REQUEST_TIMEOUT))
   }

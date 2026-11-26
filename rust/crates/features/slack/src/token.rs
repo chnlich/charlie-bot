@@ -6,6 +6,7 @@ use charliebot_cli_common::exit::CliExit;
 use charliebot_core::config::ConfigError;
 use charliebot_core::credentials;
 
+use crate::config;
 use crate::slack_client::{
   AUTH_TEST, CONVERSATIONS_HISTORY, CONVERSATIONS_LIST, CONVERSATIONS_REPLIES, SEARCH_MESSAGES, USERS_LIST,
 };
@@ -32,7 +33,7 @@ impl TokenKind {
 /// The named token from `<home>/credentials.yaml`.
 pub fn token(home: &Path, kind: TokenKind) -> Result<String, ConfigError> {
   let credentials = credentials::load_credentials(home)?;
-  credentials.require("slack", kind.key())
+  config::require_credential(&credentials, kind.key())
 }
 
 /// The Slack Web API methods the user token may call through the CLI: the six read methods agents

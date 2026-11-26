@@ -14,8 +14,7 @@ const LEGACY_KEYS: &[(&str, &str)] = &[
 ];
 
 /// Slack user ids allowed to summon a session (the operator), and colleague ids whose summons the operator's presence
-/// in their thread admits. A config that lists one id in both fails at load, and so does an id listed twice in the
-/// colleague list.
+/// in their thread admits. The fields of `RawSlackConfig` document each key.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(try_from = "RawSlackConfig")]
 pub(crate) struct SlackConfig {
@@ -26,8 +25,17 @@ pub(crate) struct SlackConfig {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawSlackConfig {
+  /// Set this to the Slack user ids of the operators. A mention or thread message from a listed id may start or
+  /// continue a session, and one from any other user is ignored. While this list is empty, the Slack listener does not
+  /// start. The first id is the host owner, and a failed backup sends that id a DM.
   #[serde(default)]
   allowed_user_ids: Vec<String>,
+  /// Set this to the Slack user ids of colleagues whose mentions and thread messages may start or continue a session.
+  /// Such a message is admitted only when an operator is a member of the channel, and the thread holds a message from
+  /// an operator or one that mentions an operator. A message that fails this check is dropped and logged.
+  /// An id that is also in `allowed_user_ids`, or that is listed twice here, fails the config load, and the error names
+  /// the id. In a thread that a colleague has posted in, a run whose inputs are not all from an operator refuses its
+  /// requests for agent work.
   #[serde(default)]
   colleague_user_ids: Vec<String>,
 }

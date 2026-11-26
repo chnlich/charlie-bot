@@ -535,7 +535,7 @@ fn renderer_has_live_server_ancestor(
 }
 
 /// Ends each renderer whose server is gone and removes its profile. Read and cleanup errors are logged and returned.
-/// Processes whose `/proc` fields refuse permission are left alone and named once.
+/// Permission refusals are named once; a process is left alone when the readable fields cannot prove its ownership.
 pub(crate) fn end_orphaned_renderers() -> anyhow::Result<()> {
   let scan = match read_process_scan() {
     Ok(scan) => scan,
@@ -545,19 +545,19 @@ pub(crate) fn end_orphaned_renderers() -> anyhow::Result<()> {
       return Err(error);
     }
   };
-  name_unclassified_processes(&scan);
+  log_permission_refusals(&scan);
   end_orphaned_renderers_from(&scan).map(|_| ())
 }
 
-/// Logs each process that the sweep cannot classify because permission refused a `/proc` field.
-fn name_unclassified_processes(scan: &ProcessScan) {
+/// Logs each process whose `/proc` fields refused permission.
+fn log_permission_refusals(scan: &ProcessScan) {
   for pid in &scan.refused {
     tracing::info!(pid, "headless_renderer_process_unreadable_left_alone");
   }
   for process in &scan.records {
     let exe_refused = exe_name_needed(&process.argv) && process.exe_name.is_none();
-    if exe_refused && !is_renderer_browser(process) && !is_crashpad_handler(process) {
-      tracing::info!(pid = process.pid, "headless_renderer_exe_unreadable_role_unproven");
+    if exe_refused {
+      tracing::info!(pid = process.pid, "headless_renderer_exe_read_refused");
     }
   }
 }
@@ -1161,6 +1161,8 @@ mod tests {
   #[test]
   #[ignore = "integration"]
   fn startup_sweep_ends_reparented_renderer_and_crashpad_but_keeps_live_server_tree() {
+    // SAFETY: geteuid has no preconditions.
+    assert_ne!(unsafe { libc::geteuid() }, 0, "non-dumpable process checks require a non-root test user");
     let mut non_server_parent = Command::new("sleep").arg("60").spawn().expect("the subreaper stand-in starts");
     let directory = tempfile::tempdir().expect("the test directory exists");
     let orphan_profile = Builder::new().prefix(RENDERER_TEMP_PREFIX).tempdir().expect("the orphan profile exists");
@@ -1173,6 +1175,7 @@ mod tests {
     let live_browser_bin = chrome_program(&live_directory, json!([{"sleep_ms": 60000}, {"exit": 0}]));
     let orphan_crashpad_bin = crashpad_stub(directory.path(), "orphan_crashpad");
     let live_crashpad_bin = crashpad_stub(directory.path(), "live_crashpad");
+    let unowned_crashpad_bin = crashpad_stub(directory.path(), "unowned_crashpad");
     let orphan_crashpad_db = directory.path().join("CrashReportsOutsideProfile");
     let mut orphan_crashpad = Command::new(orphan_crashpad_bin)
       .arg(format!("--database={}", orphan_crashpad_db.display()))
@@ -1205,10 +1208,18 @@ mod tests {
       .stderr(Stdio::null())
       .spawn()
       .expect("the live server crashpad handler starts");
+    let mut unowned_crashpad = Command::new(unowned_crashpad_bin)
+      .arg(format!("--database={}", directory.path().join("UnownedCrashReports").display()))
+      .process_group(0)
+      .stdout(Stdio::null())
+      .stderr(Stdio::null())
+      .spawn()
+      .expect("the unowned crashpad handler starts");
     let orphan_browser_pid = orphan_browser.id();
     let orphan_crashpad_pid = orphan_crashpad.id();
     let live_browser_pid = live_browser.id();
     let live_crashpad_pid = live_crashpad.id();
+    let unowned_crashpad_pid = unowned_crashpad.id();
     let test_pid = std::process::id();
     read_record(test_pid).expect("the test process has a proc record");
     let parent = read_record(non_server_parent.id()).expect("the stand-in parent has a proc record");
@@ -1217,22 +1228,35 @@ mod tests {
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut scan = loop {
       let scan = read_process_scan().expect("the process table is readable");
-      let ready = [orphan_browser_pid, orphan_crashpad_pid, live_browser_pid, live_crashpad_pid]
+      let ready = [orphan_browser_pid, orphan_crashpad_pid, live_browser_pid, live_crashpad_pid, unowned_crashpad_pid]
         .iter()
         .all(|pid| scan.records.iter().any(|process| process.pid == *pid));
-      if ready && [orphan_crashpad_pid, live_crashpad_pid].iter().all(|pid| exe_read_refused(*pid)) {
+      if ready
+        && [orphan_crashpad_pid, live_crashpad_pid, unowned_crashpad_pid].iter().all(|pid| exe_read_refused(*pid))
+      {
         break scan;
       }
       assert!(Instant::now() < deadline, "the crashpad handlers' exe reads were not refused (the test needs non-root)");
       thread::sleep(Duration::from_millis(10));
     };
     scan.records.retain(|process| {
-      [orphan_browser_pid, orphan_crashpad_pid, live_browser_pid, live_crashpad_pid, test_pid, parent.pid]
-        .contains(&process.pid)
+      [
+        orphan_browser_pid,
+        orphan_crashpad_pid,
+        live_browser_pid,
+        live_crashpad_pid,
+        unowned_crashpad_pid,
+        test_pid,
+        parent.pid,
+      ]
+      .contains(&process.pid)
     });
     for process in &mut scan.records {
-      if process.pid == orphan_browser_pid || process.pid == orphan_crashpad_pid {
-        process.parent_pid = if process.pid == orphan_browser_pid { parent.pid } else { orphan_browser_pid };
+      if process.pid == orphan_browser_pid || process.pid == unowned_crashpad_pid {
+        process.parent_pid = parent.pid;
+      }
+      if process.pid == orphan_crashpad_pid {
+        process.parent_pid = orphan_browser_pid;
       }
       if process.pid == live_browser_pid || process.pid == live_crashpad_pid {
         process.parent_pid = if process.pid == live_browser_pid { test_pid } else { live_browser_pid };
@@ -1270,6 +1294,7 @@ mod tests {
     assert!(live_profile.path().exists());
     assert!(live_browser.try_wait().unwrap().is_none(), "the live server browser was ended");
     assert!(live_crashpad.try_wait().unwrap().is_none(), "the live server crashpad handler was ended");
+    assert!(unowned_crashpad.try_wait().unwrap().is_none(), "an unowned crashpad handler was ended");
 
     orphan_browser.wait().unwrap();
     orphan_crashpad.wait().unwrap();
@@ -1277,6 +1302,8 @@ mod tests {
     live_browser.wait().unwrap();
     live_crashpad.kill().unwrap();
     live_crashpad.wait().unwrap();
+    unowned_crashpad.kill().unwrap();
+    unowned_crashpad.wait().unwrap();
     non_server_parent.kill().unwrap();
     non_server_parent.wait().unwrap();
     live_profile.close().unwrap();

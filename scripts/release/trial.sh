@@ -566,9 +566,9 @@ process_state() {
 trial_process_pids() {
   local entry pid
   HOME=/nonexistent TMPDIR=/nonexistent \
-    grep -lF -e "HOME=$TRIAL_HOME" -e "TMPDIR=$TMP_ROOT" /proc/[0-9]*/environ \
+    grep -lZzFx -e "HOME=$TRIAL_HOME" -e "TMPDIR=$TMP_ROOT" /proc/[0-9]*/environ \
     >"$HTTP_ROOT/trial-process-environ" 2>/dev/null || true
-  while IFS= read -r entry; do
+  while IFS= read -r -d '' entry; do
     pid=${entry#/proc/}
     pid=${pid%/environ}
     [[ $pid =~ ^[0-9]+$ ]] || continue

@@ -1525,16 +1525,7 @@ fn test_trial_serve_fails_and_names_a_leftover_process_that_carries_the_trial_en
 
   let run = world.serve(tree_root, &seed, &["sh", "-c", script.as_str()]);
 
-  assert_eq!(run.code, 1, "{}", run.describe());
-  assert!(run.stdout.contains("SERVE command exit=0"), "{}", run.describe());
   let pid = fs::read_to_string(&leftover_pid_file).expect("the leftover pid").trim().to_string();
-  let fail_line = format!("FAIL serve ChildProcess: processes of the trial tree or temp root remain: {pid}");
-  assert!(run.stdout.lines().any(|line| line == fail_line), "{}", run.describe());
-  let cause_prefix = format!("CAUSE serve: pid {pid} ");
-  let cause = run.stdout.lines().find(|line| line.starts_with(&cause_prefix)).expect("the leftover's CAUSE line");
-  assert!(cause.contains("comm sleep"), "{}", cause);
-  assert!(cause.contains("cmdline \"sleep 300"), "{}", cause);
-  assert!(cause.contains(" ancestors "), "{}", cause);
   let leftover: i32 = pid.parse().expect("a numeric leftover pid");
   // SAFETY: the leftover is the sleep this test started; killing it needs no other process.
   unsafe { libc::kill(leftover, libc::SIGKILL) };
@@ -1543,6 +1534,57 @@ fn test_trial_serve_fails_and_names_a_leftover_process_that_carries_the_trial_en
     thread::sleep(Duration::from_millis(10));
   }
   assert!(!process_is_running(leftover), "the test did not stop its leftover {leftover}: {}", run.describe());
+
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(run.stdout.contains("SERVE command exit=0"), "{}", run.describe());
+  let fail_line = format!("FAIL serve ChildProcess: processes of the trial tree or temp root remain: {pid}");
+  assert!(run.stdout.lines().any(|line| line == fail_line), "{}", run.describe());
+  let cause_prefix = format!("CAUSE serve: pid {pid} ");
+  let cause = run.stdout.lines().find(|line| line.starts_with(&cause_prefix)).expect("the leftover's CAUSE line");
+  assert!(cause.contains("comm sleep"), "{}", cause);
+  assert!(cause.contains("cmdline \"sleep 300"), "{}", cause);
+  let parent_pid = cause
+    .split(" ppid ")
+    .nth(1)
+    .expect("the leftover's parent pid")
+    .split_whitespace()
+    .next()
+    .expect("the leftover's parent pid value");
+  let ancestors = cause.split(" ancestors ").nth(1).expect("the leftover's parent chain");
+  assert!(ancestors.starts_with(&format!("{parent_pid}:")), "{}", cause);
+}
+
+/// A process whose HOME and TMPDIR only share the trial paths as prefixes does not belong to the trial.
+#[test]
+#[ignore = "integration"]
+fn test_trial_serve_ignores_environment_values_that_only_prefix_match_the_trial_paths() {
+  let world = ServeWorld::new();
+  let seed = world.seed_home("seed", "1");
+  let tree_root = world.tree_root();
+  let pid_file = world.sandbox.root().join("prefix-process.pid");
+  let script = format!(
+    concat!(
+      "env HOME=\"${{HOME}}-other\" TMPDIR=\"${{TMPDIR}}-other\" ",
+      "sleep 300 >/dev/null 2>&1 < /dev/null & ",
+      "printf '%s\\n' \"$!\" > '{}'; exit 0"
+    ),
+    pid_file.display()
+  );
+
+  let run = world.serve(tree_root, &seed, &["sh", "-c", script.as_str()]);
+
+  let pid: i32 = fs::read_to_string(&pid_file).expect("the prefix process pid").trim().parse().expect("a numeric pid");
+  // SAFETY: the background process is the sleep this test started; killing it needs no other process.
+  unsafe { libc::kill(pid, libc::SIGKILL) };
+  let deadline = Instant::now() + Duration::from_secs(10);
+  while process_is_running(pid) && Instant::now() < deadline {
+    thread::sleep(Duration::from_millis(10));
+  }
+  assert!(!process_is_running(pid), "the test did not stop the prefix process {pid}: {}", run.describe());
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(run.stdout.contains("SERVE PASS ChildProcess:"), "{}", run.describe());
+  assert!(!run.stdout.contains("FAIL serve ChildProcess"), "{}", run.describe());
 }
 
 /// A serve trial started from a shell whose command line names the trial's tree path, as an improve round's launcher

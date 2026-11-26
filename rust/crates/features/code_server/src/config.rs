@@ -22,8 +22,9 @@ const LEGACY_KEYS: &[(&str, &str)] =
 pub struct CodeServerConfig {
   /// The code-server executable. Unset or empty, it is `code-server`. A name with no directory part is searched along
   /// `PATH`. A name with one is used as it stands, and a relative one resolves against the server's working directory.
-  /// `~` expands to the home directory. When no executable is found, the diff page hides its open button, and the open
-  /// route answers 404 with `code-server not available on this host`.
+  /// Each `.` part drops before the lookup, so `./code-server` is searched along `PATH` like `code-server`. `~` expands
+  /// to the home directory. When no executable is found, the diff page hides its open button, and the open route
+  /// answers 404 with `code-server not available on this host`.
   #[serde(default)]
   pub bin: Option<String>,
   /// The code-server config file. When the open route starts code-server, it passes this file as `--config`. A relative

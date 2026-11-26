@@ -178,7 +178,7 @@ impl StreamingManager {
     // any later frame. A second commit could not share the frame's one commit field.
     let carries_commit = frame.get(COMMIT).is_some();
 
-    if event_type == Some("stream") && !carries_commit {
+    if event_type == Some(event_types::STREAM_FRAME) && !carries_commit {
       let window_id = {
         let mut state = self.inner.state.lock().expect("streaming state mutex is not poisoned");
         let Some(channel_state) = state.channels.get_mut(channel) else { return Ok(()) };

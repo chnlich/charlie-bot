@@ -40,6 +40,9 @@ pub const GREP_TOOL: &str = "Grep";
 pub const SKILL_TOOL: &str = "Skill";
 /// The JSON pointer to the content blocks of an event's message: the array a `user` or `assistant` event carries.
 pub const MESSAGE_CONTENT_POINTER: &str = "/message/content";
+/// The `type` of a live stream frame, which changes the pending draft message. The aggregator and the socket
+/// replay emit it, and the stream coalescer and the projection read it.
+pub const STREAM_FRAME: &str = "stream";
 /// The committed message's flag that the page already holds its content from the stream frames, so the message frame
 /// carries none of it.
 pub const MESSAGE_CONTENT_STREAMED: &str = "content_streamed";

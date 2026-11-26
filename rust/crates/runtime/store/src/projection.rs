@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use charliebot_core::config::BackendsConfig;
+use charliebot_core::event_types::STREAM_FRAME;
 use serde_json::Value;
 
 use crate::aggregator::MessageAggregator;
@@ -183,7 +184,7 @@ fn messages_of(deltas: Vec<Value>) -> StoreResult<Vec<Value>> {
           .ok_or_else(|| StoreError::new("message_update names no committed message"))?;
         messages[position] = update;
       }
-      Some("stream") => {}
+      Some(STREAM_FRAME) => {}
       None => {}
       Some(other) => return Err(StoreError::new(format!("frame type `{other}` is not one the aggregator emits"))),
     }
@@ -231,7 +232,7 @@ fn fold_messages(
         let update = delta.get("message").ok_or_else(|| StoreError::new("message_update is missing its message"))?;
         updates.push(update.clone());
       }
-      Some("stream") => {}
+      Some(STREAM_FRAME) => {}
       None => {}
       Some(other) => return Err(StoreError::new(format!("frame type `{other}` is not one the aggregator emits"))),
     }

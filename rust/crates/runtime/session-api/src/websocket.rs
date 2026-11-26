@@ -288,7 +288,7 @@ impl CatchupWalk {
 /// a page needs. Those rows let a page render the same draft as a page that received every live frame.
 fn draft_stream_frame(draft: &Value) -> Value {
   let mut frame = json!({
-    "type": "stream",
+    "type": event_types::STREAM_FRAME,
     "reset": true,
     (event_types::EVENT_INDEX): draft.get(event_types::EVENT_INDEX).cloned().unwrap_or(Value::Null),
   });
@@ -614,7 +614,7 @@ async fn keepalive(
 fn covered_by_replay(frame: &str, replayed_through: Option<usize>) -> bool {
   let Some(replayed_through) = replayed_through else { return false };
   let Ok(value) = serde_json::from_str::<Value>(frame) else { return false };
-  if value.get("type").and_then(Value::as_str) != Some("stream") {
+  if value.get("type").and_then(Value::as_str) != Some(event_types::STREAM_FRAME) {
     return false;
   }
   value.get(event_types::EVENT_INDEX).and_then(Value::as_u64).is_some_and(|index| index < replayed_through as u64)

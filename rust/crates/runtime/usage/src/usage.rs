@@ -164,7 +164,7 @@ impl UsageFold {
           | event_types::POLICY_TABLE_CHANGED
           | event_types::SLACK_ACK
           | event_types::SLACK_REPLY
-          | "stream"
+          | event_types::STREAM_FRAME
           | "text"
           | event_types::WEB_STATUS_SUBTREE
           | event_types::AI_TITLE

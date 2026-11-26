@@ -192,7 +192,7 @@ impl ChatEventType {
       Some(event_types::COMMAND_LIFECYCLE) => Self::CommandLifecycle,
       Some(event_types::FEATURE_EVENT) => Self::FeatureEvent,
       Some(event_types::RATE_LIMIT_EVENT) => Self::RateLimitEvent,
-      Some("stream") => Self::Stream,
+      Some(event_types::STREAM_FRAME) => Self::Stream,
       Some(event_types::WEB_STATUS_SUBTREE) => Self::WebStatusSubtree,
       Some(event_types::AI_TITLE) => Self::AiTitle,
       Some(event_types::ATIS_LATCH) => Self::AtisLatch,

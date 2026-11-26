@@ -17,6 +17,7 @@ use charliebot_core::json_loads;
 use charliebot_core::str_methods;
 pub(crate) use charliebot_core::text_repr::type_name;
 use charliebot_core::text_repr::{self, JsonStyle};
+use clap::ValueEnum;
 use serde_json::{Map, Value, json};
 
 use crate::plan_paths;
@@ -24,19 +25,57 @@ use crate::plan_paths;
 /// The registry file of a session directory.
 pub const PLANS_FILE: &str = "plans.json";
 
-/// The derived state of a plan with no approved version. The sidebar flag matches this spelling.
-pub const AWAITING_APPROVAL_STATE: &str = "awaiting approval";
-const APPROVED_STATE: &str = "approved";
-// A closed plan's state is its close mode's spelling.
-pub(crate) const PLAN_CLOSE_SUPERSEDED: &str = "superseded";
-pub(crate) const PLAN_CLOSE_ABANDONED: &str = "abandoned";
-pub(crate) const PLAN_CLOSE_COMPLETED: &str = "completed";
+/// The derived state of a plan. A plan with no approved version awaits approval, an approved plan shows approved, and a
+/// closed plan shows its close mode. The spelling of each state is what the registry emits and the sidebar matches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PlanState {
+  AwaitingApproval,
+  Approved,
+  Closed(PlanCloseMode),
+}
+
+impl PlanState {
+  pub(crate) const fn as_str(self) -> &'static str {
+    match self {
+      Self::AwaitingApproval => "awaiting approval",
+      Self::Approved => "approved",
+      Self::Closed(mode) => mode.as_str(),
+    }
+  }
+}
+
+/// The close modes that `plan close` accepts. A closed plan's state is its mode's spelling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum PlanCloseMode {
+  Superseded,
+  Abandoned,
+  Completed,
+}
+
+impl PlanCloseMode {
+  pub(crate) const ALL: [Self; 3] = [Self::Superseded, Self::Abandoned, Self::Completed];
+
+  pub(crate) const fn as_str(self) -> &'static str {
+    match self {
+      Self::Superseded => "superseded",
+      Self::Abandoned => "abandoned",
+      Self::Completed => "completed",
+    }
+  }
+
+  /// The mode that a spelling names, or `None` for any other text.
+  pub(crate) fn from_spelling(text: &str) -> Option<Self> {
+    Self::ALL.into_iter().find(|mode| mode.as_str() == text)
+  }
+}
+
 /// The revision triggers that `plan amend` accepts.
 pub(crate) const PLAN_AMEND_TRIGGERS: [&str; 2] = ["auto_amend", "feedback"];
 /// The revision trigger that a request uses when it names none.
 pub(crate) const PLAN_AMEND_TRIGGER_DEFAULT: &str = "feedback";
-/// The close modes that `plan close` accepts.
-pub(crate) const PLAN_CLOSE_MODES: [&str; 3] = [PLAN_CLOSE_SUPERSEDED, PLAN_CLOSE_ABANDONED, PLAN_CLOSE_COMPLETED];
+/// The close-mode spellings that the close request's `close_as` field admits.
+pub(crate) const PLAN_CLOSE_MODES: [&str; 3] =
+  [PlanCloseMode::Superseded.as_str(), PlanCloseMode::Abandoned.as_str(), PlanCloseMode::Completed.as_str()];
 
 /// The plan fields the registry persists, in the order it emits them.
 const PLAN_FIELDS: [&str; 5] = ["id", "title", "versions", "takeoff", "closed"];
@@ -108,30 +147,30 @@ pub fn derive_state_str(plan: &Map<String, Value>) -> Result<&'static str, Strin
     return Err(format!("plan {} has no versions", text_repr::value_str(id)));
   }
   derive_state(plan.get("closed").unwrap_or(&Value::Null), plan.get("takeoff").unwrap_or(&Value::Null))
+    .map(PlanState::as_str)
 }
 
 /// The display state of one plan: a closed plan shows its close mode, an unapproved plan awaits approval, and an
 /// approved plan shows approved. A value of the wrong type fails with its type name.
-fn derive_state(closed: &Value, takeoff: &Value) -> Result<&'static str, String> {
+fn derive_state(closed: &Value, takeoff: &Value) -> Result<PlanState, String> {
   if !closed.is_null() {
     let Value::Object(closed) = closed else {
       return Err(format!("closed must be a dict or None, got {}", type_name(closed)));
     };
     let close_as = closed.get("as").unwrap_or(&Value::Null);
-    return match close_as.as_str() {
-      Some(PLAN_CLOSE_SUPERSEDED) => Ok(PLAN_CLOSE_SUPERSEDED),
-      Some(PLAN_CLOSE_ABANDONED) => Ok(PLAN_CLOSE_ABANDONED),
-      Some(PLAN_CLOSE_COMPLETED) => Ok(PLAN_CLOSE_COMPLETED),
-      _ => Err(format!("unknown closed.as: {}", value_repr(close_as))),
-    };
+    return close_as
+      .as_str()
+      .and_then(PlanCloseMode::from_spelling)
+      .map(PlanState::Closed)
+      .ok_or_else(|| format!("unknown closed.as: {}", value_repr(close_as)));
   }
   if takeoff.is_null() {
-    return Ok(AWAITING_APPROVAL_STATE);
+    return Ok(PlanState::AwaitingApproval);
   }
   if !takeoff.is_object() {
     return Err(format!("takeoff must be a dict or None, got {}", type_name(takeoff)));
   }
-  Ok(APPROVED_STATE)
+  Ok(PlanState::Approved)
 }
 
 /// `require_plan(plans, plan_id)`: the plan with this id in a registry's plans list.

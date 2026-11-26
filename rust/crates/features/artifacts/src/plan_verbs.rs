@@ -19,7 +19,7 @@ use tokio::sync::{Mutex, OwnedMutexGuard};
 use crate::artifact_check;
 use crate::plan_diff;
 use crate::plan_paths;
-use crate::plans::{self, LoadFailure, PLANS_FILE};
+use crate::plans::{self, LoadFailure, PLANS_FILE, PlanCloseMode};
 
 /// How a verb fails, as its route answers it.
 #[derive(Debug)]
@@ -162,10 +162,10 @@ pub(crate) async fn close(
   locks: &SessionLocks,
   session_id: &str,
   plan_id: Value,
-  close_as: String,
+  close_as: PlanCloseMode,
 ) -> Result<Value, VerbError> {
   let changed = plan_id.clone();
-  let plan = mutate(features, locks, session_id, move |plans| close_plan(plans, &changed, &close_as)).await?;
+  let plan = mutate(features, locks, session_id, move |plans| close_plan(plans, &changed, close_as)).await?;
   broadcast(features, session_id, &plan_id).await?;
   let state = plans::derive_state_str(&plan).map_err(VerbError::Refused)?;
   Ok(json!({"plan": plan_id, "state": state}))
@@ -488,7 +488,7 @@ fn approve_plan(plans: &mut [Value], plan_id: Option<&Value>) -> Result<Map<Stri
 }
 
 /// The change of `close`: the named plan gains a closed mark that names its mode.
-fn close_plan(plans: &mut [Value], plan_id: &Value, close_as: &str) -> Result<Map<String, Value>, VerbError> {
+fn close_plan(plans: &mut [Value], plan_id: &Value, close_as: PlanCloseMode) -> Result<Map<String, Value>, VerbError> {
   let index = require_plan(plans, plan_id)?;
   let plan = plan_map_mut(&mut plans[index])?;
   if !absent(plan, "closed") {
@@ -498,7 +498,7 @@ fn close_plan(plans: &mut [Value], plan_id: &Value, close_as: &str) -> Result<Ma
       closed_as_repr(plan)?
     )));
   }
-  plan.insert("closed".to_string(), json!({"as": close_as, "at": timefmt::utc_now_iso()}));
+  plan.insert("closed".to_string(), json!({"as": close_as.as_str(), "at": timefmt::utc_now_iso()}));
   Ok(plan.clone())
 }
 
@@ -1024,9 +1024,9 @@ mod tests {
   async fn close_superseded_and_abandoned() {
     let (_home, features) = session_with_registry("sess", TWO_AWAITING_REGISTRY);
     let locks = SessionLocks::default();
-    let first = close(&features, &locks, "sess", json!(1), "superseded".to_string()).await;
+    let first = close(&features, &locks, "sess", json!(1), PlanCloseMode::Superseded).await;
     assert_eq!(first.expect("the first close succeeds"), json!({"plan": 1, "state": "superseded"}));
-    let second = close(&features, &locks, "sess", json!(2), "abandoned".to_string()).await;
+    let second = close(&features, &locks, "sess", json!(2), PlanCloseMode::Abandoned).await;
     assert_eq!(second.expect("the second close succeeds"), json!({"plan": 2, "state": "abandoned"}));
   }
 
@@ -1035,8 +1035,8 @@ mod tests {
   async fn closing_already_closed_rejected() {
     let (_home, features) = session_with_registry("sess", AWAITING_REGISTRY);
     let locks = SessionLocks::default();
-    close(&features, &locks, "sess", json!(1), "superseded".to_string()).await.expect("the first close succeeds");
-    let error = close(&features, &locks, "sess", json!(1), "abandoned".to_string()).await.unwrap_err();
+    close(&features, &locks, "sess", json!(1), PlanCloseMode::Superseded).await.expect("the first close succeeds");
+    let error = close(&features, &locks, "sess", json!(1), PlanCloseMode::Abandoned).await.unwrap_err();
     assert!(matches!(&error, VerbError::Refused(message) if message == "plan 1 is already closed ('superseded')"));
   }
 
@@ -1081,7 +1081,7 @@ mod tests {
     let (_home, features) = session_with_registry("frames-close", AWAITING_REGISTRY);
     let mut frames = features.store.subscribe(&session_channel("frames-close"));
     assert!(!sidebar_state::is_dirty("frames-close"));
-    close(&features, &SessionLocks::default(), "frames-close", json!(1), "completed".to_string())
+    close(&features, &SessionLocks::default(), "frames-close", json!(1), PlanCloseMode::Completed)
       .await
       .expect("the close succeeds");
     assert_eq!(

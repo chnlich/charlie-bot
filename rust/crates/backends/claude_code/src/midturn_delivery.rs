@@ -234,7 +234,7 @@ pub fn launch_kwargs(
   };
   Ok(Map::from_iter([
     (charliebot_registry::midturn_delivery::BACKEND_KWARG.to_string(), Value::Bool(true)),
-    ("midturn_run_id".to_string(), Value::String(run_id)),
+    (charliebot_registry::midturn_delivery::RUN_ID_KWARG.to_string(), Value::String(run_id)),
   ]))
 }
 

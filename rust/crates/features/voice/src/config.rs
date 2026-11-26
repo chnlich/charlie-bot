@@ -133,8 +133,11 @@ impl VoiceSettings {
   }
 }
 
+/// The `config.yaml` key of the voice section. Every reader of the section names it through this constant.
+pub(crate) const VOICE_SECTION_KEY: &str = "voice";
+
 pub(crate) fn section() -> ConfigSection {
-  ConfigSection { key: "voice", legacy_keys: &[], parse: parse_settings, dump: dump_settings }
+  ConfigSection { key: VOICE_SECTION_KEY, legacy_keys: &[], parse: parse_settings, dump: dump_settings }
 }
 
 /// The section as its model dumps it (`charliebot config get voice`).
@@ -151,12 +154,12 @@ fn parse_settings(raw: &serde_yaml::Value) -> Result<SectionValue, String> {
 pub(crate) fn voice_backends(features: &FeatureContext) -> Result<Value, String> {
   let cfg = features.config.get().map_err(|error| error.to_string())?;
   let credentials = features.credentials.get().map_err(|error| error.to_string())?;
-  Ok(Value::from_serialize(cfg.section::<VoiceSettings>("voice").backend_rows(&credentials)))
+  Ok(Value::from_serialize(cfg.section::<VoiceSettings>(VOICE_SECTION_KEY).backend_rows(&credentials)))
 }
 
 pub(crate) fn voice_default_backend(features: &FeatureContext) -> Result<Value, String> {
   let cfg = features.config.get().map_err(|error| error.to_string())?;
-  Ok(Value::from_serialize(&cfg.section::<VoiceSettings>("voice").default_backend))
+  Ok(Value::from_serialize(&cfg.section::<VoiceSettings>(VOICE_SECTION_KEY).default_backend))
 }
 
 #[cfg(test)]

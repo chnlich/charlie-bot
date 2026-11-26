@@ -33,7 +33,7 @@ use charliebot_registry::templating::Templating;
 use serde_json::{Value, json};
 
 use crate::audio::{MAX_RECORDING_SAMPLES, SAMPLE_RATE};
-use crate::config::VoiceSettings;
+use crate::config::{VOICE_SECTION_KEY, VoiceSettings};
 use crate::recording::{self, RecordingBackendFactory};
 use crate::recordings;
 use crate::wav;
@@ -434,7 +434,7 @@ async fn upload_recording(
     Ok(pcm) => pcm,
     Err(error) => return error_response(error),
   };
-  let voice = cfg.section::<VoiceSettings>("voice");
+  let voice = cfg.section::<VoiceSettings>(VOICE_SECTION_KEY);
   // The backend the upload is filed under: the browser's choice, or the configured default.
   let backend = upload.backend.clone().or_else(|| voice.default_backend.clone());
   let persist_cfg = Arc::clone(&cfg);

@@ -5,13 +5,13 @@ use std::path::Path;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::credentials::Credentials;
 
-use crate::config::VoiceSettings;
+use crate::config::{VOICE_SECTION_KEY, VoiceSettings};
 use crate::{decode, recording};
 
 /// The transcript of one audio file, through `voice.default_backend` with the voice vocabulary and languages.
 pub async fn transcribe_file(path: &Path, cfg: &CharlieBotConfig, credentials: &Credentials) -> Result<String, String> {
   let pcm = decode::load_pcm(path)?;
-  let voice = cfg.section::<VoiceSettings>("voice");
+  let voice = cfg.section::<VoiceSettings>(VOICE_SECTION_KEY);
   let transcript = recording::transcribe_recording(
     &recording::OnlineBackendFactory,
     &pcm,

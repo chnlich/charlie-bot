@@ -17,7 +17,7 @@ use tokio::task::JoinHandle;
 
 use crate::api::{DEVICE_FIELDS, Transcribed, log_voice_transcribed};
 use crate::audio::{AudioQueue, PREVIEW_QUEUE_SECONDS};
-use crate::config::VoiceSettings;
+use crate::config::{VOICE_SECTION_KEY, VoiceSettings};
 use crate::recordings;
 use crate::transcription::{self, Backend, TranscriptEvent, TranscriptKind};
 
@@ -38,9 +38,10 @@ pub(crate) fn handler(features: Arc<FeatureContext>, request: WebSocketRequest) 
     let run_id = query_value(&request.query, "run_id").unwrap_or_default();
     let config = features.config.get();
     let backend = match (&config, features.credentials.get()) {
-      (Ok(config), Ok(credentials)) => {
-        config.section::<VoiceSettings>("voice").backend(&backend_id).map(|entry| Backend::build(entry, &credentials))
-      }
+      (Ok(config), Ok(credentials)) => config
+        .section::<VoiceSettings>(VOICE_SECTION_KEY)
+        .backend(&backend_id)
+        .map(|entry| Backend::build(entry, &credentials)),
       (Err(error), _) => Err(error.to_string()),
       (_, Err(error)) => Err(error.to_string()),
     };
@@ -69,7 +70,7 @@ pub(crate) fn handler(features: Arc<FeatureContext>, request: WebSocketRequest) 
           return;
         }
       };
-      let settings = config.section::<VoiceSettings>("voice");
+      let settings = config.section::<VoiceSettings>(VOICE_SECTION_KEY);
       let vocabulary = settings.vocabulary.clone();
       let languages = settings.languages.clone();
       relay_preview(writer, reader, RelaySettings { config, vocabulary, languages, session_id, run_id }, backend).await;

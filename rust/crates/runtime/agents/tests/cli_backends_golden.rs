@@ -1,27 +1,19 @@
-//! Golden checks of the gemini, charlie-code, antigravity and Anthropic-compatible backend types.
+//! Golden checks of the gemini, charlie-code and Anthropic-compatible backend types.
 //! The recorded reference (`fixtures/cli_backends_golden.json`) holds every section's recorded answer over the
 //! synthetic inputs built here. The test fails with every section that differs. Gemini sends the prompt on stdin, so
-//! its recorded argv and stdin are the Rust launch, not the Python package's prompt argv. Antigravity's recorded
-//! entries are the Rust launch too. The installed `agy` takes the prompt only as the value of `--print`
-//! (`--print=<prompt>`). The Python package's `--input-format text` argv therefore does not reach the answer.
+//! its recorded argv and stdin are the Rust launch, not the Python package's prompt argv.
 //!
-//! Sections: the argv/env/stdin/instructions matrix, built through each type's factory (19 cases). The translator
-//! streams of gemini and charlie-code come next (2). The antigravity finish cases follow, each run through the
-//! `AgentRunner` final-stdout path over a fake `agy` (11 cases).
+//! Sections: the argv/env/stdin/instructions matrix, built through each type's factory (14 cases). The translator
+//! streams of gemini and charlie-code come next (2). The antigravity backend is not in this golden: its turn runs
+//! `agy acp` over ACP (`charliebot-acp`), which the recorded `agy --print` reference predates.
 
 use std::fs;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 
-use charliebot_agents::agent_environment::AgentBaseEnvironment;
 use charliebot_agents::cli_base::CliHost;
-use charliebot_agents::launch_loop::ChildEnvPolicy;
-use charliebot_agents::runner::{AgentRunner, RunRequest};
-use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_anthropic_compatible as anthropic_compatible;
 use charliebot_anthropic_compatible::factory::AnthropicCompatibleFactory;
-use charliebot_antigravity::factory::AntigravityFactory;
 use charliebot_charlie_code::factory::CharlieCodeFactory;
 use charliebot_core::config::{
   BackendOption, BackendsConfig, CharlieBotConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig,
@@ -40,7 +32,6 @@ const INSTRUCTIONS: &str = "Rules: \"quoted\" ]\n[section] \\ \u{7f} \u{fc}n\u{e
 const WORKER_FILE: &str = "/synthetic/instructions/worker.md";
 const GEMINI_MODEL: &str = "gemini-synthetic-pro";
 const CLC_MODEL: &str = "clc-synthetic-model";
-const AGY_MODEL: &str = "agy-synthetic-model";
 const ANTHROPIC_MODEL: &str = "anthropic-compatible-synthetic-model";
 const ANTHROPIC_API_BASE: &str = "https://anthropic-compatible.synthetic.example";
 const ANTHROPIC_CONTEXT_WINDOW: u64 = 409_600;
@@ -48,7 +39,6 @@ const CLC_API_BASE: &str = "https://synthetic.example/v1";
 
 /// The synthetic homes, binaries and files of one run, written under one temporary root.
 struct Fixture {
-  root: PathBuf,
   home: PathBuf,
   charliebot_home: PathBuf,
   no_credentials_home: PathBuf,
@@ -134,25 +124,17 @@ fn cli_backends_match_the_package_on_synthetic_inputs() {
 
   let argv = request["argv_cases"].as_array().unwrap();
   let streams = request["translate_streams"].as_array().unwrap();
-  let finish = request["finish_cases"].as_array().unwrap();
-  assert_eq!(argv.len(), 19);
+  assert_eq!(argv.len(), 14);
   assert_eq!(streams.len(), 2);
-  assert_eq!(finish.len(), 11);
-
-  // The finish equality below says nothing about a run that emitted nothing, so the reference must reach both paths.
-  assert_eq!(python["finish"][0]["events"].as_array().unwrap().len(), 3);
-  assert!(python["finish"].as_array().unwrap().iter().any(|case| case["guard"].is_string()));
 
   let mut failures = Vec::new();
   check_argv(&fx, argv, &python, &mut failures);
   check_translate(&fx, streams, &python, &mut failures);
-  check_finish(&fx, finish, &python, &mut failures);
   assert!(failures.is_empty(), "CLI backend sections differ from the Python package:\n{}", failures.join("\n"));
 }
 
 fn write_fixtures(root: &Path) -> Fixture {
   let fx = Fixture {
-    root: root.to_path_buf(),
     home: root.join("home"),
     charliebot_home: root.join("charliebot"),
     no_credentials_home: root.join("no-credentials"),
@@ -162,22 +144,12 @@ fn write_fixtures(root: &Path) -> Fixture {
   for dir in [&fx.home, &fx.charliebot_home, &fx.no_credentials_home, &fx.bin, &fx.transport] {
     fs::create_dir_all(dir).unwrap();
   }
-  write_fakes(&fx.bin, json!({"gemini": [{"exit": 0}], "charlie-code": [{"exit": 0}], "agy": [{"exit": 0}]}));
+  write_fakes(&fx.bin, json!({"gemini": [{"exit": 0}], "charlie-code": [{"exit": 0}]}));
   write_text(
     &fx.charliebot_home.join("credentials.yaml"),
     "anthropic-main:\n  api_key: synthetic-anthropic-key\nclc-main:\n  api_key: synthetic-clc-key\n",
   );
   write_text(&fx.no_credentials_home.join("credentials.yaml"), "not: a mapping of credential sections\n");
-  for spec in finish_specs() {
-    let dir = root.join("finish").join(spec.id);
-    fs::create_dir_all(dir.join("cwd")).unwrap();
-    let steps = json!([
-      {"stdout": spec.stdout},
-      {"stderr": spec.stderr},
-      {"exit": spec.exit}
-    ]);
-    write_fakes(&dir, json!({"agy": steps}));
-  }
   fx
 }
 
@@ -190,7 +162,6 @@ fn request(fx: &Fixture) -> Value {
     "env_base": fx.env_base(),
     "argv_cases": argv_cases(),
     "translate_streams": translate_streams(),
-    "finish_cases": finish_cases(fx),
   })
 }
 
@@ -273,27 +244,6 @@ fn argv_cases() -> Vec<Value> {
       None,
       None,
     ),
-    argv_case("agy_plain", "antigravity", json!({}), &[], None, None, None),
-    argv_case(
-      "agy_print_timeout_flags",
-      "antigravity",
-      json!({"print_timeout": "30m"}),
-      &["--verbose"],
-      None,
-      None,
-      None,
-    ),
-    argv_case("agy_resume", "antigravity", json!({}), &[], Some("conv-synth-7"), None, None),
-    argv_case("agy_content", "antigravity", json!({}), &[], None, None, Some(INSTRUCTIONS)),
-    argv_case(
-      "agy_file_and_content",
-      "antigravity",
-      json!({"print_timeout": "5m"}),
-      &[],
-      None,
-      Some(WORKER_FILE),
-      Some(INSTRUCTIONS),
-    ),
     argv_case(
       "anthropic_compatible_plain",
       "cc-anthropic-compatible",
@@ -345,7 +295,6 @@ fn argv_case(
   let model = match backend_type {
     "gemini" => GEMINI_MODEL,
     "charlie-code" => CLC_MODEL,
-    "antigravity" => AGY_MODEL,
     "cc-anthropic-compatible" => ANTHROPIC_MODEL,
     other => panic!("no synthetic model for {other}"),
   };
@@ -425,92 +374,6 @@ fn charlie_code_events() -> Vec<Value> {
   ]
 }
 
-/// One fake `agy` run: the stdout and stderr it prints, the exit code it leaves with, and the conversation it resumes.
-struct FinishSpec {
-  id: &'static str,
-  stdout: String,
-  stderr: &'static str,
-  exit: i32,
-  resume: Option<&'static str>,
-}
-
-fn spec(id: &'static str, stdout: String, stderr: &'static str, exit: i32, resume: Option<&'static str>) -> FinishSpec {
-  FinishSpec { id, stdout, stderr, exit, resume }
-}
-
-/// The fake `agy` runs. A non-string `response` and a non-object `usage` are left out: the Rust code reports a
-/// named envelope guard for them instead.
-fn finish_specs() -> Vec<FinishSpec> {
-  vec![
-    spec(
-      "success",
-      envelope(json!({
-        "status": "SUCCESS",
-        "conversation_id": "conv-1",
-        "response": "Answer <SYSTEM_MESSAGE>\nplatform note\n</SYSTEM_MESSAGE>\n  body",
-        "usage": {"input_tokens": 10, "output_tokens": 4, "thinking_tokens": 2, "cache_read_tokens": 6},
-      })),
-      "",
-      0,
-      None,
-    ),
-    spec("exit_with_envelope_error", envelope(json!({"status": "FAILED", "error": "quota"})), "", 3, None),
-    spec("exit_with_plain_stdout", "plain crash text".to_string(), "", 2, None),
-    spec("exit_with_empty_stdout", String::new(), "", 5, None),
-    spec("exit_zero_non_envelope", "not json at all".to_string(), "", 0, None),
-    spec(
-      "print_timeout",
-      envelope(json!({"status": "SUCCESS", "conversation_id": "conv-2", "response": "partial"})),
-      "[agy] print timeout after 30m with turn in progress\n",
-      0,
-      None,
-    ),
-    spec("failed_with_response", envelope(json!({"status": "FAILED", "response": "partial answer"})), "", 0, None),
-    spec("failed_bare", envelope(json!({"status": "FAILED"})), "", 0, None),
-    spec("success_without_conversation", envelope(json!({"status": "SUCCESS", "response": "orphan"})), "", 0, None),
-    spec(
-      "resume_mismatch",
-      envelope(json!({"status": "SUCCESS", "conversation_id": "conv-other", "response": "x"})),
-      "",
-      0,
-      Some("conv-anchor"),
-    ),
-    spec(
-      "resume_match",
-      envelope(json!({
-        "status": "SUCCESS",
-        "conversation_id": "conv-1",
-        "response": "again",
-        "usage": {"input_tokens": 3},
-      })),
-      "",
-      0,
-      Some("conv-1"),
-    ),
-  ]
-}
-
-fn envelope(value: Value) -> String {
-  value.to_string()
-}
-
-fn finish_cases(fx: &Fixture) -> Vec<Value> {
-  finish_specs()
-    .iter()
-    .map(|spec| {
-      json!({
-        "id": spec.id,
-        "backend_type": "antigravity",
-        "model": AGY_MODEL,
-        "type_fields": {},
-        "resume": spec.resume,
-        "prompt": PROMPT,
-        "dir": path_text(&fx.root.join("finish").join(spec.id)),
-      })
-    })
-    .collect()
-}
-
 fn run_reference(request: &Value, temporary: &Path) -> Value {
   let fixture: Value = serde_json::from_str(GOLDEN_FIXTURE).unwrap();
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
@@ -575,60 +438,6 @@ fn check_translate(fx: &Fixture, streams: &[Value], python: &Value, failures: &m
   }
 }
 
-fn check_finish(fx: &Fixture, cases: &[Value], python: &Value, failures: &mut Vec<String>) {
-  let expected = python["finish"].as_array().expect("the finish section");
-  expect_eq(failures, "finish case count", &json!(cases.len()), &json!(expected.len()));
-  let runtime = tokio::runtime::Runtime::new().unwrap();
-  for (case, python_case) in cases.iter().zip(expected) {
-    let rust = runtime.block_on(run_finish(fx, case));
-    expect_eq(failures, &format!("finish {}", text(&case["id"])), &rust, python_case);
-  }
-}
-
-/// Runs one fake `agy` through the runner's final-stdout path. Returns the events it emitted, the exit code the runner
-/// recorded, and the guard error that ended the run.
-async fn run_finish(fx: &Fixture, case: &Value) -> Value {
-  let dir = PathBuf::from(text(&case["dir"]));
-  let host = CliHost { path: path_text(&dir), home: fx.home.clone() };
-  let launch = LaunchArgs {
-    resume_session_id: opt_text(&case["resume"]),
-    extra_flags: Vec::new(),
-    buffer_limit: None,
-    instructions_content: None,
-    instructions_file: None,
-    log_dir: None,
-    cgroup_session_id: None,
-    remote_launch: None,
-    backend_kwargs: serde_json::Map::new(),
-    manager_turn: false,
-  };
-  let backend = AntigravityFactory::new(host).build(Some(&option_of(case)), &fx.config(), launch.clone()).unwrap();
-  let runner = AgentRunner::new("antigravity", backend, launch);
-  let agent_path = format!("{}:/usr/bin:/bin", dir.display());
-  let environment = AgentBaseEnvironment { values: charliebot_agents::gh_wrapper::stub_environment(&dir, &agent_path) };
-  let mut request = RunRequest::new(
-    text(&case["prompt"]).to_string(),
-    dir.join("cwd"),
-    environment,
-    SessionCgroupConfig::disabled(),
-    Arc::new(Registry::new()),
-  );
-  request.child_env_policy = ChildEnvPolicy::Inherited;
-  request.final_stdout_supervisor = Some(PathBuf::from(env!("CARGO_BIN_EXE_fake_program")));
-  let seen = Arc::new(Mutex::new(Vec::new()));
-  let sink = Arc::clone(&seen);
-  request.on_event = Arc::new(move |event| {
-    let sink = Arc::clone(&sink);
-    Box::pin(async move {
-      sink.lock().unwrap().push(event);
-      Ok(())
-    })
-  });
-  let guard = runner.run(request).await.err().map(|error| error.to_string());
-  let events = seen.lock().unwrap().clone();
-  json!({"id": case["id"], "events": events, "exit_code": runner.exit_code(), "guard": guard})
-}
-
 fn build_backend(fx: &Fixture, option: &BackendOption, launch: LaunchArgs) -> Box<dyn AgentBackend> {
   let mut cfg = fx.config();
   if option.backend_type == "cc-anthropic-compatible"
@@ -639,7 +448,6 @@ fn build_backend(fx: &Fixture, option: &BackendOption, launch: LaunchArgs) -> Bo
   let built = match option.backend_type.as_str() {
     "gemini" => GeminiFactory::new(fx.host()).build(Some(option), &cfg, launch),
     "charlie-code" => CharlieCodeFactory::new(fx.host()).build(Some(option), &cfg, launch),
-    "antigravity" => AntigravityFactory::new(fx.host()).build(Some(option), &cfg, launch),
     "cc-anthropic-compatible" => AnthropicCompatibleFactory.build(Some(option), &cfg, launch),
     other => panic!("no factory for backend type {other}"),
   };

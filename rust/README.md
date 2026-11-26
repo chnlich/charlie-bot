@@ -173,7 +173,7 @@ rust/
 `crates/backends/` — one crate per LLM CLI backend:
 
 - [`anthropic_compatible`](crates/backends/anthropic_compatible/README.md) — Claude Code against a configured Anthropic-compatible endpoint
-- [`antigravity`](crates/backends/antigravity/README.md) — the `agy --print` backend, read from its JSON envelope once the process exits
+- [`antigravity`](crates/backends/antigravity/README.md) — the `agy acp` backend: each turn runs over the Agent Client Protocol, and mid-turn messages join the running turn
 - [`charlie_code`](crates/backends/charlie_code/README.md) — the CharlieCode CLI against an OpenAI-compatible endpoint
 - [`claude_code`](crates/backends/claude_code/README.md) — the cc-claude backend: option, lifecycle, environment, event translation, and the Claude Code usage source
 - [`codex`](crates/backends/codex/README.md) — the codex backend type, its usage resolver and the Codex quota accounts

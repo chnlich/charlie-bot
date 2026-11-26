@@ -110,8 +110,8 @@ pub async fn claim_finish_inputs(
 /// Build the fresh raw-log translator used to follow or reconcile one Run (`midturn_delivery.fresh_translate`).
 ///
 /// Stateful translates require one instance per scan. A gated web manager turn's replay lines need the gated backend's
-/// translator, so the launch carries the stream-json arguments its lifecycle returns. A build failure degrades to the
-/// raw claude shape the same way the worker side's reconcile translate does — never a crash of the follow.
+/// translator, so the launch carries the mid-turn kwargs its lifecycle returns. A build failure passes each raw event
+/// through unchanged, the same way the worker side's reconcile translate does — never a crash of the follow.
 pub fn fresh_translate(
   features: &FeatureContext,
   cfg: &CharlieBotConfig,

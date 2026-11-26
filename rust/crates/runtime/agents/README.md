@@ -58,7 +58,7 @@ This crate owns the process transport below the agent backends and the launch ma
 
 ## Tests
 
-The crate tests process transport with `/bin/sh`, `/bin/sleep`, and synthetic NDJSON. Fake agent programs are not written as executables. Cargo builds `src/bin/fake_program.rs` once, and each fake is a symlink named for its role (`claude`, `gemini`, `charlie-code`, `agy`) that points at that binary, next to a `probe.json` listing the role's steps. The helper reads its role from `argv[0]`, so a bare name resolves on `PATH`. The `cli_backends_golden` test links fake `gemini`, `charlie-code` and `agy` programs in a temporary directory and runs only the fake `agy` ones. The tests of the backend crates under `rust/crates/backends/` link the same helper, which they find in the target directory that holds their test binary. None starts an agent CLI or server.
+The crate tests process transport with `/bin/sh`, `/bin/sleep`, and synthetic NDJSON. Fake agent programs are not written as executables. Cargo builds `src/bin/fake_program.rs` once, and each fake is a symlink named for its role (`claude`, `gemini`, `charlie-code`, `agy`) that points at that binary, next to a `probe.json` listing the role's steps. The helper reads its role from `argv[0]`, so a bare name resolves on `PATH`. The `cli_backends_golden` test links fake `gemini` and `charlie-code` programs in a temporary directory. The tests of the backend crates under `rust/crates/backends/` link the same helper, which they find in the target directory that holds their test binary. None starts an agent CLI or server.
 
 ## Backend crates
 

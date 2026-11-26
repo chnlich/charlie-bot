@@ -1,11 +1,12 @@
 # charliebot-antigravity
 
-The `antigravity` backend type: `agy --print`, whose JSON envelope the runner reads once the process has exited.
+The `antigravity` backend type: `agy acp`, which runs each turn over the Agent Client Protocol. The turn's output is
+translated from the raw log, and each message that arrives mid-turn is a further `session/prompt` on the same session.
 
 ## Public API
 
-- `charliebot_antigravity::{register, USAGE_SOURCE}`, `AntigravityBackend` and its finish, through the private
-  `antigravity_cli`, `factory` and `options` modules.
+- `charliebot_antigravity::{register, USAGE_SOURCE}`, through the private `antigravity_cli`, `factory`, `lifecycle` and
+  `options` modules.
 
 ## Subscription quota
 

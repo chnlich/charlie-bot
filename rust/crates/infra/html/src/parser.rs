@@ -146,16 +146,16 @@ enum ReferenceMode {
   Literal,
 }
 
-struct Parser<'a, F> {
-  source: &'a str,
+struct Parser<'source, F> {
+  source: &'source str,
   convert_charrefs: bool,
   cdata_elem: Option<String>,
   reference_mode: ReferenceMode,
   handler: F,
 }
 
-impl<'a, F: FnMut(StreamEvent)> Parser<'a, F> {
-  fn new(source: &'a str, convert_charrefs: bool, handler: F) -> Self {
+impl<'source, F: FnMut(StreamEvent)> Parser<'source, F> {
+  fn new(source: &'source str, convert_charrefs: bool, handler: F) -> Self {
     Self { source, convert_charrefs, cdata_elem: None, reference_mode: ReferenceMode::Resolve, handler }
   }
 

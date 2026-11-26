@@ -1436,10 +1436,10 @@ mod tests {
   /// process uses it, and the CLI's next request must still authenticate. Run it on the host that holds the login
   /// files, before step 1's switch:
   ///
-  ///   CHARLIEBOT_LIVE_RENEW_LOGIN=<alias> cargo test --ignored a_live_cli_survives_a_renewal_of_its_login
+  ///   CHARLIEBOT_LIVE_RENEW_LOGIN=<alias> cargo test --ignored a_live_cli_survives_a_renewal_of_its_login_live
   #[test]
-  #[ignore = "integration"]
-  fn a_live_cli_survives_a_renewal_of_its_login() {
+  #[ignore = "live: renews one real login's token, once, on the host that holds the login files"]
+  fn a_live_cli_survives_a_renewal_of_its_login_live() {
     let (alias, dir, hosts) = live_login();
     let before = token_of(&dir);
     let file: Value = serde_json::from_str(&fs::read_to_string(dir.join(CREDENTIALS_FILE)).unwrap()).unwrap();

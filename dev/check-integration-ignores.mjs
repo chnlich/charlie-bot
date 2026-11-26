@@ -26,7 +26,8 @@ for (const file of rustFiles) {
     const functionMatch = source.slice(match.index + match[0].length).match(functionPattern);
     const testName = functionMatch?.[1] ?? '<unnamed ignored item>';
     const integrationReason = /^\s*=\s*(?:"integration"|r(#+)?"integration"\1)\s*$/.test(match[1]);
-    if (!integrationReason && !testName.endsWith('_subprocess_entry')) {
+    // A `_live` test needs a real login on its host and runs by hand; the integration job skips it by name.
+    if (!integrationReason && !testName.endsWith('_subprocess_entry') && !testName.endsWith('_live')) {
       const line = source.slice(0, match.index).split('\n').length;
       violations.push(`${file}:${line}: ${testName} has an unsupported #[ignore] reason`);
     }
@@ -42,8 +43,8 @@ if (violations.length > 0) {
   process.exit(1);
 }
 console.log(
-  `checked ${rustFiles.length} Rust files: every ignored test is an integration test or subprocess` +
-    ' entry, and no unmarked test launches a process'
+  `checked ${rustFiles.length} Rust files: every ignored test is an integration test, a subprocess` +
+    ' entry or a live test, and no unmarked test launches a process'
 );
 
 // ---------------------------------------------------------------------------

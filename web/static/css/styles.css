@@ -366,6 +366,8 @@ main > header > a[title="View JSONL events"]:hover {
    label. The session name keeps a readable width, and the other controls keep theirs. */
 @media (min-width: 769px) {
   main > header > .flex-1.min-w-0 { min-width: 8rem; margin-right: 0.5rem; }
+  /* The active tab's fill would otherwise touch the concurrency badge's outline. The gap matches the events link's. */
+  #tab-buttons { margin-right: 0.5rem; }
   #backend-badge { min-width: 0; max-width: clamp(10rem, 22vw, 18rem); overflow: hidden; text-overflow: ellipsis; }
   #backend-badge select { width: 100%; overflow: hidden; text-overflow: ellipsis; }
   #usage-indicator, #compact-btn, #events-link, #tab-buttons, main > header > .cb-slot { flex-shrink: 0; }

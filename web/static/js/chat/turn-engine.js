@@ -431,12 +431,15 @@
     }
 
     flatEstimate(seg) {
+      // One gap per row: the segment's own gap from the list (space-y-3), then
+      // the 0.75rem between each later row (styles.css `.turn-flat > * + *`).
+      // Both are 0.75rem, so the row count times the one gap source is the sum.
       let height = 0;
       seg.entries.forEach((entry) => {
         height += OPEN_BASE_EST
           + Math.max(1, Math.ceil(contentChars(entry) / CHARS_PER_LINE_EST)) * LINE_HEIGHT_EST;
       });
-      return height + this.rowGap();
+      return height + seg.entries.length * this.rowGap();
     }
 
     heightOf(seg) {
@@ -604,15 +607,16 @@
       // row's own margin-top. The margin reads as the gap between the row's
       // box and its predecessor's bottom edge. Every row and spacer has
       // margin-bottom 0, so the gap is the row's margin-top. A first child
-      // carries no space-y-3 margin.
+      // carries no space-y-3 margin and has no predecessor to measure the gap
+      // against, so it keeps the gap measured for the list.
       const rect = el.getBoundingClientRect();
       const prev = el.previousElementSibling;
       let marginTop = 0;
       if (prev) {
         const prevRect = prev.getBoundingClientRect();
         marginTop = rect.top - (prevRect.top + prevRect.height);
+        this.measuredRowGap = marginTop;
       }
-      this.measuredRowGap = marginTop;
       const height = rect.height + marginTop;
       this.stats.measuredTurnCount++;
       if (el.classList.contains('turn-placeholder')) return height;

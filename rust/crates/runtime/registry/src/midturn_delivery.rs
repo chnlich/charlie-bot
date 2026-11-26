@@ -9,8 +9,6 @@
 //! The backend that has no codec keeps today's behavior: its pending input waits for the next turn.
 
 use std::collections::{HashMap, HashSet};
-use std::fs::OpenOptions;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{
   Arc, Mutex, OnceLock,
@@ -19,6 +17,7 @@ use std::sync::{
 
 use anyhow::{Context, bail};
 use charliebot_core::event_types;
+use charliebot_core::fsutil;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
 use charliebot_store::run_records::{MIDTURN_INPUT_LOG_NAME, RunKind};
 use serde::{Deserialize, Serialize};
@@ -180,12 +179,9 @@ impl DeliveryState {
     let path = self.input_log.get().with_context(|| format!("Run {} has no input log", self.run_id))?;
     let mut line = serde_json::to_string(&LedgerLine { key: key.to_string(), inputs: inputs.clone() })?;
     line.push('\n');
-    let mut file = OpenOptions::new()
-      .create(true)
-      .append(true)
-      .open(path)
-      .with_context(|| format!("opening the input log {}", path.display()))?;
-    file.write_all(line.as_bytes()).with_context(|| format!("appending to the input log {}", path.display()))?;
+    // 0o666 is the mode `OpenOptions` creates a file with by default, so the umask still decides the file's access bits.
+    fsutil::append_line(path, line.as_bytes(), 0o666)
+      .with_context(|| format!("appending to the input log {}", path.display()))?;
     let mut ledger = self.ledger.lock().expect("mid-turn ledger mutex is not poisoned");
     ledger.logged_inputs.extend(inputs.iter().cloned());
     ledger.inputs_by_key.insert(key.to_string(), inputs);

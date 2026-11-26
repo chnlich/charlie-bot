@@ -245,7 +245,7 @@ test('the browser parser reads the shared fixture and offers a button per option
       'Array.from(document.querySelectorAll(".__cbc-picks button")).map((button) => button.textContent)');
     assert.deepEqual(buttons, [
       ...fixture[0].options.map((option) => option.name),
-      `${NAQ_LABEL}推荐：${recommendedOptionOf(fixture).text}`,
+      `${NAQ_LABEL}Recommended: ${recommendedOptionOf(fixture).text}`,
     ]);
     assert.equal(await page.evaluate('document.querySelectorAll(".__cbc-picks textarea, .__cbc-picks input").length'), 0);
   });
@@ -597,7 +597,7 @@ for (const genre of NAQ_GENRES) {
           'one not-a-question button on the recommended question');
         const lines = await page.evaluate('Array.from(document.querySelector(".__cbc-pick-naq")' +
           '.querySelectorAll("span")).map((span) => span.textContent)');
-        assert.deepEqual(lines.slice(-2), [NAQ_LABEL, `推荐：${recommendedOptionOf(fixture).text}`],
+        assert.deepEqual(lines.slice(-2), [NAQ_LABEL, `Recommended: ${recommendedOptionOf(fixture).text}`],
           'the label line, then the recommendation line');
       }, {source, pagePath: `/sessions/${OWNER}/artifacts/${genre}_picks.html`,
         url: `/sessions/${OWNER}/artifacts/${genre}_picks.html#cbsession=${VIEWER}`});

@@ -1616,7 +1616,7 @@ test('a question inside a closed details or a demo is not a pick, all six genres
         {bodyChildren: [genreFork], serverSessionId: 'owner', fetch: pickFetchStub(calls)});
       assert.deepEqual(
         findChildByClass(genreFork, '__cbc-picks').children.map((b) => b.textContent),
-        ['keep', 'drop', 'This should not be a question推荐：「keep」: keep the file.'],
+        ['keep', 'drop', 'This should not be a questionRecommended: 「keep」: keep the file.'],
         `${genre} offers picks and the not-a-question button`);
       const genreTray = findChildByClass(stackOf(genreBody), '__cbc-tray');
       assert.notEqual(findChildByClass(genreTray, '__cbc-tray-picks').style.display, 'none',

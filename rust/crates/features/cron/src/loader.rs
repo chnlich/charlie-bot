@@ -7,14 +7,17 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use charliebot_core::config::{CONFIG_D_DIR_NAME, CRON_D_DIR_NAME, CharlieBotConfig};
+use charliebot_core::cron_files::is_task_file;
 use charliebot_core::paths;
 use charliebot_core::repo_root::RepoRoot;
 use charliebot_registry::Registry;
 use charliebot_registry::context::FeatureContext;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::alert::fire_error_alert;
 use crate::config::{ScheduledTaskConfig, ScheduledTaskError};
+
+pub use charliebot_core::cron_files::{TaskFileReadError, read_task_file};
 
 /// One sorted read of every visible cron file.
 #[derive(Clone, Debug, Default)]
@@ -72,67 +75,6 @@ pub fn cron_path_for_home(home: &Path, name: &str) -> PathBuf {
 /// One task's config file path in this profile.
 pub fn cron_path(cfg: &CharlieBotConfig, name: &str) -> PathBuf {
   cron_path_for_home(&cfg.charliebot_home, name)
-}
-
-/// One cron task file, decoded as the JSON object its readers and writers take.
-pub type TaskFile = Map<String, Value>;
-
-/// Why one cron task file could not be read as a mapping.
-#[derive(Debug)]
-pub enum TaskFileReadError {
-  /// The file could not be opened or read.
-  Read { path: PathBuf, error: std::io::Error },
-  /// The file's text is not YAML.
-  Decode(serde_yaml::Error),
-  /// The YAML document cannot become a JSON object, such as one with a non-string key.
-  Convert(serde_json::Error),
-  /// The YAML document is not a mapping.
-  NotMapping,
-}
-
-impl TaskFileReadError {
-  /// The message with no file path, as a reader that already names the file uses.
-  pub fn message_without_path(&self) -> String {
-    match self {
-      Self::Read { error, .. } => error.to_string(),
-      Self::Decode(error) => error.to_string(),
-      Self::Convert(error) => error.to_string(),
-      Self::NotMapping => "cron config must be a mapping".to_string(),
-    }
-  }
-}
-
-impl std::fmt::Display for TaskFileReadError {
-  fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    match self {
-      Self::Read { path, error } => write!(formatter, "{}: {error}", path.display()),
-      Self::Decode(error) => error.fmt(formatter),
-      Self::Convert(error) => error.fmt(formatter),
-      Self::NotMapping => formatter.write_str("cron config must be a mapping"),
-    }
-  }
-}
-
-impl std::error::Error for TaskFileReadError {
-  fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-    match self {
-      Self::Read { error, .. } => Some(error),
-      Self::Decode(error) => Some(error),
-      Self::Convert(error) => Some(error),
-      Self::NotMapping => None,
-    }
-  }
-}
-
-/// One cron task file, read as YAML and required to be a mapping.
-pub fn read_task_file(path: &Path) -> Result<TaskFile, TaskFileReadError> {
-  let raw =
-    std::fs::read_to_string(path).map_err(|error| TaskFileReadError::Read { path: path.to_path_buf(), error })?;
-  let yaml = serde_yaml::from_str::<serde_yaml::Value>(&raw).map_err(TaskFileReadError::Decode)?;
-  match serde_json::to_value(yaml).map_err(TaskFileReadError::Convert)? {
-    Value::Object(mapping) => Ok(mapping),
-    _ => Err(TaskFileReadError::NotMapping),
-  }
 }
 
 /// Why one cron task file could not be written.
@@ -273,8 +215,7 @@ fn reload_snapshot(
   let mut snapshot = CronSnapshot::default();
   let mut prompt_paths = Vec::new();
   for path in paths {
-    let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
-    if !path.is_file() || !file_name.ends_with(".yaml") || file_name.starts_with('.') {
+    if !is_task_file(&path) {
       continue;
     }
     let name = path.file_stem().and_then(|name| name.to_str()).unwrap_or_default().to_string();
@@ -358,10 +299,10 @@ fn snapshot_fingerprint(directory: &Path, prompt_paths: &[PathBuf]) -> anyhow::R
     Ok(entries) => {
       for entry in entries {
         let path = entry?.path();
-        let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
-        if !path.is_file() || !name.ends_with(".yaml") || name.starts_with('.') {
+        if !is_task_file(&path) {
           continue;
         }
+        let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
         let modified = match path.metadata() {
           Ok(metadata) => modified_seconds(metadata.mtime(), metadata.mtime_nsec()),
           Err(error) => {

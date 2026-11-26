@@ -1,12 +1,13 @@
 //! The CharlieBot server's foundation: profile home, configuration, credentials, the OAuth token vocabulary,
 //! run tokens, backend type names, run kinds, structured logging, the session memo sentence,
-//! the process's TLS crypto provider, the text renderings the wire formats need, and the int reading their configs,
-//! flags and headers parse.
+//! the process's TLS crypto provider, the text renderings the wire formats need, the int reading their configs,
+//! flags and headers parse, and the cron task files' reader and file rule.
 
 pub mod backend_types;
 pub mod cgroup;
 pub mod config;
 pub mod credentials;
+pub mod cron_files;
 pub mod event_types;
 pub mod fsutil;
 pub mod git;

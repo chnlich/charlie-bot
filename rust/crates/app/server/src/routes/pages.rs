@@ -652,6 +652,7 @@ fn index_answer(
   let active_option = cfg.get_backend_option(active_backend);
   let backend_pools =
     cfg.backends.pools.iter().map(|pool| json!({"id": pool.id, "label": pool.label})).collect::<Vec<_>>();
+  let labels = cfg.backends.session_labels();
   let picker_entries =
     cfg.backends.picker_entries().into_iter().map(|(id, label)| json!({"id": id, "label": label})).collect::<Vec<_>>();
   let session_backend = active_session.get("backend").and_then(Value::as_str).unwrap_or_default();
@@ -672,6 +673,7 @@ fn index_answer(
       .map(|option| json!({"id": option.id, "label": option.label, "type": option.backend_type}))
       .collect::<Vec<_>>(),
     "backend_pools": backend_pools,
+    "labels": labels,
     "picker_entries": picker_entries,
     "active_session_backend": session_backend,
     "active_pool_member": active_pool_member,
@@ -1664,6 +1666,22 @@ mod tests {
     let template =
       std::fs::read_to_string(repo_root.join("web/templates/index.html")).expect("the index template reads");
     assert!(template.contains("const FOR_YOU_RULE = {{ for_you_rule|tojson }};"));
+  }
+
+  /// The page's label table carries each pool and member pair and each option, so the browser reads the one label
+  /// form `BackendsConfig::session_model_label` writes.
+  #[test]
+  fn the_index_page_declares_the_backend_label_table() {
+    let repo_root =
+      std::path::Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).expect("the crate lies under the repo");
+    let template =
+      std::fs::read_to_string(repo_root.join("web/templates/index.html")).expect("the index template reads");
+    assert!(template.contains("const BACKEND_LABELS = {{ labels|tojson }};"));
+
+    let labels = label_config().backends.session_labels();
+    assert_eq!(labels["auto"][""], ["Auto".to_string(), "Auto".to_string()]);
+    assert_eq!(labels["auto"]["claude-opus-5"], ["Auto → CC · Opus 5".to_string(), "Auto → Opus 5".to_string()]);
+    assert_eq!(labels["claude-opus-5"][""], ["CC · Opus 5".to_string(), "Opus 5".to_string()]);
   }
 
   /// The access key the composed test app's `credentials.yaml` names.

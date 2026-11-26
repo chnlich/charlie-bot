@@ -35,6 +35,22 @@ const BACKEND_OPTIONS = {
 
 const BACKEND_POOLS = [{id: 'auto', label: 'Auto'}, {id: 'cheap', label: 'Cheap'}];
 
+// The page's server-rendered label table: BACKEND_LABELS[backend][member || ""] is the [full, compact] pair.
+const BACKEND_LABELS = {
+  'claude-opus-5': {'': ['CC · Opus 5', 'Opus 5']},
+  'opencode-glm52': {'': ['OC · GLM-5.2', 'GLM-5.2']},
+  'codex-gpt-5.3-codex-spark': {'': ['Codex · GPT-5.3 Codex Spark xHigh (personal)', 'GPT-5.3 Codex Spark xHigh (personal)']},
+  'codex-gpt-luna': {'': ['Codex GPT Luna', 'Codex GPT Luna']},
+  auto: {
+    '': ['Auto', 'Auto'],
+    'claude-opus-5': ['Auto → CC · Opus 5', 'Auto → Opus 5'],
+  },
+  cheap: {
+    '': ['Cheap', 'Cheap'],
+    'codex-gpt-luna': ['Cheap → Codex GPT Luna', 'Cheap → Codex GPT Luna'],
+  },
+};
+
 // The status.js members the suites stub out: status.js defines them for real,
 // so they go back to their fakes after its load.
 const STATUS_FAKES = {
@@ -53,6 +69,7 @@ function loadGroups() {
     globalThis: null,
     BACKEND_OPTIONS,
     BACKEND_POOLS,
+    BACKEND_LABELS,
     SESSION_ID: 'other-session',
     console: {error: () => {}},
     // A package script the page fetched after its document reads readyState; no paint is on screen in this harness,

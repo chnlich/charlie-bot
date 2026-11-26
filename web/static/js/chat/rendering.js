@@ -1035,7 +1035,10 @@ function renderMessage(msg, sessionId) {
   if (msg.role === "system" || msg.role === "web_status" || msg.role === "web_ask_check" || msg.role === "cold_read_check") {
     var titleAttr = msg.timestamp ? " title=\"" + formatBubbleTime(msg.timestamp) + "\"" : "";
     var handlerMark = Object.hasOwn(HANDLER_MARK_ICONS, msg.kind) ? cbIcon(HANDLER_MARK_ICONS[msg.kind], 12) + " " : "";
-    return openMessageWrapper("flex justify-center", msg) + "<div class=\"bg-slate-700/50 text-slate-400 text-xs px-3 py-1.5 rounded-full max-w-[85%] overflow-hidden truncate\"" + titleAttr + ">"
+    var pillClass = msg.role === "cold_read_check"
+      ? "bg-slate-700/50 text-slate-400 text-xs px-3 py-1.5 rounded-full max-w-[85%] overflow-hidden truncate"
+      : "bg-slate-700/50 text-slate-400 text-xs px-3 py-1.5 rounded-2xl max-w-[85%] whitespace-normal break-words text-center";
+    return openMessageWrapper("flex justify-center", msg) + "<div class=\"" + pillClass + "\"" + titleAttr + ">"
       + handlerMark + escapeHtml(msg.content) + "</div></div>";
   }
   if (msg.role === "task_delegated") {

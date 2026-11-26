@@ -312,36 +312,28 @@ function activeTurnEngineFor(container) {
   return engine && engine.alive ? engine : null;
 }
 
-// The one model label every surface writes. A pool session reads "<pool> → <member> · <model>": `poolMember` is
-// the member the server already filtered to the pool, so a pool with no member reads the pool label alone. A
-// single-option session reads its option's label. The compact form drops the backend family prefix ("CC · ") and
-// the model, so a row next to a timestamp or a status verdict keeps its width.
+// The one model label every surface writes, from the server's table: the page renders
+// BACKEND_LABELS[sessionBackend][poolMember || ""] as the [full, compact] pair. A pool session reads
+// "<pool> → <member>" and a memberless pooled row the pool label alone; one option reads its option label; an id the
+// table does not hold reads itself. The full form of a pool member takes the model after " · "; the compact form
+// drops the member's backend-family prefix and the model, so a row next to a timestamp or a status verdict keeps its
+// width.
 function isPoolBackend(backendId) {
   const pools = typeof BACKEND_POOLS === 'undefined' ? [] : BACKEND_POOLS;
   return pools.some((candidate) => candidate.id === backendId);
 }
 
-function backendOptionLabel(backendId) {
-  const options = typeof BACKEND_OPTIONS === 'undefined' ? {} : BACKEND_OPTIONS;
-  return options[backendId] || backendId;
-}
-
-// An option label without its backend family prefix: "CC · Opus" reads "Opus".
-function withoutFamilyPrefix(label) {
-  const sep = label.indexOf(' · ');
-  return sep === -1 ? label : label.slice(sep + 3);
-}
-
 function sessionModelLabel(sessionBackend, poolMember, model, style) {
   const compact = style === 'compact';
-  if (!isPoolBackend(sessionBackend)) {
-    const full = backendOptionLabel(sessionBackend);
-    return compact ? withoutFamilyPrefix(full) : full;
-  }
-  const pool = BACKEND_POOLS.find((candidate) => candidate.id === sessionBackend);
-  if (!poolMember) return pool.label;
-  if (compact) return pool.label + ' → ' + withoutFamilyPrefix(backendOptionLabel(poolMember));
-  return pool.label + ' → ' + backendOptionLabel(poolMember) + (model ? ' · ' + model : '');
+  const labels = BACKEND_LABELS;
+  // The server filters a recorded member outside its pool to null, so a member key the table lacks falls back to
+  // the row's memberless entry: the pool label, or the option label for a session switched off a pool.
+  const memberPair = labels[sessionBackend]?.[poolMember || ''];
+  const pair = memberPair || labels[sessionBackend]?.[''];
+  if (!pair) return sessionBackend || '';
+  const label = pair[compact ? 1 : 0];
+  // The model belongs to a pool member; a single option's label and a pool without a member keep their own form.
+  return poolMember && memberPair && !compact && model ? label + ' · ' + model : label;
 }
 
 // The backend id the open session holds: a pool id for a pool session, whatever its turn runs on.

@@ -1303,6 +1303,10 @@ test('switchBackend updates the active backend badge in place on success', async
   const {context, elements} = buildContext({
     ACTIVE_BACKEND_ID: 'claude-opus-4.6',
     BACKEND_OPTIONS: {'claude-opus-4.6': 'Opus 4.6', 'codex-o3': 'Codex O3'},
+    BACKEND_LABELS: {
+      'claude-opus-4.6': {'': ['Opus 4.6', 'Opus 4.6']},
+      'codex-o3': {'': ['Codex O3', 'Codex O3']},
+    },
     elements: new Map([
       ['backend-badge', createElement()],
     ]),

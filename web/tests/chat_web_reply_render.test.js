@@ -68,7 +68,12 @@ test('an item cold-read check renders as the centered pill, under its own role a
     const html = context.renderMessage(message, 'sess-1');
     assert.ok(html.includes('data-message-role="' + message.role + '"'), message.role);
     assert.ok(html.includes('justify-center'), message.role);
-    assert.ok(html.includes('rounded-full'), message.role);
+    const radiusClass = message.role === 'web_ask_check' ? 'rounded-2xl' : 'rounded-full';
+    assert.ok(html.includes(radiusClass), message.role);
+    if (message.role === 'web_ask_check') {
+      assert.ok(html.includes('whitespace-normal break-words'), message.role);
+      assert.ok(!html.includes('truncate'), message.role);
+    }
     assert.ok(html.includes(context.escapeHtml(message.content)), message.role);
   }
 });
@@ -100,12 +105,20 @@ test('an error row renders left-aligned in the red palette with every line of it
   assert.ok(!html.includes('truncate'), 'nothing cuts the text to one line');
 });
 
-test('a system row without the error prefix stays a centered one-line pill', () => {
+test('a system pill wraps its text, so a long quota failover notice stays whole', () => {
   const context = loadChatRendering();
-  const html = context.renderMessage(
+  const short = context.renderMessage(
       {role: 'system', id: 's1', content: 'Backend switched: one to two', timestamp: null}, 'sess-1');
-  assert.ok(html.includes('justify-center'));
-  assert.ok(html.includes('truncate'), 'the pill truncates its one line');
+  assert.ok(short.includes('justify-center'));
+  const notice = 'Subscription quota reset: switched from CC · Member A (member-a) to Pool A → CC · Member B '
+      + '(member-b); CC · Member A recovers at 2030-01-02T03:04+00:00';
+  const long = context.renderMessage(
+      {role: 'system', id: 's2', content: notice, timestamp: null}, 'sess-1');
+  assert.ok(long.includes(context.escapeHtml(notice)), 'the whole notice is in the pill');
+  for (const html of [short, long]) {
+    assert.ok(html.includes('whitespace-normal break-words'), 'the pill wraps its text');
+    assert.ok(!html.includes('truncate'), 'nothing cuts the pill text to one line');
+  }
 });
 
 test('a handler_ok row draws the check ahead of its task and message', () => {

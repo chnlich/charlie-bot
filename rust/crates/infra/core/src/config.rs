@@ -566,6 +566,26 @@ impl PoolBilling {
   }
 }
 
+/// The form a session model label takes: see [`BackendsConfig::session_model_label`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LabelStyle {
+  /// The whole label: `Pool → CC · Opus`, or `CC · Opus` for one option.
+  Full,
+  /// The label beside a timestamp or a status verdict: `Pool → Opus`, or `Opus` for one option.
+  Compact,
+}
+
+/// One label as `style` writes it: the full form, or the compact one with the backend-family prefix dropped.
+fn short_label(label: &str, compact: bool) -> String {
+  if !compact {
+    return label.to_string();
+  }
+  match label.split_once(" · ") {
+    Some((_, rest)) => rest.to_string(),
+    None => label.to_string(),
+  }
+}
+
 /// One member of a pool: the `backends.options` id it names. A pool's rule does not change the member's shape; its
 /// billing is the option's ([`BackendOption::billing`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -744,6 +764,51 @@ impl BackendsConfig {
   pub fn display_pool_member<'a>(&self, session_backend: &str, member: &'a str) -> Option<&'a str> {
     let pool = self.pool(session_backend)?;
     pool.members.iter().any(|candidate| candidate.backend == member).then_some(member)
+  }
+
+  /// The label a session's model renders with, in the one form every surface writes. A session on pool
+  /// `session_backend` with a member the pool lists reads `Pool → Member`; a pool without such a member reads its
+  /// label alone; one option reads its label; an id no entry holds reads itself. `Compact` drops the member's or the
+  /// option's backend-family prefix, for a row beside a timestamp or a status verdict.
+  pub fn session_model_label(&self, session_backend: &str, member: &str, style: LabelStyle) -> String {
+    let compact = style == LabelStyle::Compact;
+    if let Some(pool) = self.pool(session_backend) {
+      let Some(member) = self.display_pool_member(session_backend, member) else {
+        return pool.label.clone();
+      };
+      let member_label =
+        self.option_label(member).map_or_else(|| member.to_string(), |label| short_label(label, compact));
+      return format!("{} → {member_label}", pool.label);
+    }
+    self.option_label(session_backend).map_or_else(|| session_backend.to_string(), |label| short_label(label, compact))
+  }
+
+  /// The label pairs the page's `BACKEND_LABELS` table carries: for every pool, its `""` key and each member, then
+  /// each option's `""` key. Each pair is the [`Self::session_model_label`] full and compact form.
+  pub fn session_labels(&self) -> BTreeMap<String, BTreeMap<String, [String; 2]>> {
+    let pair = |session_backend: &str, member: &str| {
+      [
+        self.session_model_label(session_backend, member, LabelStyle::Full),
+        self.session_model_label(session_backend, member, LabelStyle::Compact),
+      ]
+    };
+    let mut labels = BTreeMap::new();
+    for pool in &self.pools {
+      let mut members = BTreeMap::from([(String::new(), pair(&pool.id, ""))]);
+      for member in &pool.members {
+        members.insert(member.backend.clone(), pair(&pool.id, &member.backend));
+      }
+      labels.insert(pool.id.clone(), members);
+    }
+    for option in &self.options {
+      labels.insert(option.id.clone(), BTreeMap::from([(String::new(), pair(&option.id, ""))]));
+    }
+    labels
+  }
+
+  /// The configured label of the option named `id`, or `None` for an id no option holds.
+  fn option_label(&self, id: &str) -> Option<&str> {
+    self.options.iter().find(|option| option.id == id).map(|option| option.label.as_str())
   }
 
   /// Check whether `id` names a configured model or pool; return the canonical refusal for an unknown id.
@@ -1917,6 +1982,32 @@ voice: {}
 
   fn member_ids(pool: &PoolConfig) -> Vec<&str> {
     pool.members.iter().map(|member| member.backend.as_str()).collect()
+  }
+
+  #[test]
+  fn a_session_model_label_names_the_pool_and_the_member_it_lists() {
+    let home = home_with(VALID);
+    let cfg = load(&home).unwrap();
+    assert_eq!(cfg.backends.session_model_label("pool", "claude-fable", LabelStyle::Full), "Pool → CC · Fable");
+    assert_eq!(cfg.backends.session_model_label("pool", "claude-fable", LabelStyle::Compact), "Pool → Fable");
+    // A member the pool no longer lists, and a pool with no member, read the pool label alone.
+    assert_eq!(cfg.backends.session_model_label("pool", "retired", LabelStyle::Full), "Pool");
+    assert_eq!(cfg.backends.session_model_label("pool", "", LabelStyle::Compact), "Pool");
+    // One option reads its own label, and an id no entry holds reads itself.
+    assert_eq!(cfg.backends.session_model_label("claude-fable", "", LabelStyle::Full), "CC · Fable");
+    assert_eq!(cfg.backends.session_model_label("claude-fable", "", LabelStyle::Compact), "Fable");
+    assert_eq!(cfg.backends.session_model_label("removed", "", LabelStyle::Full), "removed");
+  }
+
+  #[test]
+  fn the_label_table_holds_each_pool_member_and_each_option() {
+    let home = home_with(VALID);
+    let cfg = load(&home).unwrap();
+    let labels = cfg.backends.session_labels();
+    assert_eq!(labels["pool"][""], ["Pool".to_string(), "Pool".to_string()]);
+    assert_eq!(labels["pool"]["claude-fable"], ["Pool → CC · Fable".to_string(), "Pool → Fable".to_string()]);
+    assert_eq!(labels["claude-fable"][""], ["CC · Fable".to_string(), "Fable".to_string()]);
+    assert_eq!(labels.len(), 2, "one entry per pool and per option");
   }
 
   const TWO_OPTIONS: &str = concat!(

@@ -163,10 +163,28 @@ const EXCEPTIONS = [
     ["tatic v1.76.0 - ISC -->\\n<svg viewBox=\\\"0 0 24 24\\\"><path d=\\\"M5 6", MODULE_REASON],
     ["assert!(changed.contains(\"<path d=\\\"M3 4\\\"/>\"));", MODULE_REASON],
   ]),
+  ...byFile('rust/crates/runtime/session-api/src/worker_transcript.rs', [
+    ["assert_eq!(run_backend_label(&backends, \"pool-a\", \"member-a\"), \"Pool A → CC · Member A\");", PROSE_REASON],
+  ]),
   ...byFile('rust/crates/runtime/store/src/aggregator.rs', [
     ["t!(\"Backend switched: {} → {}\", string_default(event, \"from\", \"\"),", PROSE_REASON],
     ["Subscription quota reset: switched {from_backend} → {to_backend}\")", PROSE_REASON],
     ["push_str(&format!(\" — {} → {} tokens\", format_k_tokens(pre_tokens)", PROSE_REASON],
+    ["\"Subscription quota reset: switched from CC · Member A (member-a) to Pool A → CC · Member B (member-b); \\", PROSE_REASON],
+    ["\"Timeout on CC · Member A (member-a): switched to Pool A → CC · Member B (member-b)\"", PROSE_REASON],
+  ]),
+  ...byFile('rust/crates/infra/core/src/config.rs', [
+    ["return format!(\"{} → {member_label}\", pool.label);", PROSE_REASON],
+    ["\"Pool → CC · Fable\");", PROSE_REASON],
+    ["\"Pool → Fable\");", PROSE_REASON],
+    ["[\"Pool → CC · Fable\".to_string(), \"Pool → Fable\".to_string()]", PROSE_REASON],
+  ]),
+  ...byFile('rust/crates/features/web_reply/src/status.rs', [
+    ["assert_eq!(body[\"children\"][0][\"backend_label\"], \"Pool A → Member A\");", PROSE_REASON],
+    ["assert_eq!(body[\"descendants\"][0][\"backend_label\"], \"Pool A → Member A\");", PROSE_REASON],
+  ]),
+  ...byFile('rust/crates/app/server/src/routes/pages.rs', [
+    ["[\"Auto → CC · Opus 5\".to_string(), \"Auto → Opus 5\".to_string()]", PROSE_REASON],
   ]),
   ...byFile('rust/crates/runtime/store/src/fact_scan.rs', [
     ["us · Waiting on you]\\n1. ▸ Waiting on you · session synthetic · li", CHAT_TEXT_REASON],
@@ -244,8 +262,6 @@ const EXCEPTIONS = [
   ...byFile('web/static/js/chat/shared.js', [
     [" `<span id=\"${id}-short\">… <button onclick=\"document.getElementByI", PROSE_REASON],
     ["'none'?'block':'none'\" class=\"${buttonClass}\">Thinking…</button>`;", PROSE_REASON],
-    ["if (compact) return pool.label + ' → ' + withoutFamilyPrefix(", PROSE_REASON],
-    ["return pool.label + ' → ' + backendOptionLabel(poolMember) + (model", PROSE_REASON],
   ]),
   ...byFile('web/static/js/comment_post.js', [
     ["lines.push((i + 1) + '. ▸ ' + referenceLines[0]);", CHAT_TEXT_REASON],

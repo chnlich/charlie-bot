@@ -408,6 +408,10 @@ main > header > .header-controls { flex: 0 1 auto; min-width: 0; margin-left: au
   main > header a[title="View JSONL events"] { order: 100; align-self: center; }
   #usage-indicator { display: none !important; }
   .input-buttons button { min-width: 44px; min-height: 44px; }
+  /* The drawer has no hover, so a tap on a row's truncated model label shows it whole: the label wraps instead of
+     clipping, and a second tap collapses it. The selector beats Tailwind's `.truncate` utility, which the page loads
+     after this file. */
+  .session-backend.session-backend--full { white-space: normal; overflow: visible; text-overflow: clip; min-width: 0; }
 }
 .diff-modal-overlay {
   position: fixed; inset: 0; background: rgba(0,0,0,0.6);

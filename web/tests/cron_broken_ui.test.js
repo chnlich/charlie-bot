@@ -29,6 +29,7 @@ function makeEl() {
     value: '', textContent: '', readOnly: false, disabled: false,
     checked: false, indeterminate: false, innerHTML: '',
     classList: makeClassList(), style: {},
+    addEventListener() {},
   };
 }
 

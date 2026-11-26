@@ -55,6 +55,8 @@ function loadChatRenderingModules(context) {
 function loadChatRendering() {
   const context = {
     CSS: {escape: (value) => String(value)},
+    // The page's server-rendered label table; a fixture that renders a pool label supplies its own entries.
+    BACKEND_LABELS: {},
     document: {
       createElement: (tag) => createEscapingElement(tag),
       getElementById: () => null,
@@ -105,6 +107,8 @@ function makeChatRenderContext(elements = new Map()) {
     // code_block_wc2ch.test.js against the real renderer.
     wrapWideChars: (html) => html,
     CSS: { escape: (v) => String(v) },
+    // The page's server-rendered label table; a fixture that renders a pool label supplies its own entries.
+    BACKEND_LABELS: {},
     SESSION_ID: 'sess-1',
     confirm: () => true,
     fetch: () => Promise.resolve({ ok: true }),

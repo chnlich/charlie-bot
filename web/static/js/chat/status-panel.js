@@ -458,11 +458,10 @@
 
   // ---- Status panel --------------------------------------------------------
 
-  // A child's "name · short id" line, with the compact pool label after it when the child runs on a pool.
+  // A child's "name · short id" line, with the server's compact pool label after it when the child runs on a pool.
   function childHead(child) {
     const head = child.name + ' · ' + child.session_id.slice(0, 8);
-    if (!isPoolBackend(child.backend)) return head;
-    return head + ' · ' + sessionModelLabel(child.backend, child.pool_member, null, 'compact');
+    return child.backend_label ? head + ' · ' + child.backend_label : head;
   }
 
   // The descendants' items, grouped by session: one header per session, its

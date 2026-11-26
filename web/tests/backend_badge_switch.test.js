@@ -39,6 +39,19 @@ function makeDocument(elements) {
   return { getElementById: (id) => elements.get(id) || null };
 }
 
+// The page's server-rendered label table: BACKEND_LABELS[backend][member || ""] is the [full, compact] pair. These
+// are the entries the fixtures below use; an id the table does not hold reads itself.
+const BACKEND_LABELS = {
+  'claude-opus-5': {'': ['Opus 5', 'Opus 5']},
+  'claude-fable-5': {'': ['Fable 5', 'Fable 5']},
+  auto: {
+    '': ['Auto', 'Auto'],
+    'claude-opus-5': ['Auto → Opus 5', 'Auto → Opus 5'],
+    'claude-fable-5': ['Auto → Fable 5', 'Auto → Fable 5'],
+  },
+  cheap: {'': ['Cheap', 'Cheap']},
+};
+
 // The globals match the page's server render: the session's own backend, the backend the header reads, and the
 // member and model its records carry.
 function loadSessionContext({elements, BACKEND_OPTIONS, BACKEND_POOLS, ACTIVE_POOL_MEMBER, ACTIVE_NATIVE_MODEL, SESSION_ID, SESSION_BACKEND, ACTIVE_BACKEND_ID, fetchImpl}) {
@@ -48,6 +61,7 @@ function loadSessionContext({elements, BACKEND_OPTIONS, BACKEND_POOLS, ACTIVE_PO
     showToast: () => {},
     BACKEND_OPTIONS: BACKEND_OPTIONS || {},
     BACKEND_POOLS,
+    BACKEND_LABELS,
     ACTIVE_SESSION_BACKEND: SESSION_BACKEND,
     ACTIVE_BACKEND_ID,
     ACTIVE_POOL_MEMBER,

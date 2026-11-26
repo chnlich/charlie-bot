@@ -7,6 +7,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::sync::{Arc, LazyLock, Mutex};
 
+use charliebot_core::config::{BackendsConfig, LabelStyle};
 use charliebot_core::event_types;
 use charliebot_core::text_repr;
 use charliebot_core::timefmt;
@@ -85,6 +86,8 @@ fn build_worker_transcript(store: &Store, session_id: &str, signature: Signature
   }
 
   let cfg = store.config();
+  // The pool a run belongs to is the session's own backend; the run names the member it launched on.
+  let session_backend = store.read_metadata_fresh(session_id)?.map_or_else(String::new, |meta| meta.backend);
   // The transcript events stay in the compact form from parse to projection fold. The builder shares its parsed
   // objects between the summary, the map, and the projection input. The compact form is the one tree that the fold
   // and the summary read in place.
@@ -114,12 +117,12 @@ fn build_worker_transcript(store: &Store, session_id: &str, signature: Signature
     let launch_prompt_ref =
       if launch_prompt_path.is_file() { launch_prompt_path.to_string_lossy().into_owned() } else { String::new() };
     let backend = run.backend.as_deref().unwrap_or("");
-    let backend_label = cfg.get_backend_option(backend).map_or(backend, |option| option.label.as_str());
+    let backend_label = run_backend_label(&cfg.backends, &session_backend, backend);
     transcript.push(Arc::new(ChatEvent::from_value(&run_header_event(
       run,
       *state,
       &error,
-      backend_label,
+      &backend_label,
       &launch_prompt_ref,
       if *state == RunDisplayState::Withheld { withheld_reason(facts_events.as_slice(), &run.id) } else { None },
       (!state.is_live()).then_some(tool_calls),
@@ -245,6 +248,17 @@ fn store_read(store: &Store, path: &Path) -> StoreResult<Vec<ChatEvent>> {
   let mut events = store.read_ndjson_compact(path)?;
   events.retain(|event| event.get("type").and_then(CompactValue::as_str) != Some(event_types::SESSION_ATTACHED));
   Ok(events)
+}
+
+/// The label a run's backend reads with. A run that launched on a member of the session's pool reads `Pool → Member`;
+/// any other run reads its own backend's label, so a run from before the session switched backend still names the
+/// backend it ran on.
+fn run_backend_label(backends: &BackendsConfig, session_backend: &str, run_backend: &str) -> String {
+  if backends.display_pool_member(session_backend, run_backend).is_some() {
+    backends.session_model_label(session_backend, run_backend, LabelStyle::Full)
+  } else {
+    backends.session_model_label(run_backend, "", LabelStyle::Full)
+  }
 }
 
 fn run_header_event(
@@ -383,6 +397,8 @@ struct SummaryInputs<'a> {
 
 fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> StoreResult<Value> {
   let SummaryInputs { task_state, facts_events, run_records, states, run_events, run_tools, run_causes } = inputs;
+  // The pool a run belongs to is the session's own backend; the run names the member it launched on.
+  let session_backend = store.read_metadata_fresh(session_id)?.map_or_else(String::new, |meta| meta.backend);
   let mut closed_at = String::new();
   let mut landed = String::new();
   let mut outcomes = BTreeMap::new();
@@ -413,7 +429,7 @@ fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> 
     .iter()
     .map(|run| {
       let backend = run.backend.as_deref().unwrap_or("");
-      let backend_label = store.config().get_backend_option(backend).map_or(backend, |option| option.label.as_str());
+      let backend_label = run_backend_label(&store.config().backends, &session_backend, backend);
       json!({
         "run_id": run.id,
         "kind": serde_json::to_value(run.kind).expect("run kind serializes"),
@@ -596,6 +612,40 @@ mod tests {
 
   use super::*;
   use crate::test_support::{GatedHome, create_node, feature_context};
+  use charliebot_core::config::{BackendOption, CallsConfig, PoolConfig, PoolMember, PoolRule};
+
+  /// A run reads `Pool → Member` only when it launched on a member of the session's pool. A run whose backend is no
+  /// member of the session's pool keeps its own backend's label, so a run from before a backend switch stays truthful.
+  #[test]
+  fn a_run_names_the_backend_it_launched_on() {
+    let option = |id: &str, label: &str| BackendOption {
+      id: id.to_string(),
+      label: label.to_string(),
+      model: "synthetic-model".to_string(),
+      prompt_overlay: None,
+      billing: None,
+      backend_type: "synthetic".to_string(),
+      type_fields: Default::default(),
+      visible: true,
+    };
+    let backends = BackendsConfig {
+      routing: None,
+      options: vec![option("member-a", "CC · Member A"), option("single-a", "CC · Single A")],
+      pools: vec![PoolConfig {
+        id: "pool-a".to_string(),
+        label: "Pool A".to_string(),
+        rule: PoolRule::Rotate,
+        members: vec![PoolMember { backend: "member-a".to_string() }],
+        visible: true,
+      }],
+      calls: CallsConfig::default(),
+    };
+    assert_eq!(run_backend_label(&backends, "pool-a", "member-a"), "Pool A → CC · Member A");
+    // The session switched to a single option after the run; the run still names the member it launched on.
+    assert_eq!(run_backend_label(&backends, "single-a", "member-a"), "CC · Member A");
+    // A run on an option outside the session's pool names that option.
+    assert_eq!(run_backend_label(&backends, "pool-a", "single-a"), "CC · Single A");
+  }
 
   async fn worker_context(
     label: &str,

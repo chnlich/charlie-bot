@@ -120,6 +120,8 @@ function buildPage({painted = [], filter = 'all', partial = true} = {}) {
     switching: false,
     masterThinking: false,
     THINKING_SINCE: null,
+    // The page always defines the label table; this page names no backend, so each id reads as itself.
+    BACKEND_LABELS: {},
   };
   context.globalThis = context;
   vm.createContext(context);

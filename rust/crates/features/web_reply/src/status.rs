@@ -12,8 +12,9 @@ use axum::http::StatusCode;
 use charliebot_agents::model_pool::POOL_MEMBER_FIELD;
 use charliebot_compat::file_urls;
 use charliebot_compat::file_urls::ScanContext;
+use charliebot_core::config::LabelStyle;
 use charliebot_core::config::sessions_dir_in;
-use charliebot_core::event_types::{WEB_REPLY, WEB_STATUS, WEB_STATUS_CONFIRMED};
+use charliebot_core::event_types::{BACKEND_LABEL, WEB_REPLY, WEB_STATUS, WEB_STATUS_CONFIRMED};
 use charliebot_core::json_loads::{self, LoadError};
 use charliebot_core::str_methods;
 use charliebot_core::text_repr::{JsonStyle, json_dumps};
@@ -882,6 +883,8 @@ struct StatusDescendant {
   metadata: SessionMetadata,
   status: WebStatus,
   clicked: Vec<(String, usize)>,
+  /// The compact `Pool → Member` label the row shows, for a session whose backend is a pool; `None` for one option.
+  backend_label: Option<String>,
 }
 
 /// Read the session's subtree: the direct children, then each descendant's metadata and stored status while that
@@ -890,13 +893,24 @@ struct StatusDescendant {
 /// A session deleted since the task-tree index was read is absent, so it answers no row.
 fn read_status_tree(store: &Store, session_id: &str) -> Result<StatusTree, WebReplyError> {
   let children = store.child_ids(session_id)?;
+  let config = store.config();
   let mut open = Vec::new();
   let mut statuses = Vec::new();
   for meta in store.open_descendants(session_id)? {
     let descendant_id = meta.id.clone();
+    let backend_label = config.backends.pool(&meta.backend).map(|_| {
+      let member = meta.extra(POOL_MEMBER_FIELD).and_then(Value::as_str).unwrap_or_default();
+      config.backends.session_model_label(&meta.backend, member, LabelStyle::Compact)
+    });
     if let Some(status) = stored_status(&meta)? {
       let clicked = if status.waiting.is_empty() { Vec::new() } else { store.facts_of(&descendant_id)?.clicked };
-      statuses.push(StatusDescendant { session_id: descendant_id.clone(), metadata: meta, status, clicked });
+      statuses.push(StatusDescendant {
+        session_id: descendant_id.clone(),
+        metadata: meta,
+        status,
+        clicked,
+        backend_label,
+      });
     }
     open.push(descendant_id);
   }
@@ -957,26 +971,22 @@ pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<
   let mut holders = HashSet::from([session_id.to_string()]);
   holders.extend(tree.open.iter().cloned());
   let derived = derived_items(features, Some(&holders)).await?;
-  let config = features.config.get().map_err(|error| WebReplyError::Failed(error.into()))?;
   let mut rows: Vec<(UtcDateTime, Value)> = Vec::new();
   for descendant in &tree.statuses {
     if descendant.status.waiting.is_empty() {
       continue;
     }
     let payload = status_payload_with_clicked(&descendant.status, &descendant.clicked);
-    let row = json!({
+    let mut row = json!({
       "session_id": descendant.session_id,
       "name": descendant.metadata.name,
-      "backend": descendant.metadata.backend,
-      (POOL_MEMBER_FIELD): descendant
-        .metadata
-        .extra(POOL_MEMBER_FIELD)
-        .and_then(Value::as_str)
-        .and_then(|member| config.backends.display_pool_member(&descendant.metadata.backend, member)),
       "updated_at": descendant.status.updated_at.to_str(),
       "waiting_version": payload["waiting_version"],
       "waiting": payload["waiting"],
     });
+    if let Some(label) = &descendant.backend_label {
+      row[BACKEND_LABEL] = json!(label);
+    }
     rows.push((descendant.status.updated_at, row));
   }
   rows.sort_by_key(|(updated_at, _)| std::cmp::Reverse(*updated_at));
@@ -991,18 +1001,15 @@ pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<
     let Some(now) = child.status.now.as_ref() else {
       continue;
     };
-    let row = json!({
+    let mut row = json!({
       "session_id": child_id,
       "name": child.metadata.name,
-      "backend": child.metadata.backend,
-      (POOL_MEMBER_FIELD): child
-        .metadata
-        .extra(POOL_MEMBER_FIELD)
-        .and_then(Value::as_str)
-        .and_then(|member| config.backends.display_pool_member(&child.metadata.backend, member)),
       "now": now,
       "updated_at": child.status.updated_at.to_str(),
     });
+    if let Some(label) = &child.backend_label {
+      row[BACKEND_LABEL] = json!(label);
+    }
     children.push((child.status.updated_at, row));
   }
   children.sort_by_key(|(updated_at, _)| std::cmp::Reverse(*updated_at));
@@ -1815,9 +1822,10 @@ mod tests {
       body["children"].as_array().unwrap().iter().map(|row| row["now"].as_str().unwrap()).collect::<Vec<_>>(),
       ["New step", "Old step"]
     );
-    // Each row names its backend; a child on one option holds no pool member to show.
-    assert!(body["children"].as_array().unwrap().iter().all(|row| row["backend"].is_string()));
-    assert!(body["children"].as_array().unwrap().iter().all(|row| row["pool_member"].is_null()));
+    // A child on one option carries no backend label: the row's own name already stands for it.
+    assert!(body["children"].as_array().unwrap().iter().all(|row| row.get("backend_label").is_none()));
+    assert!(body["children"].as_array().unwrap().iter().all(|row| row.get("backend").is_none()));
+    assert!(body["children"].as_array().unwrap().iter().all(|row| row.get("pool_member").is_none()));
   }
 
   #[tokio::test]
@@ -1839,7 +1847,56 @@ mod tests {
     let body = read_status(&home.features, &root).await.expect("the read answers");
 
     assert_eq!(body["children"].as_array().unwrap().len(), 1);
-    assert!(body["children"][0]["pool_member"].is_null());
+    assert!(body["children"][0].get("backend_label").is_none());
+  }
+
+  /// Record a session's backend and the member it ran on, as the store's metadata file carries them.
+  fn record_backend(home: &Home, session_id: &str, backend: &str, member: Option<&str>) {
+    let mut metadata =
+      home.features.store.read_metadata_fresh(session_id).expect("the metadata reads").expect("the session exists");
+    metadata.backend = backend.to_string();
+    metadata.set_extra(POOL_MEMBER_FIELD, member.map_or(Value::Null, |member| json!(member)));
+    fs::write(
+      home.features.store.metadata_path(session_id),
+      metadata.to_json_string(&home.features.registry.metadata_slots(), true),
+    )
+    .expect("the backend is recorded");
+  }
+
+  #[tokio::test]
+  async fn the_status_read_names_a_pool_child_with_its_compact_label() {
+    let home = Home::with_pool("pool-a", "Pool A", "member-a", "CC · Member A");
+    let root = home.manager("root", None).await;
+    let child = home.child(&root, "child").await;
+    record_backend(&home, &child, "pool-a", Some("member-a"));
+    write_stored_status(
+      &home,
+      &child,
+      json!({
+        "goal": null,
+        "now": "Child step",
+        "waiting": [{"text": "Pick a layout", "context": "The layout is open now.", "link": null}],
+        "updated_at": UtcDateTime::now().to_str(),
+      }),
+    )
+    .await;
+
+    let body = read_status(&home.features, &root).await.expect("the read answers");
+    assert_eq!(body["children"][0]["backend_label"], "Pool A → Member A");
+    assert_eq!(body["descendants"][0]["backend_label"], "Pool A → Member A");
+  }
+
+  #[tokio::test]
+  async fn the_status_read_reads_the_pool_label_for_a_member_the_pool_does_not_list() {
+    let home = Home::with_pool("pool-a", "Pool A", "member-a", "CC · Member A");
+    let root = home.manager("root", None).await;
+    let child = home.child(&root, "child").await;
+    record_backend(&home, &child, "pool-a", Some("member-b"));
+    set_status(&home.features, &child, r#"{"now": "Child step"}"#).await.expect("the child sets");
+
+    let body = read_status(&home.features, &root).await.expect("the read answers");
+
+    assert_eq!(body["children"][0]["backend_label"], "Pool A");
   }
 
   #[tokio::test]

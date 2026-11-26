@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use charliebot_core::config::BackendsConfig;
+use charliebot_core::config::{BackendsConfig, LabelStyle};
 use charliebot_core::event_types::{self, EventFields, is_truthy};
 use charliebot_core::int_text;
 use charliebot_core::model_id;
@@ -827,30 +827,46 @@ fn render_builtin<E: EventFields>(
     ChatEventType::QuotaFailover => {
       let from_backend = string_default(event, "from", "");
       let to_backend = string_default(event, "to", "");
+      // A pooled switch names the pool under `set`; its `from` and `to` are member ids. Each label keeps its raw id
+      // once, so a reader that searches the dialog for an id still finds the line. An event without a configured
+      // pool, such as one recorded before `set` existed, keeps its raw ids.
+      let pool = event
+        .field(event_types::QUOTA_FAILOVER_SET)
+        .filter(|value| is_truthy(*value))
+        .and_then(EventFields::as_str_field)
+        .filter(|pool| backends.pool(pool).is_some());
+      let (from_shown, to_shown, from_label) = match pool {
+        Some(pool) => {
+          let from_label = backends.session_model_label(&from_backend, "", LabelStyle::Full);
+          let to_label = backends.session_model_label(pool, &to_backend, LabelStyle::Full);
+          (label_with_id(&from_label, &from_backend), label_with_id(&to_label, &to_backend), from_label)
+        }
+        None => (from_backend.to_string(), to_backend.to_string(), from_backend.to_string()),
+      };
       let recovers_at = event.field(event_types::QUOTA_FAILOVER_RECOVERS_AT).filter(|value| is_truthy(*value));
       let recovery =
-        recovers_at.map_or_else(String::new, |value| format!("; {from_backend} recovers at {}", event_str(value)));
+        recovers_at.map_or_else(String::new, |value| format!("; {from_label} recovers at {}", event_str(value)));
       let reason = event.field(event_types::QUOTA_FAILOVER_REASON).and_then(EventFields::as_str_field);
       let head = match reason {
         Some(event_types::QUOTA_REASON_NEAR_EXHAUSTION) => {
-          format!("Near quota exhaustion on {from_backend}: switched to {to_backend}")
+          format!("Near quota exhaustion on {from_shown}: switched to {to_shown}")
         }
         Some(event_types::QUOTA_REASON_SUBSCRIPTION_RESET) => {
-          format!("Subscription quota reset: switched {from_backend} → {to_backend}")
+          format!("Subscription quota reset: switched from {from_shown} to {to_shown}")
         }
         Some(event_types::QUOTA_REASON_ACCESS_REFUSED) => {
-          format!("Access refused on {from_backend}: switched to {to_backend}")
+          format!("Access refused on {from_shown}: switched to {to_shown}")
         }
         Some(event_types::QUOTA_REASON_TIMEOUT) => {
-          format!("Timeout on {from_backend}: switched to {to_backend}")
+          format!("Timeout on {from_shown}: switched to {to_shown}")
         }
         Some(event_types::QUOTA_REASON_ITERATION_FAILURE) => {
-          format!("Iteration failed on {from_backend}: switched to {to_backend}")
+          format!("Iteration failed on {from_shown}: switched to {to_shown}")
         }
         Some(event_types::QUOTA_REASON_QUOTA_ERROR) | None => {
-          format!("Quota exhausted on {from_backend}: switched to {to_backend}")
+          format!("Quota exhausted on {from_shown}: switched to {to_shown}")
         }
-        Some(reason) => format!("Quota change on {from_backend}: switched to {to_backend} ({reason})"),
+        Some(reason) => format!("Quota change on {from_shown}: switched to {to_shown} ({reason})"),
       };
       let handoff = event
         .field(event_types::QUOTA_FAILOVER_SUMMARY)
@@ -1650,6 +1666,12 @@ fn delegated_member<E: EventFields>(backends: &BackendsConfig, event: &E) -> Val
 
 fn string_default<E: EventFields>(event: &E, key: &str, default: &str) -> String {
   event.field(key).map_or_else(|| default.to_string(), event_str)
+}
+
+/// A label with the raw id after it, so a search for the id still finds the line. A label that is already the raw id
+/// adds nothing.
+fn label_with_id(label: &str, id: &str) -> String {
+  if label == id { label.to_string() } else { format!("{label} ({id})") }
 }
 
 fn required_field<'a, E: EventFields>(event: &'a E, key: &str) -> StoreResult<&'a E> {
@@ -2492,6 +2514,68 @@ mod tests {
         "{reason}"
       );
     }
+  }
+
+  #[test]
+  fn a_pooled_quota_failover_names_the_pool_members_and_keeps_each_raw_id() {
+    use charliebot_core::config::{BackendOption, CallsConfig, PoolConfig, PoolMember, PoolRule};
+    let option = |id: &str, label: &str| BackendOption {
+      id: id.to_string(),
+      label: label.to_string(),
+      model: "synthetic-model".to_string(),
+      prompt_overlay: None,
+      billing: None,
+      backend_type: "synthetic".to_string(),
+      type_fields: Default::default(),
+      visible: true,
+    };
+    let backends = BackendsConfig {
+      routing: None,
+      options: vec![option("member-a", "CC · Member A"), option("member-b", "CC · Member B")],
+      pools: vec![PoolConfig {
+        id: "pool-a".to_string(),
+        label: "Pool A".to_string(),
+        rule: PoolRule::Rotate,
+        members: vec![PoolMember { backend: "member-a".to_string() }, PoolMember { backend: "member-b".to_string() }],
+        visible: true,
+      }],
+      calls: CallsConfig::default(),
+    };
+    let mut aggregator = MessageAggregator::new(0, true, backends.clone());
+    let deltas = aggregator
+      .feed(&json!({
+        "type": "quota_failover",
+        "set": "pool-a",
+        "from": "member-a",
+        "to": "member-b",
+        "reason": event_types::QUOTA_REASON_SUBSCRIPTION_RESET,
+        "recovers_at": "2030-01-02T03:04+00:00",
+      }))
+      .unwrap();
+    let content = deltas[0]["message"]["content"].as_str().unwrap();
+    assert_eq!(
+      content,
+      "Subscription quota reset: switched from CC · Member A (member-a) to Pool A → CC · Member B (member-b); \
+       CC · Member A recovers at 2030-01-02T03:04+00:00"
+    );
+    // A reader that searches the dialog for either raw id still finds the line.
+    assert!(content.contains("member-a") && content.contains("member-b"));
+
+    // The other reasons label each side too.
+    let mut aggregator = MessageAggregator::new(0, true, backends);
+    let deltas = aggregator
+      .feed(&json!({
+        "type": "quota_failover",
+        "set": "pool-a",
+        "from": "member-a",
+        "to": "member-b",
+        "reason": event_types::QUOTA_REASON_TIMEOUT,
+      }))
+      .unwrap();
+    assert_eq!(
+      deltas[0]["message"]["content"],
+      "Timeout on CC · Member A (member-a): switched to Pool A → CC · Member B (member-b)"
+    );
   }
 
   #[test]

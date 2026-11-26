@@ -88,6 +88,13 @@ test('a pool delegation names its pool and member from the event, and an event w
   const context = loadChatRendering();
   context.BACKEND_OPTIONS = {'claude-opus-5': 'CC · Opus'};
   context.BACKEND_POOLS = [{id: 'human-communication', label: 'Human communication'}];
+  context.BACKEND_LABELS = {
+    'human-communication': {
+      '': ['Human communication', 'Human communication'],
+      'claude-opus-5': ['Human communication → CC · Opus', 'Human communication → Opus'],
+    },
+    'claude-opus-5': {'': ['CC · Opus', 'Opus']},
+  };
 
   const pooled = context.renderMessage({
     role: 'task_delegated',
@@ -114,6 +121,13 @@ test('a pool delegation card names its pool and compact member on the live state
   const context = loadChatRendering();
   context.BACKEND_OPTIONS = {'claude-opus-5': 'CC · Opus'};
   context.BACKEND_POOLS = [{id: 'human-communication', label: 'Human communication'}];
+  context.BACKEND_LABELS = {
+    'human-communication': {
+      '': ['Human communication', 'Human communication'],
+      'claude-opus-5': ['Human communication → CC · Opus', 'Human communication → Opus'],
+    },
+    'claude-opus-5': {'': ['CC · Opus', 'Opus']},
+  };
 
   const html = context.renderMessage({
     role: 'task_delegated',
@@ -131,6 +145,13 @@ test('a pool delegation reads the server-filtered member rather than the pool na
   const context = loadChatRendering();
   context.BACKEND_OPTIONS = {'claude-opus-5': 'CC · Opus'};
   context.BACKEND_POOLS = [{id: 'human-communication', label: 'Human communication'}];
+  context.BACKEND_LABELS = {
+    'human-communication': {
+      '': ['Human communication', 'Human communication'],
+      'claude-opus-5': ['Human communication → CC · Opus', 'Human communication → Opus'],
+    },
+    'claude-opus-5': {'': ['CC · Opus', 'Opus']},
+  };
 
   // When --backend passes the pool id, delegate_invocation.backend carries the pool id while msg.backend carries the member.
   const active = context.renderMessage({

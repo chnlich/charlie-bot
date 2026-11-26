@@ -147,6 +147,8 @@ function baseSessionContext(overrides = {}) {
     showScrollToBottom: () => {},
     showToast: () => {},
     BACKEND_OPTIONS: overrides.BACKEND_OPTIONS || {},
+    // index.html's server-rendered label table: BACKEND_LABELS[backend][member || ""] = [full, compact].
+    BACKEND_LABELS: overrides.BACKEND_LABELS || {},
     BACKEND_TYPES: overrides.BACKEND_TYPES || {},
     BACKEND_ALIASES: overrides.BACKEND_ALIASES || {},
     // index.html's picker list: the config's visible options and pools, options first. The backend

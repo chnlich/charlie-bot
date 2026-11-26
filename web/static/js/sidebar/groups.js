@@ -1031,6 +1031,7 @@ const GLOBALS = {
   restoreWorkspaceFromMemory,
   rowsChangeMembership,
   toggleTreeNode,
+  installSidebarLabelTap,
 };
 const SIDEBAR_ONLY = {
   sessionMenuItemSources,
@@ -1047,7 +1048,24 @@ const SIDEBAR_ONLY = {
   renderGroupedSessionList,
   expandSessionColumns,
 };
+// The phone drawer's full model label: a tap on a row's truncated `.session-backend` expands it in place, and a
+// second tap collapses it. The capture listener runs before the row's own onclick, so the tap neither switches
+// sessions nor opens a scheduled row; the rest of the row still does. Desktop keeps the hover title.
+function installSidebarLabelTap() {
+  const sidebar = document.getElementById('sidebar');
+  if (!sidebar) return;
+  sidebar.addEventListener('click', function(event) {
+    if (!window.matchMedia('(max-width: 768px)').matches) return;
+    const label = event.target && event.target.closest ? event.target.closest('.session-backend') : null;
+    if (!label || !sidebar.contains(label)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    label.classList.toggle('session-backend--full');
+  }, true);
+}
+
 watchSessionListHeight();
+installSidebarLabelTap();
 Sidebar.wire(GLOBALS, SIDEBAR_ONLY);
 
 })();

@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use axum::Router;
 use axum::body::Body;
-use charliebot_core::config::{BackendOption, CREDENTIALS_FILENAME};
+use charliebot_core::config::{BackendOption, CREDENTIALS_FILENAME, PoolConfig, PoolMember, PoolRule};
 use charliebot_core::credentials::load_credentials;
 use charliebot_core::hot_reload::HotReload;
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
@@ -113,6 +113,11 @@ impl Home {
     Self::build("", PackageSet::Full)
   }
 
+  /// A home whose backend config lists one pool over one member, for the Status rows' pool label.
+  pub fn with_pool(pool: &str, pool_label: &str, member: &str, member_label: &str) -> Self {
+    Self::build_pooled("", PackageSet::Full, Some((pool, pool_label, member, member_label)))
+  }
+
   pub fn with_config(config_yaml: &str) -> Self {
     Self::build(config_yaml, PackageSet::Full)
   }
@@ -127,6 +132,10 @@ impl Home {
   }
 
   fn build(config_yaml: &str, packages: PackageSet) -> Self {
+    Self::build_pooled(config_yaml, packages, None)
+  }
+
+  fn build_pooled(config_yaml: &str, packages: PackageSet, pool: Option<(&str, &str, &str, &str)>) -> Self {
     let dir = tempfile::tempdir().expect("temporary directory exists");
     fs::write(dir.path().join("config.yaml"), config_yaml).expect("the synthetic config writes");
     if matches!(packages, PackageSet::Full) {
@@ -165,6 +174,25 @@ impl Home {
       type_fields: Default::default(),
       visible: true,
     });
+    if let Some((pool_id, pool_label, member_id, member_label)) = pool {
+      loaded.backends.options.push(BackendOption {
+        id: member_id.to_string(),
+        label: member_label.to_string(),
+        model: "synthetic-member-model".to_string(),
+        prompt_overlay: None,
+        billing: None,
+        backend_type: "synthetic".to_string(),
+        type_fields: Default::default(),
+        visible: true,
+      });
+      loaded.backends.pools.push(PoolConfig {
+        id: pool_id.to_string(),
+        label: pool_label.to_string(),
+        rule: PoolRule::Rotate,
+        members: vec![PoolMember { backend: member_id.to_string() }],
+        visible: true,
+      });
+    }
     loaded.backends.calls = [(
       charliebot_core::config::CallClass::NewSession,
       charliebot_core::config::CallTarget::Backend("synthetic-web".to_string()),

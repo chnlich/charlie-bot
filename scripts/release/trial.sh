@@ -665,6 +665,9 @@ stop_server_pid() {
     fi
   else
     printf 'SIGTERM check=%s pid=%s was_not_running=1\n' "$check_number" "$pid"
+    if (( SERVER_EXIT_NAMED == 0 )); then
+      stop_cause="server pid $pid was not running when the trial stopped it"
+    fi
   fi
   if (( waitable == 1 )); then
     if wait "$pid"; then
@@ -1114,6 +1117,7 @@ wait_server_gone() {
 # ended. A scope that ended by its memory cap is the memory-cap failure. Any other end is the RunWait failure, and its
 # CAUSE names the scope's state, so a scope still active at the bound is never reported as a memory cap.
 report_server_exit() {
+  SERVER_EXIT_NAMED=1
   if server_memory_cap_killed; then
     memory_cap_failed
     return
@@ -1124,6 +1128,26 @@ report_server_exit() {
   else
     printf 'CAUSE serve: server pid %s exited while the trial waited for its runs; %s\n' "$SERVER_PID" "$SCOPE_CAUSE"
   fi
+}
+
+# verify_server_running succeeds while the trial server runs. A server that is gone is named by report_server_exit and
+# fails the side, and a pid that cannot be read fails the side too. The wait calls it at the top of each pass and before
+# its PASS verdict, so a RunWait PASS is printed only for a server that still runs.
+verify_server_running() {
+  local status
+  if server_is_gone; then
+    cleanup_failed=1
+    report_server_exit
+    return 1
+  else
+    status=$?
+    if (( status != 1 )); then
+      cleanup_failed=1
+      printf 'FAIL serve RunWait: the current trial server pid cannot be read\n'
+      return 1
+    fi
+  fi
+  return 0
 }
 
 # memory_cap_failed: the FAIL and CAUSE lines of a serve whose memory cap ended the server. The kernel keeps no peak
@@ -1380,6 +1404,8 @@ SERVE_WAIT_RUNS_SECONDS=600
 # RUN_CAUSE to the session that holds the run or to the read that failed.
 RUN_ACTIVE=0
 RUN_CAUSE=
+# SERVER_EXIT_NAMED is 1 once report_server_exit has named a gone server, so the teardown does not name it again.
+SERVER_EXIT_NAMED=0
 # RUN_WAIT_STARTED is the SECONDS value when the run wait began. Every read of the wait shares its bound.
 RUN_WAIT_STARTED=0
 
@@ -1625,17 +1651,8 @@ run_serve_mode() {
   wait_started=$SECONDS
   RUN_WAIT_STARTED=$wait_started
   while :; do
-    if server_is_gone; then
-      cleanup_failed=1
-      report_server_exit
+    if ! verify_server_running; then
       break
-    else
-      server_status=$?
-      if (( server_status != 1 )); then
-        cleanup_failed=1
-        printf 'FAIL serve RunWait: the current trial server pid cannot be read\n'
-        break
-      fi
     fi
     if ! serve_home_has_active_run; then
       # A read that fails because the server exited is classified by the first check of the next pass, which names a
@@ -1661,6 +1678,8 @@ run_serve_mode() {
       break
     fi
     if (( RUN_ACTIVE == 0 )); then
+      # The run scan can outlast the server's exit, so the PASS below needs a server that still runs after the scan.
+      verify_server_running
       break
     fi
     if (( SECONDS - wait_started >= SERVE_WAIT_RUNS_SECONDS )); then

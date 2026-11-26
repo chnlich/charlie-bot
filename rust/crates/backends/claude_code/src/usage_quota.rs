@@ -425,8 +425,16 @@ pub async fn renew_login(
   if file.expires_at_ms - now_millis() >= claude_accounts::RENEWABLE_TOKEN_MAX_SECONDS * 1000 {
     return Ok(skipped(label, trigger, "band", None));
   }
-  let hosts = match claude_accounts::improve_hosts(cron_dir) {
-    Ok(hosts) => hosts,
+  let hold_dir = login_dir.to_path_buf();
+  let cron = cron_dir.to_path_buf();
+  let now = claude_accounts::now_or(None);
+  let read = tokio::task::spawn_blocking(move || {
+    claude_accounts::improve_hosts(&cron).map(|hosts| claude_accounts::HoldCheck::new(hosts, now).hold(&hold_dir))
+  })
+  .await
+  .context("the hold check task failed")?;
+  let hold = match read {
+    Ok(hold) => hold,
     Err(error) => {
       tracing::warn!(
         target: "charliebot_agents",
@@ -438,9 +446,6 @@ pub async fn renew_login(
       return Ok(skipped(label, trigger, "unreadable", Some("unreadable:cron_tasks".to_string())));
     }
   };
-  let hold_dir = login_dir.to_path_buf();
-  let check = claude_accounts::HoldCheck::new(hosts, claude_accounts::now_or(None));
-  let hold = tokio::task::spawn_blocking(move || check.hold(&hold_dir)).await.context("the hold check task failed")?;
   match hold {
     claude_accounts::Hold::Free => {}
     claude_accounts::Hold::Held(holder) => return Ok(skipped(label, trigger, "held", Some(holder))),

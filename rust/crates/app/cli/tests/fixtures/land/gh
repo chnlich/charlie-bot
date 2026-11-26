@@ -40,6 +40,33 @@ json_escape() {
 group=$1
 action=$2
 shift 2
+# `gh api -i` prints the status line and response headers before the body, and the landing's CI reads
+# parse them. The endpoint is the first argument that is not an option.
+include_headers=
+if [[ $group == api && $action == -i ]]; then
+  include_headers=1
+  action=
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      -H) shift 2 ;;
+      *)
+        action=$1
+        shift
+        break
+        ;;
+    esac
+  done
+fi
+
+# respond prints the body alone, or behind a 200 status line and headers for a `gh api -i` call.
+respond() {
+  if [[ -n $include_headers ]]; then
+    printf 'HTTP/2.0 200 OK\nContent-Type: application/json\n\n%s\n' "$1"
+  else
+    printf '%s\n' "$1"
+  fi
+}
+
 positional=()
 declare -A option=()
 while [[ $# -gt 0 ]]; do
@@ -111,7 +138,7 @@ case "$group $action" in
       git --git-dir="$origin" update-ref refs/heads/main "$(cat "$state_dir/advance-main")"
       rm "$state_dir/advance-main"
     fi
-    printf '{"workflow_runs":[{"name":"CI","path":".github/workflows/ci.yml","event":"pull_request","status":"completed","conclusion":"success"}]}\n'
+    respond '{"workflow_runs":[{"name":"CI","path":".github/workflows/ci.yml","event":"pull_request","status":"completed","conclusion":"success"}]}'
     ;;
   api\ repos/*/pulls/*)
     number=${action##*/}
@@ -124,10 +151,10 @@ case "$group $action" in
     printf '{"number":%s}\n' "$number"
     ;;
   api\ repos/*/commits/*/check-runs\?per_page=100)
-    printf '{"check_runs":[{"name":"rust-test","conclusion":"success","completed_at":"2026-11-11T00:00:00Z","html_url":"https://github.test/checks/1"}]}\n'
+    respond '{"check_runs":[{"name":"rust-test","conclusion":"success","completed_at":"2026-11-11T00:00:00Z","html_url":"https://github.test/checks/1"}]}'
     ;;
   api\ repos/*/commits/*/status)
-    printf '{"statuses":[]}\n'
+    respond '{"statuses":[]}'
     ;;
   *)
     printf 'the gh stub has no answer for: gh %s %s\n' "$group" "$action" >&2

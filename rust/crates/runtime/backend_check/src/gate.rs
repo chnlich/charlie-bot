@@ -101,4 +101,37 @@ mod tests {
     );
     assert!(describe(&hit, None).starts_with("/repo/scripts/run.sh:3 "));
   }
+
+  /// The `k8s/environ/fpt-k8s/helmfile.yaml` exemption passes the three Helm release and values file names at that
+  /// path, refuses `muse-voice-transcribe-1.0` added to the same file, and refuses the three names at another path.
+  #[test]
+  fn fpt_k8s_helmfile_exemption_keeps_only_the_three_names_at_that_path() {
+    let root = tempfile::tempdir().unwrap();
+    let repo = fs::canonicalize(root.path()).unwrap();
+    let fpt_dir = repo.join("k8s/environ/fpt-k8s");
+    let other_dir = repo.join("k8s/environ/xinjiang");
+    fs::create_dir_all(&fpt_dir).unwrap();
+    fs::create_dir_all(&other_dir).unwrap();
+
+    let three_names = "# muse-launcher\n- name: muse-bundle-eval\nvalues:\n- ./muse-bundle-eval.values.yaml\n";
+    let helmfile = fpt_dir.join("helmfile.yaml");
+    let other_file = other_dir.join("helmfile.yaml");
+    fs::write(&helmfile, three_names).unwrap();
+    fs::write(&other_file, three_names).unwrap();
+
+    let vocab = Vocabulary::load(&Registry::new(), &repo.join("home"), None).unwrap();
+    let scan_roots = roots(Some(&repo), &repo.join("home")).unwrap();
+
+    let pass = open_hits(&vocab, &scan_roots, std::slice::from_ref(&helmfile)).unwrap();
+    assert!(pass.is_empty(), "{pass:?}");
+
+    let other_hits = open_hits(&vocab, &scan_roots, &[other_file]).unwrap();
+    let other_values: Vec<&str> = other_hits.iter().map(|hit| hit.value.as_str()).collect();
+    assert_eq!(other_values, vec!["muse-launcher", "muse-bundle-eval", "muse-bundle-eval.values.yaml"]);
+
+    fs::write(&helmfile, format!("{three_names}model: muse-voice-transcribe-1.0\n")).unwrap();
+    let model_hits = open_hits(&vocab, &scan_roots, &[helmfile]).unwrap();
+    assert_eq!(model_hits.len(), 1, "{model_hits:?}");
+    assert_eq!((model_hits[0].class, model_hits[0].value.as_str()), (Class::ModelId, "muse-voice-transcribe-1.0"));
+  }
 }

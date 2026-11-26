@@ -18,6 +18,8 @@ const BACKEND_CRATES: &str = "rust/crates/backends/";
 pub enum Values {
   /// These exact words: a constant's value, or a directory or kind name.
   Words(&'static [&'static str]),
+  /// These exact spellings in a model-id position, such as a third-party name that shares a model family prefix.
+  ModelIds(&'static [&'static str]),
   /// A backend CLI run that carries no model, option or pool: the program's name and the marker that follows it.
   Invocation { command: &'static str, marker: &'static str },
   /// Any model spelling in the file, whichever class the vocabulary gives it. The file owns the spellings it holds: a
@@ -39,7 +41,7 @@ pub struct Exemption {
 }
 
 /// The reviewed rows. Each row's values are the sites that the match definition finds and that the owner keeps.
-static EXEMPTIONS: [Exemption; 7] = [
+static EXEMPTIONS: [Exemption; 8] = [
   Exemption {
     path: "scripts/sync-skills.sh",
     values: Values::Invocation { command: "claude", marker: "-p" },
@@ -75,6 +77,16 @@ static EXEMPTIONS: [Exemption; 7] = [
     values: Values::OwnHarness,
     owner: "backend crates: each crate's harness binary, argv and usage kind, which its type registers",
   },
+  Exemption {
+    path: "k8s/environ/fpt-k8s/helmfile.yaml",
+    // Split the prefix so `rust_scan` does not flag the exemption table entry itself as a model literal.
+    values: Values::ModelIds(&[
+      concat!("muse", "-bundle-eval"),
+      concat!("muse", "-launcher"),
+      concat!("muse", "-bundle-eval.values.yaml"),
+    ]),
+    owner: "another team's Helm release and file names in the deployments repo, not a CharlieBot backend",
+  },
 ];
 
 /// The row that exempts a site, or `None` when the site must be fixed. `path` is the site's file under its root.
@@ -97,6 +109,7 @@ impl Values {
   fn covers(self, path: &str, class: Class, value: &str) -> bool {
     match self {
       Values::Words(words) => class == Class::FixedCommand && words.contains(&value),
+      Values::ModelIds(words) => class == Class::ModelId && words.contains(&value),
       Values::Invocation { command, marker } => {
         class == Class::FixedCommand && value.split_once(' ') == Some((command, marker))
       }
@@ -217,10 +230,24 @@ mod tests {
     assert!(find("rust/crates/app/cli/src/commands/backend.rs", Class::FixedCommand, "codex -p").is_none());
   }
 
-  /// Every row names an owner, and the reviewed rows are seven: six owned values and the backend crates.
+  #[test]
+  fn fpt_k8s_helmfile_row_exempts_its_three_names_only() {
+    let path = "k8s/environ/fpt-k8s/helmfile.yaml";
+    for value in ["muse-bundle-eval", "muse-launcher", "muse-bundle-eval.values.yaml"] {
+      assert_row(
+        path,
+        Class::ModelId,
+        value,
+        &[(Class::ModelId, "muse-voice-transcribe-1.0"), (Class::OptionId, value), (Class::DefaultValue, value)],
+      );
+      assert!(find("k8s/environ/xinjiang/helmfile.yaml", Class::ModelId, value).is_none());
+    }
+  }
+
+  /// Every row names an owner, and the reviewed rows are eight: seven owned values and the backend crates.
   #[test]
   fn every_row_names_its_owner() {
-    assert_eq!(EXEMPTIONS.len(), 7);
+    assert_eq!(EXEMPTIONS.len(), 8);
     assert!(EXEMPTIONS.iter().all(|row| !row.owner.is_empty()));
   }
 }

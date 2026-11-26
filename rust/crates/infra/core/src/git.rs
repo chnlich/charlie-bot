@@ -1,6 +1,7 @@
 //! Git facts the server shares: the reads it makes in the repository root, the plain run whose exit status and
-//! streams a caller reads, the timed run that an async caller awaits, the arguments of the object-existence probe and
-//! of the merge-base queries, and the name of the quarantine directory beside the worktrees.
+//! streams a caller reads, the timed run that an async caller awaits, the arguments of the object-existence probe,
+//! of the merge-base queries and of the worktree add, remove and prune commands, and the name of the quarantine
+//! directory beside the worktrees.
 
 use std::path::Path;
 use std::process::{Command, Output, Stdio};

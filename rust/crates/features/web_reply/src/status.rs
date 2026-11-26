@@ -541,8 +541,8 @@ pub async fn record_ask_check(
   record_item_check(features, session_id, cold_read::ASK, raw_item, backend, answer).await
 }
 
-/// Return the waiting items in `text` whose current digest has no matching ask-check event, the kept items that still
-/// need a settle cold read, and the turn's record when `settle` is non-empty.
+/// Return the waiting items in `text` whose current digest has no matching `ask` cold-read record, the kept items that
+/// still need a settle cold read, and the turn's record when `settle` is non-empty.
 pub async fn unread_waiting(features: &FeatureContext, session_id: &str, text: &str) -> Result<Value, WebReplyError> {
   let meta = reply::require_manager_session(features, session_id).await?;
   let patch = parse_patch(text)?;
@@ -2088,7 +2088,7 @@ mod tests {
     let events = home.events(&sid);
     assert!(reply::for_you_entries(&home.features.store, &events).unwrap().is_empty());
     let compact = events.iter().map(charliebot_store::ChatEvent::from_value).collect::<Vec<_>>();
-    let messages = home.features.store.events_to_messages(&compact).expect("the ask-check event renders");
+    let messages = home.features.store.events_to_messages(&compact).expect("the ask cold-read record renders");
     assert!(messages.iter().any(|message| message["role"] == COLD_READ_CHECK && message["name"] == cold_read::ASK));
   }
 
@@ -3205,6 +3205,13 @@ mod tests {
     for body in bodies {
       // The conversation itself is public to the page; the assembled turn record and the settle list are not.
       let text = body.to_string();
+      assert!(!text.contains("turn_text"), "{text}");
+      assert!(!text.contains("\"settle\""), "{text}");
+    }
+    // The live frames the socket sends for each stored event carry neither either.
+    for (index, event) in home.events(&sid).iter().enumerate() {
+      let frames = charliebot_store::streaming::socket_frames(event, index, Vec::new()).expect("the frames build");
+      let text = Value::Array(frames).to_string();
       assert!(!text.contains("turn_text"), "{text}");
       assert!(!text.contains("\"settle\""), "{text}");
     }

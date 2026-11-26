@@ -828,7 +828,7 @@ async fn test_unmentioned_message_arms_follow_and_compares_ids_as_integers() {
 }
 
 #[tokio::test]
-async fn test_archived_session_revives_and_arms_on_an_unmentioned_message() {
+async fn test_archived_session_skips_an_unmentioned_message() {
   let home = Home::new(true).await;
   let sid = summon_session_id(GUILD, THREAD);
   home.thread_session(&sid, origin(THREAD), None).await;
@@ -836,15 +836,10 @@ async fn test_archived_session_revives_and_arms_on_an_unmentioned_message() {
   let mut payload = message("1000000000000000100", THREAD);
   payload["mentions"] = json!([]);
   payload["content"] = json!("the follow-up");
-  assert_eq!(
-    handle_message_create(&payload, &home.features, discord_client(&home), BOT_USER).await.unwrap(),
-    Some(sid.clone())
-  );
-  assert_eq!(home.features.store.get_session(&sid).await.unwrap().unwrap().status, SessionStatus::Active);
+  assert_eq!(handle_message_create(&payload, &home.features, discord_client(&home), BOT_USER).await.unwrap(), None);
+  assert_eq!(home.features.store.get_session(&sid).await.unwrap().unwrap().status, SessionStatus::Archived);
   let manager = home.features.startup.require::<Arc<TriggerManager>>().unwrap();
-  assert!(
-    manager.list_triggers(&sid).await.unwrap().iter().any(|trigger| trigger.message.starts_with(FOLLOW_TRIGGER_PREFIX))
-  );
+  assert!(manager.list_triggers(&sid).await.unwrap().is_empty());
 }
 
 #[tokio::test]

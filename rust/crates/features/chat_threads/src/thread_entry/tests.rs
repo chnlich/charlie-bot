@@ -1603,7 +1603,7 @@ async fn accept_summon_reopens_an_archived_ancestor_chain_and_admits_the_mention
   assert_eq!(launched_session, "s1");
   assert_eq!(pending.len(), 1);
   assert_eq!(pending[0]["content"], "fakechat summon");
-  assert_eq!(pending[0]["fields"]["fakechat"], block);
+  assert_eq!(pending[0]["fakechat"], block);
 }
 
 #[tokio::test]

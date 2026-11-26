@@ -1,11 +1,12 @@
-//! The `antigravity` backend type: `agy --print`, whose JSON envelope the runner reads once
-//! the process has exited. Token usage comes from CharlieBot's own run logs; quota-panel readings come from the CLI's
-//! `/usage` command.
+//! The `antigravity` backend type: `agy acp`, which runs each turn over the Agent Client Protocol. The turn's output is
+//! translated from the raw log and its live messages are sent over the same protocol. Quota-panel readings come from the
+//! CLI's `/usage` command.
 
 mod antigravity_cli;
 mod api;
 mod envelope;
 pub mod factory;
+mod lifecycle;
 mod options;
 mod usage_quota;
 

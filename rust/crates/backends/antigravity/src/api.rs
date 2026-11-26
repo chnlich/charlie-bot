@@ -4,12 +4,12 @@
 use std::sync::Arc;
 
 use charliebot_agents::cli_base::CliHost;
-use charliebot_registry::backend::{BackendTraits, BackendTypeRegistration, ResumeStyle};
+use charliebot_registry::backend::{BackendLifecycle, BackendTraits, BackendTypeRegistration, ResumeStyle};
 use charliebot_registry::usage::{NativeCacheRead, UsageSource};
 use charliebot_registry::{Registry, RegistryError, registration_step};
 
 use crate::options::{self, TYPE_NAME};
-use crate::{factory, usage_quota};
+use crate::{factory, lifecycle, usage_quota};
 
 /// The ledger's source value and the usage page's card title for antigravity's usage.
 pub const USAGE_SOURCE: &str = "Antigravity";
@@ -38,7 +38,7 @@ pub fn register_with_host(registry: &mut Registry, host: CliHost) -> Result<(), 
     },
     option_model: options::option_model,
     factory: Arc::new(factory::AntigravityFactory::new(host)),
-    lifecycle: None,
+    lifecycle: Some(Arc::new(lifecycle::AntigravityLifecycle) as Arc<dyn BackendLifecycle>),
     translate_fallback: false,
   })?;
   registry.option_schema(TYPE_NAME, options::SCHEMA)?;

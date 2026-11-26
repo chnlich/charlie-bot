@@ -342,6 +342,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "charliebot-acp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "charliebot-agents",
+ "charliebot-core",
+ "charliebot-registry",
+ "charliebot-store",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "charliebot-agents"
 version = "0.1.0"
 dependencies = [
@@ -393,12 +407,12 @@ name = "charliebot-antigravity"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "charliebot-acp",
  "charliebot-agents",
  "charliebot-core",
  "charliebot-registry",
  "charliebot-store",
  "futures-util",
- "regex",
  "serde_json",
  "serde_yaml",
  "tempfile",

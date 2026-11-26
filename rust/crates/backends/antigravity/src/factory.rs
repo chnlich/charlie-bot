@@ -5,7 +5,6 @@ use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_registry::backend::{AgentBackend, BackendFactory, LaunchArgs};
 
 use super::antigravity_cli::AntigravityBackend;
-use super::options;
 use charliebot_agents::cli_base::CliHost;
 
 /// The factory that builds one antigravity backend per launch.
@@ -28,7 +27,6 @@ impl BackendFactory for AntigravityFactory {
   ) -> anyhow::Result<Box<dyn AgentBackend>> {
     let option = option.context("the antigravity backend type needs its backends.options entry")?;
     let model = option.required_model("backend").map_err(anyhow::Error::msg)?;
-    let print_timeout = options::print_timeout(&option.type_fields).map_err(anyhow::Error::msg)?;
     let agy_bin = self
       .host
       .resolve_binary("agy")?
@@ -36,6 +34,6 @@ impl BackendFactory for AntigravityFactory {
       .into_string()
       .map_err(|path| anyhow::anyhow!("the agy binary path is not valid Unicode: {path:?}"))?;
     let user_local_bin = self.host.user_local_bin().to_string_lossy().into_owned();
-    Ok(Box::new(AntigravityBackend::from_launch(agy_bin, user_local_bin, &model, print_timeout, launch)))
+    Ok(Box::new(AntigravityBackend::from_launch(agy_bin, user_local_bin, &model, launch)?))
   }
 }

@@ -1,32 +1,19 @@
-//! The antigravity option fields: `print_timeout`, the `agy --print` turn budget.
+//! The antigravity option fields. A turn runs `agy acp` with no backend-specific setting, so the option takes no field.
 
-use charliebot_core::config::{OptionField, OptionFieldDefault};
+use charliebot_core::config::OptionField;
 use charliebot_registry::option_model::{self, UnknownOptionFieldStyle};
-use serde_yaml::{Mapping, Value};
+use serde_yaml::Mapping;
 
 /// The backend type this package registers: the `type` a `backends.options` entry names, and the key `SCHEMA` below
 /// is registered under.
 pub const TYPE_NAME: &str = "antigravity";
 
-const PRINT_TIMEOUT: &str = "print_timeout";
+/// The `antigravity` option's type-specific fields: none.
+pub const SCHEMA: &[OptionField] = &[];
 
-/// The `antigravity` option's type-specific fields in `AntigravityBackend`'s declaration order, each with the default
-/// an entry that omits it takes. `charliebot config get backends` renders them.
-pub const SCHEMA: &[OptionField] = &[OptionField::field(PRINT_TIMEOUT, OptionFieldDefault::Null)];
-
-/// The `print_timeout` the option sets, or `None` when it sets none. Any other key is refused.
-pub fn print_timeout(fields: &Mapping) -> Result<Option<String>, String> {
-  option_model::validate_field_names(fields, SCHEMA, TYPE_NAME, UnknownOptionFieldStyle::Unknown)?;
-  match fields.get(PRINT_TIMEOUT) {
-    None | Some(Value::Null) => Ok(None),
-    Some(Value::String(timeout)) => Ok(Some(timeout.clone())),
-    Some(_) => Err("antigravity option print_timeout must be a string or null".to_string()),
-  }
-}
-
-/// The option model the registry runs over each `antigravity` entry at config load.
+/// The option model the registry runs over each `antigravity` entry at config load. Every key is refused.
 pub fn option_model(fields: &Mapping) -> Result<(), String> {
-  print_timeout(fields).map(|_| ())
+  option_model::validate_field_names(fields, SCHEMA, TYPE_NAME, UnknownOptionFieldStyle::Unknown)
 }
 
 #[cfg(test)]
@@ -34,10 +21,9 @@ mod tests {
   use super::*;
 
   #[test]
-  fn print_timeout_is_an_optional_text_and_no_other_field_is_accepted() {
+  fn an_antigravity_option_takes_no_field() {
     let fields = |text: &str| -> Mapping { serde_yaml::from_str(text).unwrap() };
-    assert_eq!(print_timeout(&fields("print_timeout: 2h\n")).unwrap().as_deref(), Some("2h"));
-    assert_eq!(print_timeout(&fields("print_timeout: null\n")).unwrap(), None);
-    assert!(print_timeout(&fields("effort: high\n")).is_err());
+    assert!(option_model(&fields("")).is_ok());
+    assert!(option_model(&fields("print_timeout: 2h\n")).is_err());
   }
 }

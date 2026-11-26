@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/backends/anthropic_compatible",
+    "crates/backends/acp",
     "crates/backends/antigravity",
     "crates/backends/charlie_code",
     "crates/backends/claude_code",
@@ -161,6 +162,7 @@ zstd = "0.13"
 charliebot-artifacts = { path = "crates/features/artifacts" }
 charliebot-agents = { path = "crates/runtime/agents" }
 charliebot-anthropic-compatible = { path = "crates/backends/anthropic_compatible" }
+charliebot-acp = { path = "crates/backends/acp" }
 charliebot-antigravity = { path = "crates/backends/antigravity" }
 charliebot-backup = { path = "crates/features/backup" }
 charliebot-chat-threads = { path = "crates/features/chat_threads" }

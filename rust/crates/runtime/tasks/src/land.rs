@@ -1051,23 +1051,26 @@ enum RebaseStep {
   Conflict,
 }
 
-/// The task branch push under `--force-with-lease`: the lease is the fetched tracking ref when origin
-/// already has the branch, and an absent ref when it does not, so a rebase never clobbers another push.
+/// The task branch push under `--force-with-lease`, so a rebase never clobbers another push.
+///
+/// With the branch on origin, the push fetches it first and leases against the fetched tip. Without it
+/// — a merged branch GitHub deleted — the push leases against an explicitly absent ref,
+/// `--force-with-lease=refs/heads/<branch>:`. The empty expected value means the ref must not exist on
+/// origin; without it, git falls back to the local `refs/remotes/origin/<branch>`, which still holds the
+/// merged tip and makes the push fail as `stale info`.
 async fn push_task_branch(ctx: &TaskLanding, branch: &str) -> anyhow::Result<()> {
-  if origin_has_branch(ctx, branch).await? {
+  let lease = if origin_has_branch(ctx, branch).await? {
     let (fetched, _, fetch_err) =
       git::git_stdout(&ctx.worktree, &["fetch", "origin", branch], GIT_WRITE_TIMEOUT, "git fetch task branch").await;
     if !fetched {
       anyhow::bail!("git fetch origin {branch} failed: {fetch_err}");
     }
-  }
-  let (ok, _, err) = git::git_stdout(
-    &ctx.worktree,
-    &["push", "--force-with-lease", "origin", branch],
-    GIT_PUSH_TIMEOUT,
-    "git push task branch",
-  )
-  .await;
+    "--force-with-lease".to_string()
+  } else {
+    format!("--force-with-lease=refs/heads/{branch}:")
+  };
+  let (ok, _, err) =
+    git::git_stdout(&ctx.worktree, &["push", &lease, "origin", branch], GIT_PUSH_TIMEOUT, "git push task branch").await;
   if !ok {
     anyhow::bail!("pushing task branch {branch} failed: {err}");
   }
@@ -2834,6 +2837,104 @@ mod synthetic_repo_tests {
       Err(error) => format!("{error:#}"),
     };
     assert!(hook.contains("was refused"), "{hook}");
+  }
+
+  /// A landing venue over *worktree* on *branch*: the push reads only the worktree.
+  fn landing_ctx(worktree: &Path, branch: &str) -> TaskLanding {
+    TaskLanding {
+      repo: "synthetic/synthetic".to_string(),
+      worktree: worktree.to_path_buf(),
+      repo_path: worktree.to_path_buf(),
+      base_branch: "main".to_string(),
+      branch_name: branch.to_string(),
+      session_dir: worktree.join("session"),
+    }
+  }
+
+  fn git_ok(repo: &Path, args: &[&str]) {
+    let output = Command::new("git").arg("-C").arg(repo).args(args).output().expect("git runs");
+    assert!(output.status.success(), "git {args:?} failed: {}", String::from_utf8_lossy(&output.stderr));
+  }
+
+  /// GitHub deletes a merged task branch on origin, but the landing's clone keeps
+  /// `refs/remotes/origin/<branch>` at the merged tip. The push leases against an explicitly absent ref,
+  /// so the rewritten branch publishes as a new branch; the implicit lease of the tracking ref would refuse
+  /// it as `stale info`.
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_merged_branch_absent_from_origin_publishes_its_rewrite_as_a_new_branch() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    synthetic_repo(root.path(), "main");
+    let origin = root.path().join("origin.git");
+    let work = root.path().join("work");
+    git_ok(root.path(), &["clone", "-q", origin.to_str().unwrap(), work.to_str().unwrap()]);
+    git_ok(&work, &["switch", "-q", "-c", "task1"]);
+    commit(&work, "one.txt", "one\n");
+    git_ok(&work, &["push", "-q", "-u", "origin", "task1"]);
+    let merged_tip = head(&work);
+
+    // GitHub deletes the branch on origin; the clone's tracking ref stays at the merged tip.
+    git_ok(&origin, &["update-ref", "-d", "refs/heads/task1"]);
+    let tracking = git::git_rev_parse(&work, "refs/remotes/origin/task1").await.expect("the tracking ref survives");
+    assert_eq!(tracking, merged_tip);
+
+    // A rebase rewrote the branch, as the landing's round before the push does.
+    git_ok(
+      &work,
+      &[
+        "-c",
+        "user.name=Synthetic",
+        "-c",
+        "user.email=synthetic@example.test",
+        "commit",
+        "-q",
+        "--amend",
+        "-m",
+        "rewritten",
+      ],
+    );
+    let rewritten = head(&work);
+    assert_ne!(rewritten, merged_tip);
+
+    push_task_branch(&landing_ctx(&work, "task1"), "task1").await.expect("the absent branch publishes as a new one");
+    let published = git::git_rev_parse(&origin, "refs/heads/task1").await.expect("origin holds the new branch");
+    assert_eq!(published, rewritten);
+  }
+
+  /// With the branch still on origin, the push leases against the tip it fetched. A second landing that
+  /// pushes between that fetch and this push's update transaction therefore keeps its tip, and this push
+  /// refuses instead of overwriting it.
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_branch_moved_on_origin_after_the_fetch_still_refuses_the_push() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    let repo = synthetic_repo(root.path(), "task1");
+    let origin = root.path().join("origin.git");
+    commit(&repo, "one.txt", "one\n");
+    git_ok(&repo, &["push", "-q", "-u", "origin", "task1"]);
+
+    // A second landing clone holds its own commit for the same branch.
+    let other = root.path().join("other");
+    git_ok(root.path(), &["clone", "-q", origin.to_str().unwrap(), other.to_str().unwrap()]);
+    git_ok(&other, &["switch", "-q", "-c", "task1", "origin/task1"]);
+    commit(&other, "two.txt", "two\n");
+    let other_tip = head(&other);
+
+    // The race: the other push lands after this push advertised the remote refs and before its update
+    // transaction, so the fetched tip the lease names is no longer the remote tip.
+    let hook = repo.join(".git/hooks/pre-push");
+    fs::write(
+      &hook,
+      format!("#!/bin/sh\nunset GIT_DIR GIT_WORK_TREE\ngit -C '{}' push -q origin task1\n", other.display()),
+    )
+    .expect("the pre-push hook is written");
+    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).expect("the hook is executable");
+
+    git_ok(&repo, &["commit", "-q", "--amend", "-m", "rewritten"]);
+    let error = push_task_branch(&landing_ctx(&repo, "task1"), "task1").await.expect_err("the other push stands");
+    let text = format!("{error:#}");
+    assert!(text.contains("cannot lock ref") && text.contains("but expected"), "{text}");
+    assert_eq!(git::git_rev_parse(&origin, "refs/heads/task1").await.expect("origin holds the branch"), other_tip);
   }
 
   #[tokio::test]

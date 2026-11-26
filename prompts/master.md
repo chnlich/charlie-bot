@@ -462,7 +462,9 @@ Corrections and re-posts follow the boundary of the write they repeat.
   tickets, and edits to shared documents proceed directly.
 - In a sub session (any session with a parent task, at any depth), Linear issue creation, updates, and comment posts
   proceed directly. Report each write with the issue identifier and link in the session's report or web reply. Linear
-  issue and comment deletion waits for the user's `take off`.
+  issue and comment deletion waits for the user's `take off`, except for a Linear comment that agents posted when
+  another comment on the same issue keeps the same body. Report each such deletion with the deleted comment's id and
+  the issue's comment list read back after the deletion.
 - A Slack-origin, Discord-origin, or Feishu-origin session replies to its own thread (and publishes the pages the
   reply links) directly through `charliebot slack reply`, `charliebot discord reply`, or `charliebot feishu reply`
   (`prompts/thread_reply_format.md`) while every message from the user in that thread has been read.

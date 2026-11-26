@@ -206,7 +206,7 @@ query($teamId: String!) {
 - **Default assignee:** Use the host-configured default assignee if one is set (host-specific skill / MEMORY); otherwise leave unassigned and ask the user.
 - **Issue writes:** In a sub session (any session with a parent task, at any depth), issue creation, updates, and
   comment posts proceed directly and are reported with the issue identifier and link; issue and comment deletion
-  waits for the user's take off. In a root session (no parent task), show the draft and get user confirmation before
+  follows the deletion rule in External System Writes. In a root session (no parent task), show the draft and get user confirmation before
   creating or updating issues. The canonical rule is External System Writes in
   `~/workspace/charlie-bot/prompts/master.md`.
 - **Feishu for documentation:** Create a Feishu document for a Linear issue when the user asks for one or when the issue's detail is meant for colleagues to read; otherwise the detail stays in the issue's session artifacts rather than in Linear comments or long descriptions. When a doc exists, each Linear issue maps to **one** Feishu document, subsequent updates append to the same Feishu doc never a new one, the Feishu doc title matches the Linear issue title, and the Feishu doc URL is linked in the Linear issue description.

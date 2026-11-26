@@ -62,6 +62,15 @@ export class CdpConnection {
     this.#readable = readable;
     readable.setEncoding('utf8');
     readable.on('data', (chunk) => this.#onData(chunk));
+    // A browser that dies closes its pipe with calls still waiting; failing them here keeps the caller from hanging.
+    readable.on('close', () => this.#failPending("the browser's DevTools pipe closed before it answered"));
+  }
+
+  #failPending(reason) {
+    for (const waiter of this.#pending.values()) {
+      waiter.reject(new Error(`${waiter.method}: ${reason}`));
+    }
+    this.#pending.clear();
   }
 
   #onData(chunk) {
@@ -106,10 +115,7 @@ export class CdpConnection {
   // (a crashpad handler) can hold the pipe's far end, so the streams never see EOF and the bench's process would never
   // drain; destroying them drops the handles.
   close() {
-    for (const waiter of this.#pending.values()) {
-      waiter.reject(new Error(`${waiter.method}: the browser's DevTools pipe was closed`));
-    }
-    this.#pending.clear();
+    this.#failPending("the browser's DevTools pipe was closed");
     this.#writable.destroy();
     this.#readable.destroy();
   }

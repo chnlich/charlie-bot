@@ -11,7 +11,7 @@
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 
-use charliebot_core::event_types::{EventFields, INPUT_DELIVERED, INPUT_EVENT_ID, MASTER_DONE};
+use charliebot_core::event_types::{EventFields, INPUT_DELIVERED, INPUT_EVENT_ID, MASTER_DONE, RUN_FINISHED};
 
 use crate::event_types::ChatEvent;
 use crate::message_utils::master_done_input_event_ids;
@@ -124,9 +124,10 @@ pub fn running_receipts<E: Borrow<ChatEvent>>(
   }
 }
 
-/// The input ids that the session's finished turns received: each `master_done`'s input ids, united with the
-/// receipts of the run it names. A `master_done` written before the run id existed contributes its recorded input ids
-/// alone.
+/// The input ids that the session's finished manager turns received. Each `master_done` contributes its input ids,
+/// united with the receipts of the run it names. Each `run_finished` of a finished manager turn contributes its input
+/// ids, united with the input ids on the run record. Either event written without a run id contributes its recorded
+/// input ids alone, and a `run_finished` of another run kind contributes nothing.
 pub fn received_by_finished_turns<E: Borrow<ChatEvent>>(
   store: &Store,
   session_id: &str,
@@ -137,16 +138,35 @@ pub fn received_by_finished_turns<E: Borrow<ChatEvent>>(
   let mut received = HashSet::new();
   for event in events {
     let event: &ChatEvent = event.borrow();
-    if event_type(event) != Some(MASTER_DONE) {
-      continue;
+    match event_type(event) {
+      Some(MASTER_DONE) => {
+        received.extend(master_done_input_event_ids(event));
+        let Some(run_id) = event.get("run_id").and_then(CompactValue::as_str).filter(|run_id| !run_id.is_empty())
+        else {
+          continue;
+        };
+        let run = runs
+          .get(run_id)
+          .ok_or_else(|| StoreError::not_found(format!("run {run_id} not found in task {session_id}")))?;
+        received.extend(receipts(run, events)?.into_iter().map(|receipt| receipt.input_event_id));
+      }
+      Some(RUN_FINISHED) => {
+        let Some(run_id) = event.get("run_id").and_then(CompactValue::as_str).filter(|run_id| !run_id.is_empty())
+        else {
+          received.extend(master_done_input_event_ids(event));
+          continue;
+        };
+        let run = runs
+          .get(run_id)
+          .ok_or_else(|| StoreError::not_found(format!("run {run_id} not found in task {session_id}")))?;
+        if run.kind != RunKind::ManagerTurn {
+          continue;
+        }
+        received.extend(master_done_input_event_ids(event));
+        received.extend(run.input_event_ids.iter().cloned());
+      }
+      _ => {}
     }
-    received.extend(master_done_input_event_ids(event));
-    let Some(run_id) = event.get("run_id").and_then(CompactValue::as_str).filter(|run_id| !run_id.is_empty()) else {
-      continue;
-    };
-    let run =
-      runs.get(run_id).ok_or_else(|| StoreError::not_found(format!("run {run_id} not found in task {session_id}")))?;
-    received.extend(receipts(run, events)?.into_iter().map(|receipt| receipt.input_event_id));
   }
   Ok(received)
 }
@@ -193,6 +213,13 @@ mod tests {
       "run_id": run_id,
       "timestamp": timestamp,
     }))
+  }
+
+  fn write_run(store: &Store, session_id: &str, run: Value) {
+    let run_id = run["id"].as_str().expect("a test run carries its id");
+    let path = store.run_metadata_path(session_id, run_id);
+    std::fs::create_dir_all(path.parent().expect("run directory")).expect("run directory");
+    std::fs::write(&path, run.to_string()).expect("run record");
   }
 
   #[test]
@@ -243,20 +270,17 @@ mod tests {
   fn a_finished_turn_received_the_inputs_of_its_master_done_and_of_its_run() {
     let (_home, store) = crate::store::test_support::make_test_store();
     let session_id = "session";
-    let path = store.run_metadata_path(session_id, "resumed-run");
-    std::fs::create_dir_all(path.parent().expect("run directory")).expect("run directory");
-    std::fs::write(
-      &path,
+    write_run(
+      &store,
+      session_id,
       json!({
         "id": "resumed-run",
         "session_id": session_id,
         "kind": "manager_turn",
         "input_event_ids": ["resumed-input"],
         "started_at": "2026-11-02T08:20:54.838607Z",
-      })
-      .to_string(),
-    )
-    .expect("run record");
+      }),
+    );
     // A resumed turn loses its master_done input ids. The run record still names what it received.
     let events = [event(json!({"type": MASTER_DONE, "run_id": "resumed-run", "input_event_ids": []}))];
 
@@ -267,5 +291,81 @@ mod tests {
     let legacy = [event(json!({"type": MASTER_DONE, "input_event_ids": ["legacy-input"]}))];
     let received = received_by_finished_turns(&store, session_id, &legacy).expect("the legacy ids read");
     assert_eq!(received, HashSet::from(["legacy-input".to_string()]));
+  }
+
+  #[test]
+  fn a_failed_manager_turns_run_finished_receives_inputs_without_a_start_time() {
+    let (_home, store) = crate::store::test_support::make_test_store();
+    let session_id = "session";
+    write_run(
+      &store,
+      session_id,
+      json!({
+        "id": "quota-run",
+        "session_id": session_id,
+        "kind": "manager_turn",
+        "input_event_ids": ["run-input"],
+        "ended_at": "2026-11-02T08:20:54.838607Z",
+      }),
+    );
+    let events = [event(json!({
+      "type": RUN_FINISHED,
+      "run_id": "quota-run",
+      "outcome": "failed",
+      "input_event_ids": ["event-input"],
+    }))];
+
+    let received = received_by_finished_turns(&store, session_id, &events).expect("the received ids read");
+
+    assert_eq!(received, HashSet::from(["event-input".to_string(), "run-input".to_string()]));
+  }
+
+  #[test]
+  fn a_run_finished_of_a_non_manager_run_contributes_nothing() {
+    let (_home, store) = crate::store::test_support::make_test_store();
+    let session_id = "session";
+    write_run(
+      &store,
+      session_id,
+      json!({
+        "id": "worker-run",
+        "session_id": session_id,
+        "kind": "work",
+        "input_event_ids": ["worker-input"],
+        "started_at": "2026-11-02T08:20:54.838607Z",
+        "ended_at": "2026-11-02T08:30:54.838607Z",
+      }),
+    );
+    let events = [event(json!({
+      "type": RUN_FINISHED,
+      "run_id": "worker-run",
+      "outcome": "failed",
+      "input_event_ids": ["worker-event-input"],
+    }))];
+
+    let received = received_by_finished_turns(&store, session_id, &events).expect("the received ids read");
+
+    assert!(received.is_empty());
+  }
+
+  #[test]
+  fn a_run_finished_without_a_run_id_contributes_its_recorded_input_ids() {
+    let (_home, store) = crate::store::test_support::make_test_store();
+    let events = [event(json!({"type": RUN_FINISHED, "outcome": "failed", "input_event_ids": ["recorded-input"]}))];
+
+    let received = received_by_finished_turns(&store, "session", &events).expect("the received ids read");
+
+    assert_eq!(received, HashSet::from(["recorded-input".to_string()]));
+  }
+
+  #[test]
+  fn a_run_finished_naming_a_missing_run_fails_not_found() {
+    let (_home, store) = crate::store::test_support::make_test_store();
+    let events = [event(json!({"type": RUN_FINISHED, "run_id": "missing-run", "outcome": "failed"}))];
+
+    let error = received_by_finished_turns(&store, "session", &events).unwrap_err();
+
+    assert_eq!(error.status_code(), Some(404));
+    assert_eq!(error.to_string(), "run missing-run not found in task session");
   }
 }

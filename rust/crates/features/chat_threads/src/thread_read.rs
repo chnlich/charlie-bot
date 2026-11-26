@@ -56,22 +56,22 @@ pub struct ThreadRead<'a, M> {
 
 impl<M> ThreadRead<'_, M> {
   /// The window's first index, the index one past its last, and the unread count it leaves out. It starts at the
-  /// earlier of the oldest unread message and the oldest pending summon's message, and holds the newest `limit`
-  /// messages when neither exists.
+  /// oldest pending summon's message when that message and the oldest unread message fit inside one `limit`-sized
+  /// window, and otherwise at the oldest unread message, so a positive `limit` puts an unread message in the window.
+  /// Without an unread message it starts at the oldest pending summon's message, and with neither it holds the newest
+  /// `limit` messages.
   fn bounds(&self, message_id: impl Fn(&M) -> &str) -> (usize, usize, usize) {
-    let mut starts = Vec::new();
     let unread = |message: &M| self.unread_ids.contains(message_id(message));
     let summoned = |message: &M| self.pending.contains(message_id(message));
-    if let Some(first) = self.messages.iter().position(unread) {
-      starts.push(first);
-    }
-    if let Some(first) = self.messages.iter().position(summoned) {
-      starts.push(first);
-    }
-    let (first, last) = match starts.into_iter().min() {
-      None => (self.messages.len().saturating_sub(self.limit), self.messages.len()),
-      Some(start) => (start, self.messages.len().min(start + self.limit)),
+    let first_unread = self.messages.iter().position(unread);
+    let first_summon = self.messages.iter().position(summoned);
+    let first = match (first_unread, first_summon) {
+      (Some(unread), Some(summon)) if summon < unread && unread - summon < self.limit => summon,
+      (Some(unread), _) => unread,
+      (None, Some(summon)) => summon,
+      (None, None) => self.messages.len().saturating_sub(self.limit),
     };
+    let last = self.messages.len().min(first + self.limit);
     let unread_in_window = self.messages[first..last].iter().filter(|message| unread(message)).count();
     (first, last, self.unread_ids.len() - unread_in_window)
   }
@@ -148,7 +148,44 @@ mod tests {
 
   #[test]
   fn a_pending_summon_older_than_the_oldest_unread_opens_the_window() {
-    assert_eq!(bounds(&["a", "b", "c", "d", "e"], &["d"], &["b"], 2), (1, 3, 1));
+    assert_eq!(bounds(&["a", "b", "c", "d", "e"], &["d"], &["c"], 2), (2, 4, 0));
+  }
+
+  #[test]
+  fn a_pending_summon_too_far_before_the_oldest_unread_leaves_the_window_to_the_unread() {
+    assert_eq!(bounds(&["a", "b", "c", "d", "e"], &["d"], &["b"], 2), (3, 5, 0));
+  }
+
+  #[test]
+  fn a_limit_of_one_still_windows_the_oldest_unread() {
+    assert_eq!(bounds(&["a", "b", "c"], &["c"], &["b"], 1), (2, 3, 0));
+  }
+
+  #[test]
+  fn repeated_reads_behind_a_pending_summon_cover_the_thread_without_repeating_a_window() {
+    let message_names = ["a", "b", "c", "d", "e", "f"];
+    let messages: Vec<Message> = message_names.iter().map(|id| Message { id }).collect();
+    let pending_ids = ids(&["a"]);
+    let mut unread_ids = ids(&["b", "c", "d", "e", "f"]);
+    let mut windows = Vec::new();
+    let mut more_unread = Vec::new();
+    for _ in 0..message_names.len() {
+      let read =
+        ThreadRead { messages: &messages, unread_ids: &unread_ids, pending: &pending_ids, watermark: None, limit: 2 };
+      let (first, last, left_out) = read.bounds(|message| message.id);
+      windows.push((first, last));
+      more_unread.push(left_out);
+      for message in &messages[first..last] {
+        unread_ids.remove(message.id);
+      }
+      if left_out == 0 {
+        break;
+      }
+    }
+
+    assert_eq!(windows, [(0, 2), (2, 4), (4, 6)]);
+    assert_eq!(more_unread, [4, 2, 0]);
+    assert!(unread_ids.is_empty());
   }
 
   #[test]

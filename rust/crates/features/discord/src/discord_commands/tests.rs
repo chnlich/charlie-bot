@@ -68,6 +68,20 @@ fn summon_event(mention_id: &str) -> Value {
   })
 }
 
+/// Writes the terminal manager run record of a turn that ended before its launch: no start time, only its end.
+fn finish_manager_run_without_start(home: &Home, session_id: &str, run_id: &str, input_event_ids: &[&str]) {
+  let run_path = home.features.store.run_metadata_path(session_id, run_id);
+  std::fs::create_dir_all(run_path.parent().expect("run directory")).expect("run directory");
+  let run = json!({
+    "id": run_id,
+    "session_id": session_id,
+    "kind": "manager_turn",
+    "input_event_ids": input_event_ids,
+    "ended_at": "2026-11-02T08:20:54Z",
+  });
+  std::fs::write(&run_path, run.to_string()).expect("run record");
+}
+
 /// The status and JSON answer of a POST of `body` to `path` on the router.
 async fn send(router: Router, path: &str, body: Value) -> (StatusCode, Value) {
   let request = Request::builder()
@@ -260,6 +274,57 @@ async fn read_does_not_flag_a_summon_a_resumed_turn_received() {
 
   assert_eq!(ids(&result), [snowflake(2)]);
   assert_eq!(fields(&result, "summon"), [json!(false)]);
+}
+
+/// A summon whose manager turn ended before launch is answered history even without a master_done: the terminal
+/// run_finished retires it, so no flag and the window start stays with the unread.
+#[tokio::test]
+async fn read_does_not_flag_a_summon_whose_manager_turn_failed_before_launch() {
+  let home = Home::new_without_thread_runtime(true).await;
+  thread_messages(&home, &[Msg::new(1, "the question"), Msg::new(2, "a later follow up")]);
+  let session_id = make_session(&home, Some(snowflake(1))).await;
+  let summon = home.append(&session_id, summon_event(&snowflake(1))).await;
+  let summon_id = summon["id"].as_str().expect("an appended event carries its id");
+  finish_manager_run_without_start(&home, &session_id, "quota-run", &[summon_id]);
+  home
+    .append(
+      &session_id,
+      json!({
+        "type": event_types::RUN_FINISHED,
+        "run_id": "quota-run",
+        "outcome": "failed",
+        "input_event_ids": [summon_id],
+      }),
+    )
+    .await;
+
+  let result = bot(&home).read_thread(&session_id, None, 2).await.unwrap();
+
+  assert_eq!(ids(&result), [snowflake(2)]);
+  assert_eq!(fields(&result, "summon"), [json!(false)]);
+  assert_eq!(fields(&result, "unread"), [json!(true)]);
+}
+
+/// Consecutive reads keep moving the watermark while a pending summon sits behind the unread backlog.
+#[tokio::test]
+async fn read_pages_past_a_pending_summon_until_no_unread_remains() {
+  let home = Home::new_without_thread_runtime(true).await;
+  thread_messages(&home, &(1..=6).map(|i| Msg::new(i, &format!("m{i}"))).collect::<Vec<_>>());
+  let session_id = make_session(&home, Some(snowflake(1))).await;
+  home.append(&session_id, summon_event(&snowflake(1))).await;
+
+  let first = bot(&home).read_thread(&session_id, None, 2).await.unwrap();
+  let second = bot(&home).read_thread(&session_id, None, 2).await.unwrap();
+  let third = bot(&home).read_thread(&session_id, None, 2).await.unwrap();
+
+  assert_eq!(ids(&first), [1, 2].map(snowflake));
+  assert_eq!(first["more_unread"], 4);
+  assert_eq!(ids(&second), [3, 4].map(snowflake));
+  assert_eq!(second["more_unread"], 2);
+  assert_eq!(ids(&third), [5, 6].map(snowflake));
+  assert_eq!(third["more_unread"], 0);
+  assert_eq!(home.meta(&session_id).await.extra("discord_watermark_id"), Some(&json!(snowflake(6))));
+  assert_eq!(acks(&home, &session_id).len(), 3);
 }
 
 /// A summon the boot backfill marked lost never gets a master_done, so the marker alone must retire it. No flag, and

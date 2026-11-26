@@ -63,10 +63,10 @@ impl Bot {
     .map_err(ThreadReplyError::failure)
   }
 
-  /// The read of the session's topic, which acks the unread messages the window returns. The window starts at the
-  /// earlier of the oldest unread message and the oldest pending summon's message, or holds the newest `limit` messages
-  /// when neither exists. The summon's root message rides first, outside the count, when the thread's listing does not
-  /// carry it.
+  /// The read of the session's topic, which acks the unread messages the window returns. The window follows the
+  /// shared thread-read rule: a pending summon's message opens it only when that message and the oldest unread message
+  /// fit inside one `limit`-sized window. The summon's root message rides first, outside the count, when the thread's
+  /// listing does not carry it.
   pub async fn read_thread(&self, session_id: &str, limit: usize) -> Result<Value, ThreadReplyError> {
     let session = thread_entry::require_thread_session(&FEISHU, &self.features, session_id).await?;
     let origin: FeishuOrigin = serde_json::from_value(session.origin.clone()).map_err(ThreadReplyError::failure)?;

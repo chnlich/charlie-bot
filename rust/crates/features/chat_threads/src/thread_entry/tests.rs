@@ -405,6 +405,20 @@ impl Home {
     fs::write(&run_path, run.to_string()).expect("run record");
   }
 
+  /// Writes the terminal manager run record of a turn that ended before its launch: no start time, only its end.
+  fn finish_manager_run_without_start(&self, session_id: &str, run_id: &str, input_event_ids: &[&str], ended_at: &str) {
+    let run_path = self.features.store.run_metadata_path(session_id, run_id);
+    fs::create_dir_all(run_path.parent().expect("run directory")).expect("run directory");
+    let run = json!({
+      "id": run_id,
+      "session_id": session_id,
+      "kind": "manager_turn",
+      "input_event_ids": input_event_ids,
+      "ended_at": ended_at,
+    });
+    fs::write(&run_path, run.to_string()).expect("run record");
+  }
+
   async fn triggers(&self, session_id: &str) -> Vec<PendingTrigger> {
     let manager = self.features.startup.require::<Arc<TriggerManager>>().expect("the manager is in startup");
     manager.list_triggers(session_id).await.expect("the trigger records read")
@@ -1228,6 +1242,55 @@ async fn the_boot_backfill_reports_only_summons_no_finished_turn_received() {
     })
     .collect();
   assert_eq!(markers, [lost_id]);
+}
+
+/// A manager turn that quota exhaustion ends before launch still received its summon: it is neither pending nor lost.
+#[tokio::test]
+async fn a_run_finished_manager_turn_without_a_start_retires_its_summon() {
+  let home = Home::new();
+  home.thread_session("s1", origin()).await;
+  let backend_pool =
+    home.features.startup.require::<backend_pool::BackendPool>().expect("the backend pool is in startup");
+  home
+    .features
+    .startup
+    .insert(charliebot_tasks::master_queue::MasterQueue::new(backend_pool))
+    .expect("the master queue inserts once");
+  let adapter = FakeAdapter::with_thread(&[]);
+  let dyn_adapter: Arc<dyn ThreadAdapter> = adapter.clone();
+  let summon = home
+    .append(
+      "s1",
+      json!({"type": event_types::AGENT_MESSAGE, "content": FAKECHAT.summon_line,
+             "fakechat": {"channel_id": "c1", "thread_ts": "t1", "mention_id": "m1"}}),
+    )
+    .await;
+  let summon_id = summon["id"].as_str().expect("an appended event carries its id").to_string();
+  home.finish_manager_run_without_start("s1", "quota-run", &[summon_id.as_str()], "2026-11-02T08:20:54Z");
+  home
+    .append(
+      "s1",
+      json!({
+        "type": event_types::RUN_FINISHED,
+        "run_id": "quota-run",
+        "outcome": "failed",
+        "input_event_ids": [summon_id],
+      }),
+    )
+    .await;
+
+  let events = load_chat_events(&home.features, "s1").await.expect("the events read");
+  let pending = pending_summon_mention_ids(&FAKECHAT, &home.features.store, "s1", events.as_ref(), |mention| {
+    Ok(mention.as_str().expect("the fakechat mention id is a string").to_string())
+  })
+  .expect("the pending summons read");
+  assert!(pending.is_empty(), "{pending:?}");
+
+  let reported = backfill_lost_summons(&dyn_adapter, &home.features).await.unwrap();
+
+  assert_eq!(reported, 0);
+  assert!(adapter.posts.lock().unwrap().is_empty());
+  assert!(home.events("s1").iter().all(|event| event.get(FAKECHAT.backfill_key()).is_none()));
 }
 
 fn replay_fixture() -> Value {

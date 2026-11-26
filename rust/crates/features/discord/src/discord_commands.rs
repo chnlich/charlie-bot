@@ -61,9 +61,9 @@ impl Bot {
   }
 
   /// The readback of the session's own Discord thread, with the unread messages the window returns acked. The
-  /// window starts at the earlier of the oldest unread message and the oldest pending summon's mention, or holds the
-  /// newest `limit` messages when neither exists. The starter rides first, outside the count, when it lives in the parent
-  /// channel: a 404 there means the thread has none.
+  /// window follows the shared thread-read rule: a pending summon's mention opens it only when that mention and the
+  /// oldest unread message fit inside one `limit`-sized window. The starter rides first, outside the count, when it
+  /// lives in the parent channel: a 404 there means the thread has none.
   async fn read_own_thread(&self, session_id: &str, limit: usize) -> Result<Value, ThreadReplyError> {
     let session = thread_entry::require_thread_session(&DISCORD, &self.features, session_id).await?;
     let origin: DiscordOrigin = serde_json::from_value(session.origin.clone()).map_err(ThreadReplyError::failure)?;

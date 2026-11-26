@@ -955,6 +955,7 @@ fn fakechat_turn(turn: Vec<Value>, exit_code: i64) -> TurnInput {
   TurnInput {
     session_id: "s1".to_string(),
     colleague_read_only: false,
+    parent_approved: false,
     exit_code,
     continuation_failed: false,
     status: Value::Null,

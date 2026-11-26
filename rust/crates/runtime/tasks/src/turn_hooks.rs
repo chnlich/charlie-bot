@@ -289,6 +289,7 @@ pub(crate) async fn checkpoint(
   let input = TurnInput {
     session_id: session_id.to_string(),
     colleague_read_only: colleague_gate::run_read_only(features, session_id, run_id).await,
+    parent_approved: meta.parent_approved(),
     exit_code,
     // Past the pending check, a block in this turn has run its continuation, and this checkpoint judges that run.
     continuation_failed: exit_code != 0 && log.turn.iter().any(is_block_record),
@@ -413,6 +414,7 @@ mod tests {
     TurnInput {
       session_id: "synthetic-session".to_string(),
       colleague_read_only: false,
+      parent_approved: false,
       exit_code: 0,
       continuation_failed: false,
       status: Value::Null,

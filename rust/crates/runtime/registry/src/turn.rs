@@ -16,6 +16,12 @@ pub struct TurnInput {
   /// in. Such a run's requests to write are refused, so its write-side checks pass. The colleague gate computes it at
   /// the checkpoint from the same predicate that refuses those requests.
   pub colleague_read_only: bool,
+  /// Whether the session's approver is its parent node. Such a session's status set refuses a non-empty Waiting on you
+  /// list, so a check that asks for one cannot be complied with. The checkpoint computes it with
+  /// `SessionMetadata::parent_approved`, the predicate that refuses the set. A serialized input without this key reads
+  /// as user-approved, the default approver.
+  #[serde(default)]
+  pub parent_approved: bool,
   /// The turn's exit code; a zero-output turn carries 1.
   pub exit_code: i64,
   /// Whether the turn is the continuation of a block and exited with an error. Such a turn misses the checks that

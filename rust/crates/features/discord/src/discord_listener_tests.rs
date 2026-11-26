@@ -928,6 +928,7 @@ fn test_thread_check_blocks_a_summon_round_without_a_reply_then_notices_the_seco
   let mut input = TurnInput {
     session_id: "discord-session".to_string(),
     colleague_read_only: false,
+    parent_approved: false,
     exit_code: 0,
     continuation_failed: false,
     status: Value::Null,

@@ -850,6 +850,13 @@ impl SessionMetadata {
   pub fn improve_host(&self) -> Option<&str> {
     self.task.as_ref().and_then(|task| task.improve_host.as_deref())
   }
+
+  /// Whether the session's approver is its parent node. A session without a task is user-approved. The status set
+  /// refuses a non-empty Waiting on you list for a parent-approved session, and the turn-end checkpoint reads the same
+  /// predicate, so the two decide the session the same way.
+  pub fn parent_approved(&self) -> bool {
+    self.task.as_ref().is_some_and(|task| task.approver == TaskApprover::Parent)
+  }
 }
 
 // The metadata.json file rules. Session, thread and run `metadata.json` are one file kind the store owns.

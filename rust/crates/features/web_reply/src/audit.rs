@@ -113,9 +113,10 @@ pub fn check_web_status(input: &TurnInput) -> CheckResult {
 
 /// The `status-reread` entry: a turn that received an input and holds Waiting on you items stores a status set after
 /// its last input, and that set names the Waiting on you list. A confirm, or a set stored before the last input, does
-/// not count. The first miss blocks with the reason; a miss after that passes with the notice of the items left.
+/// not count. The first miss blocks with the reason; a miss after that passes with the notice of the items left. A
+/// parent-approved session always passes: its status set refuses a non-empty list, so the reason could not be met.
 pub fn check_status_reread(input: &TurnInput) -> CheckResult {
-  if !web_turn_checks_apply(input) {
+  if !web_turn_checks_apply(input) || input.parent_approved {
     return CheckResult::Pass;
   }
   let Some(last) = last_received_index(&input.turn) else {
@@ -266,6 +267,7 @@ mod tests {
     TurnInput {
       session_id: "web-session".to_string(),
       colleague_read_only,
+      parent_approved: false,
       exit_code,
       continuation_failed: false,
       status: Value::Null,
@@ -401,6 +403,41 @@ mod tests {
       "received_at": "2026-01-01T00:00:01Z",
     });
     assert_eq!(check_web_reply(&input(false, 0, vec![summon])).unwrap(), CheckResult::Pass);
+  }
+
+  /// A parent-approved session passes `status-reread` for an input turn that stores no set or an empty list. Its status
+  /// set refuses a non-empty list, so the reminder would ask for a list it cannot store.
+  #[test]
+  fn a_parent_approved_session_passes_status_reread_for_an_input_turn() {
+    let legacy = json!({"goal": "g", "waiting": [{"text": "legacy item", "context": "c"}]});
+    let received = vec![user("u1", "q", "2026-01-01T00:00:01Z")];
+
+    let no_set = TurnInput { parent_approved: true, status: legacy.clone(), ..input(false, 0, received.clone()) };
+    assert_eq!(check_status_reread(&no_set), CheckResult::Pass);
+
+    let mut cleared = received.clone();
+    cleared.push(json!({"type": WEB_STATUS, "id": "s1", "web_status_changed": ["waiting"]}));
+    let empty_list =
+      TurnInput { parent_approved: true, status: json!({"goal": "g", "waiting": []}), ..input(false, 0, cleared) };
+    assert_eq!(check_status_reread(&empty_list), CheckResult::Pass);
+  }
+
+  /// A user-approved session blocks `status-reread` on the same input turn with the reminder, then notices the item it
+  /// left as stored.
+  #[test]
+  fn a_user_approved_session_blocks_status_reread_then_notices_the_left_items() {
+    let legacy = json!({"goal": "g", "waiting": [{"text": "legacy item", "context": "c"}]});
+    let received = vec![user("u1", "q", "2026-01-01T00:00:01Z")];
+
+    let blocked = TurnInput { status: legacy.clone(), ..input(false, 0, received.clone()) };
+    let CheckResult::Block(reason) = check_status_reread(&blocked) else { panic!("the reminder blocks") };
+    assert!(reason.starts_with("Session status reminder:") && reason.contains("holds 1 item"), "{reason}");
+
+    let mut second = received;
+    second.push(block_record(STATUS_REREAD_ENTRY));
+    let noticed = TurnInput { status: legacy, ..input(false, 0, second) };
+    let CheckResult::Notice(notice) = check_status_reread(&noticed) else { panic!("the second miss notices") };
+    assert!(notice.contains("legacy item"), "{notice}");
   }
 
   /// The report that task `child_id` delivers to its parent, received at `received_at`.

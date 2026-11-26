@@ -20,7 +20,7 @@ use charliebot_core::text_repr::{JsonStyle, json_dumps};
 use charliebot_registry::FeatureContext;
 use charliebot_store::compact::CompactValue;
 use charliebot_store::control_events::SOURCE_SESSION_ID_FIELD;
-use charliebot_store::metadata::{SessionMetadata, SessionStatus, TaskApprover, UtcDateTime};
+use charliebot_store::metadata::{SessionMetadata, SessionStatus, UtcDateTime};
 use charliebot_store::{Store, session_channel};
 use charliebot_tasks::{cold_read, session_turn};
 use charliebot_user_text_checks as user_text_checks;
@@ -447,8 +447,7 @@ fn require_waiting_context(items: &[WaitingItem]) -> Result<(), WebReplyError> {
 /// Refuse a non-empty `waiting` list when the session's approver is its parent node, so parent-approved sessions
 /// escalate blockers and approval requests to their parent instead of writing user-facing Waiting on you items.
 fn refuse_parent_approved_waiting(meta: &SessionMetadata, patch: &StatusPatch) -> Result<(), WebReplyError> {
-  let approver = meta.task.as_ref().map_or(TaskApprover::User, |task| task.approver);
-  if approver == TaskApprover::Parent && patch.waiting.as_deref().is_some_and(|items| !items.is_empty()) {
+  if meta.parent_approved() && patch.waiting.as_deref().is_some_and(|items| !items.is_empty()) {
     return Err(WebReplyError::Refused {
       status: StatusCode::CONFLICT,
       detail: concat!(
@@ -1076,6 +1075,7 @@ mod tests {
   use super::*;
   use crate::test_support::{Home, set_derived_waiting};
   use charliebot_registry::registry::OpenWaitingRow;
+  use charliebot_store::metadata::TaskApprover;
 
   const VALID_SET: &str = r#"{"now": "Running"}"#;
 

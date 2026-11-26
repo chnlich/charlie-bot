@@ -205,6 +205,7 @@ mod tests {
     TurnInput {
       session_id: session_id.to_string(),
       colleague_read_only,
+      parent_approved: false,
       exit_code,
       continuation_failed: false,
       status,

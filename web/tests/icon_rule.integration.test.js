@@ -186,17 +186,22 @@ const EXCEPTIONS = [
   ...byFile('rust/crates/app/server/src/routes/pages.rs', [
     ["[\"Auto → CC · Opus 5\".to_string(), \"Auto → Opus 5\".to_string()]", PROSE_REASON],
   ]),
+  ...byFile('rust/crates/runtime/store/src/events.rs', [
+    ["[Status · Waiting on you]\\n1. ▸ Waiting on you · session synthetic · li", CHAT_TEXT_REASON],
+  ]),
   ...byFile('rust/crates/runtime/store/src/fact_scan.rs', [
     ["us · Waiting on you]\\n1. ▸ Waiting on you · session synthetic · li", CHAT_TEXT_REASON],
     ["us · Waiting on you]\\n1. ▸ Waiting on you · session synthetic · li", CHAT_TEXT_REASON],
   ]),
   ...byFile('rust/crates/runtime/store/src/task_tree.rs', [
-    ["erence)) = line.split_once(\". ▸ Waiting on you · session \") else {", CHAT_TEXT_REASON],
     ["\"{}. ▸ Waiting on you · session synthetic · list {:016x} · since 2", CHAT_TEXT_REASON],
     ["\"71. ▸ Waiting on you · session another-session · list fffffffffff", CHAT_TEXT_REASON],
     ["lines.push(\"72. ▸ Waiting on you · session synthetic · list invali", CHAT_TEXT_REASON],
     ["us · Waiting on you]\\n1. ▸ Waiting on you · session synthetic · li", CHAT_TEXT_REASON],
     ["us · Waiting on you]\\n1. ▸ Waiting on you · session synthetic · li", CHAT_TEXT_REASON],
+  ]),
+  ...byFile('rust/crates/runtime/store/src/waiting_clicks.rs', [
+    ["erence)) = line.split_once(\". ▸ Waiting on you · session \") else {", CHAT_TEXT_REASON],
   ]),
   ...byFile('rust/crates/runtime/tasks/src/handoff.rs', [
     ["format!(\"{}…\", line.chars().take(MAX_SUMMARY_LINE_CHARS).collect::", PROSE_REASON],

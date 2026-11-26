@@ -50,6 +50,7 @@
 //     registerSessionRowTitleBadge
 //                                 web/static/js/sidebar/groups.js (a badge on a session row's title line)
 //     registerSidebarControl      web/static/js/sidebar/namespace.js (the handler a rendered sidebar control calls by name)
+//     registerWaitingCheckWriter  web/static/js/sidebar/namespace.js (the writer the Status view's done boxes report through)
 //     registerSidebarFilter       web/static/js/sidebar/filters.js (a sidebar filter button)
 //     registerTab                 web/static/js/tabs.js (a tab: its layout, show and hide callbacks)
 //     registerTaskContextSection  web/static/js/sidebar/namespace.js (a section of the Task & context dialog)

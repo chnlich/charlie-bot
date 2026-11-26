@@ -1667,8 +1667,8 @@ fn apply_sidebar_fields(value: &mut Value, row: &RowInputs, projection: SidebarP
   }
 }
 
-/// The row's `has_waiting_items` boolean: whether the session stores a Waiting on you item. A row whose overlay has no
-/// entry for it reads false.
+/// The row's `has_waiting_items` boolean: whether the session stores a Waiting on you item that no click answered. A
+/// row whose overlay has no entry for it reads false.
 fn insert_waiting_field(object: &mut Map<String, Value>, row: &RowInputs) {
   let waiting =
     row.derived.as_ref().and_then(|entry| entry.get(HAS_WAITING_ITEMS)).cloned().unwrap_or(Value::Bool(false));

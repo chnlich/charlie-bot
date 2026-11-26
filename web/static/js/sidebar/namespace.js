@@ -202,6 +202,17 @@
     return statusPollHolds.some((holds) => holds());
   }
 
+  // The Status view's done boxes are where a person clears a Waiting on you mark. The panel of the open session
+  // reports its box state here, and sidebar/status.js registers the writer that applies it to the waiting fact, so
+  // the shown session's mark follows its boxes at once. Every other page follows the status poll.
+  const waitingCheckWriters = [];
+  function registerWaitingCheckWriter(write) {
+    waitingCheckWriters.push(write);
+  }
+  function reportWaitingCheckState(sessionId, hasUnchecked) {
+    waitingCheckWriters.forEach((write) => write(sessionId, hasUnchecked));
+  }
+
   Sidebar.wire = wire;
   wire({
     registerSidebarControl,
@@ -212,6 +223,6 @@
     registerTaskContextSection,
     registerStatusPollHold,
     statusPollHeld,
-  }, {taskContextSectionLoaders});
+  }, {taskContextSectionLoaders, registerWaitingCheckWriter, reportWaitingCheckState});
   global.Sidebar = Sidebar;
 })(globalThis);

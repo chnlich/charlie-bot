@@ -48,6 +48,7 @@ mod tool_rows;
 pub mod trigger_files;
 pub mod v1_session_conversion;
 pub mod v1_sessions;
+mod waiting_clicks;
 #[cfg(any(test, feature = "write-faults"))]
 mod write_fault_types;
 #[cfg(any(test, feature = "write-faults"))]

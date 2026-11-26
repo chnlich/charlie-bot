@@ -862,6 +862,74 @@ test('post errors refresh status, keep confirmed marks, report failures and neve
   });
 });
 
+// A page that shows session 'session-a' with a sidebar row for it: the row's own waiting mark element answers the
+// status-panel module's paints.
+function panelRigWithWaitingMark() {
+  const rig = panelRig();
+  const marker = new FakeElement('SPAN', {id: 'waiting-marker-session-a'});
+  const lookup = rig.context.document.getElementById;
+  rig.context.document.getElementById = (id) => (id === 'waiting-marker-session-a' ? marker : lookup(id));
+  return {rig, marker};
+}
+
+test('the shown session\'s sidebar mark follows its done boxes: the last check clears it at once', async () => {
+  const {rig, marker} = panelRigWithWaitingMark();
+  await openSession(rig, {web_status: normalizeStatus({...STATUS, waiting: [{text: 'Only item', link: null}]})});
+  selectStatus(rig);
+  assert.equal(marker.classList.contains('hidden'), false, 'an unchecked item shows the mark');
+
+  toggleDone(rig);
+  assert.equal(marker.classList.contains('hidden'), true,
+      'the mark goes as the box is checked, inside the five-second window and before the click lands');
+
+  // The window closes and the server records the click, so the readback after the post reports the item answered.
+  rig.setPostHandler(() => {
+    rig.page.web_status = normalizeStatus({...rig.page.web_status, waiting: [
+      {...rig.page.web_status.waiting[0], answered: true},
+    ]});
+  });
+  rig.statusTimers.advance(5000);
+  await settled();
+  assert.equal(rig.posts.length, 1, 'the closed window posts the one click');
+  assert.equal(marker.classList.contains('hidden'), true, 'the sent click keeps the mark off');
+});
+
+test('unchecking inside the undo window brings the shown session\'s sidebar mark back', async () => {
+  const {rig, marker} = panelRigWithWaitingMark();
+  await openSession(rig, {web_status: normalizeStatus({...STATUS, waiting: [{text: 'Only item', link: null}]})});
+  selectStatus(rig);
+  toggleDone(rig);
+  assert.equal(marker.classList.contains('hidden'), true, 'the mark goes with the check');
+
+  toggleDone(rig);
+  assert.equal(marker.classList.contains('hidden'), false, 'the undone check brings the mark back');
+  rig.statusTimers.advance(5000);
+  await settled();
+  assert.equal(rig.posts.length, 0, 'an undone click posts nothing');
+  assert.equal(marker.classList.contains('hidden'), false, 'the item is still unchecked');
+});
+
+test('a failed done click brings the shown session\'s sidebar mark back', async () => {
+  const {rig, marker} = panelRigWithWaitingMark();
+  rig.postResults.push({status: 503});
+  await openSession(rig, {web_status: normalizeStatus({...STATUS, waiting: [{text: 'Only item', link: null}]})});
+  selectStatus(rig);
+  toggleDone(rig);
+  assert.equal(marker.classList.contains('hidden'), true, 'the mark goes with the check');
+  rig.statusTimers.advance(5000);
+  await settled();
+  assert.equal(marker.classList.contains('hidden'), false, 'the unsent click puts the mark back');
+});
+
+test('a session whose items the server reports answered opens with no sidebar mark', async () => {
+  const {rig, marker} = panelRigWithWaitingMark();
+  await openSession(rig, {web_status: normalizeStatus({...STATUS, waiting: [
+    {text: 'First', link: null, answered: true},
+    {text: 'Second', link: null, answered: true},
+  ]})});
+  assert.equal(marker.classList.contains('hidden'), true, 'every item answered leaves no mark');
+});
+
 test('the child Now rows list each open child with its Now, update time and Open link', async () => {
   const rig = panelRig();
   rig.page.children = NOW_CHILDREN;

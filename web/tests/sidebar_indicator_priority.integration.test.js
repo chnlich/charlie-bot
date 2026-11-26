@@ -709,6 +709,21 @@ test('a status poll row writes the fact and repaints the row and each ancestor, 
   assert.deepEqual(waitingMarks('p'), {marker: false, subtree: false});
 });
 
+test('the Status view’s check state clears the row mark and the hollow marks above it at once', () => {
+  const {context, waitingMarks} = buildSidebarIndicatorContext(['p', 'c', 'g']);
+  paintListReply(context, [row('p', null), stores('c', 'p', {profile: 'manager'}), row('g', 'c')], 'all');
+  assert.deepEqual(waitingMarks('c'), {marker: true, subtree: false});
+  assert.equal(waitingMarks('p').subtree, true, 'the folded parent reports the item below it');
+
+  context.Sidebar.reportWaitingCheckState('c', false);
+  assert.deepEqual(waitingMarks('c'), {marker: false, subtree: false}, 'every item marked done clears the row');
+  assert.deepEqual(waitingMarks('p'), {marker: false, subtree: false}, 'the hollow mark counts the same answer');
+
+  context.Sidebar.reportWaitingCheckState('c', true);
+  assert.equal(waitingMarks('c').marker, true, 'an item left unchecked brings the mark back');
+  assert.equal(waitingMarks('p').subtree, true);
+});
+
 // Each activity state: ids[0] is the row that stores an item, and `indicator` is the existing icon that must keep its
 // state beside the marker. A sub-task's gear is a stand-in the grouped paint lays on its parent, so that state reads
 // through shown() rather than the rendered markup.

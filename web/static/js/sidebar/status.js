@@ -272,11 +272,21 @@ function readDisplayedSession() {
   if (SESSION_ID && !switching && ownUnread(SESSION_ID)) markSessionRead(SESSION_ID, null);
 }
 
-// The waiting fact: the session stores at least one Waiting on you item.
+// The waiting fact: the session stores at least one Waiting on you item that is not marked done.
 function recordWaitingFact(sessionId, hasWaiting) {
   sessionWaiting[sessionId] = !!hasWaiting;
   stampFactSeq('waiting', sessionId);
 }
+
+// The Status view's done boxes of the open session: the page where an item is checked shows that session's mark
+// from those boxes at once, before the click's reply lands. An unchecked box, or a click that fails, puts the mark
+// back. The write is stamped like any other waiting fact, so a listing row or poll reply captured before it is
+// refused, and the next poll answers every other page.
+function applyStatusCheckState(sessionId, hasUnchecked) {
+  recordWaitingFact(sessionId, hasUnchecked);
+  refreshSessionIndicator(sessionId);
+}
+Sidebar.registerWaitingCheckWriter(applyStatusCheckState);
 
 // The facts of one fetched row list, captured at requestSeq (factSeqAtRequest
 // before the fetch). Call it before the list paints. Each row carries the

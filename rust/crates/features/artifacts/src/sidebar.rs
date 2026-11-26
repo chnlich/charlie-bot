@@ -10,6 +10,7 @@ use anyhow::bail;
 use charliebot_core::paths;
 use charliebot_core::text_repr::{self, is_truthy};
 use charliebot_registry::sidebar::SidebarContribution;
+use charliebot_store::Store;
 use charliebot_store::sidebar_state;
 use serde_json::{Map, Value};
 
@@ -24,8 +25,8 @@ impl SidebarContribution for ArtifactsSidebar {
     &[PLANS_FILE]
   }
 
-  fn row_flags(&self, session_dir: &Path, session_id: &str) -> Vec<(&'static str, bool)> {
-    let pending = pending_plan_approval(&session_dir.join(PLANS_FILE), session_id);
+  fn row_flags(&self, store: &Store, session_id: &str) -> Vec<(&'static str, bool)> {
+    let pending = pending_plan_approval(&store.session_dir(session_id).join(PLANS_FILE), session_id);
     vec![(sidebar_state::HAS_PENDING_PLAN_APPROVAL, pending)]
   }
 
@@ -229,27 +230,28 @@ mod tests {
 
   #[test]
   fn the_flag_is_set_only_while_a_plan_awaits_approval() {
-    let dir = tempfile::tempdir().expect("a temporary session directory is available");
-    let awaiting = dir.path().join("awaiting");
+    let (_home, features) = crate::test_support::features();
+    let store = &features.store;
+    let awaiting = store.session_dir("awaiting");
     fs::create_dir_all(&awaiting).expect("the session directory is created");
     fs::write(awaiting.join(PLANS_FILE), json!({"plans": [{"id": 1, "versions": [version(1, "a.html")]}]}).to_string())
       .expect("the registry is written");
-    let approved = dir.path().join("approved");
+    let approved = store.session_dir("approved");
     fs::create_dir_all(&approved).expect("the session directory is created");
     fs::write(
       approved.join(PLANS_FILE),
       json!({"plans": [{"id": 1, "versions": [version(1, "a.html")], "takeoff": {"v": 1, "at": "t"}}]}).to_string(),
     )
     .expect("the registry is written");
-    let corrupt = dir.path().join("corrupt");
+    let corrupt = store.session_dir("corrupt");
     fs::create_dir_all(&corrupt).expect("the session directory is created");
     fs::write(corrupt.join(PLANS_FILE), "{not valid json").expect("the registry is written");
 
-    let flag = |session_dir: &Path| ArtifactsSidebar.row_flags(session_dir, "sess");
-    assert_eq!(flag(&awaiting), vec![(sidebar_state::HAS_PENDING_PLAN_APPROVAL, true)]);
-    assert_eq!(flag(&approved), vec![(sidebar_state::HAS_PENDING_PLAN_APPROVAL, false)]);
-    assert_eq!(flag(&corrupt), vec![(sidebar_state::HAS_PENDING_PLAN_APPROVAL, false)]);
-    assert_eq!(flag(&dir.path().join("missing")), vec![(sidebar_state::HAS_PENDING_PLAN_APPROVAL, false)]);
+    let flag = |session_id: &str| ArtifactsSidebar.row_flags(store, session_id);
+    assert_eq!(flag("awaiting"), vec![(sidebar_state::HAS_PENDING_PLAN_APPROVAL, true)]);
+    assert_eq!(flag("approved"), vec![(sidebar_state::HAS_PENDING_PLAN_APPROVAL, false)]);
+    assert_eq!(flag("corrupt"), vec![(sidebar_state::HAS_PENDING_PLAN_APPROVAL, false)]);
+    assert_eq!(flag("missing"), vec![(sidebar_state::HAS_PENDING_PLAN_APPROVAL, false)]);
   }
 
   #[test]

@@ -40,9 +40,10 @@ pub(crate) use crate::task_tree_state::{
 };
 use crate::task_tree_state::{
   MAX_CLICKED_WAITING_ITEMS, TASK_ANCESTOR_HOP_LIMIT, ancestor_ids, index_meta, task_below_caller,
-  valid_waiting_version, within_caller_subtree,
+  within_caller_subtree,
 };
 pub use crate::task_tree_state::{NodeFacts, TaskFacts, TaskState, TaskTreeActivity, TaskTreeRow};
+use crate::waiting_clicks::status_waiting_clicks;
 use crate::{ControlGuard, Store, StoreError, StoreResult};
 
 const TREE_INDEX_TTL: Duration = Duration::from_secs(2);
@@ -2957,53 +2958,6 @@ fn fold_task_facts(events: &[Value]) -> StoreResult<TaskFacts> {
   let mut never_stop = || false;
   assert!(fold_task_facts_from("synthetic", &mut facts, &events, 0, &mut never_stop, None)?);
   Ok(facts)
-}
-
-/// The list version and 1-based position named by each matching status click line.
-fn status_waiting_clicks(event: &ChatEvent, session_id: &str) -> Vec<(String, usize)> {
-  const HEADER: &str = "[Status · Waiting on you]";
-
-  let Some(content) = event.get("content").and_then(CompactValue::as_str) else {
-    return Vec::new();
-  };
-  let mut lines = content.lines();
-  if lines.next() != Some(HEADER) {
-    return Vec::new();
-  }
-  let mut clicks = Vec::new();
-  for line in lines {
-    let Some((number, reference)) = line.split_once(". ▸ Waiting on you · session ") else {
-      continue;
-    };
-    if number.parse::<usize>().ok().is_none_or(|number| number == 0) {
-      continue;
-    }
-    let Some((owner, reference)) = reference.split_once(" · list ") else {
-      continue;
-    };
-    if owner != session_id {
-      continue;
-    }
-    let Some((version, reference)) = reference.split_once(" · since ") else {
-      continue;
-    };
-    if !valid_waiting_version(version) {
-      continue;
-    }
-    let Some((since, position)) = reference.rsplit_once(" · #") else {
-      continue;
-    };
-    if since.is_empty() || position.is_empty() || !position.bytes().all(|byte| byte.is_ascii_digit()) {
-      continue;
-    }
-    let Ok(position) = position.parse::<usize>() else {
-      continue;
-    };
-    if position > 0 {
-      clicks.push((version.to_string(), position));
-    }
-  }
-  clicks
 }
 
 fn fold_task_facts_from(

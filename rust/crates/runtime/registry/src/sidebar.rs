@@ -5,6 +5,7 @@
 
 use std::path::Path;
 
+use charliebot_store::Store;
 use charliebot_store::metadata::SessionMetadata;
 
 /// One feature's sidebar contribution. Every method defaults to adding nothing.
@@ -15,8 +16,9 @@ pub trait SidebarContribution: Send + Sync {
     &[]
   }
 
-  /// The sidebar flags this feature sets on one session's row. A corrupt file yields no flag and does not fail.
-  fn row_flags(&self, _session_dir: &Path, _session_id: &str) -> Vec<(&'static str, bool)> {
+  /// The sidebar flags this feature sets on one session's row, read from `store` and the session's directory. A
+  /// corrupt file yields no flag and does not fail.
+  fn row_flags(&self, _store: &Store, _session_id: &str) -> Vec<(&'static str, bool)> {
     Vec::new()
   }
 

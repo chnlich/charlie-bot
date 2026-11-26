@@ -251,9 +251,9 @@ mod tests {
     serde_json::from_slice(&bytes).expect("the body is JSON")
   }
 
-  /// The status poll answers each row's `has_waiting_items`. A status set that stores an item raises the flag on the
-  /// next delta poll, which answers that row alone. Clearing the items lowers it the same way. The Workspace listing's
-  /// row carries the same flag, as a boolean.
+  /// The status poll answers each row's `has_waiting_items`: the session stores a Waiting on you item that no click
+  /// answered. A status set that stores an item raises the flag on the next delta poll, which answers that row alone.
+  /// Clearing the items lowers it the same way. The Workspace listing's row carries the same flag, as a boolean.
   #[tokio::test]
   async fn the_status_poll_carries_the_waiting_flag_of_each_row() {
     let home = test_support::Home::new();

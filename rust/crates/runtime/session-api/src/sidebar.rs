@@ -138,10 +138,9 @@ pub(crate) fn resolve_sidebar_state(
         entry.insert(HAS_PENDING_PLAN_APPROVAL.to_string(), Value::Bool(false));
       }
       if include_waiting {
-        let session_dir = store.session_dir(&meta.id);
         let waiting_items = registry
           .sidebar_contributions()
-          .flat_map(|contribution| contribution.row_flags(&session_dir, &meta.id))
+          .flat_map(|contribution| contribution.row_flags(store, &meta.id))
           .any(|(name, value)| name == HAS_WAITING_ITEMS && value);
         entry.insert(HAS_WAITING_ITEMS.to_string(), Value::Bool(waiting_items));
       }
@@ -402,7 +401,7 @@ fn probe_session(store: &Store, registry: &Registry, session_id: &str) -> StoreR
   let mut pending_plan_approval = false;
   let mut waiting_items = false;
   for contribution in registry.sidebar_contributions() {
-    for (name, value) in contribution.row_flags(&session_dir, session_id) {
+    for (name, value) in contribution.row_flags(store, session_id) {
       match name {
         HAS_PENDING_PLAN_APPROVAL => pending_plan_approval |= value,
         HAS_WAITING_ITEMS => waiting_items |= value,

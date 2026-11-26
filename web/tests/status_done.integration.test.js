@@ -1,8 +1,8 @@
 // ---------------------------------------------------------------------------
 // The done checkbox of a Waiting on you item, clicked in its owner's Status view in a headless Chrome. The page loads
-// the real chat/status-panel.js, comment_post.js, view-requests.js and icons.js with a stubbed Chat namespace and
-// fetch, the way the chat page loads them, and answers GET /api/internal/web/status with a parent whose own stored
-// item has no answer and whose one open child holds an item.
+// the real sidebar/namespace.js, chat/status-panel.js, comment_post.js, view-requests.js and icons.js with a stubbed
+// Chat namespace and fetch, the way the chat page loads them, and answers GET /api/internal/web/status with a parent
+// whose own stored item has no answer and whose one open child holds an item.
 //
 // Checks:
 // - the own item's row holds one checkbox, and the child's item holds none;
@@ -95,6 +95,7 @@ function pageHtml(mobile) {
     return {ok: true, status: 200, json: async () => []};
   };
 </script>
+<script src="/static/js/sidebar/namespace.js"></script>
 <script src="/static/js/chat/shared.js"></script>
 <script src="/static/js/chat/status-panel.js"></script>
 </body></html>`;
@@ -106,6 +107,7 @@ function serve(mobile) {
     '/static/js/icons.js': path.join(WEB_DIR, 'static', 'js', 'icons.js'),
     '/static/js/comment_post.js': path.join(WEB_DIR, 'static', 'js', 'comment_post.js'),
     '/static/js/view-requests.js': path.join(WEB_DIR, 'static', 'js', 'view-requests.js'),
+    '/static/js/sidebar/namespace.js': path.join(WEB_DIR, 'static', 'js', 'sidebar', 'namespace.js'),
     '/static/js/chat/shared.js': path.join(WEB_DIR, 'static', 'js', 'chat', 'shared.js'),
     '/static/js/chat/status-panel.js': path.join(WEB_DIR, 'static', 'js', 'chat', 'status-panel.js'),
     '/static/css/tailwind.css': path.join(WEB_DIR, 'static', 'css', 'tailwind.css'),

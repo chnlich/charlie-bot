@@ -140,11 +140,19 @@ pub fn stored_goal(meta: &SessionMetadata) -> anyhow::Result<Option<String>> {
   Ok(status.and_then(|status| status.goal))
 }
 
-/// Whether the session stores at least one Waiting on you item. An unreadable status is the failure this package raises
-/// for it.
-pub fn has_stored_waiting(meta: &SessionMetadata) -> anyhow::Result<bool> {
+/// Whether the session stores a Waiting on you item that no click answered. The sidebar's waiting flag and the
+/// Status view's done checkboxes read this one rule: an item is answered when a click names its position in the list
+/// version the status serves, so a changed list leaves every item unanswered. An unreadable status is the failure
+/// this package raises for it.
+pub(crate) fn has_unanswered_waiting(store: &Store, meta: &SessionMetadata) -> anyhow::Result<bool> {
   let status = stored_status(meta).map_err(status_failure)?;
-  Ok(status.is_some_and(|status| !status.waiting.is_empty()))
+  let Some(status) = status.filter(|status| !status.waiting.is_empty()) else {
+    return Ok(false);
+  };
+  // Only a session that holds items reads its click facts, so a session with none costs no history read.
+  let version = waiting_version(&effective_waiting(&status));
+  let clicked = store.facts_of(&meta.id)?.clicked;
+  Ok((1..=status.waiting.len()).any(|position| !item_answered(&version, position, &clicked)))
 }
 
 /// The status error as the failure a caller outside this package reports.
@@ -344,15 +352,18 @@ fn waiting_version(items: &[WaitingItem]) -> String {
   charliebot_store::control_events::sha256_bytes_hex(encoded.as_bytes())[..16].to_string()
 }
 
+/// Whether `clicked` holds a click on the item at `position` in the list `version`.
+fn item_answered(version: &str, position: usize, clicked: &[(String, usize)]) -> bool {
+  clicked.iter().any(|(clicked_version, clicked_position)| clicked_version == version && *clicked_position == position)
+}
+
 /// Add the fold's click references to the status payload without changing stored waiting items.
 fn status_payload_with_clicked(status: &WebStatus, clicked: &[(String, usize)]) -> Value {
   let mut payload = status_payload(status);
   let version = payload["waiting_version"].as_str().expect("a status payload has its waiting version").to_string();
   let waiting = payload["waiting"].as_array_mut().expect("a status payload has a waiting list");
   for (index, item) in waiting.iter_mut().enumerate() {
-    item["answered"] = json!(
-      clicked.iter().any(|(clicked_version, position)| { clicked_version == &version && *position == index + 1 })
-    );
+    item["answered"] = json!(item_answered(&version, index + 1, clicked));
   }
   payload
 }
@@ -1080,9 +1091,12 @@ mod tests {
   use serde_json::json;
 
   use super::*;
+  use crate::sidebar::WebReplySidebar;
   use crate::test_support::{Home, set_derived_waiting};
   use charliebot_registry::registry::OpenWaitingRow;
+  use charliebot_registry::sidebar::SidebarContribution;
   use charliebot_store::metadata::TaskApprover;
+  use charliebot_store::sidebar_state::HAS_WAITING_ITEMS;
 
   const VALID_SET: &str = r#"{"now": "Running"}"#;
 
@@ -1715,6 +1729,53 @@ mod tests {
     let restored = read_status(&home.features, &sid).await.expect("the status reads after restoration");
     assert_eq!(restored["web_status"]["waiting_version"], json!(initial_version));
     assert_eq!(restored["web_status"]["waiting"][0]["answered"], json!(true));
+  }
+
+  #[tokio::test]
+  async fn the_sidebar_waiting_flag_counts_only_items_that_no_click_answered() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    for text in ["Approve the deploy", "Pick a layout"] {
+      check_waiting_item(&home, &sid, text).await;
+    }
+    set_status(
+      &home.features,
+      &sid,
+      &json!({"waiting": [waiting_item("Approve the deploy"), waiting_item("Pick a layout")]}).to_string(),
+    )
+    .await
+    .expect("the set stores");
+    let reading = read_status(&home.features, &sid).await.expect("the status reads");
+    let version = reading["web_status"]["waiting_version"].as_str().unwrap().to_string();
+    let since: Vec<String> = reading["web_status"]["waiting"]
+      .as_array()
+      .unwrap()
+      .iter()
+      .map(|item| item["since"].as_str().unwrap().to_string())
+      .collect();
+    let flag =
+      || WebReplySidebar.row_flags(&home.features.store, &sid).into_iter().find(|(name, _)| *name == HAS_WAITING_ITEMS);
+    assert_eq!(flag(), Some((HAS_WAITING_ITEMS, true)), "two unmarked items show the mark");
+
+    home.append(&sid, waiting_click(&sid, &version, &since[0], 1)).await;
+    assert_eq!(flag(), Some((HAS_WAITING_ITEMS, true)), "one unmarked item keeps the mark");
+
+    home.append(&sid, waiting_click(&sid, &version, &since[1], 2)).await;
+    assert_eq!(flag(), Some((HAS_WAITING_ITEMS, false)), "every item answered lifts the mark");
+
+    let rewritten = json!({
+      "text": "Approve the deploy now",
+      "context": "The decision is active now. Options are deploy or wait; deploy is recommended.",
+      "link": null,
+    });
+    record_ask_check(&home.features, &sid, &rewritten, "synthetic-haiku", "Deploy now.")
+      .await
+      .expect("the rewritten item cold read records");
+    check_kept_item(&home, &sid, "Pick a layout").await;
+    set_status(&home.features, &sid, &json!({"waiting": [rewritten, waiting_item("Pick a layout")]}).to_string())
+      .await
+      .expect("the rewritten list stores");
+    assert_eq!(flag(), Some((HAS_WAITING_ITEMS, true)), "a changed list leaves every item unanswered");
   }
 
   #[tokio::test]

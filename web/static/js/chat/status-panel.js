@@ -5,9 +5,10 @@
 // takes the message list's place in the Chat column while Status is selected in
 // the view toggle. The selection and the panel's visibility belong to
 // chat/for-you.js's applyChatView. This file renders the panel's content and
-// the waiting count on the toggle option's badge. A worker session shows neither
-// the option nor the badge. A manager session is one that Chat.ForYou.isManagerSession
-// (for-you.js) accepts, bound to a chat thread or not.
+// the waiting count on the toggle option's badge; the shown session's sidebar
+// mark follows those done boxes through Sidebar.reportWaitingCheckState. A worker
+// session shows neither the option nor the badge. A manager session is one that
+// Chat.ForYou.isManagerSession (for-you.js) accepts, bound to a chat thread or not.
 //
 // The session's own status, list version and answered marks come from GET /api/internal/web/status. The descendant and
 // child rows use the same read, fetched at open and after status notifications.
@@ -283,6 +284,12 @@
     renderPanel();
   }
 
+  // Whether one own stored item's done box reads checked: the server answered it, or this page's click for it is in
+  // flight. The box and the session's sidebar mark read this one rule, so both show the same state.
+  function itemChecked(sessionId, waitingVersion, position, answered) {
+    return answered === true || pendingDone.has(doneKey(sessionId, waitingVersion, position));
+  }
+
   // The done checkbox of one stored item. Checking it starts the Status click; unchecking inside the undo window
   // cancels it. The box is checked and disabled once the server reports the item answered and while the post is under
   // way. A status read that failed leaves it unchecked and disabled, since the item's state is then unknown.
@@ -297,7 +304,7 @@
     box.title = DONE_TITLE;
     box.setAttribute('aria-label', DONE_TITLE);
     box.dataset.doneCheck = 'true';
-    box.checked = answered || Boolean(pending);
+    box.checked = itemChecked(click.sessionId, click.waitingVersion, click.position, answered);
     box.disabled = answered || unknown || Boolean(pending && pending.undo.sending);
     box.onchange = () => {
       if (box.checked) scheduleClick(click);
@@ -579,9 +586,8 @@
     if (panelChildren.length) el.appendChild(childrenNowRow());
   }
 
-  // The panel redraws on every status update, and the badge follows the
-  // same state. The panel may be hidden while Status is not selected. Its
-  // content stays current, so selecting it shows the newest state.
+  // The panel redraws on every status update, and the badge and the sidebar mark follow the same state. The panel
+  // may be hidden while Status is not selected. Its content stays current, so selecting it shows the newest state.
   function renderPanel() {
     const view = document.getElementById(VIEW_ID);
     if (view) {
@@ -590,6 +596,23 @@
       else if (panelSessionId) statusPanelBody(view);
     }
     renderWaitingBadge();
+    syncSidebarWaitingFact();
+  }
+
+  // Whether this session still holds a stored item that no done box checked: the condition its sidebar mark shows
+  // under. A page that holds no status yet holds none.
+  function hasUncheckedWaiting() {
+    if (!panelSessionId || !panelStatus) return false;
+    const version = panelStatus.waiting_version;
+    return panelStatus.waiting.some((item, index) =>
+      !itemChecked(panelSessionId, version, index + 1, item.answered));
+  }
+
+  // The shown session's sidebar mark follows its done boxes: checking the last item clears the mark where it was
+  // checked, and unchecking one inside the undo window brings it back. Every other row follows the status poll.
+  function syncSidebarWaitingFact() {
+    if (!panelSessionId || !panelStatus) return;
+    globalThis.Sidebar.reportWaitingCheckState(panelSessionId, hasUncheckedWaiting());
   }
 
   // The toggle option's waiting count holds this session's own stored Waiting on you

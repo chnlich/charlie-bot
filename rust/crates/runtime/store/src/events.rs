@@ -106,6 +106,13 @@ impl Store {
     let kind = compact.get("type").and_then(CompactValue::as_str);
     drop(cache);
     self.note_tree_state_event(kind);
+    // A click on a Waiting on you item moves the row's waiting flag, which the next sidebar poll reads from a fresh
+    // probe. Every other append leaves the flag where it is.
+    if kind == Some(charliebot_core::event_types::USER)
+      && !crate::waiting_clicks::status_waiting_clicks(&compact, session_id).is_empty()
+    {
+      crate::sidebar_state::mark_sidebar_dirty(session_id);
+    }
     Ok(compact)
   }
 
@@ -1969,6 +1976,21 @@ mod tests {
     assert_ne!(replacement_generation, append_generation, "cache replacement gives the Python-style new list identity");
     assert!(!Arc::ptr_eq(&replacement_identity, &append_identity), "replacement changes the event-list memo key");
     assert_eq!(replacement_events.len(), 2);
+  }
+
+  #[tokio::test]
+  async fn an_appended_status_click_marks_its_row_for_a_fresh_sidebar_probe() {
+    let (_home, store) = make_test_store();
+    store.append_chat_event("synthetic", json!({"type": "user", "content": "an ordinary message"})).await.unwrap();
+    assert!(!crate::sidebar_state::is_dirty("synthetic"), "an ordinary message leaves the row where it is");
+    store
+      .append_chat_event(
+        "synthetic",
+        json!({"type": "user", "content": "[Status · Waiting on you]\n1. ▸ Waiting on you · session synthetic · list 0123456789abcdef · since 2026-11-06T16:50:57Z · #1\n   ↳ Done"}),
+      )
+      .await
+      .unwrap();
+    assert!(crate::sidebar_state::is_dirty("synthetic"), "a click moves the row's waiting flag");
   }
 
   #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

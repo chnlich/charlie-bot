@@ -4,7 +4,7 @@
 //! each role to its steps. The helper reads its role from `argv[0]`, resolves a bare name on `PATH` as the caller's
 //! own `exec` resolved it, and runs the role's steps in order. The steps record argv, the child environment or stdin
 //! into a file. They append text to a file, write text into a file inside the directory that an argument names, sleep,
-//! write stdout or stderr, and exit. A step list that ends without `exit` is an error.
+//! clear their dumpable flag, write stdout or stderr, and exit. A step list that ends without `exit` is an error.
 //!
 //! The two step-based helpers run this one vocabulary: `charliebot-agents`'s `fake_program` binary and
 //! `charliebot-artifacts`'s `chrome_stub` binary. A step added for one helper is available to the other, and the
@@ -43,6 +43,9 @@ enum Step {
     text: String,
   },
   SleepMs(u64),
+  /// Clears the process's dumpable flag. A non-root reader's `/proc/<pid>/exe` read then fails with a permission
+  /// error, as it does for a Chrome crashpad handler.
+  NonDumpable,
   Stdout(String),
   Stderr(String),
   Exit(i32),
@@ -112,6 +115,11 @@ fn run_step(step: Step) {
       fs::write(&path, text).unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
     }
     Step::SleepMs(ms) => thread::sleep(Duration::from_millis(ms)),
+    Step::NonDumpable => {
+      // SAFETY: PR_SET_DUMPABLE with a constant 0 changes only this process's own dumpable flag.
+      let ret = unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) };
+      assert_eq!(ret, 0, "clear the dumpable flag: {}", io::Error::last_os_error());
+    }
     Step::Stdout(text) => {
       let mut out = io::stdout();
       out.write_all(text.as_bytes()).expect("write fake stdout");

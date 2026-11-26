@@ -159,7 +159,7 @@ fn stop_loop(args: &StopArgs) -> Result<(), CliExit> {
 /// Every missing piece returns `None`, so the caller reports `outcome_unknown`.
 fn readback_launch(home: &Path, session_id: &str, goal: &str, plan: Option<&str>, iterations: i64) -> Option<Value> {
   let session_dir = config::sessions_dir_in(home).join(session_id);
-  let loops_dir = session_dir.join("loops");
+  let loops_dir = command::loops_dir_of(&session_dir);
   if !loops_dir.is_dir() {
     return None;
   }

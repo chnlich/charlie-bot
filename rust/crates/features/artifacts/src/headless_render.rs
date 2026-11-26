@@ -467,14 +467,34 @@ pub(crate) struct ProcessRecord {
   parent_pid: u32,
   start_time: u64,
   state: char,
-  /// The executable file name, read when argv carries a renderer profile.
+  /// The executable file name, read when argv names a renderer profile or a crashpad handler. `None` when that read
+  /// was refused, and the argv decides the process's role instead.
   exe_name: Option<String>,
   argv: Vec<String>,
 }
 
+/// One pass over `/proc`: the records it read, and the pids whose `/proc` fields refused permission.
+struct ProcessScan {
+  records: Vec<ProcessRecord>,
+  refused: BTreeSet<u32>,
+}
+
+/// One read of `/proc/<pid>`.
+enum ProcessRead {
+  /// The process has no command line, or it exited during the read.
+  Gone,
+  /// A `/proc` field refused permission, so the process cannot be classified from this read.
+  Refused,
+  Record(ProcessRecord),
+}
+
 /// Whether `process` is a renderer browser whose parent chain has no live CharlieBot server.
-fn is_orphaned_renderer(process: &ProcessRecord, processes: &HashMap<u32, &ProcessRecord>) -> bool {
-  is_renderer_browser(process) && !renderer_has_live_server_ancestor(process, processes)
+fn is_orphaned_renderer(
+  process: &ProcessRecord,
+  processes: &HashMap<u32, &ProcessRecord>,
+  refused: &BTreeSet<u32>,
+) -> bool {
+  is_renderer_browser(process) && !renderer_has_live_server_ancestor(process, processes, refused)
 }
 
 fn is_renderer_browser(process: &ProcessRecord) -> bool {
@@ -487,10 +507,19 @@ fn is_renderer_browser(process: &ProcessRecord) -> bool {
     && renderer_user_data_dir(&process.argv).is_some()
 }
 
-fn renderer_has_live_server_ancestor(process: &ProcessRecord, processes: &HashMap<u32, &ProcessRecord>) -> bool {
+/// Whether the parent chain holds a live server, or a process whose `/proc` fields refused permission, which the sweep
+/// cannot prove is not one.
+fn renderer_has_live_server_ancestor(
+  process: &ProcessRecord,
+  processes: &HashMap<u32, &ProcessRecord>,
+  refused: &BTreeSet<u32>,
+) -> bool {
   let mut parent_pid = process.parent_pid;
   let mut visited = HashSet::new();
   while parent_pid > 0 && visited.insert(parent_pid) {
+    if refused.contains(&parent_pid) {
+      return true;
+    }
     let Some(parent) = processes.get(&parent_pid) else { return false };
     let argv0_name =
       parent.argv.first().and_then(|argument| Path::new(argument).file_name()).and_then(|name| name.to_str());
@@ -506,22 +535,37 @@ fn renderer_has_live_server_ancestor(process: &ProcessRecord, processes: &HashMa
 }
 
 /// Ends each renderer whose server is gone and removes its profile. Read and cleanup errors are logged and returned.
+/// Processes whose `/proc` fields refuse permission are left alone and named once.
 pub(crate) fn end_orphaned_renderers() -> anyhow::Result<()> {
-  let processes = match read_process_records() {
-    Ok(processes) => processes,
+  let scan = match read_process_scan() {
+    Ok(scan) => scan,
     Err(error) => {
       tracing::error!(error = format!("{error:#}"), "headless_renderer_process_scan_failed");
       tracing::info!(count = 0, complete = false, "headless_renderer_orphans_ended");
       return Err(error);
     }
   };
-  end_orphaned_renderers_from(&processes).map(|_| ())
+  name_unclassified_processes(&scan);
+  end_orphaned_renderers_from(&scan).map(|_| ())
 }
 
-fn end_orphaned_renderers_from(processes: &[ProcessRecord]) -> anyhow::Result<usize> {
-  let by_pid: HashMap<u32, &ProcessRecord> = processes.iter().map(|process| (process.pid, process)).collect();
+/// Logs each process that the sweep cannot classify because permission refused a `/proc` field.
+fn name_unclassified_processes(scan: &ProcessScan) {
+  for pid in &scan.refused {
+    tracing::info!(pid, "headless_renderer_process_unreadable_left_alone");
+  }
+  for process in &scan.records {
+    let exe_refused = exe_name_needed(&process.argv) && process.exe_name.is_none();
+    if exe_refused && !is_renderer_browser(process) && !is_crashpad_handler(process) {
+      tracing::info!(pid = process.pid, "headless_renderer_exe_unreadable_role_unproven");
+    }
+  }
+}
+
+fn end_orphaned_renderers_from(scan: &ProcessScan) -> anyhow::Result<usize> {
+  let by_pid: HashMap<u32, &ProcessRecord> = scan.records.iter().map(|process| (process.pid, process)).collect();
   let mut profiles = BTreeSet::new();
-  for process in processes.iter().filter(|process| is_orphaned_renderer(process, &by_pid)) {
+  for process in scan.records.iter().filter(|process| is_orphaned_renderer(process, &by_pid, &scan.refused)) {
     let profile = renderer_user_data_dir(&process.argv)
       .ok_or_else(|| anyhow!("renderer browser {} has no renderer user-data directory", process.pid))?;
     profiles.insert(PathBuf::from(profile));
@@ -569,10 +613,10 @@ fn end_renderer_processes(profile: &Path) -> anyhow::Result<()> {
   let deadline = Instant::now() + HEADLESS_TEARDOWN_WAIT;
   let mut crashpad_pids: HashMap<u32, u64> = HashMap::new();
   loop {
-    let processes = read_process_records()?;
-    let by_pid: HashMap<u32, &ProcessRecord> = processes.iter().map(|process| (process.pid, process)).collect();
+    let scan = read_process_scan()?;
+    let by_pid: HashMap<u32, &ProcessRecord> = scan.records.iter().map(|process| (process.pid, process)).collect();
     let matching: Vec<&ProcessRecord> =
-      processes.iter().filter(|process| process_uses_renderer_profile(process, profile)).collect();
+      scan.records.iter().filter(|process| process_uses_renderer_profile(process, profile)).collect();
     for process in &matching {
       for cpid in crashpad_handler_pids(&process.argv) {
         if !crashpad_pids.contains_key(&cpid)
@@ -612,8 +656,21 @@ fn end_renderer_processes(profile: &Path) -> anyhow::Result<()> {
   }
 }
 
+/// Reads a process again before its kill. A process whose fields refuse permission now cannot be verified, so it is
+/// left alone and named.
+fn reread_before_kill(process: &ProcessRecord, profile: &Path) -> anyhow::Result<Option<ProcessRecord>> {
+  match read_process_record(process.pid)? {
+    ProcessRead::Record(current) => Ok(Some(current)),
+    ProcessRead::Gone => Ok(None),
+    ProcessRead::Refused => {
+      tracing::info!(pid = process.pid, path = %profile.display(), "headless_renderer_kill_skipped_unreadable");
+      Ok(None)
+    }
+  }
+}
+
 fn kill_renderer_process(process: &ProcessRecord, profile: &Path) -> anyhow::Result<()> {
-  let Some(current) = read_process_record(process.pid)? else { return Ok(()) };
+  let Some(current) = reread_before_kill(process, profile)? else { return Ok(()) };
   if current.start_time != process.start_time {
     return Err(anyhow!("process {} changed while ending renderer profile {}", process.pid, profile.display()));
   }
@@ -624,7 +681,7 @@ fn kill_renderer_process(process: &ProcessRecord, profile: &Path) -> anyhow::Res
 }
 
 fn kill_crashpad_process(process: &ProcessRecord, profile: &Path) -> anyhow::Result<()> {
-  let Some(current) = read_process_record(process.pid)? else { return Ok(()) };
+  let Some(current) = reread_before_kill(process, profile)? else { return Ok(()) };
   if current.start_time != process.start_time {
     return Err(anyhow!(
       "crashpad process {} changed while ending renderer profile {}",
@@ -683,37 +740,58 @@ fn renderer_user_data_dir(argv: &[String]) -> Option<&str> {
   })
 }
 
-/// Every readable process with a command line, returning an error for any process that could not be inspected.
-fn read_process_records() -> anyhow::Result<Vec<ProcessRecord>> {
+/// One pass over `/proc`. A process that vanishes mid-scan is skipped, a refused field is recorded, and any other read
+/// error stops the scan.
+fn read_process_scan() -> anyhow::Result<ProcessScan> {
   let entries = fs::read_dir("/proc").context("could not list /proc")?;
-  let mut processes = Vec::new();
+  let mut scan = ProcessScan { records: Vec::new(), refused: BTreeSet::new() };
   for entry in entries {
     let entry = entry.context("could not read a /proc directory entry")?;
     let Some(pid) = entry.file_name().to_str().and_then(|name| name.parse::<u32>().ok()) else { continue };
     match read_process_record(pid) {
-      Ok(Some(process)) => processes.push(process),
-      Ok(None) => tracing::debug!(pid, "headless_renderer_process_disappeared_during_scan"),
+      Ok(ProcessRead::Record(process)) => scan.records.push(process),
+      Ok(ProcessRead::Gone) => tracing::debug!(pid, "headless_renderer_process_disappeared_during_scan"),
+      Ok(ProcessRead::Refused) => {
+        scan.refused.insert(pid);
+      }
       Err(error) => {
         tracing::error!(pid, error = format!("{error:#}"), "headless_renderer_process_read_failed");
         return Err(error).with_context(|| format!("could not inspect process {pid}"));
       }
     }
   }
-  Ok(processes)
+  Ok(scan)
 }
 
 fn is_missing_process_error(error: &std::io::Error) -> bool {
   error.kind() == ErrorKind::NotFound || error.raw_os_error() == Some(libc::ESRCH)
 }
 
-fn read_process_record(pid: u32) -> anyhow::Result<Option<ProcessRecord>> {
+/// The outcome of a failed `/proc/<pid>/<field>` read: a vanished process is gone, a refused field is the caller's
+/// to skip, and any other failure is an error.
+fn field_read_failure(pid: u32, field: &str, error: std::io::Error) -> anyhow::Result<ProcessRead> {
+  if is_missing_process_error(&error) {
+    Ok(ProcessRead::Gone)
+  } else if error.kind() == ErrorKind::PermissionDenied {
+    Ok(ProcessRead::Refused)
+  } else {
+    Err(error).with_context(|| format!("could not read /proc/{pid}/{field}"))
+  }
+}
+
+/// Whether the sweep reads the executable name for this argv: a renderer profile, or a crashpad handler by argv0.
+fn exe_name_needed(argv: &[String]) -> bool {
+  let argv0_name = argv.first().and_then(|argument| Path::new(argument).file_name()).and_then(|name| name.to_str());
+  argv.iter().any(|argument| argument.contains(RENDERER_TEMP_PREFIX)) || argv0_name == Some(CRASHPAD_HANDLER_EXE)
+}
+
+fn read_process_record(pid: u32) -> anyhow::Result<ProcessRead> {
   let argv_raw = match fs::read(format!("/proc/{pid}/cmdline")) {
     Ok(argv) => argv,
-    Err(error) if is_missing_process_error(&error) => return Ok(None),
-    Err(error) => return Err(error).with_context(|| format!("could not read /proc/{pid}/cmdline")),
+    Err(error) => return field_read_failure(pid, "cmdline", error),
   };
   if argv_raw.is_empty() {
-    return Ok(None);
+    return Ok(ProcessRead::Gone);
   }
   // Chrome rewrites its argv into one space-joined string, so each NUL-separated part splits on spaces too.
   let mut argv = Vec::new();
@@ -725,29 +803,27 @@ fn read_process_record(pid: u32) -> anyhow::Result<Option<ProcessRecord>> {
       argv.push(argument.to_owned());
     }
   }
-  let argv0_name = argv.first().and_then(|argument| Path::new(argument).file_name()).and_then(|name| name.to_str());
-  let needs_exe_name =
-    argv.iter().any(|argument| argument.contains(RENDERER_TEMP_PREFIX)) || argv0_name == Some(CRASHPAD_HANDLER_EXE);
-  let exe_name = if needs_exe_name {
-    let exe = match fs::read_link(format!("/proc/{pid}/exe")) {
-      Ok(exe) => exe,
-      Err(error) if is_missing_process_error(&error) => return Ok(None),
+  let exe_name = if exe_name_needed(&argv) {
+    match fs::read_link(format!("/proc/{pid}/exe")) {
+      Ok(exe) => Some(
+        exe
+          .file_name()
+          .and_then(|name| name.to_str())
+          .ok_or_else(|| anyhow!("/proc/{pid}/exe has no UTF-8 file name"))?
+          .to_owned(),
+      ),
+      // A non-dumpable process, such as a Chrome crashpad handler, refuses this read to a non-root reader. Its argv
+      // then decides its role.
+      Err(error) if error.kind() == ErrorKind::PermissionDenied => None,
+      Err(error) if is_missing_process_error(&error) => return Ok(ProcessRead::Gone),
       Err(error) => return Err(error).with_context(|| format!("could not read /proc/{pid}/exe")),
-    };
-    Some(
-      exe
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| anyhow!("/proc/{pid}/exe has no UTF-8 file name"))?
-        .to_owned(),
-    )
+    }
   } else {
     None
   };
   let stat = match read_stat_text(pid) {
     Ok(stat) => stat,
-    Err(error) if is_missing_process_error(&error) => return Ok(None),
-    Err(error) => return Err(error).with_context(|| format!("could not read /proc/{pid}/stat")),
+    Err(error) => return field_read_failure(pid, "stat", error),
   };
   let fields: Vec<&str> = stat_fields_after_command(&stat)
     .ok_or_else(|| anyhow!("/proc/{pid}/stat has no command delimiter"))?
@@ -767,7 +843,7 @@ fn read_process_record(pid: u32) -> anyhow::Result<Option<ProcessRecord>> {
     .ok_or_else(|| anyhow!("/proc/{pid}/stat has no process start time"))?
     .parse()
     .with_context(|| format!("/proc/{pid}/stat has an invalid process start time"))?;
-  Ok(Some(ProcessRecord { pid, parent_pid, start_time, state, exe_name, argv }))
+  Ok(ProcessRead::Record(ProcessRecord { pid, parent_pid, start_time, state, exe_name, argv }))
 }
 
 fn is_load_event(value: &Value) -> bool {
@@ -839,6 +915,8 @@ mod tests {
     )
   }
 
+  /// A fake crashpad handler that is non-dumpable, as Chrome's handlers are, so a non-root reader's `/proc/<pid>/exe`
+  /// read is refused.
   fn crashpad_stub(directory: &Path, name: &str) -> PathBuf {
     let stub = directory.join(name);
     fs::create_dir(&stub).expect("the crashpad stub directory is created");
@@ -847,7 +925,7 @@ mod tests {
       .expect("the fake links to the helper");
     fs::write(
       stub.join(charliebot_core::paths::PROBE_FILE_NAME),
-      json!({"chrome_crashpad_handler": [{"sleep_ms": 60000}, {"exit": 0}]}).to_string(),
+      json!({"chrome_crashpad_handler": ["non_dumpable", {"sleep_ms": 60000}, {"exit": 0}]}).to_string(),
     )
     .expect("the crashpad steps are written");
     program
@@ -945,6 +1023,20 @@ mod tests {
     !matches!(state, Some('Z' | 'X'))
   }
 
+  /// The record of a process that the test expects to read: `None` once it has exited, and a refused field fails.
+  fn read_record(pid: u32) -> Option<ProcessRecord> {
+    match read_process_record(pid).expect("the process reads") {
+      ProcessRead::Record(process) => Some(process),
+      ProcessRead::Gone => None,
+      ProcessRead::Refused => panic!("process {pid} refused a /proc field"),
+    }
+  }
+
+  /// Whether `/proc/<pid>/exe` refuses this reader, as it does for a non-dumpable process.
+  fn exe_read_refused(pid: u32) -> bool {
+    fs::read_link(format!("/proc/{pid}/exe")).is_err_and(|error| error.kind() == ErrorKind::PermissionDenied)
+  }
+
   /// A process record for an ownership predicate test.
   fn process_record(pid: u32, parent_pid: u32, exe_name: &str, argv: &[&str]) -> ProcessRecord {
     ProcessRecord {
@@ -984,12 +1076,13 @@ mod tests {
     let not_chrome = process_record(104, systemd.pid, "sleep", &["--user-data-dir=/tmp/headless-render-jkl"]);
     let process_refs = [&systemd, &server, &orphan, &live, &other_profile, &renderer_child, &not_chrome];
     let by_pid: HashMap<u32, &ProcessRecord> = process_refs.iter().map(|process| (process.pid, *process)).collect();
+    let refused = BTreeSet::new();
 
-    assert!(is_orphaned_renderer(&orphan, &by_pid));
-    assert!(!is_orphaned_renderer(&live, &by_pid), "a renderer with a live server ancestor stays");
-    assert!(!is_orphaned_renderer(&other_profile, &by_pid), "other Chrome profiles stay");
-    assert!(!is_orphaned_renderer(&renderer_child, &by_pid), "Chrome renderer children are not roots");
-    assert!(!is_orphaned_renderer(&not_chrome, &by_pid), "non-Chrome processes are not roots");
+    assert!(is_orphaned_renderer(&orphan, &by_pid, &refused));
+    assert!(!is_orphaned_renderer(&live, &by_pid, &refused), "a renderer with a live server ancestor stays");
+    assert!(!is_orphaned_renderer(&other_profile, &by_pid, &refused), "other Chrome profiles stay");
+    assert!(!is_orphaned_renderer(&renderer_child, &by_pid, &refused), "Chrome renderer children are not roots");
+    assert!(!is_orphaned_renderer(&not_chrome, &by_pid, &refused), "non-Chrome processes are not roots");
 
     let child_with_crashpad = process_record(
       105,
@@ -1006,6 +1099,63 @@ mod tests {
     );
     assert!(is_crashpad_handler(&crashpad));
     assert!(!is_crashpad_handler(&not_chrome));
+  }
+
+  /// A record whose exe read was refused: the sweep has only its argv.
+  fn refused_exe_record(pid: u32, parent_pid: u32, argv: &[&str]) -> ProcessRecord {
+    ProcessRecord { exe_name: None, ..process_record(pid, parent_pid, "", argv) }
+  }
+
+  #[test]
+  fn a_refused_exe_leaves_the_role_to_argv() {
+    let systemd = process_record(815, 1, "systemd", &[]);
+    let orphan = refused_exe_record(
+      100,
+      systemd.pid,
+      &["/opt/google/chrome/chrome", "--headless", "--user-data-dir=/tmp/headless-render-abc"],
+    );
+    let renamed =
+      refused_exe_record(106, systemd.pid, &["/opt/other/launcher", "--user-data-dir=/tmp/headless-render-x"]);
+    let crashpad = refused_exe_record(
+      200,
+      systemd.pid,
+      &["/opt/google/chrome/chrome_crashpad_handler", "--database=/home/user/.config/google-chrome/Crash Reports"],
+    );
+    let unnamed_crashpad = refused_exe_record(201, systemd.pid, &["/opt/other/handler", "--database=/tmp/db"]);
+    let by_pid: HashMap<u32, &ProcessRecord> = [&systemd, &orphan, &renamed, &crashpad, &unnamed_crashpad]
+      .into_iter()
+      .map(|process| (process.pid, process))
+      .collect();
+    let refused = BTreeSet::new();
+
+    assert!(is_orphaned_renderer(&orphan, &by_pid, &refused), "argv0 chrome proves a renderer browser");
+    assert!(!is_orphaned_renderer(&renamed, &by_pid, &refused), "an argv0 that is not chrome proves nothing");
+    assert!(is_crashpad_handler(&crashpad), "argv0 chrome_crashpad_handler proves a crashpad handler");
+    assert!(!is_crashpad_handler(&unnamed_crashpad), "an unproven crashpad handler is not ours");
+  }
+
+  #[test]
+  fn a_refused_ancestor_keeps_its_renderer() {
+    let systemd = process_record(815, 1, "systemd", &[]);
+    let refused_parent_pid = 60;
+    let child = process_record(
+      100,
+      refused_parent_pid,
+      "chrome",
+      &["/opt/google/chrome/chrome", "--user-data-dir=/tmp/headless-render-abc"],
+    );
+    let by_pid: HashMap<u32, &ProcessRecord> =
+      [&systemd, &child].into_iter().map(|process| (process.pid, process)).collect();
+    let refused: BTreeSet<u32> = [refused_parent_pid].into();
+
+    assert!(
+      !is_orphaned_renderer(&child, &by_pid, &refused),
+      "a parent whose fields refused permission may be the live server"
+    );
+    assert!(
+      is_orphaned_renderer(&child, &by_pid, &BTreeSet::new()),
+      "the same renderer is an orphan once its parent is readable and gone"
+    );
   }
 
   #[test]
@@ -1060,26 +1210,27 @@ mod tests {
     let live_browser_pid = live_browser.id();
     let live_crashpad_pid = live_crashpad.id();
     let test_pid = std::process::id();
-    read_process_record(test_pid).unwrap().expect("the test process has a proc record");
-    let parent = read_process_record(non_server_parent.id()).unwrap().expect("the stand-in parent has a proc record");
+    read_record(test_pid).expect("the test process has a proc record");
+    let parent = read_record(non_server_parent.id()).expect("the stand-in parent has a proc record");
 
+    // Each crashpad handler marks itself non-dumpable after its exec, so its exe read is refused only once that runs.
     let deadline = Instant::now() + Duration::from_secs(5);
-    let mut processes = loop {
-      let processes = read_process_records().expect("the process table is readable");
+    let mut scan = loop {
+      let scan = read_process_scan().expect("the process table is readable");
       let ready = [orphan_browser_pid, orphan_crashpad_pid, live_browser_pid, live_crashpad_pid]
         .iter()
-        .all(|pid| processes.iter().any(|process| process.pid == *pid));
-      if ready {
-        break processes;
+        .all(|pid| scan.records.iter().any(|process| process.pid == *pid));
+      if ready && [orphan_crashpad_pid, live_crashpad_pid].iter().all(|pid| exe_read_refused(*pid)) {
+        break scan;
       }
-      assert!(Instant::now() < deadline, "the renderer processes did not enter /proc");
+      assert!(Instant::now() < deadline, "the crashpad handlers' exe reads were not refused (the test needs non-root)");
       thread::sleep(Duration::from_millis(10));
     };
-    processes.retain(|process| {
+    scan.records.retain(|process| {
       [orphan_browser_pid, orphan_crashpad_pid, live_browser_pid, live_crashpad_pid, test_pid, parent.pid]
         .contains(&process.pid)
     });
-    for process in &mut processes {
+    for process in &mut scan.records {
       if process.pid == orphan_browser_pid || process.pid == orphan_crashpad_pid {
         process.parent_pid = if process.pid == orphan_browser_pid { parent.pid } else { orphan_browser_pid };
       }
@@ -1095,18 +1246,18 @@ mod tests {
       }
     }
 
-    let orphan_browser_record = processes.iter().find(|process| process.pid == orphan_browser_pid).unwrap();
-    let live_browser_record = processes.iter().find(|process| process.pid == live_browser_pid).unwrap();
-    let by_pid: HashMap<u32, &ProcessRecord> = processes.iter().map(|process| (process.pid, process)).collect();
-    assert!(is_orphaned_renderer(orphan_browser_record, &by_pid));
-    assert!(!is_orphaned_renderer(live_browser_record, &by_pid));
+    let orphan_browser_record = scan.records.iter().find(|process| process.pid == orphan_browser_pid).unwrap();
+    let live_browser_record = scan.records.iter().find(|process| process.pid == live_browser_pid).unwrap();
+    let by_pid: HashMap<u32, &ProcessRecord> = scan.records.iter().map(|process| (process.pid, process)).collect();
+    assert!(is_orphaned_renderer(orphan_browser_record, &by_pid, &scan.refused));
+    assert!(!is_orphaned_renderer(live_browser_record, &by_pid, &scan.refused));
     assert_ne!(
       nix::unistd::getpgid(Some(Pid::from_raw(orphan_browser_pid as i32))).unwrap(),
       nix::unistd::getpgid(Some(Pid::from_raw(orphan_crashpad_pid as i32))).unwrap(),
       "the crashpad handler uses a separate process group"
     );
 
-    assert_eq!(end_orphaned_renderers_from(&processes).unwrap(), 1);
+    assert_eq!(end_orphaned_renderers_from(&scan).unwrap(), 1, "the sweep proceeds past the refused exe read");
     let deadline = Instant::now() + Duration::from_secs(5);
     while (process_alive(orphan_browser_pid as i32) || process_alive(orphan_crashpad_pid as i32))
       && Instant::now() < deadline
@@ -1169,17 +1320,13 @@ mod tests {
       .expect("the crashpad handler starts");
     let crashpad_pid = crashpad.id();
     let deadline = Instant::now() + Duration::from_secs(5);
-    while read_process_record(crashpad_pid)
-      .unwrap()
-      .is_none_or(|process| !process_uses_renderer_profile(&process, &profile))
+    while read_record(crashpad_pid).is_none_or(|process| !process_uses_renderer_profile(&process, &profile))
       && Instant::now() < deadline
     {
       thread::sleep(Duration::from_millis(10));
     }
     assert!(
-      read_process_record(crashpad_pid)
-        .unwrap()
-        .is_some_and(|process| process_uses_renderer_profile(&process, &profile)),
+      read_record(crashpad_pid).is_some_and(|process| process_uses_renderer_profile(&process, &profile)),
       "the crashpad handler command line names the renderer profile"
     );
 
@@ -1190,7 +1337,7 @@ mod tests {
     assert!(!process_alive(crashpad_pid as i32), "the renderer crashpad handler remains after shutdown");
     crashpad.wait().unwrap();
     assert!(
-      read_process_records().unwrap().iter().all(|process| !process_uses_renderer_profile(process, &profile)),
+      read_process_scan().unwrap().records.iter().all(|process| !process_uses_renderer_profile(process, &profile)),
       "a process with the renderer profile in argv remains after shutdown"
     );
   }

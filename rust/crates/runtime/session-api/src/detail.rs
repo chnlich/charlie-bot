@@ -2474,7 +2474,14 @@ backends:
       );
       events.push(json!({"type": "master_done", "timestamp": stamp}));
     }
-    append_all(&features, &meta.id, events).await;
+    // This test covers the archive scan, so seed the log in one write instead of syncing each fixture event.
+    let mut log = Vec::new();
+    for (index, mut event) in events.into_iter().enumerate() {
+      event["id"] = json!(format!("fixture-{index}"));
+      serde_json::to_writer(&mut log, &event).unwrap();
+      log.push(b'\n');
+    }
+    std::fs::write(features.store.chat_events_path(&meta.id), log).unwrap();
     let archived = features
       .store
       .archive_events_before(&meta.id, UtcDateTime::parse("2099-01-01T00:00:00Z").unwrap())

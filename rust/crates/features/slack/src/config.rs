@@ -26,8 +26,8 @@ pub(crate) struct SlackConfig {
 #[serde(deny_unknown_fields)]
 struct RawSlackConfig {
   /// Set this to the Slack user ids of the operators. A mention or thread message from a listed id may start or
-  /// continue a session, and one from any other user is ignored. While this list is empty, the Slack listener does not
-  /// start. The first id is the host owner, and a failed backup sends that id a DM.
+  /// continue a session. A message from a user in neither list is ignored. While this list is empty, the Slack listener
+  /// does not start. The first id is the host owner, and a failed backup sends that id a DM.
   #[serde(default)]
   allowed_user_ids: Vec<String>,
   /// Set this to the Slack user ids of colleagues whose mentions and thread messages may start or continue a session.

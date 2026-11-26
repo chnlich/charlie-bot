@@ -1,8 +1,8 @@
 # Pinned Google style guides
 
-This directory holds the guide text that a code-style round reads and cites: unmodified copies of `jsguide.md`,
-`htmlcssguide.md` and `shellguide.md` from [google/styleguide](https://github.com/google/styleguide). `REVISION`
-names the upstream revision and its date.
+This directory holds the guide text that a code-style round reads and cites: unmodified copies of `rustguide.md`,
+`jsguide.md`, `htmlcssguide.md` and `shellguide.md` from [google/styleguide](https://github.com/google/styleguide).
+`REVISION` names the upstream revision and its date.
 
 The guides come from Google and are licensed under
 [Creative Commons Attribution 3.0 Unported](https://creativecommons.org/licenses/by/3.0/); the full license text is

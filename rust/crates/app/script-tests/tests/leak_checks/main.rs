@@ -413,10 +413,18 @@ fn a_reference_file_that_another_branch_claims_still_blocks_its_update() {
 
 /// The pinned JavaScript guide of the kit, as a rule line names it.
 const JS_GUIDE: &str = "google-styleguide/jsguide.md";
+const RUST_GUIDE: &str = "google-styleguide/rustguide.md";
 
 /// The lines of the pinned JavaScript guide.
 fn js_guide_lines() -> Vec<String> {
   let path = harness::repo_root().join("dev/improve").join(JS_GUIDE);
+  let text = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+  text.lines().map(str::to_string).collect()
+}
+
+/// The pinned Rust guide of the kit, as a rule line names it.
+fn rust_guide_lines() -> Vec<String> {
+  let path = harness::repo_root().join("dev/improve").join(RUST_GUIDE);
   let text = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
   text.lines().map(str::to_string).collect()
 }
@@ -435,6 +443,15 @@ fn js_rule() -> (usize, String) {
   (line, words.to_string())
 }
 
+/// A single-line rule of the pinned Rust guide: its 1-based line and its words.
+fn rust_rule() -> (usize, String) {
+  let lines = rust_guide_lines();
+  let words = "Prefer unique ownership and borrowing over `Rc` and `Arc` for managing memory.";
+  let line = lines.iter().position(|line| line.contains(words)).expect("the pinned Rust guide holds the rule") + 1;
+  assert_eq!(lines[line - 1].trim(), words, "the rule's words are the whole cited line");
+  (line, words.to_string())
+}
+
 /// A rule that spans two lines of the pinned JavaScript guide: its line range and its words.
 fn js_rule_span() -> (usize, usize, String) {
   let lines = js_guide_lines();
@@ -448,6 +465,11 @@ fn js_rule_span() -> (usize, usize, String) {
 /// One rule line that cites `line` of the pinned JavaScript guide and quotes `quote`.
 fn js_rule_citation(line: usize, quote: &str) -> String {
   format!("Rule: {JS_GUIDE}:{line} \"{quote}\"")
+}
+
+/// One rule line that cites `line` of the pinned Rust guide and quotes `quote`.
+fn rust_rule_citation(line: usize, quote: &str) -> String {
+  format!("Rule: {RUST_GUIDE}:{line} \"{quote}\"")
 }
 
 /// One rule line that cites lines `first` through `last` of the pinned JavaScript guide and quotes `quote`.
@@ -491,6 +513,20 @@ fn a_code_style_pr_create_sends_a_body_whose_rule_lines_quote_the_pinned_guide()
 
 #[test]
 #[ignore = "integration"]
+fn a_code_style_pr_create_accepts_a_rule_from_the_pinned_rust_guide() {
+  let sandbox = Sandbox::new();
+  let (env, gh_log, _home) = post(&sandbox);
+  let env = code_style_env(&env);
+  let clone = push_repo(&sandbox, &env);
+  let (line, words) = rust_rule();
+  let body = body_file(&sandbox, "body.md", &format!("{CLEAN_BODY}{}\n", rust_rule_citation(line, &words)));
+  let run = pr_create(&env, &clone, &body);
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(gh_log_lines(&gh_log)[0].contains("pr create"), "{}", gh_log_lines(&gh_log)[0]);
+}
+
+#[test]
+#[ignore = "integration"]
 fn a_code_style_pr_create_refuses_a_body_without_a_rule_line() {
   let sandbox = Sandbox::new();
   let (env, gh_log, _home) = post(&sandbox);
@@ -512,12 +548,12 @@ fn a_code_style_pr_create_refuses_each_rule_line_that_does_not_match_the_pinned_
   let clone = push_repo(&sandbox, &env);
   let (line, words) = js_rule();
   let past_end = js_guide_lines().len() + 1;
-  // Words the guide does not hold, a citation past its last line, a guide this direction does not cite, the
-  // writing-style rule file, and each malformed rule-line form.
+  // Words the guide does not hold, a citation past its last line, an unlisted guide, the writing-style rule file,
+  // and each malformed rule-line form.
   let refusals: [(String, String); 6] = [
     (js_rule_citation(line, "Each statement is followed by a semicolon."), format!("{JS_GUIDE}:{line}")),
     (js_rule_citation(past_end, &words), format!("{JS_GUIDE}:{past_end}")),
-    (format!("Rule: google-styleguide/rustguide.md:1 \"{words}\""), "is not a guide of this direction".to_string()),
+    (format!("Rule: google-styleguide/unsupported.md:1 \"{words}\""), "is not a guide of this direction".to_string()),
     (format!("Rule: writing-style/genres/code.md:{line} \"{words}\""), "is not the rule line form".to_string()),
     (format!("* {}", js_rule_citation(line, &words)), "is not the rule line form".to_string()),
     (format!("1. {}", js_rule_citation(line, &words)), "is not the rule line form".to_string()),

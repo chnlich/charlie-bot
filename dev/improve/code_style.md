@@ -22,13 +22,12 @@ The kit pins that text in `$IMPROVE_KIT_DIR/dev/improve/google-styleguide/`, a c
 revision its `REVISION` file names.
 The pinned guide alone is the round's rule source, and a guide revision changes only by a kit change.
 
+- `.rs` files: `google-styleguide/rustguide.md`
 - `.js` and `.mjs` files: `google-styleguide/jsguide.md`
 - `.html` and `.css` files: `google-styleguide/htmlcssguide.md`
 - `.sh` files: `google-styleguide/shellguide.md`
 
 A file whose language has no guide in that list gets no topic.
-Rust files get no code-style topic: rustfmt and clippy hold the repository's Rust code in CI, and the pinned set
-carries no Rust guide. `rust/` stays in the Scope for the direction's file ownership.
 Earlier rounds' pull requests, reports and evidence are not a rule source.
 
 ## Topics

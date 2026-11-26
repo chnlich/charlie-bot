@@ -17,7 +17,7 @@ code_style_guide_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/google
 
 # The guide files of this direction. A new language takes its guide here, in dev/improve/code_style.md, and in the
 # directory, in one kit change.
-code_style_guides='jsguide.md htmlcssguide.md shellguide.md'
+code_style_guides='rustguide.md jsguide.md htmlcssguide.md shellguide.md'
 
 # code_style_normalize <text>: print the text with each run of whitespace collapsed to one space and both ends
 # trimmed, so a quote and its cited lines compare as words.

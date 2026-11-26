@@ -4,8 +4,9 @@ This file is the round protocol for the five improve directions.
 Each direction prompt names its own scope, topic sources and evidence.
 This file carries the steps that every direction shares.
 
-Read `skills/writing-style/genres/code.md` before writing code.
-Its rules govern the diff this round produces.
+Every direction except `code_style` reads `skills/writing-style/genres/code.md` before writing code; its rules govern
+those diffs.
+The `code_style` direction takes its rules from the pinned Google guide named in `code_style.md`.
 
 `main` takes no direct pushes: every change lands through a pull request.
 The pull request is the triage record, and CI is the full test run.

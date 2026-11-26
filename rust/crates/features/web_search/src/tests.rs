@@ -20,7 +20,8 @@ use tokio::net::TcpListener;
 use tower::ServiceExt;
 
 use super::endpoint::WebSearch;
-use super::{matches, mcp};
+use super::mcp;
+use crate::entry::matches;
 
 const API_KEY_HEADER: &str = "x-goog-api-key";
 const CREDENTIALS: &str = "gemini:\n  api_key: synthetic-gemini-key\n";

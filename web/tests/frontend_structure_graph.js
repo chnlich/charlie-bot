@@ -32,11 +32,11 @@ const identifyShadowedGlobals = require(path.join(sucraseDist, 'identifyShadowed
 const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
 
 // Registered packages in registration order: "features.cron" -> "features/cron". The table
-// lives in the server's package registry (rust/crates/app/packages/src/lib.rs), which is also
-// the order the served page assembles its package part templates in. The table is crate-private
-// (`const PACKAGES`; `registry()` is the crate's only `pub` item), so the read admits an optional
-// leading `pub ` but still anchors to the whole table.
-const PACKAGES_TABLE_PATH = 'rust/crates/app/packages/src/lib.rs';
+// lives in the server's package registry (rust/crates/app/packages/src/entry.rs), which is also
+// the order the served page assembles its package part templates in. The table is private to
+// its module (`const PACKAGES`), so the read admits an optional leading `pub ` but still anchors
+// to the whole table.
+const PACKAGES_TABLE_PATH = 'rust/crates/app/packages/src/entry.rs';
 const registry = read(PACKAGES_TABLE_PATH);
 const packagesMatch = registry.match(/(?:pub )?const PACKAGES[^=]*=\s*&\[([\s\S]*?)\n\];/);
 if (packagesMatch === null) {

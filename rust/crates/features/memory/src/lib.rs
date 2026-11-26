@@ -3,20 +3,12 @@
 //! this crate beside it.
 
 pub mod cli;
+mod entry;
 pub mod memory;
 mod store_root;
 mod turn_contribution;
 
-use std::sync::Arc;
-
-use charliebot_registry::{Registry, RegistryError};
-use turn_contribution::MemoryTurn;
-
-/// `register`: the store's diff root, then its turn contribution.
-pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
-  registry.diff_root("memory", store_root::memory_dir)?;
-  registry.turn_contribution("memory", Arc::new(MemoryTurn))
-}
+pub use entry::register;
 
 #[cfg(test)]
 mod tests {

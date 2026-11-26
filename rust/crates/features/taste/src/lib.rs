@@ -4,18 +4,11 @@
 
 pub mod candidates;
 pub mod cli;
+mod entry;
 pub mod store;
 mod turn_contribution;
 
-use std::sync::Arc;
-
-use charliebot_registry::{Registry, RegistryError};
-use turn_contribution::TasteTurn;
-
-/// The taste package's registration: its turn contribution.
-pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
-  registry.turn_contribution("taste", Arc::new(TasteTurn))
-}
+pub use entry::register;
 
 #[cfg(test)]
 mod tests {

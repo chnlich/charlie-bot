@@ -16,7 +16,7 @@ Rules that hold for every hook kind:
 
 ## Composition root
 
-`rust/crates/app/packages/src/lib.rs` owns the package list, one entry per package. The list order is the server's
+`rust/crates/app/packages/src/entry.rs` owns the package list, one entry per package. The list order is the server's
 registration order:
 
 ```rust

@@ -11,7 +11,7 @@
 // a template are its lowest node (bootstrap), and each script its <script src="/static/..."> tags
 // load is one node. Its inline handler attributes (onclick="..." and the like) are its highest
 // node (markup). Package parts load after core, in the server's package registry order
-// (rust/crates/app/packages/src/lib.rs, the PACKAGES table).
+// (rust/crates/app/packages/src/entry.rs, the PACKAGES table).
 //
 // Directions: core uses no name a package defines. A package uses names of core and of itself
 // only; the features in CHAT_CHANNELS may also use features.chat_threads, and the backends in

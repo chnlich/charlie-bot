@@ -103,9 +103,10 @@ paths = ["dev/poor-network/**"]
 node = ["dev/poor-network/*.integration.test.*", "dev/poor-network/lock.test.mjs"]
 
 # web/tests/frontend_structure.integration.test.js runs web/tests/frontend_structure_graph.js, which reads the
-# server's package registry to learn the package load order.
+# server's package registry to learn the package load order. The table lives in entry.rs; lib.rs stays listed because
+# it declares the package's modules.
 [[entry]]
-paths = ["rust/crates/app/packages/src/lib.rs"]
+paths = ["rust/crates/app/packages/src/entry.rs", "rust/crates/app/packages/src/lib.rs"]
 node = ["web/tests/frontend_structure.integration.test.js"]
 
 # web/tests/client_readback.integration.test.mjs runs the committed readback script on fixture logs.

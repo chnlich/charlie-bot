@@ -4,15 +4,10 @@ pub mod api;
 pub mod cli;
 pub mod command;
 pub mod controller;
+mod entry;
 pub mod judgment;
 pub mod landing;
 pub mod sequence;
 pub(crate) mod wire;
 
-use charliebot_registry::{Registry, RegistryError};
-
-/// The improve routes and the improve sequence controller, registered together.
-pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
-  registry.router(api::routes, api::matches)?;
-  controller::register(registry)
-}
+pub use entry::register;

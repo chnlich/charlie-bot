@@ -7,6 +7,7 @@
 #![allow(clippy::result_large_err)]
 
 mod api;
+mod entry;
 mod git;
 mod manifest;
 mod memo;
@@ -14,19 +15,8 @@ mod page;
 mod params;
 mod refs;
 mod repos;
+
+pub use entry::register;
+
 #[cfg(test)]
 mod tests;
-
-use charliebot_registry::pages::HomeCard;
-use charliebot_registry::{Registry, RegistryError};
-
-/// `register`: the `/api/git` router, the page router, then the home card.
-pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
-  registry.router(api::routes, api::matches)?;
-  registry.router(page::routes, page::matches)?;
-  registry.home_card(HomeCard {
-    name: "Diff viewer",
-    url: page::PAGE_PATH,
-    description: "Browse a repository diff between two refs.",
-  })
-}

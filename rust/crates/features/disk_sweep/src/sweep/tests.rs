@@ -1214,7 +1214,7 @@ async fn test_a_failed_row_reports_the_failure_line_and_the_full_summary() {
   let worktree_path = worktree.canonicalize().unwrap();
 
   let report = run_sweep(roots.clone(), SweepMode::Apply, now, fail_removal).await.unwrap();
-  let error = crate::handler_result(&report).expect_err("a failed row fails the handler");
+  let error = crate::entry::handler_result(&report).expect_err("a failed row fails the handler");
   let message = error.to_string();
   let (first, rest) = message.split_once('\n').expect("the summary follows the failure line");
   assert_eq!(

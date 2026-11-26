@@ -6,6 +6,7 @@ mod api;
 mod attention;
 mod browser_login;
 mod config;
+mod entry;
 mod host_auth;
 mod login_state;
 mod page;
@@ -19,11 +20,7 @@ mod state_file;
 mod timestamps;
 
 pub use config::check_labels;
-
-use std::sync::Arc;
-
-use charliebot_registry::pages::HomeCard;
-use charliebot_registry::{Registry, RegistryError};
+pub use entry::{READBACK_SUPERVISOR_ARG, readback_supervisor_entry, register};
 
 /// The lock every test takes before it claims or holds the process-wide round slot.
 ///
@@ -54,30 +51,9 @@ pub(crate) mod test_support {
   }
 }
 
-pub const READBACK_SUPERVISOR_ARG: &str = process_tree::SUPERVISOR_ARG;
-
-/// The helper entry that runs one readback as a supervised process.
-pub fn readback_supervisor_entry(args: &[std::ffi::OsString]) -> Option<u8> {
-  process_tree::helper_entry(args)
-}
-
-/// `register`: the config section, the router, the `host_auth` service in phase Ready, the host readers the cron gate
-/// and the Waiting on you read use, then the home card.
-pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
-  registry.config_section(config::section())?;
-  registry.router(api::routes, api::matches)?;
-  registry.service(Arc::new(poller::HostAuthPoller::default()))?;
-  registry.host_logins(readers::host_logins)?;
-  registry.host_probe(readers::probe_alias_now)?;
-  registry.home_card(HomeCard {
-    name: "Host login authorization",
-    url: "/host-auth",
-    description: "Per-host ssh login state and the browser logins that renew it.",
-  })
-}
-
 #[cfg(test)]
 mod tests {
+  use charliebot_registry::Registry;
   use charliebot_registry::wiring::Phase;
 
   use super::*;

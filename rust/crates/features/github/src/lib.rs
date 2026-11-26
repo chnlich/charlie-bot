@@ -4,11 +4,7 @@
 
 pub mod cli;
 mod draft;
+mod entry;
 mod target;
 
-use charliebot_registry::{Registry, RegistryError};
-
-/// `register`: the platform's draft support.
-pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
-  registry.draft_platform("github", draft::platform_factory())
-}
+pub use entry::register;

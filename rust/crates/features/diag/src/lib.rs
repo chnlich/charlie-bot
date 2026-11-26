@@ -4,13 +4,9 @@
 //! route logs it as one `diag_client` line. No state is kept.
 
 mod api;
+mod entry;
 
-use charliebot_registry::{Registry, RegistryError};
-
-/// `register`: the `/api/diag` router, nothing else.
-pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
-  registry.router(api::routes, api::matches)
-}
+pub use entry::register;
 
 #[cfg(test)]
 mod tests {

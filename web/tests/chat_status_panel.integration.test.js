@@ -579,7 +579,7 @@ test('an own Waiting on you row holds its checkbox, text, age, Open link and Con
     'no option button and no All as recommended renders, even for an item whose page has questions');
 });
 
-test('a done click posts one request at once and the box holds disabled until it settles', async () => {
+test('unchecking a done box inside the undo window sends nothing', async () => {
   const rig = panelRig();
   await openSession(rig, {web_status: {
     ...STATUS,
@@ -587,11 +587,13 @@ test('a done click posts one request at once and the box holds disabled until it
   }});
   selectStatus(rig);
   toggleDone(rig);
-  assert.equal(rig.posts.length, 1, 'the click posts at once, with no window to undo');
   assert.equal(doneCheck(rig).checked, true);
-  assert.equal(doneCheck(rig).disabled, true, 'the box holds while the post is in flight');
+  rig.statusTimers.advance(2000);
+  toggleDone(rig);
+  assert.equal(doneCheck(rig).checked, false, 'the box shows unchecked again');
+  rig.statusTimers.advance(5000);
   await settled();
-  assert.equal(rig.posts.length, 1, 'exactly one post');
+  assert.equal(rig.posts.length, 0, 'an unchecked click sends nothing');
 });
 
 test('an answered item shows its box checked and disabled; a list change without the answer unchecks it', async () => {
@@ -640,7 +642,7 @@ test('descendant items show no checkbox, and an answered one reads Marked done',
   assert.doesNotMatch(open.textContent, /Marked done/, 'an open child item shows no mark');
 });
 
-test('a done click posts the exact click text at once, with no item text in it', async () => {
+test('a done click keeps its undo timer through redraw and sends the exact text at five seconds', async () => {
   const rig = panelRig();
   const since = '2026-11-19T08:30:00Z';
   await openSession(rig, {web_status: {
@@ -649,6 +651,18 @@ test('a done click posts the exact click text at once, with no item text in it',
   }});
   selectStatus(rig);
   toggleDone(rig);
+  assert.equal(doneCheck(rig).checked, true);
+  assert.equal(doneCheck(rig).disabled, false, 'the click is still undoable');
+  assert.equal(rig.posts.length, 0, 'the click is still undoable');
+
+  rig.page.web_status = normalizeStatus({...rig.page.web_status, now: 'A redraw', updated_at: '2026-10-16T22:00:00Z'});
+  rig.context.observeWebStatusMessages([{role: 'web_status', web_status: rig.page.web_status}]);
+  await settled();
+  assert.equal(doneCheck(rig).checked, true, 'the pending box survives a redraw');
+  rig.statusTimers.advance(4999);
+  await settled();
+  assert.equal(rig.posts.length, 0, 'nothing is sent before five seconds');
+  rig.statusTimers.advance(1);
   await settled();
   const post = rig.posts[0];
   assert.equal(rig.posts.length, 1, 'one click sends one request');
@@ -660,7 +674,7 @@ test('a done click posts the exact click text at once, with no item text in it',
       ' · #1\n   ↳ Done');
   assert.equal(post.body.content.includes('Private item text'), false);
   assert.equal(post.body.content.includes('Private context'), false);
-  assert.equal('keepalive' in post.options, false, 'the post is a normal request');
+  assert.equal(post.options.keepalive, false, 'a click sent when its window closes is not keepalive');
   assert.match(waitingHeaderControls(rig).textContent, /Sent: the list changed/,
     'a 202 readback without the answered mark reports that the list changed');
 });
@@ -675,6 +689,7 @@ test('an answered readback marks the item done after a 202', async () => {
   });
   selectStatus(rig);
   toggleDone(rig);
+  rig.statusTimers.advance(5000);
   await settled();
   assert.equal(doneCheck(rig).checked, true);
   assert.equal(doneCheck(rig).disabled, true, 'the answered box is disabled');
@@ -700,10 +715,8 @@ const SECOND_QUESTION = {
   rec: 'later',
 };
 
-test('a changed list moves the in-flight checkbox to the header and still sends the clicked version', async () => {
+test('a changed list moves the pending checkbox to the header and still sends the clicked version', async () => {
   const rig = panelRig();
-  let releasePost;
-  rig.setPostHandler(() => new Promise((resolve) => { releasePost = resolve; }));
   await openSession(rig, {web_status: {...STATUS, waiting: [{text: 'Old item', link: null}]}});
   selectStatus(rig);
   toggleDone(rig);
@@ -713,9 +726,9 @@ test('a changed list moves the in-flight checkbox to the header and still sends 
     role: 'web_status', id: 'w-version', content: 'Status updated: Waiting on you', web_status: rig.page.web_status,
   }});
   assert.equal(waitingHeaderControls(rig).querySelectorAll('[data-done-check]')[0].checked, true,
-    'the header keeps the in-flight box');
+    'the header keeps the pending box');
   assert.match(viewWaitingItems(rig.panel)[0].textContent, /New item/);
-  releasePost();
+  rig.statusTimers.advance(5000);
   await settled();
   assert.match(rig.posts[0].body.content, /list 1111111111111111/);
   assert.match(waitingHeaderControls(rig).textContent, /Sent: the list changed/);
@@ -723,12 +736,10 @@ test('a changed list moves the in-flight checkbox to the header and still sends 
     'the header box leaves once the click is sent');
 });
 
-test('a Now-only push refreshes status without changing the in-flight click', async () => {
+test('a Now-only push refreshes status without changing the pending click version or timer', async () => {
   const rig = panelRig();
   await openSession(rig, {web_status: {...STATUS, waiting: [{text: 'Keep this', link: null}]}});
   selectStatus(rig);
-  let releasePost;
-  rig.setPostHandler(() => new Promise((resolve) => { releasePost = resolve; }));
   toggleDone(rig);
   rig.page.web_status = normalizeStatus({...rig.page.web_status, now: 'Now changed', updated_at: '2026-10-16T22:00:00Z'});
   const getsBefore = rig.statusGets.length;
@@ -737,10 +748,69 @@ test('a Now-only push refreshes status without changing the in-flight click', as
   }});
   assert.equal(rig.statusGets.length, getsBefore + 1);
   assert.equal(viewRow(rig.panel, 'now').children[1].children[0].textContent, 'Now changed');
-  assert.equal(doneCheck(rig).checked, true, 'the in-flight click keeps its mark');
-  releasePost();
+  assert.equal(doneCheck(rig).checked, true);
+  rig.statusTimers.advance(5000);
   await settled();
   assert.match(rig.posts[0].body.content, /list 1111111111111111/);
+});
+
+test('a leave inside the undo window sends the click once with keepalive; Undo sends nothing', async (t) => {
+  const makePending = async () => {
+    const rig = panelRig();
+    await openSession(rig, {web_status: {...STATUS, waiting: [{text: 'Wait', link: null}]}});
+    selectStatus(rig);
+    toggleDone(rig);
+    return rig;
+  };
+  await t.test('pagehide posts at once to the owner session, keepalive, and the window timer adds no second post',
+    async () => {
+      const rig = await makePending();
+      const getsBefore = rig.statusGets.length;
+      rig.fireWindow('pagehide');
+      assert.equal(rig.posts.length, 1, 'the leave posts without waiting for the window');
+      assert.equal(rig.posts[0].url, '/api/chat/session-a/message');
+      assert.equal(rig.posts[0].options.keepalive, true, 'the post outlives the page');
+      rig.statusTimers.advance(5000);
+      await settled();
+      assert.equal(rig.posts.length, 1, 'exactly one post');
+      assert.equal(rig.statusGets.length, getsBefore + 1, 'the flushed click reads its owner status back once');
+    });
+  await t.test('a session switch posts once to the owner session, keepalive, after the panel shows the next session',
+    async () => {
+      const rig = await makePending();
+      rig.fireDocument('charliebot:session-view-teardown');
+      await openSession(rig, {id: 'session-b'});
+      rig.statusTimers.advance(5000);
+      await settled();
+      assert.equal(rig.posts.length, 1, 'exactly one post');
+      assert.equal(rig.posts[0].url, '/api/chat/session-a/message', 'the click goes to the session it was made in');
+      assert.equal(rig.posts[0].options.keepalive, true, 'the post outlives the switch');
+      assert.ok(rig.statusGets.some((url) => url.endsWith('session_id=session-a')),
+        'the flushed click reads its owner status back after the switch');
+    });
+  await t.test('Undo, then a later pagehide, sends nothing', async () => {
+    const rig = await makePending();
+    toggleDone(rig);
+    assert.equal(doneCheck(rig).checked, false);
+    rig.fireWindow('pagehide');
+    rig.statusTimers.advance(5000);
+    await settled();
+    assert.equal(rig.posts.length, 0, 'an undone click sends nothing, also when the reader leaves');
+  });
+  await t.test('a leave flushed after the panel is removed from the DOM settles without errors', async () => {
+    const rig = await makePending();
+    const childrenBefore = [...rig.panel.children];
+    rig.postResults.push(new Error('network down'));
+    rig.statusGetErrors.push(new Error('network down'));
+    rig.removePanel();
+    rig.fireDocument('charliebot:session-view-teardown');
+    rig.context.clearSessionStatusPanel();
+    await settled();
+    assert.equal(rig.posts.length, 1);
+    assert.equal(rig.posts[0].options.keepalive, true);
+    assert.deepEqual(rig.panel.children, childrenBefore,
+      'no render touches the removed view after teardown');
+  });
 });
 
 test('post errors refresh status, keep confirmed marks, report failures and never retry', async (t) => {
@@ -758,6 +828,7 @@ test('post errors refresh status, keep confirmed marks, report failures and neve
     rig.postResults.push(postResult);
     selectStatus(rig);
     toggleDone(rig);
+    rig.statusTimers.advance(5000);
     await settled();
     return rig;
   }

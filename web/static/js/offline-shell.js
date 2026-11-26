@@ -146,8 +146,8 @@ function whenUpdateTakesOver(registration) {
 // first online use. An excluded file's only function talks to the server, so its control shows its offline state and
 // needs no stored code. offline_shell_page.test.js fails when a loader names a same-origin file neither list names.
 //
-// Kept: status-panel.js draws the Status view with its offline mark; comment_post.js is loaded before it and posts
-// each click's message; worker-summary.js paints the For-you row's summary
+// Kept: status-panel.js draws the Status view with its offline mark and sends each done click; comment_post.js is
+// loaded before it and builds each click's message; worker-summary.js paints the For-you row's summary
 // from the stored bootstrap; file-links.js marks file links in stored messages, and a failed probe is not a missing
 // file; draft-cards.js paints the stored draft rows; artifact-cards.js renders artifact-page links in stored messages
 // as cards. Each stylesheet follows its script.

@@ -564,37 +564,24 @@ struct RefreshLocks {
 
 impl RefreshLocks {
   /// Takes both locks for `login_dir`, waiting up to `wait` for the first. `Ok(None)` is the CLI's own give-up: the
-  /// wait ran out, or the second lock is held.
+  /// wait ran out, or the second lock is held by a live holder.
   fn acquire(login_dir: &Path, wait: Duration) -> anyhow::Result<Option<Self>> {
     let first = login_dir.join(REFRESH_LOCK);
     let second = PathBuf::from(format!("{}.lock", login_dir.display()));
-    let deadline = Instant::now() + wait;
-    loop {
-      match fs::create_dir(&first) {
-        Ok(()) => break,
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-          if lock_is_stale(&first)? {
-            let _ = fs::remove_dir_all(&first);
-            continue;
-          }
-          let remaining = deadline.saturating_duration_since(Instant::now());
-          if remaining.is_zero() {
-            return Ok(None);
-          }
-          std::thread::sleep(remaining.min(Duration::from_millis(100)));
-        }
-        Err(error) => return Err(error).with_context(|| format!("taking {}", first.display())),
-      }
+    if !take_lock(&first, wait)? {
+      return Ok(None);
     }
-    match fs::create_dir(&second) {
-      Ok(()) => {}
-      Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+    // The CLI gives up at once when the second lock is held, so this take does not wait. The first lock is released on
+    // every path that does not return the pair.
+    match take_lock(&second, Duration::ZERO) {
+      Ok(true) => {}
+      Ok(false) => {
         let _ = fs::remove_dir(&first);
         return Ok(None);
       }
       Err(error) => {
         let _ = fs::remove_dir(&first);
-        return Err(error).with_context(|| format!("taking {}", second.display()));
+        return Err(error);
       }
     }
     let locks = Self { paths: [first, second], stop: None, toucher: None };
@@ -627,6 +614,35 @@ impl Drop for RefreshLocks {
     }
     for path in self.paths.iter().rev() {
       let _ = fs::remove_dir(path);
+    }
+  }
+}
+
+/// Takes the lock directory at `path`, waiting up to `wait` for a live holder to release it. A stale lock is removed and
+/// taken over. `Ok(false)` means a live holder kept the lock past the wait.
+fn take_lock(path: &Path, wait: Duration) -> anyhow::Result<bool> {
+  let deadline = Instant::now() + wait;
+  loop {
+    match fs::create_dir(path) {
+      Ok(()) => return Ok(true),
+      Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+        if lock_is_stale(path)? {
+          match fs::remove_dir_all(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+              return Err(error).with_context(|| format!("removing the stale lock {}", path.display()));
+            }
+          }
+          continue;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+          return Ok(false);
+        }
+        std::thread::sleep(remaining.min(Duration::from_millis(100)));
+      }
+      Err(error) => return Err(error).with_context(|| format!("taking {}", path.display())),
     }
   }
 }
@@ -1167,12 +1183,18 @@ mod tests {
     assert!(!login.join(REFRESH_LOCK).exists());
     assert!(!PathBuf::from(format!("{}.lock", login.display())).exists());
 
-    // A lock untouched past LOCK_STALE may be taken over.
-    fs::create_dir(login.join(REFRESH_LOCK)).unwrap();
+    // A lock untouched past LOCK_STALE may be taken over, the first one and the second one alike.
     let old = SystemTime::now() - LOCK_STALE - Duration::from_secs(1);
+    let second = PathBuf::from(format!("{}.lock", login.display()));
+    fs::create_dir(login.join(REFRESH_LOCK)).unwrap();
     fs::File::open(login.join(REFRESH_LOCK)).unwrap().set_modified(old).unwrap();
     let taken = RefreshLocks::acquire(&login, Duration::ZERO).unwrap();
-    assert!(taken.is_some(), "a stale lock was not taken over");
+    assert!(taken.is_some(), "a stale first lock was not taken over");
+    drop(taken);
+    fs::create_dir(&second).unwrap();
+    fs::File::open(&second).unwrap().set_modified(old).unwrap();
+    let taken = RefreshLocks::acquire(&login, Duration::ZERO).unwrap();
+    assert!(taken.is_some(), "a stale second lock was not taken over");
   }
 
   #[test]

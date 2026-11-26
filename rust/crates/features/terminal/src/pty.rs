@@ -252,17 +252,16 @@ impl PtyAttachment {
       ws_ypixel: 0,
     };
     let mut attachment = PtyAttachment { session_id: session_id.to_string(), pid: None, fd: -1, closed: false };
-    // SAFETY: `winsize` is a live `Winsize` for the whole call, and `None` passes no terminal attributes.
+    let exec_error = format!("tmux exec failed: '{}'\n", binary.display());
+    let exec_error_bytes = exec_error.as_bytes();
+    // SAFETY: `winsize` lives across the call, and `None` supplies no terminal attributes. The child arm limits its
+    // pre-`execve` calls to async-signal-safe functions.
     match unsafe { forkpty(&winsize, None::<&Termios>) }.map_err(|error| os_error(&io::Error::from(error), None))? {
-      // SAFETY: `execve` gets `path`, `argv_ptrs` and `env_ptrs`, which were built before the fork and live in this
-      // frame. The block ends in `_exit`, so the child never returns to the parent's code.
+      // SAFETY: `path`, `argv_ptrs` and `env_ptrs` were built before the fork and live here. If `execve` fails, the
+      // prebuilt message is written with async-signal-safe `write`, then the child ends with async-signal-safe `_exit`.
       ForkptyResult::Child => unsafe {
         libc::execve(path.as_ptr(), argv_ptrs.as_ptr(), env_ptrs.as_ptr());
-        let error_number = *libc::__errno_location();
-        let description = std::ffi::CStr::from_ptr(libc::strerror(error_number)).to_string_lossy();
-        let line = charliebot_core::os_error::errno_line(error_number, &description);
-        let error = format!("tmux exec failed: {line}: '{}'\n", binary.display());
-        libc::write(libc::STDERR_FILENO, error.as_ptr().cast(), error.len());
+        libc::write(libc::STDERR_FILENO, exec_error_bytes.as_ptr().cast(), exec_error_bytes.len());
         libc::_exit(1);
       },
       ForkptyResult::Parent { child, master } => {

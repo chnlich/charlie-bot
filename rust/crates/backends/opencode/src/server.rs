@@ -1316,7 +1316,9 @@ impl OpenCodeServer {
     let deadline = tokio::time::Instant::now() + self.timeouts()?.start;
     let display_path = self.pool()?.host.program.display.display().to_string();
     let timeout_seconds = self.timeouts()?.start.as_secs_f64();
-    let listen_re = LISTEN_RE.get_or_init(|| Regex::new(r"server listening on (http://\S+)").unwrap());
+    let listen_re = LISTEN_RE.get_or_init(|| {
+      Regex::new(r"server listening on (http://\S+)").expect("the listening-address pattern is a valid regex")
+    });
     loop {
       let bytes = tokio::time::timeout_at(deadline, tokio::fs::read(&process.log_path)).await.map_err(|_| {
         anyhow::anyhow!("{display_path} serve did not print its listening address within {timeout_seconds} s")
@@ -1339,7 +1341,10 @@ impl OpenCodeServer {
   async fn await_connected(&self) -> anyhow::Result<()> {
     let (mut connected, mut reader_done) = {
       let state = self.state.lock().expect("opencode server state mutex is not poisoned");
-      (state.connected.as_ref().unwrap().clone(), state.reader_done.as_ref().unwrap().clone())
+      (
+        state.connected.as_ref().expect("connected channel was registered").clone(),
+        state.reader_done.as_ref().expect("reader channel was registered").clone(),
+      )
     };
     let deadline = tokio::time::Instant::now() + self.timeouts()?.start;
     loop {

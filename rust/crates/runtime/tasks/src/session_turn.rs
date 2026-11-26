@@ -5,7 +5,7 @@
 //! each input the running run's record names, and `turn_hooks::read_log` builds `status-reread`'s `TurnInput` through
 //! it. [`turn_text`] renders the same turn as one line per event with its time, applying the shared cut and bound.
 
-use charliebot_core::event_types::MASTER_DONE;
+use charliebot_core::event_types::{MASTER_DONE, TASK_CLOSE_REQUESTED, WEB_REPLY, WEB_STATUS, WEB_STATUS_CONFIRMED};
 use charliebot_core::text_repr::{self, JsonStyle};
 use charliebot_registry::FeatureContext;
 use charliebot_store::SharedChatEvent;
@@ -58,8 +58,13 @@ pub fn split_turn(
 /// The moment of the turn's last input: the last event `received_at` the running run stamped. A turn with no input
 /// event has no moment, and its checks look back to the previous `master_done` instead.
 pub fn last_input_at(turn: &[Value]) -> Option<UtcDateTime> {
-  let index = crate::turn_hooks::last_received_index(turn)?;
+  let index = last_received_index(turn)?;
   UtcDateTime::parse(turn[index]["received_at"].as_str()?).ok()
+}
+
+/// The index of the turn's last event that the running run stamped `received_at` on: its last input.
+pub fn last_received_index(turn: &[Value]) -> Option<usize> {
+  turn.iter().rposition(|event| event["received_at"].is_string())
 }
 
 /// The kind of one rendered entry. A tool entry is droppable when the text exceeds the bound.
@@ -104,7 +109,7 @@ fn cut(body: &str) -> (String, usize) {
   let head: String = chars[..TURN_TEXT_HEAD].iter().collect();
   let tail: String = chars[chars.len() - TURN_TEXT_TAIL..].iter().collect();
   let removed = chars.len() - TURN_TEXT_HEAD - TURN_TEXT_TAIL;
-  (format!("{head}[… {removed} chars cut …]{tail}"), TURN_TEXT_HEAD + TURN_TEXT_TAIL)
+  (format!("{head}[... {removed} chars cut ...]{tail}"), TURN_TEXT_HEAD + TURN_TEXT_TAIL)
 }
 
 /// The `[time] ` prefix of one event's lines.
@@ -159,17 +164,17 @@ fn turn_entries(turn: &[Value]) -> Vec<Entry> {
           }
         }
       }
-      "web_reply" => entries.push(Entry::new(
+      WEB_REPLY => entries.push(Entry::new(
         Kind::Core,
         format!("{at}web reply: "),
         event["content"].as_str().unwrap_or_default().to_string(),
       )),
-      "web_status" => {
-        let payload = text_repr::json_dumps(&event["web_status"], &PYTHON_JSON);
+      WEB_STATUS => {
+        let payload = text_repr::json_dumps(&event[WEB_STATUS], &PYTHON_JSON);
         let changed = text_repr::json_dumps(&event["web_status_changed"], &PYTHON_JSON);
         entries.push(Entry::new(Kind::Core, format!("{at}web_status "), format!("{payload} changed {changed}")));
       }
-      "web_status_confirmed" | "task_close_requested" => {
+      WEB_STATUS_CONFIRMED | TASK_CLOSE_REQUESTED => {
         entries.push(Entry::new(Kind::Core, at, event_type.to_string()));
       }
       _ => {}
@@ -299,7 +304,7 @@ mod tests {
     let rendered = text_repr::json_dumps(&json!(body), &PYTHON_JSON);
     let removed = rendered.chars().count() - TURN_TEXT_CUT;
     let text = turn_text(&[event]);
-    assert!(text.contains(&format!("[… {removed} chars cut …]")), "{text}");
+    assert!(text.contains(&format!("[... {removed} chars cut ...]")), "{text}");
     assert!(text.contains(&"a".repeat(TURN_TEXT_HEAD - 1)), "the head keeps 699 of the 1,500 characters: {text}");
     assert!(text.contains(&"a".repeat(TURN_TEXT_TAIL)), "the tail keeps its 300 characters: {text}");
     assert!(!text.contains(&"a".repeat(TURN_TEXT_CUT)), "no run reaches the 1,000-character cut: {text}");
@@ -327,7 +332,7 @@ mod tests {
     ]}}));
     let text = turn_text(&turn(events));
     assert!(text.starts_with('['), "the dropped tool run is marked first: {text}");
-    assert!(text.contains("[… "), "the retained input is cut: {text}");
+    assert!(text.contains("[... "), "the retained input is cut: {text}");
   }
 
   #[test]

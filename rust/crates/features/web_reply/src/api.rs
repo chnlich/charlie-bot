@@ -13,12 +13,13 @@ use axum::http::Request;
 use axum::response::Response;
 use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, RequestBody, text_field};
 use charliebot_compat::responses;
-use charliebot_compat::validation::{self, FieldError, Source};
+use charliebot_compat::validation::{self, FieldError, Kind, Loc, Source};
 use charliebot_registry::FeatureContext;
 use charliebot_registry::caller;
 use charliebot_registry::colleague_gate::{guard_agent_work, refuse_colleague_work};
+use charliebot_tasks::cold_read;
 use http::StatusCode;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::reply::{self, WebReplyError};
 use crate::status;
@@ -161,6 +162,29 @@ pub async fn post_reply_unread(State(features): State<Arc<FeatureContext>>, requ
   )
 }
 
+/// `POST /api/internal/web/cold-read-check`: records one cold read of a reply, a Waiting on you item, or the kept
+/// items of a status set. The event it writes is `cold_read_record::record`'s.
+pub async fn post_cold_read_check(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
+  let (parts, stream) = request.into_parts();
+  let body = match request_body::read(&parts.headers, stream).await {
+    Ok(body) => body,
+    Err(response) => return *response,
+  };
+  let model = match ColdReadCheck::validate(&body) {
+    Ok(model) => model,
+    Err(response) => return *response,
+  };
+  let identity = match caller::resolve_caller(&parts.headers, &features) {
+    Ok(identity) => identity,
+    Err(response) => return response,
+  };
+  if let Some(refusal) = refuse_colleague_work(&features, &identity).await {
+    return refusal;
+  }
+  let run_id = identity.claims().map(|claims| claims.run_id.as_str());
+  answer(dispatch(&features, &model, run_id).await)
+}
+
 /// `GET /api/internal/web/status?session_id=`: the session's status and its waiting descendants.
 pub async fn get_status(
   State(features): State<Arc<FeatureContext>>,
@@ -215,6 +239,129 @@ const SESSION_TEXT_BODY: BodyModel = BodyModel::required(SESSION_TEXT_FIELDS).fo
 /// The fields of `WebStatusConfirmRequest`: the calling session's id, a required string.
 const SESSION_ID_FIELDS: &[Field] = &[Field::required("session_id", FieldType::String)];
 const SESSION_ID_BODY: BodyModel = BodyModel::required(SESSION_ID_FIELDS).forbid_extra();
+
+/// The fields of one `ColdReadCheckRequest` in declaration order.
+const COLD_READ_CHECK_FIELDS: &[Field] = &[
+  Field::required("session_id", FieldType::String),
+  Field::required("name", FieldType::Literal(cold_read::RECORDED_NAMES)),
+  Field::required("backend", FieldType::String),
+  Field::optional("text", FieldType::NullableString),
+  Field::optional("item", FieldType::Dictionary),
+  Field::optional("findings", FieldType::StringList),
+  Field::optional("answer", FieldType::NullableString),
+];
+const COLD_READ_CHECK_BODY: BodyModel = BodyModel::required(COLD_READ_CHECK_FIELDS).forbid_extra();
+
+/// The validated body of one `cold_read_check` request.
+struct ColdReadCheck {
+  session_id: String,
+  name: String,
+  backend: String,
+  text: Option<String>,
+  item: Option<Value>,
+  findings: Option<Vec<String>>,
+  answer: Option<String>,
+}
+
+impl ColdReadCheck {
+  /// Validates the body against `COLD_READ_CHECK_BODY`, then refuses the fields the named check does not carry and
+  /// requires the fields it needs.
+  fn validate(body: &RequestBody) -> Result<Self, Box<Response>> {
+    let mut fields = body.declared_fields(&COLD_READ_CHECK_BODY)?;
+    let name = text_field(&fields, "name");
+    let forbidden: &[&str] = if name == cold_read::REPLY { &["item"] } else { &["text", "findings"] };
+    let required: &[&str] = if name == cold_read::REPLY { &["text", "findings"] } else { &["item", "answer"] };
+    let mut errors = Vec::new();
+    for field in forbidden {
+      if let Some(value) = fields.remove(*field) {
+        errors.push(FieldError {
+          loc: vec![Loc::Field("body".to_string()), Loc::Field((*field).to_string())],
+          input: value,
+          kind: Kind::ExtraForbidden,
+        });
+      }
+    }
+    for field in required {
+      if fields.get(*field).is_none_or(Value::is_null) {
+        errors.push(FieldError {
+          loc: vec![Loc::Field("body".to_string()), Loc::Field((*field).to_string())],
+          input: Value::Null,
+          kind: Kind::Missing,
+        });
+      }
+    }
+    if !errors.is_empty() {
+      return Err(Box::new(validation::response(&errors)));
+    }
+    let text = optional_string(&mut fields, "text");
+    let item = fields.remove("item");
+    let findings = match fields.remove("findings") {
+      Some(Value::Array(items)) => Some(
+        items
+          .into_iter()
+          .map(|item| match item {
+            Value::String(text) => text,
+            _ => unreachable!("a validated findings item is a string"),
+          })
+          .collect(),
+      ),
+      Some(Value::Null) | None => None,
+      Some(_) => unreachable!("a validated findings is a list"),
+    };
+    let answer = optional_string(&mut fields, "answer");
+    Ok(Self {
+      session_id: text_field(&fields, "session_id"),
+      name,
+      backend: text_field(&fields, "backend"),
+      text,
+      item,
+      findings,
+      answer,
+    })
+  }
+}
+
+/// The string a nullable-string field holds, or `None` when it is absent or null.
+fn optional_string(fields: &mut Map<String, Value>, name: &str) -> Option<String> {
+  match fields.remove(name) {
+    Some(Value::String(text)) => Some(text),
+    Some(Value::Null) | None => None,
+    Some(_) => unreachable!("a validated {name} is a string or null"),
+  }
+}
+
+/// Record the check the body names.
+async fn dispatch(
+  features: &FeatureContext,
+  model: &ColdReadCheck,
+  run_id: Option<&str>,
+) -> Result<Value, WebReplyError> {
+  match model.name.as_str() {
+    cold_read::REPLY => {
+      reply::record_reply_check(
+        features,
+        &model.session_id,
+        model.text.as_deref().expect("a validated reply check carries its text"),
+        &model.backend,
+        model.findings.as_deref().expect("a validated reply check carries its findings"),
+        model.answer.as_deref(),
+        run_id,
+      )
+      .await
+    }
+    name => {
+      status::record_item_check(
+        features,
+        &model.session_id,
+        name,
+        model.item.as_ref().expect("a validated item check carries its item"),
+        &model.backend,
+        model.answer.as_deref().expect("a validated item check carries its answer"),
+      )
+      .await
+    }
+  }
+}
 
 /// The validated `WebReplyRequest`.
 struct ReplyRequest {

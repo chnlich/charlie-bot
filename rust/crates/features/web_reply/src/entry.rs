@@ -13,7 +13,7 @@ use charliebot_store::metadata::UtcDateTime;
 use serde_json::{Map, Value, json};
 
 use crate::turn_contribution::WebReplyTurnContribution;
-use crate::{api, cold_read_record, sidebar};
+use crate::{api, sidebar};
 
 /// `register`: the `/api/internal` router, then the turn and sidebar contributions, then the
 /// web-reply status field of each session.
@@ -111,7 +111,7 @@ pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
     .route("/api/internal/web/reply", post_only(api::post_reply))
     .route("/api/internal/web/reply/unread", post_only(api::post_reply_unread))
-    .route("/api/internal/web/cold-read-check", post_only(cold_read_record::post_cold_read_check))
+    .route("/api/internal/web/cold-read-check", post_only(api::post_cold_read_check))
     .route("/api/internal/web/dialog", get_only(api::get_dialog))
     .route("/api/internal/web/status", refuse_other_methods(post(api::post_status).get(api::get_status), "POST"))
     .route("/api/internal/web/status/confirm", post_only(api::post_status_confirm))

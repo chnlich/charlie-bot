@@ -1,29 +1,17 @@
-//! The one record of a command-side cold read: the `cold_read_check` event, its route, and the mapping that keeps the
-//! legacy `web_reply_check` and `web_ask_check` records readable.
+//! The one record of a command-side cold read: the `cold_read_check` event and the mapping that keeps the legacy
+//! `web_reply_check` and `web_ask_check` records readable.
 //!
 //! A recorded check is named by its row in `charliebot_tasks::cold_read::REGISTRY`: `reply`, `ask` or `settle`. Every
 //! writer writes one `cold_read_check` event carrying that name, and every reader asks
 //! [`cold_read_record_name`] what a stored record was, so no log is migrated: a `web_reply_check` record reads as
-//! `reply` and a `web_ask_check` record reads as `ask`.
+//! `reply` and a `web_ask_check` record reads as `ask`. The HTTP route that writes the event lives in `api`, so this
+//! module stays a leaf that `reply` and `status` can both read.
 
-use std::sync::Arc;
-
-use axum::body::Body;
-use axum::extract::State;
-use axum::http::Request;
-use axum::response::Response;
-use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, RequestBody, text_field};
-use charliebot_compat::validation::{self, FieldError, Kind, Loc};
 use charliebot_core::event_types::{COLD_READ_CHECK, WEB_ASK_CHECK, WEB_REPLY_CHECK};
 use charliebot_registry::FeatureContext;
-use charliebot_registry::caller;
-use charliebot_registry::colleague_gate::refuse_colleague_work;
 use charliebot_store::CompactValue;
 use charliebot_tasks::cold_read;
 use serde_json::{Map, Value, json};
-
-use crate::reply::{self, WebReplyError};
-use crate::status;
 
 /// The event fields the record-name mapping reads, so the JSON form and the store's compact form share one mapping.
 pub trait RecordFields {
@@ -85,7 +73,7 @@ pub struct CheckRecord<'a> {
 }
 
 /// Record one `cold_read_check` event and name its check.
-pub async fn record(features: &FeatureContext, session_id: &str, record: CheckRecord<'_>) -> Result<(), WebReplyError> {
+pub async fn record(features: &FeatureContext, session_id: &str, record: CheckRecord<'_>) -> anyhow::Result<()> {
   let mut event = Map::new();
   event.insert("type".to_string(), json!(COLD_READ_CHECK));
   event.insert("content".to_string(), json!(content(record.name)));
@@ -111,165 +99,6 @@ pub async fn record(features: &FeatureContext, session_id: &str, record: CheckRe
   );
   Ok(())
 }
-
-/// `POST /api/internal/web/cold-read-check`: records one cold read of a reply, a Waiting on you item, or the kept
-/// items of a status set.
-pub async fn post_cold_read_check(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
-  let (parts, stream) = request.into_parts();
-  let body = match request_body::read(&parts.headers, stream).await {
-    Ok(body) => body,
-    Err(response) => return *response,
-  };
-  let model = match ColdReadCheck::validate(&body) {
-    Ok(model) => model,
-    Err(response) => return *response,
-  };
-  let identity = match caller::resolve_caller(&parts.headers, &features) {
-    Ok(identity) => identity,
-    Err(response) => return response,
-  };
-  if let Some(refusal) = refuse_colleague_work(&features, &identity).await {
-    return refusal;
-  }
-  let run_id = identity.claims().map(|claims| claims.run_id.as_str());
-  answer(dispatch(&features, &model, run_id).await)
-}
-
-/// The validated body of one `cold_read_check` request.
-struct ColdReadCheck {
-  session_id: String,
-  name: String,
-  backend: String,
-  text: Option<String>,
-  item: Option<Value>,
-  findings: Option<Vec<String>>,
-  answer: Option<String>,
-}
-
-impl ColdReadCheck {
-  /// Validates the body against `COLD_READ_CHECK_BODY`, then refuses the fields the named check does not carry and
-  /// requires the fields it needs.
-  fn validate(body: &RequestBody) -> Result<Self, Box<Response>> {
-    let mut fields = body.declared_fields(&COLD_READ_CHECK_BODY)?;
-    let name = text_field(&fields, "name");
-    let forbidden: &[&str] = if name == cold_read::REPLY { &["item"] } else { &["text", "findings"] };
-    let required: &[&str] = if name == cold_read::REPLY { &["text", "findings"] } else { &["item", "answer"] };
-    let mut errors = Vec::new();
-    for field in forbidden {
-      if let Some(value) = fields.remove(*field) {
-        errors.push(FieldError {
-          loc: vec![Loc::Field("body".to_string()), Loc::Field((*field).to_string())],
-          input: value,
-          kind: Kind::ExtraForbidden,
-        });
-      }
-    }
-    for field in required {
-      if fields.get(*field).is_none_or(Value::is_null) {
-        errors.push(FieldError {
-          loc: vec![Loc::Field("body".to_string()), Loc::Field((*field).to_string())],
-          input: Value::Null,
-          kind: Kind::Missing,
-        });
-      }
-    }
-    if !errors.is_empty() {
-      return Err(Box::new(validation::response(&errors)));
-    }
-    let text = optional_string(&mut fields, "text");
-    let item = fields.remove("item");
-    let findings = match fields.remove("findings") {
-      Some(Value::Array(items)) => Some(
-        items
-          .into_iter()
-          .map(|item| match item {
-            Value::String(text) => text,
-            _ => unreachable!("a validated findings item is a string"),
-          })
-          .collect(),
-      ),
-      Some(Value::Null) | None => None,
-      Some(_) => unreachable!("a validated findings is a list"),
-    };
-    let answer = optional_string(&mut fields, "answer");
-    Ok(Self {
-      session_id: text_field(&fields, "session_id"),
-      name,
-      backend: text_field(&fields, "backend"),
-      text,
-      item,
-      findings,
-      answer,
-    })
-  }
-}
-
-/// The string a nullable-string field holds, or `None` when it is absent or null.
-fn optional_string(fields: &mut Map<String, Value>, name: &str) -> Option<String> {
-  match fields.remove(name) {
-    Some(Value::String(text)) => Some(text),
-    Some(Value::Null) | None => None,
-    Some(_) => unreachable!("a validated {name} is a string or null"),
-  }
-}
-
-/// Record the check the body names.
-async fn dispatch(
-  features: &FeatureContext,
-  model: &ColdReadCheck,
-  run_id: Option<&str>,
-) -> Result<Value, WebReplyError> {
-  match model.name.as_str() {
-    cold_read::REPLY => {
-      reply::record_reply_check(
-        features,
-        &model.session_id,
-        model.text.as_deref().expect("a validated reply check carries its text"),
-        &model.backend,
-        model.findings.as_deref().expect("a validated reply check carries its findings"),
-        model.answer.as_deref(),
-        run_id,
-      )
-      .await
-    }
-    name => {
-      status::record_item_check(
-        features,
-        &model.session_id,
-        name,
-        model.item.as_ref().expect("a validated item check carries its item"),
-        &model.backend,
-        model.answer.as_deref().expect("a validated item check carries its answer"),
-      )
-      .await
-    }
-  }
-}
-
-/// A handler's answer: the body with 200, a refusal with its status and detail, or the unhandled-exception 500.
-fn answer(result: Result<Value, WebReplyError>) -> Response {
-  match result {
-    Ok(body) => charliebot_compat::responses::json(http::StatusCode::OK, &body),
-    Err(WebReplyError::Refused { status, detail }) => {
-      charliebot_compat::responses::json(status, &json!({"detail": detail}))
-    }
-    Err(WebReplyError::Failed(error)) => {
-      charliebot_compat::responses::internal_error("RuntimeError", format!("{error:#}"))
-    }
-  }
-}
-
-/// The fields of one `ColdReadCheckRequest` in declaration order.
-const COLD_READ_CHECK_FIELDS: &[Field] = &[
-  Field::required("session_id", FieldType::String),
-  Field::required("name", FieldType::Literal(cold_read::RECORDED_NAMES)),
-  Field::required("backend", FieldType::String),
-  Field::optional("text", FieldType::NullableString),
-  Field::optional("item", FieldType::Dictionary),
-  Field::optional("findings", FieldType::StringList),
-  Field::optional("answer", FieldType::NullableString),
-];
-const COLD_READ_CHECK_BODY: BodyModel = BodyModel::required(COLD_READ_CHECK_FIELDS).forbid_extra();
 
 #[cfg(test)]
 mod tests {

@@ -136,9 +136,7 @@ fn read_log(features: &FeatureContext, session_id: &str) -> anyhow::Result<Sessi
 }
 
 /// The index of the turn's last input that the running run received: the last event with a `received_at` stamp.
-pub fn last_received_index(turn: &[Value]) -> Option<usize> {
-  turn.iter().rposition(|event| event["received_at"].is_string())
-}
+pub use crate::session_turn::last_received_index;
 
 /// The provenance fragment of the turn's last received input when that input is a child report, else `None`. The
 /// dispatcher answers it as the prompt builder does, so the reminder quotes the report as the prompt renders it.

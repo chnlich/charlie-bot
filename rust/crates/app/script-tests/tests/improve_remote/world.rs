@@ -275,11 +275,16 @@ fi
 exit "${FAKE_CLAUDE_EXIT:-0}"
 "#;
 
+/// The output of `codex debug prompt-input` for a codex that lists no skills: its skills section, with the marker that
+/// the round's start check reads, and no entries. The start check fails a discovery without that marker.
+pub const NO_SKILLS_DISCOVERY: &str = r#"[{"role":"developer","content":[{"type":"input_text","text":"<skills_instructions>\n## Skills\n### Skill roots\n### Available skills\n</skills_instructions>"}]}]"#;
+
 /// Fake codex: record the `CODEX_HOME` it runs with, its environment, its arguments, and the `auth.json` it finds there
 /// with that file's mode, outside the round's boundary.
 const CODEX: &str = r#"# Fake codex: record the CODEX_HOME it runs with, the environment and arguments it receives and its login file.
-# The skill discovery of a codex round asks `codex debug prompt-input`, which lists no skills here and is no run.
+# The skill discovery of a codex round asks `codex debug prompt-input`: the answer lists no skills, and it is no run.
 if [[ ${1-} == debug ]]; then
+  printf '%s\n' '@NO_SKILLS_DISCOVERY@'
   exit 0
 fi
 printf '%s\n' "$0" >>"$FAKE_CLI_RUNS"
@@ -352,6 +357,11 @@ fi
 /// A member CLI as the vendor publishes it: `--version` prints `line`, and any other call runs `body`.
 fn cli_script(body: &str, line: &str) -> String {
   format!("#!/usr/bin/env bash\nif [[ ${{1-}} == --version ]]; then\n  printf '%s\\n' '{line}'\n  exit 0\nfi\n{body}")
+}
+
+/// The fake codex as a CLI script with its `--version` line; its `debug prompt-input` answer lists no skills.
+fn codex_script(line: &str) -> String {
+  cli_script(&CODEX.replace("@NO_SKILLS_DISCOVERY@", NO_SKILLS_DISCOVERY), line)
 }
 
 /// The SHA-256 of a file, in the form the vendor publishes.
@@ -812,7 +822,7 @@ impl World {
     sandbox.stub("codex", LOCAL_CODEX);
     let remote_bin = sandbox.dir("remote/.local/bin");
     write_executable(&remote_bin.join("claude"), cli_script(CLAUDE, HOST_CLAUDE_LINE));
-    write_executable(&remote_bin.join("codex"), cli_script(CODEX, HOST_CODEX_LINE));
+    write_executable(&remote_bin.join("codex"), codex_script(HOST_CODEX_LINE));
     let vendor_root = sandbox.dir("vendor");
     let curl_log = sandbox.root().join("curl.log");
     let cli_runs = sandbox.root().join("cli-runs.log");
@@ -913,7 +923,7 @@ impl World {
         let stage = self.sandbox.dir(&format!("stage/codex-{version}"));
         let bin = stage.join("bin");
         fs::create_dir_all(&bin).expect("the package's bin directory");
-        write_executable(&bin.join("codex"), cli_script(CODEX, reported));
+        write_executable(&bin.join("codex"), codex_script(reported));
         for helper in ["codex-code-mode-host", "codex-exec-server"] {
           write_executable(&bin.join(helper), "#!/usr/bin/env bash\nexit 0\n");
         }

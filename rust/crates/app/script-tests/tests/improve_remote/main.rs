@@ -1343,9 +1343,13 @@ fn the_in_scope_codex_round_runs_under_a_codex_home_holding_its_login_at_mode_60
   let forwarded = forwarded_codex_login(world::now_seconds() + 200 * 3600);
   codex_in_scope_fixture(&world, launch_id, &forwarded);
   fs::create_dir(&round_tmp).expect("the round's directory");
-  // The round's start asks the codex on PATH which skills it lists: this stub lists none.
+  // The round's start asks the codex on PATH which skills it lists: this stub lists none, with the section marker.
   let discovery = world.sandbox.dir("codex-discovery");
-  harness::write_executable(&discovery.join("codex"), "#!/usr/bin/env bash\nexit 0\n");
+  let answer = format!(
+    "#!/usr/bin/env bash\nif [[ ${{1-}} == debug ]]; then\n  printf '%s\\n' '{}'\nfi\n",
+    world::NO_SKILLS_DISCOVERY
+  );
+  harness::write_executable(&discovery.join("codex"), answer);
   let path = format!("{}:/usr/local/bin:/usr/bin:/bin", discovery.display());
 
   let run = run_in_scope_with(&world, launch_id, "codex", &[("PATH", path)]);

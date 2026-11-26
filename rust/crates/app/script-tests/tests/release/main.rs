@@ -1508,6 +1508,67 @@ fn test_trial_serve_stops_the_tmux_server_even_when_its_socket_was_removed() {
   assert_eq!(fs::read_dir(tree_root).expect("the tree root").count(), 0, "{}", run.describe());
 }
 
+/// A serve trial whose command leaves a child process behind: the child carries the trial's environment, so the
+/// leftover check finds it, fails the side even though the command exited 0, and names the pid, command line and parent
+/// chain it found.
+#[test]
+#[ignore = "integration"]
+fn test_trial_serve_fails_and_names_a_leftover_process_that_carries_the_trial_environment() {
+  let world = ServeWorld::new();
+  let seed = world.seed_home("seed", "1");
+  let tree_root = world.tree_root();
+  let leftover_pid_file = world.sandbox.root().join("leftover.pid");
+  let script = format!(
+    "sleep 300 >/dev/null 2>&1 < /dev/null & printf '%s\\n' \"$!\" > '{}'; exit 0",
+    leftover_pid_file.display()
+  );
+
+  let run = world.serve(tree_root, &seed, &["sh", "-c", script.as_str()]);
+
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(run.stdout.contains("SERVE command exit=0"), "{}", run.describe());
+  let pid = fs::read_to_string(&leftover_pid_file).expect("the leftover pid").trim().to_string();
+  let fail_line = format!("FAIL serve ChildProcess: processes of the trial tree or temp root remain: {pid}");
+  assert!(run.stdout.lines().any(|line| line == fail_line), "{}", run.describe());
+  let cause_prefix = format!("CAUSE serve: pid {pid} ");
+  let cause = run.stdout.lines().find(|line| line.starts_with(&cause_prefix)).expect("the leftover's CAUSE line");
+  assert!(cause.contains("comm sleep"), "{}", cause);
+  assert!(cause.contains("cmdline \"sleep 300"), "{}", cause);
+  assert!(cause.contains(" ancestors "), "{}", cause);
+  let leftover: i32 = pid.parse().expect("a numeric leftover pid");
+  // SAFETY: the leftover is the sleep this test started; killing it needs no other process.
+  unsafe { libc::kill(leftover, libc::SIGKILL) };
+  let deadline = Instant::now() + Duration::from_secs(10);
+  while process_is_running(leftover) && Instant::now() < deadline {
+    thread::sleep(Duration::from_millis(10));
+  }
+  assert!(!process_is_running(leftover), "the test did not stop its leftover {leftover}: {}", run.describe());
+}
+
+/// A serve trial started from a shell whose command line names the trial's tree path, as an improve round's launcher
+/// does, passes: the leftover check reads the environment the trial exported, never command-line text.
+#[test]
+#[ignore = "integration"]
+fn test_trial_serve_passes_when_its_launcher_names_the_tree_path_in_its_command_line() {
+  let _serial = TRIAL_RUNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+  let world = ServeWorld::new();
+  let seed = world.seed_home("seed", "1");
+  let tree_root = world.tree_root();
+  let tree = tree_root.join(format!("trial-{}", &world.commit[..12]));
+  let arguments = world.serve_arguments(tree_root, &seed, &world.release.join("charliebot-server"), &["true"]);
+  let quoted: Vec<String> = arguments.iter().map(|argument| format!("'{}'", argument.to_string_lossy())).collect();
+  // The trailing `:` keeps the shell alive while the trial runs, with the tree path in its own command line.
+  let script = format!(": '{}'; bash {}; :", tree.display(), quoted.join(" "));
+  let mut trial = harness::command("sh", &world.env);
+  trial.arg("-c").arg(script);
+
+  let run = harness::run(&mut trial);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(run.stdout.contains("SERVE PASS ChildProcess:"), "{}", run.describe());
+  assert!(!run.stdout.contains("FAIL serve ChildProcess"), "{}", run.describe());
+}
+
 /// Runs `trial` in its own process group and waits at most `limit` for it. A trial still running at the limit has its
 /// group killed, so the server it started dies too, and the run's code is -1: the caller's assertions name the hang.
 fn run_within(trial: &mut Command, limit: Duration) -> Run {

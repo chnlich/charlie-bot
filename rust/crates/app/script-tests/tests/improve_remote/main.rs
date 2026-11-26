@@ -680,6 +680,7 @@ fn run_in_scope_for(
   harness::write_executable(&bin.join("improve-sandbox"), format!("#!/usr/bin/env bash\n{SCOPE_ENV_STUB}"));
   let mut env = harness::Env::new();
   env.insert("HOME".to_string(), world.remote_home.display().to_string());
+  env.insert("IMPROVE_SKILLS_DIR".to_string(), round_skills_dir(world).display().to_string());
   env.insert("PATH".to_string(), "/usr/local/bin:/usr/bin:/bin".to_string());
   env.insert("FAKE_SCOPE_ENV".to_string(), world.sandbox.root().join("scope-env.txt").display().to_string());
   env.insert("FAKE_SCOPE_AUTH".to_string(), world.sandbox.root().join("scope-auth.json").display().to_string());
@@ -1342,8 +1343,12 @@ fn the_in_scope_codex_round_runs_under_a_codex_home_holding_its_login_at_mode_60
   let forwarded = forwarded_codex_login(world::now_seconds() + 200 * 3600);
   codex_in_scope_fixture(&world, launch_id, &forwarded);
   fs::create_dir(&round_tmp).expect("the round's directory");
+  // The round's start asks the codex on PATH which skills it lists: this stub lists none.
+  let discovery = world.sandbox.dir("codex-discovery");
+  harness::write_executable(&discovery.join("codex"), "#!/usr/bin/env bash\nexit 0\n");
+  let path = format!("{}:/usr/local/bin:/usr/bin:/bin", discovery.display());
 
-  let run = run_in_scope(&world, launch_id, "codex");
+  let run = run_in_scope_with(&world, launch_id, "codex", &[("PATH", path)]);
 
   let scope_env = fs::read_to_string(world.sandbox.root().join("scope-env.txt")).unwrap_or_default();
   let found = fs::read_to_string(world.sandbox.root().join("scope-auth.json")).ok();

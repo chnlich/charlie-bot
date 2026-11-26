@@ -278,6 +278,10 @@ exit "${FAKE_CLAUDE_EXIT:-0}"
 /// Fake codex: record the `CODEX_HOME` it runs with, its environment, its arguments, and the `auth.json` it finds there
 /// with that file's mode, outside the round's boundary.
 const CODEX: &str = r#"# Fake codex: record the CODEX_HOME it runs with, the environment and arguments it receives and its login file.
+# The skill discovery of a codex round asks `codex debug prompt-input`, which lists no skills here and is no run.
+if [[ ${1-} == debug ]]; then
+  exit 0
+fi
 printf '%s\n' "$0" >>"$FAKE_CLI_RUNS"
 printf 'CODEX_HOME=%s\n' "${CODEX_HOME-unset}" >"$FAKE_CODEX_ENV"
 env | grep -v -e '^CODEX_HOME=' >>"$FAKE_CODEX_ENV"
@@ -703,6 +707,7 @@ impl World {
       "remote-runner.sh",
       "inflight-files.sh",
       "clone-check.sh",
+      "codex-skill-roots.sh",
       "member_kinds.txt",
       "gh-shim.sh",
       "github-post.sh",
@@ -1274,6 +1279,7 @@ impl World {
     fs::create_dir_all(launch.join("probe")).expect("the launch's probe directory");
     harness::copy_file(&self.repo.join("dev/improve/member_kinds.txt"), &launch.join("member_kinds.txt"));
     harness::copy_file(&self.repo.join("dev/improve/clone-check.sh"), &launch.join("clone-check.sh"));
+    harness::copy_file(&self.repo.join("dev/improve/codex-skill-roots.sh"), &launch.join("codex-skill-roots.sh"));
     harness::copy_file(&self.resolve_answer, &launch.join("review/option.json"));
     harness::copy_file(&self.probe_answer, &launch.join("probe/option.json"));
     // The launcher names the revision of the kit and of the skills the runner fetches, which is the commit its charliebot

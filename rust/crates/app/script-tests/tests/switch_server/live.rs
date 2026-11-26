@@ -288,14 +288,14 @@ fn unrelated_page() -> Respond {
   Arc::new(|_target, _head| (200, "text/html", "<!doctype html><title>Other page</title>".to_string()))
 }
 
-/// The app's Diff Viewer page, which uses its own page shell rather than the chat shell.
+/// The app's Diff Viewer page as the server serves it: it sits behind the access gate, and its shell is its own
+/// rather than the chat shell, with no marker any other served page shares.
 fn diff_page() -> Respond {
-  Arc::new(|_target, _head| {
-    (
-      200,
-      "text/html",
-      "<!doctype html><title>Diff Viewer — CharlieBot@test</title><form id=\"diff-form\"></form>".to_string(),
-    )
+  Arc::new(|_target, head| {
+    if !carries_key(head) {
+      return (401, "text/html", LOGIN_PAGE.to_string());
+    }
+    (200, "text/html", "<!doctype html><title>Diff Viewer — CharlieBot@test</title><main></main>".to_string())
   })
 }
 
@@ -324,7 +324,10 @@ fn slow_view() -> Respond {
 
 /// The view answers with the app's page and its access-key prompt showing, as an app that rejects the key shows.
 fn prompt_showing() -> Respond {
-  Arc::new(|_target, _head| {
+  Arc::new(|_target, head| {
+    if !carries_key(head) {
+      return (401, "text/html", LOGIN_PAGE.to_string());
+    }
     let page = APP_PAGE.replace("style=\"display:none\"", "style=\"display:flex\"");
     (200, "text/html", page)
   })

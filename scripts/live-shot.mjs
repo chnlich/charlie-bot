@@ -18,9 +18,10 @@
 // size must equal it; a capture that came out at another size fails here instead of passing a screenshot the release's
 // check would refuse.
 //
-// A capture is a picture of the app only when the rendered page shows so: the view must answer 200, the app shell must
-// be present, and the page must show neither the access-key login page nor the app's own access-key prompt. Any other
-// page fails the capture, and no PNG is written.
+// A capture is a picture of the app only when the rendered page shows so: the view must answer 200, the same view must
+// answer 401 to a request that carries no key (every page the server renders sits behind its access gate), and the
+// page must show neither the access-key login page nor the app's own access-key prompt. Any other page fails the
+// capture, and no PNG is written.
 //
 // Chrome resolves from LIVE_SHOT_CHROME, then the newest Playwright Chromium under ~/.cache/ms-playwright,
 // then `chromium`, `chromium-browser` and `google-chrome`.
@@ -193,27 +194,40 @@ function seedAccessKey(origin) {
 }
 
 // The facts of the rendered page that decide whether it is the app: the access-key login page's form, and the app's
-// own access-key prompt when it is showing.
+// own access-key prompt when it is showing. The page's shell is no fact here: the server renders standalone pages
+// (`/diff`, `/token-usage`, the events viewer) with shells of their own, so the capture tells a served page from an
+// unrelated one by the server's access gate instead.
 async function renderedPageFacts(page) {
   return evaluate(page, `(() => {
     const prompt = document.getElementById('auth-overlay');
-    const chatShell = prompt !== null && document.getElementById('sidebar') !== null &&
-      document.getElementById('messages') !== null;
-    const diffPage = document.getElementById('diff-form') !== null;
     return {
-      appShell: chatShell || diffPage,
       loginForm: document.querySelector('input#k[type="password"]') !== null,
       accessPrompt: prompt !== null && getComputedStyle(prompt).display !== 'none',
     };
   })()`);
 }
 
-// Refuses a capture that is not the app: the view must answer 200, and the rendered page must show neither the
-// access-key login page nor the app's access-key prompt.
-function refuseNonAppPage(status, facts) {
+// The status the view answers to a request that carries no key. Every page the CharlieBot server renders sits behind
+// its access gate, so the keyless request draws the 401 the gate answers with; a view that answers 200 to a request
+// without the key is an unrelated page the server did not render. The probe runs outside the browser, so it carries
+// no key and none of the capture's own interception headers.
+async function gateProbeStatus(url) {
+  try {
+    const probe = await fetch(url, { redirect: 'manual' });
+    return probe.status;
+  } catch (error) {
+    throw new Error(`the access-gate probe of the view failed: ${error.message}`);
+  }
+}
+
+// Refuses a capture that is not the app: the view must answer 200, it must not answer 200 without the key, and the
+// rendered page must show neither the access-key login page nor the app's access-key prompt.
+function refuseNonAppPage(status, facts, gateStatus) {
   if (facts.loginForm) throw new Error('the page is the access-key login page, not the app');
   if (status !== 200) throw new Error(`the view answered ${status ?? 'with no status'}, not 200`);
-  if (!facts.appShell) throw new Error('the page is not the CharlieBot app');
+  if (gateStatus === 200) {
+    throw new Error('the view answers 200 without the access key, so the page is not the CharlieBot app');
+  }
   if (facts.accessPrompt) throw new Error("the app's access-key prompt covers the page, so the key was not accepted");
 }
 
@@ -265,7 +279,8 @@ async function capture(browser, url) {
       await sleep(50);
     }
     await sleep(1000);
-    refuseNonAppPage(statuses.get(loaderId), await renderedPageFacts(page));
+    const gateStatus = await gateProbeStatus(url);
+    refuseNonAppPage(statuses.get(loaderId), await renderedPageFacts(page), gateStatus);
     const { data } = await page.send('Page.captureScreenshot', { format: 'png' });
     return Buffer.from(data, 'base64');
   } finally {

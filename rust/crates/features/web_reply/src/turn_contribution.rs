@@ -335,6 +335,10 @@ mod tests {
         json!({"type": COLD_READ_CHECK, "name": "settle", "content": "Cold read of the kept Waiting on you items"}),
         "settle",
       ),
+      (
+        json!({"type": COLD_READ_CHECK, "name": "remaining", "content": "Cold read of the Remaining list"}),
+        "remaining",
+      ),
       (json!({"type": WEB_REPLY_CHECK, "content": "web reply check"}), "reply"),
       (json!({"type": WEB_ASK_CHECK, "content": "Cold read of a Waiting on you item"}), "ask"),
     ] {

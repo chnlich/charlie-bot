@@ -35,6 +35,9 @@ pub const NOW_QUESTIONS_SECTION: &str = "now_questions";
 /// The settle prompt pair under `prompts/cold_read.md`.
 pub const SETTLE_SYSTEM_SECTION: &str = "settle_system_prompt";
 pub const SETTLE_QUESTIONS_SECTION: &str = "settle_questions";
+/// The Remaining prompt pair under `prompts/cold_read.md`.
+pub const REMAINING_SYSTEM_SECTION: &str = "remaining_system_prompt";
+pub const REMAINING_QUESTIONS_SECTION: &str = "remaining_questions";
 /// The question counts of the Now-status and web-reply prompt pairs.
 pub const NOW_QUESTION_COUNT: usize = 1;
 pub const REPLY_QUESTION_COUNT: usize = 3;
@@ -46,6 +49,7 @@ pub const PAGE: &str = "page";
 pub const REPLY: &str = "reply";
 pub const ASK: &str = "ask";
 pub const SETTLE: &str = "settle";
+pub const REMAINING: &str = "remaining";
 pub const NOW: &str = "now";
 
 /// What a caller does with a cold read's answer.
@@ -73,7 +77,7 @@ pub struct ColdReadRow {
 }
 
 /// The registry: every command-side cold read, one row each.
-pub const REGISTRY: [ColdReadRow; 5] = [
+pub const REGISTRY: [ColdReadRow; 6] = [
   ColdReadRow {
     name: PAGE,
     system_section: SYSTEM_SECTION,
@@ -99,6 +103,12 @@ pub const REGISTRY: [ColdReadRow; 5] = [
     refusal: RefusalRule::RequireRecordSinceInput,
   },
   ColdReadRow {
+    name: REMAINING,
+    system_section: REMAINING_SYSTEM_SECTION,
+    questions_section: REMAINING_QUESTIONS_SECTION,
+    refusal: RefusalRule::RequireRecordSinceInput,
+  },
+  ColdReadRow {
     name: NOW,
     system_section: NOW_SYSTEM_SECTION,
     questions_section: NOW_QUESTIONS_SECTION,
@@ -119,7 +129,7 @@ impl ColdReadRow {
 }
 
 /// The names a `cold_read_check` event may carry: the registry's recorded rows, in registry order.
-pub const RECORDED_NAMES: &[&str] = &[REPLY, ASK, SETTLE];
+pub const RECORDED_NAMES: &[&str] = &[REPLY, ASK, SETTLE, REMAINING];
 /// The item JSON an ask probe carries: non-ASCII characters unescaped, two-space indentation.
 const ITEM_JSON: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ",", key_separator: ": ", indent: Some(2) };
@@ -419,6 +429,42 @@ pub fn text_probe_input(text: &str, questions: &str) -> String {
 /// (`settle_probe_input`), joined by blank lines.
 pub fn settle_probe_input(items: &Value, turn_text: &str, questions: &str) -> String {
   format!("{}\n\n{turn_text}\n\n{questions}", text_repr::json_dumps(items, &ITEM_JSON))
+}
+
+/// The Remaining probe's whole input: the prospective list as JSON, the previous list when this set replaced it,
+/// then the turn's record, then the questions (`remaining_probe_input`), joined by blank lines.
+pub fn remaining_probe_input(remaining: &Value, previous: Option<&Value>, turn_text: &str, questions: &str) -> String {
+  format!("{}\n\n{turn_text}\n\n{questions}", remaining_lists(remaining, previous))
+}
+
+/// The Remaining lists one probe input reads: the prospective list as JSON, then `Previous remaining: ...` when
+/// this set replaced the list, a clear to an empty list included.
+fn remaining_lists(remaining: &Value, previous: Option<&Value>) -> String {
+  match previous {
+    Some(previous) => format!(
+      "{}\nPrevious remaining: {}",
+      text_repr::json_dumps(remaining, &ITEM_JSON),
+      text_repr::json_dumps(previous, &ITEM_JSON)
+    ),
+    None => text_repr::json_dumps(remaining, &ITEM_JSON),
+  }
+}
+
+/// The settle probe's whole input with the Remaining cold read appended, so the turn's one settle probe also asks
+/// the Remaining question. `settle_probe_input` alone stays the input while `remaining` needs no read.
+pub fn settle_probe_input_with_remaining(
+  items: &Value,
+  turn_text: &str,
+  remaining: &Value,
+  previous: Option<&Value>,
+  questions: &str,
+  remaining_questions: &str,
+) -> String {
+  format!(
+    "{}\n\n{}\n\n{remaining_questions}",
+    settle_probe_input(items, turn_text, questions),
+    remaining_lists(remaining, previous)
+  )
 }
 
 /// The findings parsed from a numbered cold-read answer with `question_count` questions.
@@ -1129,6 +1175,7 @@ BBBB
       (REPLY, RefusalRule::HoldOnFindings),
       (ASK, RefusalRule::RequireRecord),
       (SETTLE, RefusalRule::RequireRecordSinceInput),
+      (REMAINING, RefusalRule::RequireRecordSinceInput),
       (NOW, RefusalRule::RefuseOnFindings),
     ];
     assert_eq!(REGISTRY.len(), expected.len());
@@ -1138,7 +1185,7 @@ BBBB
       assert_eq!((registered.name, registered.refusal), (name, refusal));
     }
     assert!(row("unknown-check").is_none());
-    assert_eq!(RECORDED_NAMES, [REPLY, ASK, SETTLE]);
+    assert_eq!(RECORDED_NAMES, [REPLY, ASK, SETTLE, REMAINING]);
   }
 
   /// Every registry row's prompt pair resolves from the sections it names, and no row shares a section with another.
@@ -1176,5 +1223,45 @@ BBBB
     assert!(input.starts_with("[\n  {"), "{input}");
     assert!(input.contains("\"text\": \"Decide\""), "{input}");
     assert!(input.ends_with("\n\n[2026-01-01T00:00:00] agent: done\n\nquestions"), "{input}");
+  }
+
+  #[test]
+  fn the_remaining_probe_input_is_the_lists_then_the_turn_record_then_the_questions() {
+    let input = remaining_probe_input(
+      &serde_json::json!(["Revised milestone"]),
+      Some(&serde_json::json!(["Milestone"])),
+      "[2026-01-01T00:00:00] agent: done",
+      "questions",
+    );
+    assert!(input.starts_with("[\n  \"Revised milestone\"\n]"), "{input}");
+    assert!(input.contains("\nPrevious remaining: [\n  \"Milestone\"\n]"), "{input}");
+    assert!(input.ends_with("\n\n[2026-01-01T00:00:00] agent: done\n\nquestions"), "{input}");
+  }
+
+  #[test]
+  fn the_remaining_probe_input_carries_no_previous_line_when_the_list_is_unchanged() {
+    let input = remaining_probe_input(&serde_json::json!(["Milestone"]), None, "turn", "questions");
+    assert!(input.starts_with("[\n  \"Milestone\"\n]\n\nturn\n\nquestions"), "{input}");
+  }
+
+  #[test]
+  fn the_settle_probe_input_with_remaining_appends_the_lists_and_the_remaining_questions() {
+    let items = serde_json::json!([{"text": "Decide", "context": "The line waits."}]);
+    let input = settle_probe_input_with_remaining(
+      &items,
+      "[2026-01-01T00:00:00] agent: done",
+      &serde_json::json!(["Milestone"]),
+      Some(&serde_json::json!([])),
+      "settle questions",
+      "remaining questions",
+    );
+    assert!(input.starts_with("[\n  {"), "{input}");
+    assert!(input.contains("Previous remaining: []"), "{input}");
+    let (_, tail) = input.split_once("settle questions").expect("the settle questions come first");
+    assert!(tail.contains("\n\n[\n  \"Milestone\"\n]"), "{tail}");
+    assert!(tail.contains("Previous remaining: []"), "{tail}");
+    assert!(tail.ends_with("remaining questions"), "{tail}");
+    let without = settle_probe_input(&items, "turn", "questions");
+    assert!(!without.contains("Milestone"), "the settle probe input stays unchanged without remaining: {without}");
   }
 }

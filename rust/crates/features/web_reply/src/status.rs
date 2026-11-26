@@ -1,7 +1,8 @@
 //! A web session's status: the Goal, Remaining, Now and Waiting on you items
 //! that `charliebot web status` sets and reads. A set stores the items its JSON object names, records one `web_status`
-//! event and tells every ancestor page. A set refuses a Waiting on you item until a cold read of it is recorded, and a
-//! kept item until a `settle` cold read of the turn's record follows the turn's last input. A read lists the open
+//! event and tells every ancestor page. A set refuses a Waiting on you item until a cold read of it is recorded, a
+//! kept item until a `settle` cold read of the turn's record follows the turn's last input, and a Remaining list
+//! that needs its read until a `remaining` cold read follows the turn's last input. A read lists the open
 //! descendants whose status holds Waiting on you items and the open children that hold a Now.
 
 use std::collections::{HashMap, HashSet};
@@ -67,6 +68,9 @@ const FIELD_REQUIRED: &str = "Field required";
 const EXTRA_FORBIDDEN: &str = "Extra inputs are not permitted";
 const NOW_BUDGET_CHARS: usize = 200;
 const ITEM_SHA256: &str = "item_sha256";
+/// The digest field of a `remaining` cold-read record: the SHA-256 of the lists the probe read. The store gate does
+/// not key on it; a record's presence after the turn's last input is what counts.
+const REMAINING_SHA256: &str = "remaining_sha256";
 /// The item fields that only the server writes; a set file carries neither.
 const SERVER_WRITTEN_ITEM_FIELDS: [&str; 2] = ["since", "since_exact"];
 /// The message a since field that is not a datetime raises.
@@ -445,6 +449,43 @@ fn settle_items(items: &[WaitingItem], stored: &[WaitingItem], turn: &[Value]) -
   settle
 }
 
+/// Whether a `remaining` record was written in `turn` after `since`: the turn's last input, or anywhere in the turn
+/// for a turn with no input event. The gate keys on the record's presence, not on the list it read, so a list the
+/// agent revised after the read still stores on the next set without a second read.
+fn remaining_checked_since(turn: &[Value], since: Option<UtcDateTime>) -> bool {
+  turn.iter().any(|event| {
+    cold_read_record::cold_read_record_name(event) == Some(cold_read::REMAINING)
+      && match since {
+        Some(since) => {
+          let written = event["timestamp"].as_str().and_then(|text| UtcDateTime::parse(text).ok());
+          written.is_some_and(|written| written > since)
+        }
+        None => true,
+      }
+  })
+}
+
+/// The Remaining cold read one set needs: the prospective list, and the stored list when the set replaced it, a
+/// clear to an empty list included. A turn with an input reads a non-empty prospective list; a set that changes the
+/// list reads it whatever the turn holds. Neither read runs again while a record follows the turn's last input.
+struct RemainingRead {
+  prospective: Vec<String>,
+  previous: Option<Vec<String>>,
+}
+
+/// The Remaining read the set needs, or `None` when no record is missing.
+fn remaining_read(patch: &StatusPatch, stored_remaining: &[String], turn: &[Value]) -> Option<RemainingRead> {
+  let since = session_turn::last_input_at(turn);
+  let changed = patch.remaining.as_ref().is_some_and(|next| *next != stored_remaining);
+  let prospective = patch.remaining.clone().unwrap_or_else(|| stored_remaining.to_vec());
+  let needed = (since.is_some() && !prospective.is_empty()) || changed;
+  if needed && !remaining_checked_since(turn, since) {
+    Some(RemainingRead { previous: changed.then(|| stored_remaining.to_vec()), prospective })
+  } else {
+    None
+  }
+}
+
 /// Refuse a waiting item with no non-blank context before its digest is checked.
 fn require_waiting_context(items: &[WaitingItem]) -> Result<(), WebReplyError> {
   if let Some(item) = items.iter().find(|item| item.context.is_none()) {
@@ -542,6 +583,37 @@ pub async fn record_item_check(
   Ok(json!({ITEM_SHA256: digest}))
 }
 
+/// Record one cold read of the Remaining list. The read's `text` names the lists the probe read; a blank answer
+/// records nothing.
+pub async fn record_remaining_check(
+  features: &FeatureContext,
+  session_id: &str,
+  text: &str,
+  backend: &str,
+  answer: &str,
+) -> Result<Value, WebReplyError> {
+  reply::require_manager_session(features, session_id).await?;
+  if answer.trim().is_empty() {
+    return Err(WebReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, "the cold-read answer is blank".to_string()));
+  }
+  let digest = charliebot_store::control_events::sha256_bytes_hex(text.as_bytes());
+  cold_read_record::record(
+    features,
+    session_id,
+    cold_read_record::CheckRecord {
+      name: cold_read::REMAINING,
+      backend,
+      answer: Some(answer),
+      digest_field: REMAINING_SHA256,
+      digest: &digest,
+      findings: None,
+      run: None,
+    },
+  )
+  .await?;
+  Ok(json!({REMAINING_SHA256: digest}))
+}
+
 /// Record one cold read of one Waiting on you item.
 pub async fn record_ask_check(
   features: &FeatureContext,
@@ -554,7 +626,8 @@ pub async fn record_ask_check(
 }
 
 /// Return the waiting items in `text` whose current digest has no matching `ask` cold-read record, the kept items that
-/// still need a settle cold read, and the turn's record when `settle` is non-empty.
+/// still need a settle cold read, the Remaining list that still needs its cold read, and the turn's record when `settle`
+/// or the Remaining read is non-empty. When neither is needed, the answer carries `unread` alone.
 pub async fn unread_waiting(features: &FeatureContext, session_id: &str, text: &str) -> Result<Value, WebReplyError> {
   let meta = reply::require_manager_session(features, session_id).await?;
   let patch = parse_patch(text)?;
@@ -578,10 +651,22 @@ pub async fn unread_waiting(features: &FeatureContext, session_id: &str, text: &
   let unread = unread_items(items, &read_digests)?;
   let turn = session_turn::current_turn(features, session_id)?;
   let settle = settle_items(items, &stored_waiting, &turn);
-  if settle.is_empty() {
-    return Ok(json!({"unread": unread}));
+  let stored_remaining = stored.as_ref().map(|status| status.remaining.clone()).unwrap_or_default();
+  let remaining = remaining_read(&patch, &stored_remaining, &turn);
+  let mut answer = json!({"unread": unread});
+  if let Some(read) = &remaining {
+    answer["remaining"] = json!(read.prospective);
+    if let Some(previous) = &read.previous {
+      answer["previous_remaining"] = json!(previous);
+    }
+    answer["turn_text"] = json!(session_turn::turn_text(&turn));
   }
-  Ok(json!({"unread": unread, "settle": settle, "turn_text": session_turn::turn_text(&turn)}))
+  if settle.is_empty() {
+    return Ok(answer);
+  }
+  answer["settle"] = json!(settle);
+  answer["turn_text"] = json!(session_turn::turn_text(&turn));
+  Ok(answer)
 }
 
 /// `Text` for a present value: the non-blank string it holds, or a problem for a blank string or any other type.
@@ -761,6 +846,7 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
       Err(error @ WebReplyError::Failed(_)) => return Err(error),
     }
   };
+  let turn = session_turn::current_turn(features, session_id)?;
   if let Some(items) = patch.waiting.as_deref()
     && !items.is_empty()
   {
@@ -776,7 +862,6 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
         refused = true;
       }
     }
-    let turn = session_turn::current_turn(features, session_id)?;
     let recorded = settle_digests(&turn, session_turn::last_input_at(&turn));
     for item in kept_items(items, &stored_waiting) {
       let Ok(digest) = item_sha256(&item) else { continue };
@@ -786,6 +871,10 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
         refused = true;
       }
     }
+  }
+  if remaining_read(&patch, &base.remaining, &turn).is_some() {
+    refusal_details.push("Remaining needs a cold read of this turn's record".to_string());
+    refused = true;
   }
   if refused {
     return Err(WebReplyError::refused(
@@ -1323,9 +1412,19 @@ mod tests {
   async fn a_remaining_list_replaces_on_set_and_survives_a_set_that_leaves_it_out() {
     let home = Home::new();
     let sid = home.manager("session", None).await;
+    // A set that changes Remaining reads it first; the record, not the list's digest, is what lets the retry store,
+    // so a list the agent revised after the read stores as revised.
+    let changed = set_status(&home.features, &sid, r#"{"goal": "Ship", "remaining": ["Build", "Read back"]}"#)
+      .await
+      .expect_err("the first list needs its cold read");
+    let refusal = detail(changed);
+    assert!(refusal.contains("Remaining needs a cold read of this turn's record"), "{refusal}");
+    record_remaining_check(&home.features, &sid, r#"{"remaining": []}"#, "synthetic-haiku", "Yes.")
+      .await
+      .expect("the remaining read records");
     set_status(&home.features, &sid, r#"{"goal": "Ship", "remaining": ["Build", "Read back"]}"#)
       .await
-      .expect("the list stores");
+      .expect("the read list stores");
 
     let goal_only = set_status(&home.features, &sid, r#"{"goal": "Ship it"}"#).await.expect("the goal stores");
     assert_eq!(goal_only["remaining"], json!(["Build", "Read back"]), "a set that leaves the list out keeps it");
@@ -1360,6 +1459,9 @@ mod tests {
     assert!(!set_echo(&home, &no_goal, r#"{"now": "Running"}"#).await, "no Goal");
 
     let filled = home.manager("filled", None).await;
+    record_remaining_check(&home.features, &filled, r#"{"remaining": []}"#, "synthetic-haiku", "Yes.")
+      .await
+      .expect("the remaining read records");
     assert!(!set_echo(&home, &filled, r#"{"goal": "Ship", "remaining": ["Build"]}"#).await, "a non-empty Remaining");
     let confirmed = confirm_status(&home.features, &filled).await.expect("the confirm records");
     assert_eq!(confirmed["remaining_missing"], json!(false), "confirm echoes the same rule");
@@ -1396,6 +1498,9 @@ mod tests {
       )
       .await;
     check_waiting_item(&home, &thread, "Pick a layout").await;
+    record_remaining_check(&home.features, &thread, r#"{"remaining": []}"#, "synthetic-haiku", "Yes.")
+      .await
+      .expect("the remaining read records");
     let text = json!({
       "goal": "Ship",
       "remaining": ["Build"],
@@ -2256,6 +2361,15 @@ mod tests {
         .expect_err("the blank answer is refused");
 
       assert!(matches!(error, WebReplyError::Refused { status: StatusCode::UNPROCESSABLE_ENTITY, .. }), "{answer:?}");
+      assert_eq!(home.events(&sid), before, "{answer:?}");
+
+      let remaining_error = record_remaining_check(&home.features, &sid, r#"{"remaining": []}"#, "haiku", answer)
+        .await
+        .expect_err("the blank remaining answer is refused");
+      assert!(
+        matches!(remaining_error, WebReplyError::Refused { status: StatusCode::UNPROCESSABLE_ENTITY, .. }),
+        "{answer:?}"
+      );
       assert_eq!(home.events(&sid), before, "{answer:?}");
     }
   }
@@ -3333,5 +3447,253 @@ mod tests {
       assert!(!text.contains("turn_text"), "{text}");
       assert!(!text.contains("\"settle\""), "{text}");
     }
+  }
+
+  /// Appends one `remaining` cold-read record with `timestamp`, as the CLI's cold-read-check call writes one.
+  async fn append_remaining_record(home: &Home, session_id: &str, timestamp: &str) {
+    home
+      .append(
+        session_id,
+        json!({
+          "type": COLD_READ_CHECK,
+          "name": cold_read::REMAINING,
+          "content": "Cold read of the Remaining list",
+          REMAINING_SHA256: "digest",
+          "backend": "synthetic-haiku",
+          "answer": "Yes.",
+          "timestamp": timestamp,
+        }),
+      )
+      .await;
+  }
+
+  /// The remaining cold-read records of the session's log.
+  fn remaining_checks(home: &Home, session_id: &str) -> Vec<Value> {
+    home
+      .events(session_id)
+      .into_iter()
+      .filter(|event| event["type"] == COLD_READ_CHECK && event["name"] == cold_read::REMAINING)
+      .collect()
+  }
+
+  /// The stored status with a Remaining list, the running turn whose input woke it, and the user event the run
+  /// received.
+  async fn a_manager_with_remaining_and_an_input(home: &Home, session_id: &str, run_id: &str) {
+    write_stored_status(
+      home,
+      session_id,
+      json!({
+        "goal": "Ship",
+        "now": "Running",
+        "remaining": ["Land the list"],
+        "waiting": [],
+        "updated_at": "2026-01-01T00:00:00Z",
+      }),
+    )
+    .await;
+    home.launch_run(session_id, run_id, &["u1"], "2026-01-01T00:00:10Z");
+    home
+      .append(
+        session_id,
+        json!({"type": "user", "id": "u1", "content": "How is it going?", "timestamp": "2026-01-01T00:00:09Z"}),
+      )
+      .await;
+  }
+
+  #[tokio::test]
+  async fn a_partial_set_on_an_input_turn_with_stored_remaining_reads_remaining_until_it_records() {
+    let home = Home::new();
+    let sid = home.manager("remaining-gate", None).await;
+    a_manager_with_remaining_and_an_input(&home, &sid, "run-1").await;
+
+    let unread = unread_waiting(&home.features, &sid, &json!({"now": "Running"}).to_string())
+      .await
+      .expect("the unread query answers");
+    assert_eq!(unread["unread"], json!([]));
+    assert_eq!(unread["remaining"], json!(["Land the list"]), "the prospective list rides the answer");
+    assert!(unread.get("previous_remaining").is_none(), "an unchanged list names no previous list");
+    assert!(unread["turn_text"].as_str().is_some_and(|text| text.contains("How is it going?")), "{unread}");
+
+    let error = set_status(&home.features, &sid, &json!({"now": "Running"}).to_string())
+      .await
+      .expect_err("the set refuses until the read records");
+    assert!(detail(error).contains("Remaining needs a cold read of this turn's record"));
+    assert!(status_events(&home, &sid).is_empty(), "the refusal stores nothing");
+
+    append_remaining_record(&home, &sid, "2026-01-01T00:00:11Z").await;
+    let stored_status =
+      set_status(&home.features, &sid, &json!({"now": "Running"}).to_string()).await.expect("the recorded read stores");
+    assert_eq!(without_echoes(&stored_status)["remaining"], json!(["Land the list"]));
+  }
+
+  #[tokio::test]
+  async fn a_remaining_change_on_a_turn_without_input_reads_once_and_stores_a_revised_list() {
+    let home = Home::new();
+    let sid = home.manager("remaining-change", None).await;
+
+    let unread = unread_waiting(&home.features, &sid, &json!({"remaining": ["Land the list"]}).to_string())
+      .await
+      .expect("the unread query answers");
+    assert_eq!(unread["remaining"], json!(["Land the list"]));
+    assert_eq!(unread["previous_remaining"], json!([]), "a first list replaces the empty stored one");
+
+    let error = set_status(&home.features, &sid, &json!({"remaining": ["Land the list"]}).to_string())
+      .await
+      .expect_err("the changed list refuses until the read records");
+    assert!(detail(error).contains("Remaining needs a cold read of this turn's record"));
+
+    append_remaining_record(&home, &sid, "2026-01-01T00:00:01Z").await;
+    set_status(&home.features, &sid, &json!({"remaining": ["Revised milestone"]}).to_string())
+      .await
+      .expect("the record, not the list's digest, stores the revised list");
+    assert_eq!(stored(&home, &sid).await["remaining"], json!(["Revised milestone"]));
+    assert_eq!(remaining_checks(&home, &sid).len(), 1, "the revised list runs no second read");
+  }
+
+  #[tokio::test]
+  async fn clearing_a_non_empty_remaining_reads_it_once_before_it_stores() {
+    let home = Home::new();
+    let sid = home.manager("remaining-clear", None).await;
+    write_stored_status(
+      &home,
+      &sid,
+      json!({
+        "goal": "Ship",
+        "now": "Running",
+        "remaining": ["Land the list"],
+        "waiting": [],
+        "updated_at": "2026-01-01T00:00:00Z",
+      }),
+    )
+    .await;
+
+    let unread = unread_waiting(&home.features, &sid, &json!({"remaining": []}).to_string())
+      .await
+      .expect("the unread query answers");
+    assert_eq!(unread["remaining"], json!([]));
+    assert_eq!(unread["previous_remaining"], json!(["Land the list"]), "a clear names the list it clears");
+
+    let error = set_status(&home.features, &sid, &json!({"remaining": []}).to_string())
+      .await
+      .expect_err("the clear refuses until the read records");
+    assert!(detail(error).contains("Remaining needs a cold read of this turn's record"));
+
+    append_remaining_record(&home, &sid, "2026-01-01T00:00:01Z").await;
+    set_status(&home.features, &sid, &json!({"remaining": []}).to_string()).await.expect("the clear stores");
+    assert_eq!(stored(&home, &sid).await["remaining"], json!([]));
+  }
+
+  #[tokio::test]
+  async fn a_mid_turn_input_re_arms_the_remaining_read() {
+    let home = Home::new();
+    let sid = home.manager("remaining-rearm", None).await;
+    a_manager_with_remaining_and_an_input(&home, &sid, "run-1").await;
+    append_remaining_record(&home, &sid, "2026-01-01T00:00:11Z").await;
+    set_status(&home.features, &sid, &json!({"now": "Running"}).to_string()).await.expect("the read set stores");
+
+    // A further input mid-turn re-arms the read: the recorded read of the first input no longer covers the turn.
+    home.end_run(&sid, "run-1", "2026-01-01T00:00:15Z");
+    home.launch_run(&sid, "run-2", &["u2"], "2026-01-01T00:00:20Z");
+    home
+      .append(
+        &sid,
+        json!({"type": "user", "id": "u2", "content": "A milestone landed", "timestamp": "2026-01-01T00:00:19Z"}),
+      )
+      .await;
+
+    let unread = unread_waiting(&home.features, &sid, &json!({"now": "Running"}).to_string())
+      .await
+      .expect("the unread query answers");
+    assert_eq!(unread["remaining"], json!(["Land the list"]), "the new input re-arms the read");
+    let error = set_status(&home.features, &sid, &json!({"now": "Running"}).to_string())
+      .await
+      .expect_err("the set refuses until the turn's own read records");
+    assert!(detail(error).contains("Remaining needs a cold read of this turn's record"));
+  }
+
+  #[tokio::test]
+  async fn confirm_records_no_remaining_read() {
+    let home = Home::new();
+    let sid = home.manager("remaining-confirm", None).await;
+    a_manager_with_remaining_and_an_input(&home, &sid, "run-1").await;
+
+    let confirmed = confirm_status(&home.features, &sid).await.expect("the confirm records");
+
+    assert_eq!(confirmed["remaining"], json!(["Land the list"]));
+    assert!(remaining_checks(&home, &sid).is_empty(), "a confirm cold reads nothing");
+    assert_eq!(home.events(&sid).iter().filter(|event| event["type"] == "web_status_confirmed").count(), 1);
+  }
+
+  #[tokio::test]
+  async fn an_unchanged_remaining_without_an_input_keeps_the_exact_unread_shape() {
+    let home = Home::new();
+    let sid = home.manager("remaining-shape", None).await;
+    write_stored_status(
+      &home,
+      &sid,
+      json!({
+        "goal": "Ship",
+        "now": "Running",
+        "remaining": ["Land the list"],
+        "waiting": [],
+        "updated_at": "2026-01-01T00:00:00Z",
+      }),
+    )
+    .await;
+
+    let unread = unread_waiting(&home.features, &sid, &json!({"now": "Running"}).to_string())
+      .await
+      .expect("the unread query answers");
+
+    assert_eq!(unread, json!({"unread": []}), "no input turn and no change reads nothing and adds no fields");
+  }
+
+  #[tokio::test]
+  async fn a_kept_item_and_the_remaining_list_refuse_together_and_store_after_one_round_of_records() {
+    let home = Home::new();
+    let sid = home.manager("remaining-settle", None).await;
+    write_stored_status(
+      &home,
+      &sid,
+      json!({
+        "goal": "Ship",
+        "now": "Running",
+        "remaining": ["Land the list"],
+        "waiting": [],
+        "updated_at": "2026-01-01T00:00:00Z",
+      }),
+    )
+    .await;
+    let item = waiting_item("Decide the layout");
+    record_ask_check(&home.features, &sid, &item, "synthetic-haiku", "The item is ready.")
+      .await
+      .expect("the item cold read records");
+    set_status(&home.features, &sid, &json!({"waiting": [item.clone()]}).to_string()).await.expect("the item stores");
+    home.launch_run(&sid, "run-1", &["u1"], "2026-01-01T00:00:10Z");
+    home
+      .append(&sid, json!({"type": "user", "id": "u1", "content": "What now?", "timestamp": "2026-01-01T00:00:09Z"}))
+      .await;
+
+    let unread = unread_waiting(&home.features, &sid, &json!({"waiting": [item.clone()]}).to_string())
+      .await
+      .expect("the unread query answers");
+    assert!(unread["settle"].as_array().is_some_and(|settle| settle.len() == 1), "{unread}");
+    assert_eq!(unread["remaining"], json!(["Land the list"]), "one answer carries both contexts");
+
+    let error = set_status(&home.features, &sid, &json!({"waiting": [item.clone()]}).to_string())
+      .await
+      .expect_err("both gates refuse");
+    let refusal = detail(error);
+    assert!(refusal.contains("was kept, so it needs a cold read of this turn's record"), "{refusal}");
+    assert!(refusal.contains("Remaining needs a cold read of this turn's record"), "{refusal}");
+
+    append_settle_record(&home, &sid, &item, "2026-01-01T00:00:11Z").await;
+    append_remaining_record(&home, &sid, "2026-01-01T00:00:12Z").await;
+    // The agent removes the settled item and leaves Remaining as it stood: the recorded read stores the set without
+    // a second probe.
+    set_status(&home.features, &sid, &json!({"waiting": []}).to_string()).await.expect("the set stores");
+    assert_eq!(stored(&home, &sid).await["waiting"], json!([]));
+    assert_eq!(stored(&home, &sid).await["remaining"], json!(["Land the list"]));
+    assert_eq!(remaining_checks(&home, &sid).len(), 1, "the retry runs no second remaining read");
   }
 }

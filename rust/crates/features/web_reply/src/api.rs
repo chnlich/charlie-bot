@@ -162,8 +162,8 @@ pub async fn post_reply_unread(State(features): State<Arc<FeatureContext>>, requ
   )
 }
 
-/// `POST /api/internal/web/cold-read-check`: records one cold read of a reply, a Waiting on you item, or the kept
-/// items of a status set. The event it writes is `cold_read_record::record`'s.
+/// `POST /api/internal/web/cold-read-check`: records one cold read of a reply, a Waiting on you item, the kept
+/// items of a status set, or the Remaining list. The event it writes is `cold_read_record::record`'s.
 pub async fn post_cold_read_check(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
   let (parts, stream) = request.into_parts();
   let body = match request_body::read(&parts.headers, stream).await {
@@ -269,8 +269,13 @@ impl ColdReadCheck {
   fn validate(body: &RequestBody) -> Result<Self, Box<Response>> {
     let mut fields = body.declared_fields(&COLD_READ_CHECK_BODY)?;
     let name = text_field(&fields, "name");
-    let forbidden: &[&str] = if name == cold_read::REPLY { &["item"] } else { &["text", "findings"] };
-    let required: &[&str] = if name == cold_read::REPLY { &["text", "findings"] } else { &["item", "answer"] };
+    let (forbidden, required): (&[&str], &[&str]) = if name == cold_read::REPLY {
+      (&["item"], &["text", "findings"])
+    } else if name == cold_read::REMAINING {
+      (&["item", "findings"], &["text", "answer"])
+    } else {
+      (&["text", "findings"], &["item", "answer"])
+    };
     let mut errors = Vec::new();
     for field in forbidden {
       if let Some(value) = fields.remove(*field) {
@@ -346,6 +351,16 @@ async fn dispatch(
         model.findings.as_deref().expect("a validated reply check carries its findings"),
         model.answer.as_deref(),
         run_id,
+      )
+      .await
+    }
+    cold_read::REMAINING => {
+      status::record_remaining_check(
+        features,
+        &model.session_id,
+        model.text.as_deref().expect("a validated remaining check carries its text"),
+        &model.backend,
+        model.answer.as_deref().expect("a validated remaining check carries its answer"),
       )
       .await
     }

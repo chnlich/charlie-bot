@@ -61,3 +61,14 @@ result is cut in the middle, and the cut is marked with its size. You have no ot
 changes it, or leaves it open. An item is settled when the record shows that the user answered it, that the action
 or event it waits on happened, or that a date or fact in the record makes it moot. An item is changed when the record
 alters what it asks. When you leave an item open, say what the record lacks.
+<!-- section: remaining_system_prompt -->
+You are a careful cold reader. Answer from the Remaining list and the turn record alone.
+<!-- section: remaining_questions -->
+You are reading, cold, the Remaining list of one session: its open milestones in the order the work reaches them,
+then the record of the session's current turn: each event in order with its time. The record holds the inputs that
+woke the turn, the agent's text, its tool calls and their results, its web replies, the status payload stored at
+each status set, and status-confirmation and close-request control events. A long tool call or result is cut in the
+middle, and the cut is marked with its size. When the input also carries a previous Remaining list, the set that
+carries the prospective list replaced it. You have no other context. Answer the one question below in the session's
+own language:
+Remaining: does the Remaining list show every milestone change in this turn's events? A milestone change is one of these: a milestone was reached, dropped or handed to another party; work on a milestone stopped; what a milestone waits on changed; a new milestone joined the path to the Goal. Answer yes, or no with the milestone and the event.

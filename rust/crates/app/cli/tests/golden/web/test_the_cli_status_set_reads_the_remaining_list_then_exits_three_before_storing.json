@@ -1,0 +1,77 @@
+{
+ "argv": [
+  "web",
+  "status",
+  "set",
+  "--file",
+  "{root}/status.json",
+  "--session",
+  "abc"
+ ],
+ "cwd": "{root}",
+ "env": {
+  "PATH": "{root}/bin",
+  "HOME": "{root}/user",
+  "CHARLIEBOT_REPO_ROOT": "{repo}"
+ },
+ "files": {
+  "home/config.yaml": "server:\n  port: {port}\nbackends:\n  pools:\n    - {id: pool, label: Pool, rule: rotate, members: [claude-light]}\n  calls:\n    worker: pool\n    improve: pool\n    verify: pool\n    review: pool\n    cold_read: pool\n    probe: pool\n    autoname: pool\n    triage: pool\n  options:\n    - id: claude-light\n      label: CC Light\n      type: cc-claude\n      model: claude-light-test\n",
+  "bin/claude": "#!/bin/sh\n/bin/cat > /dev/null\nprintf '%s\\n' 'Yes. The list shows the change.'\n",
+  "status.json": "{\"remaining\": [\"Milestone revised\"]}"
+ },
+ "responses": [
+  {
+   "status": 200,
+   "body": {
+    "unread": [],
+    "remaining": ["Milestone revised"],
+    "previous_remaining": ["Milestone"],
+    "turn_text": "[2026-01-01T00:00:00] user: a milestone was reached\n[2026-01-01T00:00:01] agent: done"
+   }
+  },
+  {
+   "status": 200,
+   "body": {
+    "remaining_sha256": "digest"
+   }
+  }
+ ],
+ "expect": {
+  "stdout": "Remaining:\nBackend: claude-light\nYes. The list shows the change.\n\nNothing was stored.\n",
+  "stderr": "",
+  "exit": 3,
+  "requests": [
+   {
+    "method": "POST",
+    "path": "/api/internal/web/status/unread",
+    "query": "",
+    "headers": {
+     "Authorization": null,
+     "X-CharlieBot-Caller-Session": null,
+     "Content-Type": "application/json"
+    },
+    "body": {
+     "session_id": "abc",
+     "text": "{\"remaining\": [\"Milestone revised\"]}"
+    }
+   },
+   {
+    "method": "POST",
+    "path": "/api/internal/web/cold-read-check",
+    "query": "",
+    "headers": {
+     "Authorization": null,
+     "X-CharlieBot-Caller-Session": null,
+     "Content-Type": "application/json"
+    },
+    "body": {
+     "session_id": "abc",
+     "name": "remaining",
+     "text": "{\"remaining\":[\"Milestone revised\"],\"previous_remaining\":[\"Milestone\"]}",
+     "backend": "claude-light",
+     "answer": "Yes. The list shows the change."
+    }
+   }
+  ]
+ }
+}

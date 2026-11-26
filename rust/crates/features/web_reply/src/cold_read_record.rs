@@ -1,7 +1,8 @@
 //! The one record of a command-side cold read: the `cold_read_check` event and the mapping that keeps the legacy
 //! `web_reply_check` and `web_ask_check` records readable.
 //!
-//! A recorded check is named by its row in `charliebot_tasks::cold_read::REGISTRY`: `reply`, `ask` or `settle`. Every
+//! A recorded check is named by its row in `charliebot_tasks::cold_read::REGISTRY`: `reply`, `ask`, `settle` or
+//! `remaining`. Every
 //! writer writes one `cold_read_check` event carrying that name, and every reader asks
 //! [`cold_read_record_name`] what a stored record was, so no log is migrated: a `web_reply_check` record reads as
 //! `reply` and a `web_ask_check` record reads as `ask`. The HTTP route that writes the event lives in `api`, so this
@@ -56,6 +57,7 @@ fn content(name: &str) -> &'static str {
     cold_read::REPLY => "web reply check",
     cold_read::ASK => "Cold read of a Waiting on you item",
     cold_read::SETTLE => "Cold read of the kept Waiting on you items",
+    cold_read::REMAINING => "Cold read of the Remaining list",
     other => unreachable!("no cold-read record is named {other}"),
   }
 }
@@ -111,6 +113,8 @@ mod tests {
   fn the_mapping_names_a_unified_record_and_both_legacy_types() {
     let unified = json!({"type": COLD_READ_CHECK, "name": cold_read::SETTLE});
     assert_eq!(cold_read_record_name(&unified), Some(cold_read::SETTLE));
+    let remaining = json!({"type": COLD_READ_CHECK, "name": cold_read::REMAINING});
+    assert_eq!(cold_read_record_name(&remaining), Some(cold_read::REMAINING));
     let reply = json!({"type": WEB_REPLY_CHECK, "reply_sha256": "d"});
     assert_eq!(cold_read_record_name(&reply), Some(cold_read::REPLY));
     let ask = json!({"type": WEB_ASK_CHECK, "item_sha256": "d"});

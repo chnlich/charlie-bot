@@ -2,10 +2,11 @@
 //! show the session status.
 //!
 //! `status set` runs the fork assertions of each unread item's linked page, cold-reads a changed Now line, cold-reads
-//! each unread Waiting on you item, then cold-reads the kept items against the turn's record before it stores anything.
-//! Each probe goes to the light backends in pool rotation, and each answer is recorded with one `cold-read-check`
-//! event named by its registry row. When a page fails its fork assertions, Now has findings, or any item or kept list
-//! was read, the status is not stored: the verb exits 3 so the caller revises and runs it again.
+//! each unread Waiting on you item, then cold-reads the kept items and the Remaining list against the turn's record
+//! before it stores anything. Each probe goes to the light backends in pool rotation, and each answer is recorded
+//! with one `cold-read-check` event named by its registry row. When a page fails its fork assertions, Now has
+//! findings, or any item, kept list or Remaining list was read, the status is not stored: the verb exits 3 so the
+//! caller revises and runs it again.
 
 use std::ffi::OsString;
 use std::future::Future;
@@ -78,8 +79,8 @@ struct SessionArgs {
 
 #[derive(Args)]
 struct StatusSetArgs {
-  /// JSON object with any of goal, now, waiting, remaining; cold-read findings or unread items exit 3 before storing.
-  /// - reads stdin
+  /// JSON object with any of goal, now, waiting, remaining; cold-read answers, unread items and a Remaining read
+  /// exit 3 before storing. - reads stdin
   #[arg(long)]
   file: String,
   /// Session ID (optional; taken from the CHARLIEBOT_SESSION_ID the server writes into the master environment)
@@ -221,6 +222,8 @@ fn status_set(args: &StatusSetArgs, lazy_host: &LazyHost) -> Result<(), CliExit>
   let unread_result = client::post("/api/internal/web/status/unread", request.clone(), None, &[])?;
   let unread = list(field(&unread_result, "unread")?)?;
   let settle = unread_result.get("settle").and_then(Value::as_array).cloned().unwrap_or_default();
+  let remaining = unread_result.get("remaining").and_then(Value::as_array).cloned();
+  let previous_remaining = unread_result.get("previous_remaining").and_then(Value::as_array).cloned();
   let turn_text = unread_result.get("turn_text").and_then(Value::as_str).unwrap_or_default().to_string();
   let requested_now = requested_now(&text)?;
 
@@ -231,7 +234,7 @@ fn status_set(args: &StatusSetArgs, lazy_host: &LazyHost) -> Result<(), CliExit>
     }
     None => None,
   };
-  if unread.is_empty() && now_to_check.is_none() && settle.is_empty() {
+  if unread.is_empty() && now_to_check.is_none() && settle.is_empty() && remaining.is_none() {
     let result = client::post("/api/internal/web/status", request, None, &[])?;
     print!("{}", json_out::render(&result, None));
     return Ok(());
@@ -306,7 +309,23 @@ fn status_set(args: &StatusSetArgs, lazy_host: &LazyHost) -> Result<(), CliExit>
       .expect("the settle row is registered")
       .prompt_pair(&host.repo_root)
       .map_err(anyhow_exit)?;
-    let probe_prompt = cold_read::settle_probe_input(&Value::Array(settle.clone()), &turn_text, &questions);
+    let probe_prompt = match &remaining {
+      Some(remaining_list) => {
+        let (_, remaining_questions) = cold_read::row(cold_read::REMAINING)
+          .expect("the remaining row is registered")
+          .prompt_pair(&host.repo_root)
+          .map_err(anyhow_exit)?;
+        cold_read::settle_probe_input_with_remaining(
+          &Value::Array(settle.clone()),
+          &turn_text,
+          &json!(remaining_list),
+          previous_remaining.as_ref().map(|previous| json!(previous)).as_ref(),
+          &questions,
+          &remaining_questions,
+        )
+      }
+      None => cold_read::settle_probe_input(&Value::Array(settle.clone()), &turn_text, &questions),
+    };
     let probe = block_on(cold_read::run_probe(host, &probe_prompt, &system_prompt))?.map_err(anyhow_exit)?;
     let Some(backend) = probe.backend_id else {
       for (backend, error) in &probe.attempts {
@@ -332,19 +351,79 @@ fn status_set(args: &StatusSetArgs, lazy_host: &LazyHost) -> Result<(), CliExit>
         &[],
       )?;
     }
-    println!("Kept Waiting on you:\nBackend: {backend}\n{answer}\n");
+    if let Some(remaining_list) = &remaining {
+      post_remaining_check(&session_id, &backend, &answer, remaining_list, &previous_remaining)?;
+    }
+    if remaining.is_some() {
+      println!("Kept Waiting on you and Remaining:\nBackend: {backend}\n{answer}\n");
+    } else {
+      println!("Kept Waiting on you:\nBackend: {backend}\n{answer}\n");
+    }
+  } else if let Some(remaining_list) = &remaining {
+    let (system_prompt, questions) = cold_read::row(cold_read::REMAINING)
+      .expect("the remaining row is registered")
+      .prompt_pair(&host.repo_root)
+      .map_err(anyhow_exit)?;
+    let probe_prompt = cold_read::remaining_probe_input(
+      &json!(remaining_list),
+      previous_remaining.as_ref().map(|previous| json!(previous)).as_ref(),
+      &turn_text,
+      &questions,
+    );
+    let probe = block_on(cold_read::run_probe(host, &probe_prompt, &system_prompt))?.map_err(anyhow_exit)?;
+    let Some(backend) = probe.backend_id else {
+      for (backend, error) in &probe.attempts {
+        eprintln!("attempt {backend} failed: {error}");
+      }
+      if probe.attempts.is_empty() {
+        eprintln!("No light backend was available for the Remaining list.");
+      }
+      std::process::exit(1);
+    };
+    let answer = probe.answer.expect("a successful remaining probe has the answering backend's response");
+    post_remaining_check(&session_id, &backend, &answer, remaining_list, &previous_remaining)?;
+    println!("Remaining:\nBackend: {backend}\n{answer}\n");
   }
 
   for finding in &now_findings {
     println!("FAIL Now: {finding}");
   }
-  if now_findings.is_empty() && unread.is_empty() && settle.is_empty() {
+  if now_findings.is_empty() && unread.is_empty() && settle.is_empty() && remaining.is_none() {
     let result = client::post("/api/internal/web/status", request, None, &[])?;
     print!("{}", json_out::render(&result, None));
     return Ok(());
   }
   println!("Nothing was stored.");
   std::process::exit(3);
+}
+
+/// Records the Remaining cold read through `/api/internal/web/cold-read-check`. The `text` it sends names the lists
+/// the probe read, so the stored record shows what the answer judged.
+fn post_remaining_check(
+  session_id: &str,
+  backend: &str,
+  answer: &str,
+  remaining: &[Value],
+  previous: &Option<Vec<Value>>,
+) -> Result<(), CliExit> {
+  let mut payload = serde_json::Map::new();
+  payload.insert("remaining".to_string(), json!(remaining));
+  if let Some(previous) = previous {
+    payload.insert("previous_remaining".to_string(), json!(previous));
+  }
+  client::post(
+    "/api/internal/web/cold-read-check",
+    json!({
+      "session_id": session_id,
+      "name": cold_read::REMAINING,
+      "text": Value::Object(payload).to_string(),
+      "backend": backend,
+      "answer": answer,
+    }),
+    None,
+    &[],
+  )?;
+  Ok(())
 }
 
 /// The gate before the cold reads: every unread item's host-served page runs the fork assertions of its genre, taken

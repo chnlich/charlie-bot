@@ -157,6 +157,65 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn the_cold_read_route_records_a_remaining_check_without_a_waiting_item() {
+    let home = test_support::Home::new();
+    let sid = home.manager("session", None).await;
+
+    let (status, body) = home
+      .send(
+        Method::POST,
+        "/api/internal/web/cold-read-check",
+        Some(json!({
+          "session_id": sid,
+          "name": "remaining",
+          "text": "{\"remaining\": [\"Land the list\"]}",
+          "backend": "haiku",
+          "answer": "Yes.",
+        })),
+      )
+      .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["remaining_sha256"].as_str().unwrap().len(), 64);
+
+    let checks = home.events(&sid).into_iter().filter(|event| event["type"] == "cold_read_check").collect::<Vec<_>>();
+    assert_eq!(checks.len(), 1);
+    assert_eq!(checks[0]["name"], "remaining");
+    assert_eq!(checks[0]["content"], "Cold read of the Remaining list");
+    assert_eq!(checks[0]["backend"], "haiku");
+    assert_eq!(checks[0]["answer"], "Yes.");
+
+    // A remaining check reads the Remaining lists, so the waiting item and the findings stay out of its body.
+    let (status, body) = home
+      .send(
+        Method::POST,
+        "/api/internal/web/cold-read-check",
+        Some(json!({
+          "session_id": sid,
+          "name": "remaining",
+          "text": "t",
+          "backend": "haiku",
+          "answer": "Yes.",
+          "item": {"text": "Decide", "context": "c"},
+        })),
+      )
+      .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["detail"][0]["type"], "extra_forbidden");
+    assert_eq!(body["detail"][0]["loc"], json!(["body", "item"]));
+
+    let (status, body) = home
+      .send(
+        Method::POST,
+        "/api/internal/web/cold-read-check",
+        Some(json!({"session_id": sid, "name": "remaining", "text": "t", "backend": "haiku"})),
+      )
+      .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["detail"][0]["type"], "missing");
+    assert_eq!(body["detail"][0]["loc"], json!(["body", "answer"]));
+  }
+
+  #[tokio::test]
   async fn the_cold_read_routes_validate_record_and_gate_a_web_reply() {
     let home = test_support::Home::new();
     let sid = home.manager("session", None).await;

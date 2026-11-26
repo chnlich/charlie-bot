@@ -646,7 +646,7 @@ function sessionUpdatedIso(session) {
 // Task-tree nesting: a child task node renders under its parent row.
 // ---------------------------------------------------------------------------
 // The expanded set is held in memory only, so a reload starts every parent
-// collapsed (a persisted expand state once hid a preview-cap regression).
+// collapsed. A persisted set would mask a preview-cap regression.
 const treeExpandedNodes = new Set();
 // The session whose ancestors the last paint opened (one reveal per switch).
 let lastRevealedSessionId = null;
@@ -814,7 +814,7 @@ function renderSessionItem(s, filter, options = {}) {
     actions = renderStarButton(s);
   } else if (isArchivedRow) {
     // The archived row: three direct buttons. The group move and the delete
-    // moved into the archived Settings menu (openArchivedRowMenu in
+    // are in the archived Settings menu (openArchivedRowMenu in
     // session-menus.js).
     actions = `
       ${renderStarButton(s)}
@@ -828,7 +828,7 @@ function renderSessionItem(s, filter, options = {}) {
     actions = renderArchiveButton(s);
   } else {
     // A normal row (manager or legacy): four direct buttons. Rename, group
-    // move, Task & context and the registered items moved into the Settings
+    // move, Task & context and the registered items are in the Settings
     // menu (openSessionRowMenu in session-menus.js).
     actions = `
       ${renderStarButton(s)}

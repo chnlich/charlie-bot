@@ -567,8 +567,8 @@ function switchTargetName(sessionId) {
 
 // The open's one awaited request: the session's first screen. A network failure or a 5xx retries
 // the same request on the send path's backoff (chat/input.js): 1 s doubling to a 30 s cap,
-// unbounded attempts. A failure no longer navigates the page to a full load, which on the
-// measured link costs 415 KB. A 4xx fails the open: the server refused the bootstrap.
+// unbounded attempts. A failure retries in place: a full page load would cost 415 KB on the
+// measured link. A 4xx fails the open: the server refused the bootstrap.
 function waitForBootstrapRetry(delayMs) {
   return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
@@ -1163,9 +1163,8 @@ async function loadOlderIfNeeded(container, isContinuation) {
   if (!sessionHasMore || sessionLoadingMore) return;
   // Trigger when within 80px of the top
   if (container.scrollTop > 80) return;
-  // An unusable cursor can never produce a page. Surface it instead of returning
-  // silently — a silent return renders as "the sentinel does nothing", which is
-  // exactly how a stale backend's renamed cursor field stayed invisible.
+  // An unusable cursor can never produce a page. Surface it: a silent return looks
+  // the same as a sentinel that does nothing.
   if (!Number.isFinite(sessionOlderBeforeCursor)) {
     console.error('loadOlderMessages: unusable pagination cursor', sessionOlderBeforeCursor);
     ensureSentinel(container, 'failed');

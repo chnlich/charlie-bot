@@ -30,6 +30,12 @@ pub fn dir_under(repo_root: &Path) -> PathBuf {
   repo_root.join(WRAPPER_REPO_DIR)
 }
 
+/// The wrapper script in `dir`, the directory [`dir_under`] names. `agent_environment` records this path in
+/// [`WRAPPER_PATH_VAR`], so the spawn check and the agent environment name the same file.
+pub fn script_path(dir: &Path) -> PathBuf {
+  dir.join("gh")
+}
+
 /// Set or clear the App token command in an agent environment.
 ///
 /// The host config owns the value. `Some(command)` inserts [`TOKEN_COMMAND_VAR`], and `None` or an empty value
@@ -47,7 +53,7 @@ pub fn apply_token_command(values: &mut Env, command: Option<&str>) {
 
 /// Refuse a start without an executable wrapper script, the way `require_agent_cli` does for the CLI.
 pub fn require_installed(dir: &Path) -> anyhow::Result<()> {
-  let script = dir.join("gh");
+  let script = script_path(dir);
   let metadata =
     fs::metadata(&script).with_context(|| format!("the agent gh wrapper must exist at {}", script.display()))?;
   if !charliebot_core::paths::metadata_is_executable(&metadata) {
@@ -116,7 +122,7 @@ pub fn stub_environment(base: &Path, path: &str) -> Env {
   use std::os::unix::fs::PermissionsExt;
   let wrapper_dir = base.join("gh-wrapper");
   fs::create_dir_all(&wrapper_dir).expect("the stub wrapper directory creates");
-  let wrapper = wrapper_dir.join("gh");
+  let wrapper = script_path(&wrapper_dir);
   fs::write(&wrapper, "#!/bin/sh\n").expect("the stub wrapper script writes");
   let mut permissions = fs::metadata(&wrapper).expect("the stub wrapper script exists").permissions();
   permissions.set_mode(0o755);

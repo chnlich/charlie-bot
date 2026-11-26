@@ -181,7 +181,13 @@ async fn run_listener_loop_with_initial_backoff(
   initial_backoff: Duration,
 ) -> Result<()> {
   let mut backoff = initial_backoff;
-  let options = Options { max_size: None, close_timeout: Some(CLOSE_TIMEOUT), ..WEBSOCKETS_16_DEFAULTS };
+  let options = Options {
+    open_timeout: WEBSOCKETS_16_DEFAULTS.open_timeout,
+    close_timeout: Some(CLOSE_TIMEOUT),
+    max_size: None,
+    ping_interval: WEBSOCKETS_16_DEFAULTS.ping_interval,
+    ping_timeout: WEBSOCKETS_16_DEFAULTS.ping_timeout,
+  };
   loop {
     let url = match client.open_connection().await {
       Ok(url) => url,

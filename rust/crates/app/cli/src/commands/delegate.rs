@@ -28,10 +28,9 @@ mod delegate_sources;
 const DELEGATE_EPILOG: &str = r#"Task spec (--task-spec-file), six sections:
 
   ## Goal - one concise deliverable.
-  ## Source Files - existing absolute host paths, or `- (none)`; verify requires a listed path.
-  With --repo, list only paths outside that repository's local copies. Name repository files in
-  the body by relative path; for another pushed branch use <branch>:<path>, read with
-  `git show origin/<branch>:<path>`.
+  ## Source Files - absolute paths, or `- (none)`; verify requires a listed path.
+  With --repo, list only paths outside the repository's local copies; name repository files in the
+  body by relative path, or <branch>:<path> for a pushed branch (`git show origin/<branch>:<path>`).
   ## Required Behavior - the target outcomes, permission or safety boundaries, and external contracts.
   ## Acceptance Tests - the observable results that show each target outcome holds.
   ## Reviewer Checklist - concrete checks beyond "tests passed".

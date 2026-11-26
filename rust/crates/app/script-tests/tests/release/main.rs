@@ -1666,6 +1666,42 @@ fn test_trial_serve_ends_within_a_minute_when_its_server_stops_as_the_command_ex
   assert_eq!(fs::read_dir(tree_root).expect("the tree root").count(), 0, "{}", run.describe());
 }
 
+/// A serve trial whose server is dead when its command returns, but whose first liveness read after the command still
+/// reads it alive, as a server exiting after its SIGKILL reads. The `ps` stub gives that one read and the real ps after
+/// it. The run scan finds no live run, and the trial must read the server again before its RunWait PASS: the server is
+/// gone, so the trial fails the RunWait and prints no PASS.
+#[test]
+#[ignore = "integration"]
+fn test_trial_serve_fails_when_the_server_is_gone_after_a_live_first_read() {
+  let _serial = TRIAL_RUNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+  let world = ServeWorld::new();
+  let seed = world.seed_home("seed", "1");
+  stub_serve_scope(&world, "signal", 0);
+  let ps_dir = world.sandbox.dir("ps");
+  let marker = ps_dir.join("command-done");
+  let lied = ps_dir.join("first-read-lied");
+  world.sandbox.stub(
+    "ps",
+    &format!(
+      "case \"$*\" in\n  *stat=*)\n    if [ -e '{}' ] && [ ! -e '{}' ]; then\n      : > '{}'\n      echo S\n      exit 0\n    fi ;;\nesac\nexec /usr/bin/ps \"$@\"\n",
+      marker.display(),
+      lied.display(),
+      lied.display()
+    ),
+  );
+  let env = serve_scope_env(&world);
+  let mut trial = harness::command("bash", &env);
+  let command = format!("{KILL_SERVER_AND_WAIT}\n: > '{}'", marker.display());
+  trial.args(serve_scope_arguments(&world, &seed, &["sh", "-c", command.as_str()]));
+
+  let run = run_within(&mut trial, Duration::from_secs(120));
+
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(lied.exists(), "the first liveness read after the command was not forced: {}", run.describe());
+  assert!(run.stdout.contains("FAIL serve RunWait:"), "{}", run.describe());
+  assert!(!run.stdout.contains("SERVE PASS RunWait"), "{}", run.describe());
+}
+
 /// The file that the scope stub counts its ActiveState reads in.
 fn scope_state_reads(world: &ServeWorld) -> PathBuf {
   world.sandbox.dir("scope").join("state-reads")
@@ -1861,6 +1897,14 @@ fn kill_serve_server_after_runs_request(
   (error_path, cancel_sender, controller)
 }
 
+/// The command of a serve trial that SIGKILLs its server. It returns once the kill has taken effect: the server is a
+/// zombie or gone, so the trial reads a dead server rather than one still exiting.
+const KILL_SERVER_AND_WAIT: &str = r#"kill -KILL "$CHARLIEBOT_SERVE_PID"
+status="/proc/$CHARLIEBOT_SERVE_PID/status"
+while [ -r "$status" ] && ! grep -q '^State:.*Z' "$status"; do
+  sleep 0.01
+done"#;
+
 /// A serve trial whose scope OOM killer ends the server: the command SIGKILLs the server, and the scope reports itself
 /// active on its first two state reads before systemd records the terminal oom-kill. The trial waits for that terminal
 /// state, then fails naming the memory cap, the peak and the scope, and it does not report a generic RunWait failure.
@@ -1873,7 +1917,7 @@ fn test_trial_serve_names_the_memory_cap_when_the_scope_oom_kill_ends_the_server
   let log = stub_serve_scope(&world, "oom-kill", 2);
   let env = serve_scope_env(&world);
   let mut trial = harness::command("bash", &env);
-  trial.args(serve_scope_arguments(&world, &seed, &["sh", "-c", "kill -KILL \"$CHARLIEBOT_SERVE_PID\""]));
+  trial.args(serve_scope_arguments(&world, &seed, &["sh", "-c", KILL_SERVER_AND_WAIT]));
 
   let run = run_within(&mut trial, Duration::from_secs(120));
 
@@ -1964,7 +2008,7 @@ fn test_trial_serve_names_no_memory_cap_while_the_scope_stays_active() {
   stub_serve_scope(&world, "oom-kill", u32::MAX);
   let env = serve_scope_env(&world);
   let mut trial = harness::command("bash", &env);
-  trial.args(serve_scope_arguments(&world, &seed, &["sh", "-c", "kill -KILL \"$CHARLIEBOT_SERVE_PID\""]));
+  trial.args(serve_scope_arguments(&world, &seed, &["sh", "-c", KILL_SERVER_AND_WAIT]));
 
   let run = run_within(&mut trial, Duration::from_secs(120));
 
@@ -1987,7 +2031,7 @@ fn test_trial_serve_names_a_server_killed_by_a_signal_as_a_run_wait_failure_not_
   stub_serve_scope(&world, "signal", 0);
   let env = serve_scope_env(&world);
   let mut trial = harness::command("bash", &env);
-  trial.args(serve_scope_arguments(&world, &seed, &["sh", "-c", "kill -KILL \"$CHARLIEBOT_SERVE_PID\""]));
+  trial.args(serve_scope_arguments(&world, &seed, &["sh", "-c", KILL_SERVER_AND_WAIT]));
 
   let run = run_within(&mut trial, Duration::from_secs(120));
 

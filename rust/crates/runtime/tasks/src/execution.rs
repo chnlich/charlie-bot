@@ -38,7 +38,7 @@ use charliebot_store::run_records::{
   OBSERVATION_RESULT_REF, OBSERVATION_WORKTREE_PATH, RunKind, RunOutcome, RunOutcomeKind, RunRecord,
   visit_events_from_end,
 };
-use charliebot_store::{ChatEventHistory, NodeFacts, RunFacts, StoreError, StoreResult};
+use charliebot_store::{ChatEventHistory, ControlGuard, NodeFacts, RunFacts, StoreError, StoreResult, TaskFacts};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 use tokio::sync::watch;
@@ -199,7 +199,7 @@ impl TaskExecutionAdapter {
     launch_run_id: Option<&str>,
   ) -> StoreResult<Option<String>> {
     let mut scheduled = None;
-    let mut member_event: Option<ChatEvent> = None;
+    let mut member_events: Vec<ChatEvent> = Vec::new();
     // A manager's turn-start switch persists its intent under the control lock and records its event after the lock,
     // once the handoff is assembled outside it.
     let mut switch_intent: Option<(SessionMetadata, Value)> = None;
@@ -242,6 +242,10 @@ impl TaskExecutionAdapter {
           return Ok(None);
         }
         let cfg = self.features.config.get().map_err(|error| StoreError::new(error.to_string()))?;
+        let task = state.task()?;
+        if let Some(event) = self.maybe_return_routed_worker_locked(&guard, &cfg, &mut meta, task, &state.runs).await? {
+          member_events.push(event);
+        }
         // Turn start runs before the run is built, so the run records the member this turn runs on.
         let (change, exhausted) = match model_pool::start_turn(&self.features, &cfg, &mut meta)
           .await
@@ -299,7 +303,7 @@ impl TaskExecutionAdapter {
             handoff::write_pending_switch(&run_dir, &intent).map_err(|error| StoreError::new(format!("{error:#}")))?;
             switch_intent = Some((meta.clone(), intent));
           } else {
-            member_event = Some(self.features.store.append_control_fact(&guard, session_id, change.event()).await?);
+            member_events.push(self.features.store.append_control_fact(&guard, session_id, change.event()).await?);
           }
         }
         if let Some(message) = exhausted {
@@ -319,7 +323,7 @@ impl TaskExecutionAdapter {
     }
     if let Some((meta, intent)) = switch_intent {
       match self.record_turn_start_switch(&meta, &run_id, &intent).await {
-        Ok((_, event)) => member_event = Some(event),
+        Ok((_, event)) => member_events.push(event),
         Err(error) => {
           if let Some(key) = &scheduled {
             self.release_launch(key);
@@ -328,7 +332,7 @@ impl TaskExecutionAdapter {
         }
       }
     }
-    if let Some(event) = member_event {
+    for event in member_events {
       self.features.store.announce_appended_event(session_id, &event, member_epoch).await?;
     }
     if let Some((run_id, message)) = exhausted_turn {
@@ -1055,6 +1059,98 @@ impl TaskExecutionAdapter {
       tracing::error!(target: "charliebot_tasks", session_id, run_id, error = %error, "task_run_failed");
     }
     Ok(())
+  }
+
+  /// Restore a routed worker child that failed over to `worker_pool_id` back to its routed concrete model when
+  /// `Selector::ordered` selects it again. Returns the appended `quota_failover` event so the caller broadcasts it once
+  /// the control lock releases.
+  async fn maybe_return_routed_worker_locked(
+    &self,
+    guard: &ControlGuard,
+    cfg: &CharlieBotConfig,
+    meta: &mut SessionMetadata,
+    task: &TaskFacts,
+    runs: &RunFacts,
+  ) -> StoreResult<Option<ChatEvent>> {
+    if meta.profile != TaskProfile::Worker || backend_runs_beyond_this_host(meta) {
+      return Ok(None);
+    }
+    let Some(worker_pool_id) = spawner_backends::worker_pool_id(cfg, meta).filter(|pool_id| *pool_id == meta.backend)
+    else {
+      return Ok(None);
+    };
+    let Some(routed) = meta
+      .extra("route")
+      .and_then(|route| route.get("backends"))
+      .and_then(Value::as_array)
+      .and_then(|backends| match backends.as_slice() {
+        [single] => single.as_str(),
+        _ => None,
+      })
+      .filter(|routed| cfg.backends.pool(routed).is_none() && cfg.get_backend_option(routed).is_some())
+      .map(str::to_string)
+    else {
+      return Ok(None);
+    };
+    let mut failed_over_from_routed = false;
+    for event in self.features.store.load_chat_events_sync(&meta.id)? {
+      match event.get("type").and_then(CompactValue::as_str) {
+        Some(event_types::QUOTA_FAILOVER)
+          if event.get("from").and_then(CompactValue::as_str) == Some(routed.as_str())
+            && event.get(event_types::QUOTA_FAILOVER_SET).and_then(CompactValue::as_str) == Some(worker_pool_id) =>
+        {
+          failed_over_from_routed = true;
+        }
+        Some(event_types::BACKEND_SWITCHED)
+          if event.get("to").and_then(CompactValue::as_str) == Some(worker_pool_id) =>
+        {
+          failed_over_from_routed = false;
+        }
+        _ => {}
+      }
+    }
+    if !failed_over_from_routed || self.is_review_continuation(meta, task, runs)? {
+      return Ok(None);
+    }
+    let selector = model_pool::Selector::from_features(&self.features, cfg)
+      .map_err(|error| StoreError::invalid(error.to_string()))?;
+    if selector
+      .ordered(std::slice::from_ref(&routed), &[])
+      .map_err(|error| StoreError::invalid(error.to_string()))?
+      .is_none()
+    {
+      return Ok(None);
+    }
+    let from = meta
+      .extra(model_pool::POOL_MEMBER_FIELD)
+      .and_then(Value::as_str)
+      .filter(|member| !member.is_empty())
+      .unwrap_or(&meta.backend)
+      .to_string();
+    self.features.store.set_node_backend_locked(guard, &meta.id, &routed).await?;
+    meta.backend = routed.clone();
+    let change = model_pool::MemberChange {
+      pool: routed.clone(),
+      from,
+      to: routed,
+      reason: event_types::QUOTA_REASON_SUBSCRIPTION_RESET.to_string(),
+      recovers_at: None,
+      summary: None,
+    };
+    let event = self.features.store.append_control_fact(guard, &meta.id, change.event()).await?;
+    Ok(Some(event))
+  }
+
+  fn is_review_continuation(&self, meta: &SessionMetadata, task: &TaskFacts, runs: &RunFacts) -> StoreResult<bool> {
+    let Some(latest) = self.features.store.list_run_records_sync(&meta.id)?.last().cloned() else {
+      return Ok(false);
+    };
+    Ok(
+      task.close_events.is_empty()
+        && latest.kind == RunKind::Review
+        && runs.terminal_outcome(&latest.id)? == Some(RunOutcomeKind::Success)
+        && !self.blocked_report_sent(meta)?,
+    )
   }
 
   fn inherit_worker_continuation(&self, meta: &SessionMetadata, run: &mut RunRecord) -> StoreResult<()> {

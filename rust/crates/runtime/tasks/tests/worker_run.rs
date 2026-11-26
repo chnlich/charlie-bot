@@ -12,6 +12,7 @@ mod recovery_support;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use anyhow::Context;
@@ -20,11 +21,17 @@ use charliebot_agents::backend_availability;
 use charliebot_agents::backend_pool;
 use charliebot_agents::cli_base::CliHost;
 use charliebot_agents::model_pool;
+use charliebot_claude_code::claude_accounts::ClaudeAccountState;
+use charliebot_claude_code::claude_config;
+use charliebot_claude_code::claude_lifecycle::ClaudeCodeLifecycle;
+use charliebot_claude_code::login_dirs;
 use charliebot_core::config::{
-  BackendOption, CallClass, CallTarget, CharlieBotConfig, PoolBilling, PoolConfig, PoolMember, PoolRule, RoutingConfig,
+  BackendOption, CallClass, CallTarget, CharlieBotConfig, ConfigSection, PoolBilling, PoolConfig, PoolMember, PoolRule,
+  RoutingConfig,
 };
 use charliebot_core::event_types;
 use charliebot_registry::Registry;
+use charliebot_registry::backend::{BackendTraits, MemberReading, MemberWindow, ResumeStyle};
 use charliebot_registry::caller::CallerIdentity;
 use charliebot_store::metadata::{SessionMetadata, TaskApprover, TaskProfile, TaskSpec, TaskType, UtcDateTime};
 use charliebot_store::run_records::{self, RunKind, RunOutcome, RunOutcomeKind, RunRecord};
@@ -3972,4 +3979,928 @@ async fn a_pinned_devin_worker_exhausts_retries_records_it_out_and_reports_the_e
   assert_eq!(reports[0]["outcome"], "failed");
   assert_eq!(reports[0]["result_refs"], json!([format!("run:{}", run.first.id)]));
   settle_node(&run.stack, &run.worker_id).await
+}
+
+// ---------------------------------------------------------------------------
+// Routed worker child return from `cheap`
+// ---------------------------------------------------------------------------
+
+async fn routed_cheap_stack(
+  scripts: &Scripts,
+  routed_type: &str,
+  extra: Option<(&'static str, charliebot_registry::RegisterFn)>,
+) -> anyhow::Result<Stack> {
+  let options = [
+    (BACKEND_ID, BACKEND_TYPE, None),
+    (ROUTED_MODEL, routed_type, Some(PoolBilling::Subscription)),
+    (CHEAP_SUBSCRIPTION_MEMBER, BACKEND_TYPE, Some(PoolBilling::Subscription)),
+    (CHEAP_PAYG_MEMBER, BACKEND_TYPE, Some(PoolBilling::Payg)),
+  ]
+  .map(|(id, backend_type, billing)| BackendOption { billing, ..scripts.option(id, backend_type) })
+  .to_vec();
+  let members =
+    [CHEAP_SUBSCRIPTION_MEMBER, CHEAP_PAYG_MEMBER].map(|backend| PoolMember { backend: backend.to_string() }).to_vec();
+  let cheap = PoolConfig {
+    id: CHEAP_POOL_ID.to_string(),
+    label: "Cheap".to_string(),
+    rule: PoolRule::Priority,
+    members,
+    visible: true,
+  };
+  let stack = match extra {
+    Some(package) => {
+      let stack = Stack::start_with_package(options, Vec::new(), package).await?;
+      stack.write_access_key()?;
+      let mut cfg = stack.cfg.as_ref().clone();
+      cfg.backends.pools.push(cheap);
+      stack.replace_config(cfg)?;
+      stack
+    }
+    None => {
+      let stack = Stack::start_with_auto(options, Vec::new(), cheap).await?;
+      stack.write_access_key()?;
+      stack
+    }
+  };
+  let mut cfg = stack.features.config.get()?.as_ref().clone();
+  cfg.backends.calls = [(CallClass::Worker, CallTarget::Backend(CHEAP_POOL_ID.to_string()))].into_iter().collect();
+  stack.replace_config(cfg)?;
+  Ok(stack)
+}
+
+async fn create_routed_worker(
+  stack: &Stack,
+  parent: &str,
+  task_spec: TaskSpec,
+  session_backend: &str,
+  pool_member: Option<&str>,
+  route_backends: &[&str],
+) -> anyhow::Result<SessionMetadata> {
+  static NEXT_WORKER_ID: AtomicUsize = AtomicUsize::new(1);
+  let worker = stack
+    .store()
+    .create_task(
+      CreateTask {
+        request_id: format!("routed-worker-{}", NEXT_WORKER_ID.fetch_add(1, Ordering::Relaxed)),
+        task_parent_id: Some(parent.to_string()),
+        profile: TaskProfile::Worker,
+        task: Some(task_spec),
+        name: Some("Synthetic routed worker".to_string()),
+        backend: Some(session_backend.to_string()),
+        group: None,
+        session_id: None,
+      },
+      TaskCaller::Operator,
+      Map::new(),
+    )
+    .await?;
+  if let Some(member) = pool_member {
+    stack
+      .store()
+      .update_slot_fields(
+        &worker.id,
+        model_pool::OWNER,
+        Map::from_iter([(model_pool::POOL_MEMBER_FIELD.to_string(), json!(member))]),
+      )
+      .await?;
+  }
+  let route = backend_pool::BackendRoute {
+    backends: route_backends.iter().map(|id| (*id).to_string()).collect(),
+    reason: "design p=0.9".to_string(),
+  };
+  let guard = stack.store().control_lock().await;
+  stack
+    .store()
+    .update_task_slot_fields_locked(
+      &guard,
+      &worker.id,
+      backend_pool::METADATA_OWNER,
+      Map::from_iter([("route".to_string(), json!(route))]),
+    )
+    .await?;
+  drop(guard);
+  Ok(stack.store().load_task_meta(&worker.id).await?)
+}
+
+/// Fail `worker` over from `ROUTED_MODEL` to `cheap` (`CHEAP_PAYG_MEMBER`) on quota exhaustion, wait for the retry
+/// run to succeed cleanly, and settle the parent manager's report turn.
+async fn failover_routed_worker_to_cheap(
+  stack: &Stack,
+  manager_id: &str,
+  worker_id: &str,
+) -> anyhow::Result<RunRecord> {
+  backend_availability(&stack.features)?.record(
+    &*stack.features.config.get()?,
+    &stack.features.registry,
+    CHEAP_SUBSCRIPTION_MEMBER,
+    None,
+    backend_availability::REASON_QUOTA_ERROR,
+    "synthetic cheap subscription quota error",
+  )?;
+  let run = revision_run_on_quota(stack, worker_id, ROUTED_MODEL).await?;
+  stack.adapter.record_quota_failure_for_test(worker_id, &run, None);
+  stack.adapter.after_worker_run_for_test(worker_id, &run, "failed").await?;
+
+  let retry = stack
+    .run_records(worker_id)?
+    .into_iter()
+    .find(|record| record.retry_of_run_id.as_deref() == Some(run.as_str()))
+    .expect("the quota failover registers a retry");
+  assert_eq!(retry.backend.as_deref(), Some(CHEAP_PAYG_MEMBER));
+  assert_eq!(
+    stack.wait_terminal(worker_id, &retry.id).await?,
+    RunOutcomeKind::Success,
+    "{}",
+    error_text(stack, worker_id, &retry.id)?
+  );
+  settle_node(stack, worker_id).await?;
+  settle_until(|| Ok(!stack.child_reports(manager_id)?.is_empty())).await?;
+  settle_node(stack, manager_id).await?;
+  Ok(retry)
+}
+
+/// Wait until `manager_id` has recorded `expected_reports` child reports and settled its report turn.
+async fn settle_manager_reports(stack: &Stack, manager_id: &str, expected_reports: usize) -> anyhow::Result<()> {
+  settle_until(|| Ok(stack.child_reports(manager_id)?.len() == expected_reports)).await?;
+  settle_node(stack, manager_id).await?;
+  Ok(())
+}
+
+/// Acceptance 1 & cooldown-row boundary: a routed worker (`route.backends = [ROUTED_MODEL]`) that failed over to
+/// `cheap` stays on `cheap` while `ROUTED_MODEL` cools, then on the next new turn after `ROUTED_MODEL` recovers
+/// restores `meta.backend = ROUTED_MODEL`, preserves `pool_member`, appends `quota_failover` (`reason =
+/// subscription_reset`, `to = ROUTED_MODEL`, `set = ROUTED_MODEL`), launches with the `HandoffSource::WorkerRun`
+/// summary, leaves `backend_availability.json` untouched on return, and still writes a new cooldown row if it fails
+/// again.
+#[tokio::test]
+#[ignore = "integration"]
+async fn routed_worker_in_cheap_returns_to_routed_model_with_handoff() -> anyhow::Result<()> {
+  let gate_dir = tempfile::tempdir()?;
+  let gate1 = gate_dir.path().join("gate1");
+  let gate2 = gate_dir.path().join("gate2");
+  let gate3 = gate_dir.path().join("gate3");
+  let gated = |gate: &Path, text: &str| {
+    format!("while [ ! -e '{}' ]; do sleep 0.05; done; {}", gate.display(), result_script(text))
+  };
+  let scripts = Scripts::new(vec![
+    gated(&gate1, "cheap retry done"),
+    gated(&gate2, "stayed on cheap while cooling"),
+    gated(&gate3, "returned to routed model"),
+    result_script("manager noted return"),
+    result_script("failed over again after return"),
+    result_script("manager noted second failover"),
+  ]);
+  let stack = routed_cheap_stack(&scripts, BACKEND_TYPE, None).await?;
+  let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
+  let worker = create_routed_worker(
+    &stack,
+    &manager.id,
+    spec("do the routed work", Some(TaskType::ScriptRun)),
+    ROUTED_MODEL,
+    None,
+    &[ROUTED_MODEL],
+  )
+  .await?;
+
+  backend_availability(&stack.features)?.record(
+    &*stack.features.config.get()?,
+    &stack.features.registry,
+    CHEAP_SUBSCRIPTION_MEMBER,
+    None,
+    backend_availability::REASON_QUOTA_ERROR,
+    "synthetic cheap subscription quota error",
+  )?;
+  let run = revision_run_on_quota(&stack, &worker.id, ROUTED_MODEL).await?;
+  stack.adapter.record_quota_failure_for_test(&worker.id, &run, None);
+  stack.adapter.after_worker_run_for_test(&worker.id, &run, "failed").await?;
+  let retry = stack
+    .run_records(&worker.id)?
+    .into_iter()
+    .find(|record| record.retry_of_run_id.as_deref() == Some(run.as_str()))
+    .expect("the quota failover registers a retry");
+  assert_eq!(retry.backend.as_deref(), Some(CHEAP_PAYG_MEMBER));
+  settle_until(|| Ok(stack.store().read_run_sync(&worker.id, &retry.id)?.is_some_and(|r| r.pid.is_some()))).await?;
+
+  // Queue the first follow-up while `retry` is still live so `retry`'s end does not close the worker.
+  let cooling_input = stack
+    .dispatch
+    .admit_input(&worker.id, event_types::USER, "First follow-up while cooling.", "user", json!({}))
+    .await?;
+  let cooling_input_id = cooling_input["id"].as_str().expect("admitted input has id").to_string();
+  std::fs::write(&gate1, b"go")?;
+  assert_eq!(
+    stack.wait_terminal(&worker.id, &retry.id).await?,
+    RunOutcomeKind::Success,
+    "{}",
+    error_text(&stack, &worker.id, &retry.id)?
+  );
+
+  // `after_worker_run` dispatches the queued follow-up on `cheap` because `ROUTED_MODEL` is still cooling (`is_out`).
+  settle_until(|| {
+    Ok(
+      stack
+        .run_records(&worker.id)?
+        .into_iter()
+        .any(|r| r.input_event_ids == vec![cooling_input_id.clone()] && r.pid.is_some()),
+    )
+  })
+  .await?;
+  let cooling_run = stack
+    .run_records(&worker.id)?
+    .into_iter()
+    .find(|r| r.input_event_ids == vec![cooling_input_id.clone()])
+    .expect("cooling run recorded");
+  let cooling_run_id = cooling_run.id.clone();
+  assert_eq!(cooling_run.backend.as_deref(), Some(CHEAP_PAYG_MEMBER));
+  assert_eq!(stack.store().load_task_meta(&worker.id).await?.backend, CHEAP_POOL_ID);
+  assert_eq!(quota_failover_events(&stack, &worker.id)?.len(), 1);
+
+  // Expire `ROUTED_MODEL`'s cooldown row and queue the second follow-up while `cooling_run_id` is still live.
+  let reset_passed = UtcDateTime::parse("2020-01-02T03:04:00+00:00").expect("a fixed instant parses");
+  backend_availability(&stack.features)?.record(
+    &*stack.features.config.get()?,
+    &stack.features.registry,
+    ROUTED_MODEL,
+    Some(reset_passed),
+    backend_availability::REASON_QUOTA_ERROR,
+    "synthetic reset passed",
+  )?;
+  let return_input = stack
+    .dispatch
+    .admit_input(&worker.id, event_types::USER, "Second follow-up after reset.", "user", json!({}))
+    .await?;
+  let return_input_id = return_input["id"].as_str().expect("admitted input has id").to_string();
+  std::fs::write(&gate2, b"go")?;
+  assert_eq!(
+    stack.wait_terminal(&worker.id, &cooling_run_id).await?,
+    RunOutcomeKind::Success,
+    "{}",
+    error_text(&stack, &worker.id, &cooling_run_id)?
+  );
+
+  // `after_worker_run` dispatches the second follow-up, returning `meta.backend` to `ROUTED_MODEL` with handoff.
+  settle_until(|| {
+    Ok(
+      stack
+        .run_records(&worker.id)?
+        .into_iter()
+        .any(|r| r.input_event_ids == vec![return_input_id.clone()] && r.pid.is_some()),
+    )
+  })
+  .await?;
+  let returned_run = stack
+    .run_records(&worker.id)?
+    .into_iter()
+    .find(|r| r.input_event_ids == vec![return_input_id.clone()])
+    .expect("returned run recorded");
+  let returned_run_id = returned_run.id.clone();
+
+  let meta = stack.store().load_task_meta(&worker.id).await?;
+  assert_eq!(meta.backend, ROUTED_MODEL, "meta.backend is restored to the routed model");
+  assert_eq!(
+    meta.extra(model_pool::POOL_MEMBER_FIELD),
+    Some(&json!(CHEAP_PAYG_MEMBER)),
+    "pool_member is preserved on meta"
+  );
+  assert_eq!(returned_run.backend.as_deref(), Some(ROUTED_MODEL));
+
+  let switches = quota_failover_events(&stack, &worker.id)?;
+  assert_eq!(switches.len(), 2, "failover + return events: {switches:?}");
+  assert_eq!(switches[1]["from"], CHEAP_PAYG_MEMBER);
+  assert_eq!(switches[1]["to"], ROUTED_MODEL);
+  assert_eq!(switches[1][event_types::QUOTA_FAILOVER_SET], ROUTED_MODEL);
+  assert_eq!(switches[1][event_types::QUOTA_FAILOVER_REASON], event_types::QUOTA_REASON_SUBSCRIPTION_RESET);
+
+  let launch_prompt =
+    std::fs::read_to_string(stack.store().run_dir(&worker.id, &returned_run_id).join(LAUNCH_TEXT_FILENAME))?;
+  let prev_dir = stack.store().run_dir(&worker.id, &cooling_run_id);
+  assert!(
+    launch_prompt.contains(&prev_dir.display().to_string()) && launch_prompt.contains("Handoff summary:"),
+    "returned run launches with HandoffSource::WorkerRun summary: {launch_prompt}"
+  );
+
+  // Cooldown row on `backend_availability.json` was untouched by return, and a subsequent failure writes a new one.
+  let row = backend_availability(&stack.features)?.row(ROUTED_MODEL).expect("expired row remains on disk");
+  assert_eq!(row.out_until, reset_passed);
+
+  std::fs::write(&gate3, b"go")?;
+  assert_eq!(
+    stack.wait_terminal(&worker.id, &returned_run_id).await?,
+    RunOutcomeKind::Success,
+    "{}",
+    error_text(&stack, &worker.id, &returned_run_id)?
+  );
+  settle_node(&stack, &worker.id).await?;
+  settle_manager_reports(&stack, &manager.id, 1).await?;
+
+  // Reopen the worker with a new follow-up input claimed by a synthetic routed run that fails on quota.
+  let feedback =
+    stack.dispatch.admit_input(&worker.id, event_types::USER, "Third turn quota check.", "user", json!({})).await?;
+  let input_id = feedback["id"].as_str().expect("an admitted input has an id").to_string();
+  let again = "run-revision-2".to_string();
+  register_run(
+    &stack,
+    RunRecord {
+      backend: Some(ROUTED_MODEL.to_string()),
+      model: Some("fake-model".to_string()),
+      input_event_ids: vec![input_id],
+      ..synthetic_run(&worker.id, &again, RunKind::Work)
+    },
+    "do the routed work",
+  )
+  .await?;
+  let guard = stack.store().control_lock().await;
+  stack.dispatch.claim_input_batch_locked(&guard, &worker.id, &again, None)?;
+  drop(guard);
+
+  stack
+    .dispatch
+    .finish_run(&worker.id, &again, RunOutcome { exit_code: Some(1), ..RunOutcome::new(RunOutcomeKind::Failed) })
+    .await?;
+  stack.adapter.record_quota_failure_for_test(&worker.id, &again, None);
+  stack.adapter.after_worker_run_for_test(&worker.id, &again, "failed").await?;
+  let again_retry = stack
+    .run_records(&worker.id)?
+    .into_iter()
+    .find(|record| record.retry_of_run_id.as_deref() == Some(again.as_str()))
+    .expect("subsequent quota failure fails over to cheap again");
+  assert_eq!(again_retry.backend.as_deref(), Some(CHEAP_PAYG_MEMBER));
+  assert_eq!(
+    stack.wait_terminal(&worker.id, &again_retry.id).await?,
+    RunOutcomeKind::Success,
+    "{}",
+    error_text(&stack, &worker.id, &again_retry.id)?
+  );
+  let updated_row = backend_availability(&stack.features)?.row(ROUTED_MODEL).expect("new cooldown row written");
+  assert!(updated_row.out_until.into_inner() > OffsetDateTime::now_utc());
+  settle_node(&stack, &worker.id).await?;
+  settle_manager_reports(&stack, &manager.id, 2).await
+}
+
+static ROUTED_READING_EXHAUSTED: AtomicBool = AtomicBool::new(true);
+
+fn register_routed_exhausted_reading(registry: &mut Registry) -> Result<(), charliebot_registry::RegistryError> {
+  let traits = BackendTraits {
+    resume: ResumeStyle::CliFlag,
+    restart_reattach: false,
+    preassigned_session_id: false,
+    family_prefix: None,
+    manual_compact: false,
+    compact_hint: None,
+  };
+  registry.backend_type(scripted_type("scripted-routed-reading", traits, None))?;
+  registry.member_reading(
+    "scripted-routed-reading",
+    Arc::new(
+      |_cfg: &CharlieBotConfig, _option: &BackendOption, _now: UtcDateTime| -> anyhow::Result<Option<MemberReading>> {
+        let exhausted = ROUTED_READING_EXHAUSTED.load(Ordering::SeqCst);
+        Ok(Some(MemberReading {
+          exhausted,
+          near_exhaustion: exhausted,
+          fully_reserved: false,
+          weekly_resets_at: None,
+          windows: vec![MemberWindow {
+            utilization: if exhausted { 1.0 } else { 0.1 },
+            window_minutes: Some(300),
+            resets_at: None,
+          }],
+        }))
+      },
+    ),
+  )
+}
+
+/// Acceptance 2: an exhausted `member_reading` (even with no active cooldown row) keeps the new turn on `cheap` with no
+/// return event, and returns once the reading clears.
+#[tokio::test]
+#[ignore = "integration"]
+async fn routed_worker_stays_on_cheap_when_routed_exhausted_by_reading() -> anyhow::Result<()> {
+  ROUTED_READING_EXHAUSTED.store(true, Ordering::SeqCst);
+  let scripts = Scripts::new(vec![
+    result_script("cheap retry done"),
+    result_script("manager noted retry"),
+    result_script("stayed on cheap due to exhausted reading"),
+    result_script("manager noted stay"),
+    result_script("returned once reading cleared"),
+    result_script("manager noted return"),
+  ]);
+  let stack = routed_cheap_stack(
+    &scripts,
+    "scripted-routed-reading",
+    Some(("test.routed_exhausted_reading", register_routed_exhausted_reading)),
+  )
+  .await?;
+  let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
+  let worker = create_routed_worker(
+    &stack,
+    &manager.id,
+    spec("do the routed work", Some(TaskType::ScriptRun)),
+    ROUTED_MODEL,
+    None,
+    &[ROUTED_MODEL],
+  )
+  .await?;
+
+  failover_routed_worker_to_cheap(&stack, &manager.id, &worker.id).await?;
+  let reset_passed = UtcDateTime::parse("2020-01-02T03:04:00+00:00").expect("a fixed instant parses");
+  backend_availability(&stack.features)?.record(
+    &*stack.features.config.get()?,
+    &stack.features.registry,
+    ROUTED_MODEL,
+    Some(reset_passed),
+    backend_availability::REASON_QUOTA_ERROR,
+    "cooldown expired",
+  )?;
+
+  stack
+    .dispatch
+    .admit_input(&worker.id, event_types::USER, "Follow-up while reading exhausted.", "user", json!({}))
+    .await?;
+  let stayed_id = launched_run_id(&stack.dispatch.dispatch_pending(&worker.id).await?)?;
+  assert_eq!(
+    stack.wait_terminal(&worker.id, &stayed_id).await?,
+    RunOutcomeKind::Success,
+    "{}",
+    error_text(&stack, &worker.id, &stayed_id)?
+  );
+  settle_node(&stack, &worker.id).await?;
+  settle_manager_reports(&stack, &manager.id, 2).await?;
+  assert_eq!(stack.store().load_task_meta(&worker.id).await?.backend, CHEAP_POOL_ID);
+  assert_eq!(
+    stack.store().read_run_sync(&worker.id, &stayed_id)?.expect("run recorded").backend.as_deref(),
+    Some(CHEAP_PAYG_MEMBER)
+  );
+  assert_eq!(quota_failover_events(&stack, &worker.id)?.len(), 1);
+
+  ROUTED_READING_EXHAUSTED.store(false, Ordering::SeqCst);
+  stack
+    .dispatch
+    .admit_input(&worker.id, event_types::USER, "Follow-up after reading cleared.", "user", json!({}))
+    .await?;
+  let returned_id = launched_run_id(&stack.dispatch.dispatch_pending(&worker.id).await?)?;
+  let returned_outcome = stack.wait_terminal(&worker.id, &returned_id).await?;
+  let returned_err = error_text(&stack, &worker.id, &returned_id)?;
+  let builds_len = scripts.builds().len();
+  let mgr_reports = stack.child_reports(&manager.id)?;
+  assert_eq!(
+    returned_outcome,
+    RunOutcomeKind::Success,
+    "err={returned_err}; builds_len={builds_len}; reports={mgr_reports:?}"
+  );
+  settle_node(&stack, &worker.id).await?;
+  settle_manager_reports(&stack, &manager.id, 3).await?;
+  assert_eq!(stack.store().load_task_meta(&worker.id).await?.backend, ROUTED_MODEL);
+  assert_eq!(
+    stack.store().read_run_sync(&worker.id, &returned_id)?.expect("run recorded").backend.as_deref(),
+    Some(ROUTED_MODEL)
+  );
+  assert_eq!(quota_failover_events(&stack, &worker.id)?.len(), 2);
+  Ok(())
+}
+
+/// Acceptance 3(a): a worker placed directly in `cheap` at delegation (`NotRouted` / cooling at dispatch, no
+/// `quota_failover` from `routed`) does not switch to `routed` even when `routed` is selectable.
+#[tokio::test]
+#[ignore = "integration"]
+async fn worker_placed_in_cheap_at_delegation_does_not_return_to_routed() -> anyhow::Result<()> {
+  let scripts = Scripts::new(vec![result_script("ran on cheap"), result_script("manager noted")]);
+  let stack = routed_cheap_stack(&scripts, BACKEND_TYPE, None).await?;
+  let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
+  let worker = create_routed_worker(
+    &stack,
+    &manager.id,
+    spec("do the work", Some(TaskType::ScriptRun)),
+    CHEAP_POOL_ID,
+    Some(CHEAP_PAYG_MEMBER),
+    &[ROUTED_MODEL],
+  )
+  .await?;
+  backend_availability(&stack.features)?.record(
+    &*stack.features.config.get()?,
+    &stack.features.registry,
+    CHEAP_SUBSCRIPTION_MEMBER,
+    None,
+    backend_availability::REASON_QUOTA_ERROR,
+    "synthetic cheap subscription cooling",
+  )?;
+
+  stack.dispatch.admit_input(&worker.id, event_types::USER, "Run on cheap.", "user", json!({})).await?;
+  let run_id = launched_run_id(&stack.dispatch.dispatch_pending(&worker.id).await?)?;
+  assert_eq!(stack.wait_terminal(&worker.id, &run_id).await?, RunOutcomeKind::Success);
+  settle_node(&stack, &worker.id).await?;
+  settle_manager_reports(&stack, &manager.id, 1).await?;
+
+  assert_eq!(stack.store().load_task_meta(&worker.id).await?.backend, CHEAP_POOL_ID);
+  assert_eq!(
+    stack.store().read_run_sync(&worker.id, &run_id)?.expect("run recorded").backend.as_deref(),
+    Some(CHEAP_PAYG_MEMBER)
+  );
+  assert!(quota_failover_events(&stack, &worker.id)?.is_empty());
+  Ok(())
+}
+
+/// Acceptance 3(b): a routed worker manually switched to `cheap` (`backend_switched` `to == cheap`) after a failover
+/// does not return to `routed`.
+#[tokio::test]
+#[ignore = "integration"]
+async fn manually_switched_worker_does_not_return_to_routed() -> anyhow::Result<()> {
+  let scripts = Scripts::new(vec![
+    result_script("cheap retry done"),
+    result_script("manager noted retry"),
+    result_script("stayed on cheap after manual switch"),
+    result_script("manager noted next"),
+  ]);
+  let stack = routed_cheap_stack(&scripts, BACKEND_TYPE, None).await?;
+  let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
+  let worker = create_routed_worker(
+    &stack,
+    &manager.id,
+    spec("do the work", Some(TaskType::Implement)),
+    ROUTED_MODEL,
+    None,
+    &[ROUTED_MODEL],
+  )
+  .await?;
+
+  failover_routed_worker_to_cheap(&stack, &manager.id, &worker.id).await?;
+  let guard = stack.store().control_lock().await;
+  stack
+    .store()
+    .append_control_fact(
+      &guard,
+      &worker.id,
+      json!({
+        "type": event_types::BACKEND_SWITCHED,
+        "from": ROUTED_MODEL,
+        "to": CHEAP_POOL_ID,
+      }),
+    )
+    .await?;
+  drop(guard);
+
+  let reset_passed = UtcDateTime::parse("2020-01-02T03:04:00+00:00").expect("a fixed instant parses");
+  backend_availability(&stack.features)?.record(
+    &*stack.features.config.get()?,
+    &stack.features.registry,
+    ROUTED_MODEL,
+    Some(reset_passed),
+    backend_availability::REASON_QUOTA_ERROR,
+    "synthetic reset passed",
+  )?;
+  stack.dispatch.admit_input(&worker.id, event_types::USER, "Continue after manual switch.", "user", json!({})).await?;
+  let next_id = launched_run_id(&stack.dispatch.dispatch_pending(&worker.id).await?)?;
+  assert_eq!(
+    stack.wait_terminal(&worker.id, &next_id).await?,
+    RunOutcomeKind::Success,
+    "{}",
+    error_text(&stack, &worker.id, &next_id)?
+  );
+  settle_node(&stack, &worker.id).await?;
+  settle_manager_reports(&stack, &manager.id, 2).await?;
+
+  assert_eq!(stack.store().load_task_meta(&worker.id).await?.backend, CHEAP_POOL_ID);
+  assert_eq!(
+    stack.store().read_run_sync(&worker.id, &next_id)?.expect("run recorded").backend.as_deref(),
+    Some(CHEAP_PAYG_MEMBER)
+  );
+  assert_eq!(quota_failover_events(&stack, &worker.id)?.len(), 1);
+  Ok(())
+}
+
+/// Boundary regression (`improve_host` / `backend_runs_beyond_this_host`): a worker carrying `improve_host` never
+/// rewrites `backend` on a new input turn.
+#[tokio::test]
+#[ignore = "integration"]
+async fn improve_host_worker_in_cheap_never_rewrites_backend() -> anyhow::Result<()> {
+  let scripts = Scripts::new(vec![result_script("improve host stayed on cheap")]);
+  let stack = routed_cheap_stack(&scripts, BACKEND_TYPE, None).await?;
+  let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
+  let mut task = spec("run on remote host", Some(TaskType::ScriptRun));
+  task.improve_host = Some("synthetic-no-such-host.invalid".to_string());
+  let worker =
+    create_routed_worker(&stack, &manager.id, task, CHEAP_POOL_ID, Some(CHEAP_PAYG_MEMBER), &[ROUTED_MODEL]).await?;
+  backend_availability(&stack.features)?.record(
+    &*stack.features.config.get()?,
+    &stack.features.registry,
+    CHEAP_SUBSCRIPTION_MEMBER,
+    None,
+    backend_availability::REASON_QUOTA_ERROR,
+    "synthetic cheap subscription cooling",
+  )?;
+  let guard = stack.store().control_lock().await;
+  stack
+    .store()
+    .append_control_fact(
+      &guard,
+      &worker.id,
+      model_pool::MemberChange {
+        pool: CHEAP_POOL_ID.to_string(),
+        from: ROUTED_MODEL.to_string(),
+        to: CHEAP_PAYG_MEMBER.to_string(),
+        reason: event_types::QUOTA_REASON_QUOTA_ERROR.to_string(),
+        recovers_at: None,
+        summary: None,
+      }
+      .event(),
+    )
+    .await?;
+  drop(guard);
+
+  stack.dispatch.admit_input(&worker.id, event_types::USER, "Next turn on improve host.", "user", json!({})).await?;
+  let next_id = launched_run_id(&stack.dispatch.dispatch_pending(&worker.id).await?)?;
+  assert_eq!(
+    stack.wait_terminal(&worker.id, &next_id).await?,
+    RunOutcomeKind::Failed,
+    "remote launch to unresolved host does not rewrite backend"
+  );
+  settle_node(&stack, &worker.id).await?;
+
+  assert_eq!(stack.store().load_task_meta(&worker.id).await?.backend, CHEAP_POOL_ID);
+  assert_eq!(
+    stack.store().read_run_sync(&worker.id, &next_id)?.expect("run recorded").backend.as_deref(),
+    Some(CHEAP_PAYG_MEMBER)
+  );
+  assert_eq!(quota_failover_events(&stack, &worker.id)?.len(), 1);
+  Ok(())
+}
+
+/// Boundary regression (`Review` continuation): when `inherit_worker_continuation` would set `RunKind::Review` after
+/// a succeeded review on an open worker, the return check skips returning and emits no false `quota_failover` event.
+#[tokio::test]
+#[ignore = "integration"]
+async fn review_continuation_skips_routed_return_and_emits_no_false_event() -> anyhow::Result<()> {
+  let scripts = Scripts::new(vec![result_script("continued review on cheap"), result_script("manager noted review")]);
+  let stack = routed_cheap_stack(&scripts, BACKEND_TYPE, None).await?;
+  let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
+  let worker = create_routed_worker(
+    &stack,
+    &manager.id,
+    spec("do the work", Some(TaskType::Implement)),
+    CHEAP_POOL_ID,
+    Some(CHEAP_PAYG_MEMBER),
+    &[ROUTED_MODEL],
+  )
+  .await?;
+  backend_availability(&stack.features)?.record(
+    &*stack.features.config.get()?,
+    &stack.features.registry,
+    CHEAP_SUBSCRIPTION_MEMBER,
+    None,
+    backend_availability::REASON_QUOTA_ERROR,
+    "synthetic cheap subscription cooling",
+  )?;
+  let guard = stack.store().control_lock().await;
+  stack
+    .store()
+    .append_control_fact(
+      &guard,
+      &worker.id,
+      model_pool::MemberChange {
+        pool: CHEAP_POOL_ID.to_string(),
+        from: ROUTED_MODEL.to_string(),
+        to: CHEAP_PAYG_MEMBER.to_string(),
+        reason: event_types::QUOTA_REASON_QUOTA_ERROR.to_string(),
+        recovers_at: None,
+        summary: None,
+      }
+      .event(),
+    )
+    .await?;
+  drop(guard);
+
+  let work_record = RunRecord {
+    backend: Some(CHEAP_PAYG_MEMBER.to_string()),
+    model: Some("fake-model".to_string()),
+    ..synthetic_run(&worker.id, "run-work", RunKind::Work)
+  };
+  register_run(&stack, work_record, "do the work").await?;
+  stack
+    .dispatch
+    .finish_run(&worker.id, "run-work", RunOutcome { exit_code: Some(0), ..RunOutcome::new(RunOutcomeKind::Success) })
+    .await?;
+  let review_record = RunRecord {
+    backend: Some(CHEAP_PAYG_MEMBER.to_string()),
+    model: Some("fake-model".to_string()),
+    review_of_run_id: Some("run-work".to_string()),
+    started_at: Some(UtcDateTime::now()),
+    ..synthetic_run(&worker.id, "run-review", RunKind::Review)
+  };
+  register_run(&stack, review_record, "do the work").await?;
+  stack
+    .dispatch
+    .finish_run(&worker.id, "run-review", RunOutcome { exit_code: Some(0), ..RunOutcome::new(RunOutcomeKind::Success) })
+    .await?;
+
+  let reset_passed = UtcDateTime::parse("2020-01-02T03:04:00+00:00").expect("a fixed instant parses");
+  backend_availability(&stack.features)?.record(
+    &*stack.features.config.get()?,
+    &stack.features.registry,
+    ROUTED_MODEL,
+    Some(reset_passed),
+    backend_availability::REASON_QUOTA_ERROR,
+    "synthetic reset passed",
+  )?;
+
+  stack.dispatch.admit_input(&worker.id, event_types::USER, "Follow up after review.", "user", json!({})).await?;
+  let next_id = launched_run_id(&stack.dispatch.dispatch_pending(&worker.id).await?)?;
+  assert_eq!(
+    stack.wait_terminal(&worker.id, &next_id).await?,
+    RunOutcomeKind::Success,
+    "{}",
+    error_text(&stack, &worker.id, &next_id)?
+  );
+  settle_node(&stack, &worker.id).await?;
+  settle_manager_reports(&stack, &manager.id, 1).await?;
+
+  let next_run = stack.store().read_run_sync(&worker.id, &next_id)?.expect("review continuation run recorded");
+  assert_eq!(next_run.kind, RunKind::Review);
+  assert_eq!(next_run.backend.as_deref(), Some(CHEAP_PAYG_MEMBER));
+  assert_eq!(stack.store().load_task_meta(&worker.id).await?.backend, CHEAP_POOL_ID);
+  assert_eq!(quota_failover_events(&stack, &worker.id)?.len(), 1, "no false quota_failover return event");
+  Ok(())
+}
+
+thread_local! {
+  static ROUTED_CLAUDE_STATE: RefCell<Option<Arc<ClaudeAccountState>>> = const { RefCell::new(None) };
+}
+
+fn register_routed_claude_package(registry: &mut Registry) -> Result<(), charliebot_registry::RegistryError> {
+  let state = ROUTED_CLAUDE_STATE
+    .with(|cell| cell.borrow_mut().take())
+    .expect("test sets ROUTED_CLAUDE_STATE before registering");
+  registry.config_section(ConfigSection {
+    key: "accounts",
+    legacy_keys: &[],
+    parse: claude_config::parse_accounts,
+    dump: claude_config::dump_accounts,
+  })?;
+  let traits = BackendTraits {
+    resume: ResumeStyle::CliFlag,
+    restart_reattach: true,
+    preassigned_session_id: true,
+    family_prefix: None,
+    manual_compact: true,
+    compact_hint: None,
+  };
+  let lifecycle: Arc<dyn charliebot_registry::backend::BackendLifecycle> =
+    Arc::new(ClaudeCodeLifecycle::with_state(state));
+  registry.backend_type(scripted_type("cc-claude", traits, Some(lifecycle)))
+}
+
+/// Boundary regression (reserve_pick + relay cap `2dea85037` intact after return): a returned `cc-claude` worker
+/// relays across every login in its pool before failing back over to `cheap`.
+#[tokio::test]
+#[ignore = "integration"]
+async fn returned_claude_worker_relays_through_logins_before_failing_over_to_cheap() -> anyhow::Result<()> {
+  let state = Arc::new(ClaudeAccountState::new());
+  ROUTED_CLAUDE_STATE.with(|cell| *cell.borrow_mut() = Some(Arc::clone(&state)));
+
+  let resets_at = (OffsetDateTime::now_utc() + TimeDuration::hours(3)).unix_timestamp();
+  let rate_limit_rejected = json!({
+    "type": event_types::RATE_LIMIT_EVENT,
+    "rate_limit_info": {
+      "status": "rejected",
+      "rateLimitType": "five_hour",
+      "resetsAt": resets_at,
+      "unifiedWindows": {"five_hour": {"utilization": 1.0}, "seven_day": {"utilization": 0.3}},
+    },
+  });
+  let rejected_result = json!({
+    "type": event_types::RESULT,
+    "is_error": true,
+    "api_error_status": 429,
+    "result": "You've hit your 5-hour limit",
+  });
+  let login_rejected = events_script(&[rate_limit_rejected, rejected_result], 1);
+  let main_rejected = format!(
+    "sid=$(sed -n 's/.*\"native_session_id\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' \"$CHARLIEBOT_HOME/sessions/$CHARLIEBOT_SESSION_ID/data/runs/\"*/* 2>/dev/null | tail -n 1); \
+     if [ -n \"$sid\" ]; then mkdir -p \"$CHARLIEBOT_HOME/claude-main/projects/slug\" && printf '[]' > \"$CHARLIEBOT_HOME/claude-main/projects/slug/$sid.jsonl\"; fi; \
+     {login_rejected}"
+  );
+  let scripts = Scripts::new(vec![
+    result_script("initial cheap retry"),
+    result_script("manager noted retry"),
+    main_rejected,
+    login_rejected,
+    result_script("cheap fallback after relay cap"),
+    result_script("manager noted fallback"),
+  ]);
+  let mut routed_option = BackendOption {
+    billing: Some(PoolBilling::Subscription),
+    model: "claude-fable-5-2".to_string(),
+    ..scripts.option(ROUTED_MODEL, "cc-claude")
+  };
+  routed_option.type_fields.insert(
+    serde_yaml::Value::String("account_pool".to_string()),
+    serde_yaml::Value::String("routed-pool".to_string()),
+  );
+  let options = vec![
+    scripts.option(BACKEND_ID, BACKEND_TYPE),
+    routed_option,
+    BackendOption {
+      billing: Some(PoolBilling::Subscription),
+      ..scripts.option(CHEAP_SUBSCRIPTION_MEMBER, BACKEND_TYPE)
+    },
+    BackendOption { billing: Some(PoolBilling::Payg), ..scripts.option(CHEAP_PAYG_MEMBER, BACKEND_TYPE) },
+  ];
+  let stack =
+    Stack::start_with_package(options, Vec::new(), ("test.routed_claude", register_routed_claude_package)).await?;
+  stack.write_access_key()?;
+
+  for label in ["main", "ext-1"] {
+    let dir = stack.home.path().join(format!("claude-{label}"));
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(
+      dir.join(login_dirs::CREDENTIALS_FILE),
+      json!({"claudeAiOauth": {"accessToken": "token", "refreshToken": "r"}}).to_string(),
+    )?;
+  }
+  let yaml = serde_json::json!({
+    "accounts": {
+      "claude": [
+        {"label": "main", "config_dir": stack.home.path().join("claude-main").display().to_string()},
+        {"label": "ext-1", "config_dir": stack.home.path().join("claude-ext-1").display().to_string()},
+      ],
+      "claude_pools": {
+        "routed-pool": ["main", "ext-1"],
+      }
+    },
+    "backends": {
+      "options": [{
+        "id": ROUTED_MODEL,
+        "label": ROUTED_MODEL,
+        "type": "cc-claude",
+        "model": "claude-fable-5-2",
+        "account_pool": "routed-pool",
+      }],
+    }
+  });
+  std::fs::write(stack.home.path().join("config.yaml"), serde_json::to_string_pretty(&yaml)?)?;
+  let loaded = stack.features.registry.load_config(stack.home.path())?;
+  let mut cfg = stack.cfg.as_ref().clone();
+  cfg.sections = loaded.sections;
+  cfg.backends.pools.push(PoolConfig {
+    id: CHEAP_POOL_ID.to_string(),
+    label: "Cheap".to_string(),
+    rule: PoolRule::Priority,
+    members: [CHEAP_SUBSCRIPTION_MEMBER, CHEAP_PAYG_MEMBER]
+      .map(|backend| PoolMember { backend: backend.to_string() })
+      .to_vec(),
+    visible: true,
+  });
+  cfg.backends.calls = [(CallClass::Worker, CallTarget::Backend(CHEAP_POOL_ID.to_string()))].into_iter().collect();
+  stack.replace_config(cfg)?;
+
+  let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
+  let worker = create_routed_worker(
+    &stack,
+    &manager.id,
+    spec("do the claude work", Some(TaskType::ScriptRun)),
+    ROUTED_MODEL,
+    None,
+    &[ROUTED_MODEL],
+  )
+  .await?;
+  failover_routed_worker_to_cheap(&stack, &manager.id, &worker.id).await?;
+
+  let reset_passed = UtcDateTime::parse("2020-01-02T03:04:00+00:00").expect("a fixed instant parses");
+  backend_availability(&stack.features)?.record(
+    &*stack.features.config.get()?,
+    &stack.features.registry,
+    ROUTED_MODEL,
+    Some(reset_passed),
+    backend_availability::REASON_QUOTA_ERROR,
+    "synthetic reset passed",
+  )?;
+
+  stack.dispatch.admit_input(&worker.id, event_types::USER, "Return and hit relay cap.", "user", json!({})).await?;
+  let returned_id = launched_run_id(&stack.dispatch.dispatch_pending(&worker.id).await?)?;
+  assert_eq!(stack.wait_terminal(&worker.id, &returned_id).await?, RunOutcomeKind::Failed);
+  let fallback_retry =
+    wait_for_retry(&stack, &worker.id, &returned_id).await?.expect("exhausting both logins fails over back to cheap");
+  assert_eq!(fallback_retry.backend.as_deref(), Some(CHEAP_PAYG_MEMBER));
+  assert_eq!(
+    stack.wait_terminal(&worker.id, &fallback_retry.id).await?,
+    RunOutcomeKind::Success,
+    "{}",
+    error_text(&stack, &worker.id, &fallback_retry.id)?
+  );
+  settle_node(&stack, &worker.id).await?;
+  settle_manager_reports(&stack, &manager.id, 2).await?;
+
+  let claude_labels: Vec<String> = scripts
+    .builds()
+    .into_iter()
+    .filter_map(|build| {
+      build
+        .launch
+        .backend_kwargs
+        .get("claude_account")
+        .and_then(|account| account.get("label"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    })
+    .collect();
+  assert_eq!(claude_labels, vec!["main", "ext-1"], "returned run tried both logins before falling back to cheap");
+  Ok(())
 }

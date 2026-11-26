@@ -1362,9 +1362,41 @@ read_session_runs() {
   done
 }
 
-# serve_home_has_active_run reads the runs of every trial-home session. A stopped, withheld or input-blocked run
-# consumes no server process, so the active set is queued and running only. Every page of a session's runs is read,
-# because the newest run is on the last page. It returns 1 when a page cannot be read, and read_session_runs names why.
+# serve_home_live_run_sessions prints the id of every trial-home session that holds a run record without an ended_at:
+# the only sessions that can hold a queued or running run. A run record without ended_at is unsettled, and a session
+# whose runs all carry ended_at has no live run, so the wait never reads it. One search of the run records finds the
+# candidates; the wait then asks the server about those sessions alone. A search that fails (grep's status 2) is a
+# read failure, so the caller names it rather than passing the wait.
+serve_home_live_run_sessions() {
+  local status record session_dir session_id
+  local -A seen=()
+  local -a ids=()
+  grep -rlZ --include=metadata.json '"ended_at": null' "$SESSIONS_DIR" \
+    >"$HTTP_ROOT/serve-run-records" 2>/dev/null
+  status=$?
+  if (( status > 1 )); then
+    return 1
+  fi
+  while IFS= read -r -d '' record; do
+    case $record in
+      */data/runs/*) ;;
+      *) continue ;;
+    esac
+    session_dir=${record%/data/runs/*}
+    session_id=${session_dir##*/}
+    [[ -n $session_id && -z ${seen[$session_id]:-} ]] || continue
+    seen[$session_id]=1
+    ids+=("$session_id")
+  done <"$HTTP_ROOT/serve-run-records"
+  if (( ${#ids[@]} > 0 )); then
+    printf '%s\n' "${ids[@]}"
+  fi
+}
+
+# serve_home_has_active_run reads the runs of the trial-home sessions that hold an unsettled run record. A stopped,
+# withheld or input-blocked run consumes no server process, so the active set is queued and running only. Every page of
+# a session's runs is read, because the newest run is on the last page. It returns 1 when a page cannot be read, and
+# read_session_runs names why.
 serve_home_has_active_run() {
   local trial_session_id trial_session_ids cursor page_output
   local -a page=()
@@ -1372,8 +1404,8 @@ serve_home_has_active_run() {
   if [[ ! -d $SESSIONS_DIR ]]; then
     return 0
   fi
-  if ! trial_session_ids=$("$TRIAL_CLI" release-helper session-ids "$SESSIONS_DIR"); then
-    RUN_CAUSE="the sessions of the trial home cannot be listed: $SESSIONS_DIR"
+  if ! trial_session_ids=$(serve_home_live_run_sessions); then
+    RUN_CAUSE="the run records of the trial home cannot be searched: $SESSIONS_DIR"
     return 1
   fi
   while IFS= read -r trial_session_id; do

@@ -845,6 +845,17 @@ impl ServeWorld {
     seed
   }
 
+  /// A task-tree synthetic home of `sessions` sessions: the shape that plants run records, live runs included, so the
+  /// trial's run wait has a session to read. The generated home holds one unsettled run record at 30 sessions.
+  fn seed_task_tree_home(&self, name: &str, sessions: &str) -> PathBuf {
+    let seed = self.sandbox.dir(name);
+    let mut command = harness::command(mock_home(), &self.env);
+    command.arg("generate").arg(&seed).args(["--sessions", sessions, "--seed", "3", "--shape", "task-tree"]);
+    let run = harness::run(&mut command);
+    assert_eq!(run.code, 0, "{}", run.describe());
+    seed
+  }
+
   /// One serve trial: the tree root and `seed` as --tree-root and --seed-home, then `command` once the server
   /// answers. The command reads the seed path from MOCK_HOME_SEED.
   fn serve(&self, tree_root: &Path, seed: &Path, command: &[&str]) -> Run {
@@ -1533,7 +1544,7 @@ fn started_server_pid(run: &Run) -> String {
 fn test_trial_serve_ends_within_a_minute_when_its_server_stops_as_the_command_exits() {
   let _serial = TRIAL_RUNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
   let world = ServeWorld::new();
-  let seed = world.seed_home("seed", "2");
+  let seed = world.seed_task_tree_home("seed", "30");
   let tree_root = world.tree_root();
   let server = world.release.join("charliebot-server");
   let mut trial = harness::command("bash", &world.env);
@@ -1773,7 +1784,7 @@ fn test_trial_serve_names_the_memory_cap_when_the_scope_oom_kill_ends_the_server
 fn test_trial_serve_names_the_memory_cap_when_the_server_dies_during_its_runs_read() {
   let _serial = TRIAL_RUNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
   let world = ServeWorld::new();
-  let seed = world.seed_home("seed", "1");
+  let seed = world.seed_task_tree_home("seed", "30");
   let log = stub_serve_scope(&world, "oom-kill", 2);
   let env = stub_serve_runs_read_failure(&world, "connection");
   let mut trial = harness::command("bash", &env);
@@ -1808,7 +1819,7 @@ fn test_trial_serve_names_the_memory_cap_when_the_server_dies_during_its_runs_re
 fn test_trial_serve_names_the_memory_cap_when_the_runs_read_fails_before_the_server_dies() {
   let _serial = TRIAL_RUNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
   let world = ServeWorld::new();
-  let seed = world.seed_home("seed", "1");
+  let seed = world.seed_task_tree_home("seed", "30");
   let log = stub_serve_scope(&world, "oom-kill", 2);
   let mut env = stub_serve_runs_read_failure(&world, "http");
   stub_serve_ps_killing_server_after_runs_read_failure(&world, &mut env);

@@ -675,7 +675,8 @@ fn prompt_request(prompt: &str, uploaded_files: &[Value]) -> Value {
   let mut body = json!({"text": prompt});
   let attachments = image_file_attachments(uploaded_files);
   if !attachments.is_empty() {
-    body.as_object_mut().unwrap().insert("files".to_string(), Value::Array(attachments));
+    let object = body.as_object_mut().expect("the prompt body is a JSON object");
+    object.insert("files".to_string(), Value::Array(attachments));
   }
   body
 }

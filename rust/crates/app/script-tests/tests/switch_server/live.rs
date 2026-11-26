@@ -1,5 +1,6 @@
-//! The live capture step of the switch: the `View:` trailers it reads from the commits the switch moved across, the exit
-//! the switch reports when a capture fails, and where the access key goes during one capture.
+//! The live capture stage (`scripts/live-capture.sh`) that the switch and a rerun share: the View commits it captures,
+//! how one commit's failure leaves the others in place, the exit it reports, and where the access key goes during one
+//! capture.
 
 use std::fs;
 use std::io::{Read, Write};
@@ -9,42 +10,40 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use charliebot_shell_harness::{self as harness, Sandbox};
+use charliebot_shell_harness::{self as harness, Run, Sandbox};
 
 use crate::drain_line;
 use crate::world::{World, install_release};
 
-#[test]
-#[ignore = "integration"]
-fn test_view_trailers_names_each_view_of_each_commit_in_the_range() {
-  let world = World::new();
-  let before = world.git(&world.clone, &["rev-parse", "HEAD"]);
-  world.git(&world.clone, &["commit", "-q", "--allow-empty", "-m", "Open the status panel\n\nView: /?session=abc"]);
-  let first = world.git(&world.clone, &["rev-parse", "--short", "HEAD"]);
-  world.git(
-    &world.clone,
-    &["commit", "-q", "--allow-empty", "-m", "Add the plan tray\n\nView: /?session=abc\nView: /plans"],
-  );
-  let second = world.git(&world.clone, &["rev-parse", "--short", "HEAD"]);
-
-  let run = world.clone_command(&format!("view_trailers {before} HEAD"));
-
-  assert_eq!(run.code, 0, "{}", run.describe());
-  // `git rev-list` lists the newest commit first, and each commit's View lines follow its sha.
-  assert_eq!(run.stdout.trim(), format!("{second} /?session=abc\n{second} /plans\n{first} /?session=abc"));
+/// The run of `body` in a shell that has sourced `scripts/live-capture.sh` for its functions, with the world's clone as
+/// the repository the stage reads.
+fn capture_functions(world: &World, body: &str) -> Run {
+  let mut env = world.env.clone();
+  env.insert("CHARLIEBOT_REPO_ROOT".to_string(), world.clone.display().to_string());
+  let script = format!("source \"$1\" && {body}");
+  let mut command = harness::command("bash", &env);
+  command.args(["-c", script.as_str(), "bash"]).arg(harness::repo_root().join("scripts/live-capture.sh"));
+  harness::run(&mut command)
 }
 
 #[test]
 #[ignore = "integration"]
-fn test_a_commit_without_a_view_trailer_captures_nothing() {
+fn test_commits_with_views_lists_each_commit_that_carries_a_view_oldest_first() {
   let world = World::new();
   let before = world.git(&world.clone, &["rev-parse", "HEAD"]);
   world.git(&world.clone, &["commit", "-q", "--allow-empty", "-m", "No page in this change"]);
+  world.git(&world.clone, &["commit", "-q", "--allow-empty", "-m", "Open the status panel\n\nView: /?session=abc"]);
+  let first = world.git(&world.clone, &["rev-parse", "HEAD"]);
+  world.git(
+    &world.clone,
+    &["commit", "-q", "--allow-empty", "-m", "Add the plan tray\n\nView: /?session=abc\nView: /plans"],
+  );
+  let second = world.git(&world.clone, &["rev-parse", "HEAD"]);
 
-  let run = world.clone_command(&format!("view_trailers {before} HEAD"));
+  let run = capture_functions(&world, &format!("commits_with_views {before} HEAD"));
 
   assert_eq!(run.code, 0, "{}", run.describe());
-  assert!(run.stdout.trim().is_empty(), "{}", run.describe());
+  assert_eq!(run.stdout.trim(), format!("{first}\n{second}"), "{}", run.describe());
 }
 
 #[test]
@@ -56,27 +55,79 @@ fn test_a_view_the_live_server_does_not_resolve_fails_its_capture_before_any_pic
   let short = world.git(&world.clone, &["rev-parse", "--short", "HEAD"]);
   let head = world.git(&world.clone, &["rev-parse", "HEAD"]);
 
-  let (run, captured) = world.live_capture(&before, &head, "/?session=known-session");
+  let (run, captures) = world.live_capture(&before, &head, "/?session=known-session");
 
-  assert_eq!(run.code, 1, "{}", world.report(&run));
+  assert_eq!(run.code, 7, "{}", world.report(&run));
   assert!(run.stdout.contains(&format!("live screenshot: commit {short}: ")), "{}", world.report(&run));
   assert!(run.stdout.contains("View line \"/?session=5f1c0d2e\""), "{}", world.report(&run));
-  assert!(!captured, "a view that does not resolve is not captured: {}", world.report(&run));
+  assert!(captures.is_empty(), "a view that does not resolve is not captured: {}", world.report(&run));
+  assert!(run.stdout.contains(&format!("live capture stage: commit {short} failed: ")), "{}", world.report(&run));
 }
 
 #[test]
 #[ignore = "integration"]
-fn test_a_view_the_live_server_resolves_is_captured() {
+fn test_a_view_the_live_server_resolves_is_captured_and_judged() {
   let world = World::new();
   let before = world.git(&world.clone, &["rev-parse", "HEAD"]);
   world.git(&world.clone, &["commit", "-q", "--allow-empty", "-m", "Open the session\n\nView: /?session=5f1c0d2e"]);
+  let short = world.git(&world.clone, &["rev-parse", "--short", "HEAD"]);
   let head = world.git(&world.clone, &["rev-parse", "HEAD"]);
 
-  let (run, captured) = world.live_capture(&before, &head, "/?session=5f1c0d2e");
+  let (run, captures) = world.live_capture(&before, &head, "/?session=5f1c0d2e");
 
   assert_eq!(run.code, 0, "{}", world.report(&run));
-  assert!(captured, "{}", world.report(&run));
+  assert_eq!(captures, vec!["/?session=5f1c0d2e 1536x900".to_string()], "{}", world.report(&run));
   assert!(run.stdout.contains("view /?session=5f1c0d2e size 1536×900"), "{}", world.report(&run));
+  assert!(
+    run.stdout.contains(&format!("live view check: commit {short} view /?session=5f1c0d2e shows")),
+    "{}",
+    world.report(&run)
+  );
+  assert!(run.stdout.contains("every View commit passed (1 commit(s))"), "{}", world.report(&run));
+}
+
+/// The acceptance case: three View commits whose middle View the live server does not resolve. The first and the third
+/// are captured and judged; the middle one fails alone, and the stage exits 7 naming it with its reason.
+#[test]
+#[ignore = "integration"]
+fn test_an_unresolvable_middle_view_fails_only_its_commit_and_the_others_are_captured_and_judged() {
+  let world = World::new();
+  let before = world.git(&world.clone, &["rev-parse", "HEAD"]);
+  world.git(
+    &world.clone,
+    &["commit", "-q", "--allow-empty", "-m", "Open the first session\n\nView: /?session=first-session"],
+  );
+  let first = world.git(&world.clone, &["rev-parse", "--short", "HEAD"]);
+  world.git(
+    &world.clone,
+    &["commit", "-q", "--allow-empty", "-m", "Open the missing session\n\nView: /?session=missing-session"],
+  );
+  let second = world.git(&world.clone, &["rev-parse", "--short", "HEAD"]);
+  world.git(&world.clone, &["commit", "-q", "--allow-empty", "-m", "Show the plans\n\nView: /plans"]);
+  let third = world.git(&world.clone, &["rev-parse", "--short", "HEAD"]);
+  let head = world.git(&world.clone, &["rev-parse", "HEAD"]);
+
+  let (run, captures) = world.live_capture(&before, &head, "/?session=first-session\n/plans");
+
+  assert_eq!(run.code, 7, "{}", world.report(&run));
+  assert_eq!(
+    captures,
+    vec!["/?session=first-session 1536x900".to_string(), "/plans 1536x900".to_string()],
+    "{}",
+    world.report(&run)
+  );
+  assert!(run.stdout.contains(&format!("live screenshot: commit {second}: ")), "{}", world.report(&run));
+  assert!(run.stdout.contains("must name a view on the live server"), "{}", world.report(&run));
+  assert!(run.stdout.contains(&format!("live capture stage: commit {second} failed: ")), "{}", world.report(&run));
+  assert!(
+    run.stdout.contains(&format!("live view check: commit {first} view /?session=first-session shows")),
+    "{}",
+    world.report(&run)
+  );
+  assert!(run.stdout.contains(&format!("live view check: commit {third} view /plans shows")), "{}", world.report(&run));
+  assert!(!run.stdout.contains(&format!("live capture stage: commit {first} failed")), "{}", world.report(&run));
+  assert!(!run.stdout.contains(&format!("live capture stage: commit {third} failed")), "{}", world.report(&run));
+  assert!(run.stdout.contains("1 of 3 View commit(s) failed"), "{}", world.report(&run));
 }
 
 #[test]
@@ -91,7 +142,7 @@ fn test_a_failed_live_capture_exits_7_and_keeps_the_new_release_serving() {
 
   assert_eq!(run.code, 7, "{}", world.report(&run));
   assert!(!world.root().join("restored").exists(), "the switch did not switch back: {}", world.report(&run));
-  assert!(run.stdout.contains("live screenshot capture failed"), "{}", world.report(&run));
+  assert!(run.stdout.contains("live capture stage failed"), "{}", world.report(&run));
   assert!(!run.stdout.contains("SWITCH COMPLETE:"), "{}", world.report(&run));
 }
 
@@ -185,16 +236,17 @@ fn carries_key(head: &str) -> bool {
     || header_values(head, "Cookie").iter().any(|value| value.split(';').any(|pair| pair.trim() == cookie))
 }
 
-/// CharlieBot: the public root, and a view answered with 200 only to a request that carries the key. The view's page
-/// loads a script from the second origin, and its own fetch to that origin sends the key from localStorage as an
-/// Authorization header, the way the web client's fetch wrapper does for every fetch.
+/// The login page the server serves to a browser navigation that carries no key (`login_page.html`).
+const LOGIN_PAGE: &str = include_str!("../../../server/src/login_page.html");
+
+/// CharlieBot as the server serves it: every page takes the key, so a navigation without it gets the login page with a
+/// 401. A view answers 200 to a request that carries the key. The view's page loads a script from the second origin,
+/// and its own fetch to that origin sends the key from localStorage as an Authorization header, the way the web
+/// client's fetch wrapper does for every fetch.
 fn charliebot(second_port: u16) -> Respond {
-  Arc::new(move |target, head| {
-    if target == "/" {
-      return (200, "text/html", "<!doctype html><title>CharlieBot</title>".to_string());
-    }
+  Arc::new(move |_target, head| {
     if !carries_key(head) {
-      return (401, "text/html", "<!doctype html><title>CharlieBot login</title>".to_string());
+      return (401, "text/html", LOGIN_PAGE.to_string());
     }
     let page = format!(
       "<!doctype html><title>CharlieBot</title>\
@@ -215,6 +267,51 @@ fn second_origin() -> Respond {
   })
 }
 
+/// One `live-shot.mjs` capture of `view` from `base`, at 800x600, with the stand-in's access key in the environment.
+fn run_live_shot(sandbox: &Sandbox, base: &str, view: &str, out: &Path) -> Run {
+  let mut env = sandbox.env();
+  env.insert("CHARLIEBOT_ACCESS_KEY".to_string(), LIVE_KEY.to_string());
+  let mut command = harness::command("node", &env);
+  command.arg(harness::repo_root().join("scripts/live-shot.mjs")).arg(base).arg(view).args(["800", "600"]).arg(out);
+  harness::run(&mut command)
+}
+
+/// A stand-in origin that answers every request with the login page, as the server does to a key it does not accept.
+fn login_page_only() -> Respond {
+  Arc::new(|_target, _head| (401, "text/html", LOGIN_PAGE.to_string()))
+}
+
+/// The app's page as the stand-in serves it. Its access-key prompt opens when the page's localStorage holds no key, as
+/// the app's startup does (`initAuth` in `web/static/js/config.js`).
+const APP_PAGE: &str = r#"<!doctype html><title>CharlieBot</title>
+<div id="auth-overlay" style="display:none"><input id="auth-key-input" type="password"></div>
+<div id="sidebar"></div><div id="messages"></div>
+<script>
+if (!localStorage.getItem('charliebot_access_key')) {
+  document.getElementById('auth-overlay').style.display = 'flex';
+}
+</script>"#;
+
+/// The view answers late, and its page opens the access-key prompt when the page holds no key. Requests without the
+/// key get the login page; the keyed view answers after 1.5 s.
+fn slow_view() -> Respond {
+  Arc::new(|_target, head| {
+    if !carries_key(head) {
+      return (401, "text/html", LOGIN_PAGE.to_string());
+    }
+    thread::sleep(Duration::from_millis(1500));
+    (200, "text/html", APP_PAGE.to_string())
+  })
+}
+
+/// The view answers with the app's page and its access-key prompt showing, as an app that rejects the key shows.
+fn prompt_showing() -> Respond {
+  Arc::new(|_target, _head| {
+    let page = APP_PAGE.replace("style=\"display:none\"", "style=\"display:flex\"");
+    (200, "text/html", page)
+  })
+}
+
 #[test]
 #[ignore = "integration"]
 fn test_the_capture_sends_the_key_to_the_charliebot_origin_only() {
@@ -227,16 +324,7 @@ fn test_the_capture_sends_the_key_to_the_charliebot_origin_only() {
   let first_seen = stand_in_origin(first_listener, charliebot(second_port));
   let out = sandbox.dir("shots").join("view.png");
 
-  let mut env = sandbox.env();
-  env.insert("CHARLIEBOT_ACCESS_KEY".to_string(), LIVE_KEY.to_string());
-  let mut command = harness::command("node", &env);
-  command
-    .arg(harness::repo_root().join("scripts/live-shot.mjs"))
-    .arg(format!("http://127.0.0.1:{first_port}"))
-    .arg(VIEW)
-    .args(["800", "600"])
-    .arg(&out);
-  let run = harness::run(&mut command);
+  let run = run_live_shot(&sandbox, &format!("http://127.0.0.1:{first_port}"), VIEW, &out);
 
   assert_eq!(run.code, 0, "{}", run.describe());
   let first = first_seen.lock().expect("the first origin's log").clone();
@@ -253,6 +341,103 @@ fn test_the_capture_sends_the_key_to_the_charliebot_origin_only() {
     assert!(header_values(&seen.head, "Authorization").is_empty(), "the second origin got an Authorization: {seen:?}");
     assert!(!seen.head.contains(LIVE_KEY), "the second origin got the key: {seen:?}");
   }
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_a_capture_loads_the_view_as_its_only_page_with_the_key() {
+  let sandbox = Sandbox::new();
+  let listener = TcpListener::bind("127.0.0.1:0").expect("a port");
+  let port = listener.local_addr().expect("the port").port();
+  let seen = stand_in_origin(listener, slow_view());
+  let out = sandbox.dir("shots").join("view.png");
+
+  let run = run_live_shot(&sandbox, &format!("http://127.0.0.1:{port}"), VIEW, &out);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(out.exists(), "the capture wrote no picture: {}", run.describe());
+  let seen = seen.lock().expect("the origin's log").clone();
+  // The capture loads the view as its only page. A capture that loaded another page first would hold that page's
+  // prompt when the view's navigation had not committed, because the page loaded before the key was set.
+  let page_loads: Vec<&Seen> = seen
+    .iter()
+    .filter(|request| header_values(&request.head, "Accept").iter().any(|accept| accept.contains("text/html")))
+    .collect();
+  assert_eq!(page_loads.len(), 1, "the capture loaded more than the view: {seen:?}");
+  assert_eq!(page_loads[0].target, VIEW, "{seen:?}");
+  assert!(carries_key(&page_loads[0].head), "the view's page load went out without the key: {seen:?}");
+  assert_eq!(page_loads[0].status, 200, "{seen:?}");
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_a_capture_showing_the_apps_access_key_prompt_fails_and_writes_no_picture() {
+  let sandbox = Sandbox::new();
+  let listener = TcpListener::bind("127.0.0.1:0").expect("a port");
+  let port = listener.local_addr().expect("the port").port();
+  let _seen = stand_in_origin(listener, prompt_showing());
+  let out = sandbox.dir("shots").join("view.png");
+
+  let run = run_live_shot(&sandbox, &format!("http://127.0.0.1:{port}"), VIEW, &out);
+
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(run.stderr.contains("the app's access-key prompt covers the page"), "{}", run.describe());
+  assert!(!out.exists(), "a page under the access-key prompt is never written as a picture: {}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_a_capture_of_the_access_key_login_page_fails_and_writes_no_picture() {
+  let sandbox = Sandbox::new();
+  let listener = TcpListener::bind("127.0.0.1:0").expect("a port");
+  let port = listener.local_addr().expect("the port").port();
+  let _seen = stand_in_origin(listener, login_page_only());
+  let out = sandbox.dir("shots").join("view.png");
+
+  let run = run_live_shot(&sandbox, &format!("http://127.0.0.1:{port}"), VIEW, &out);
+
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(run.stderr.contains("the page is the access-key login page, not the app"), "{}", run.describe());
+  assert!(!out.exists(), "a login page is never written as a picture: {}", run.describe());
+}
+
+/// The capture stage against a server that shows the login page: the commit's capture fails at its size with a line
+/// that names the commit, the size and the login page, no picture is kept, and the commit is not judged.
+#[test]
+#[ignore = "integration"]
+fn test_a_login_page_capture_fails_its_commit_and_size_through_the_capture_stage() {
+  let world = World::new();
+  let before = world.git(&world.clone, &["rev-parse", "HEAD"]);
+  world.git(&world.clone, &["commit", "-q", "--allow-empty", "-m", "Open the session\n\nView: /?session=abc"]);
+  let short = world.git(&world.clone, &["rev-parse", "--short", "HEAD"]);
+  let head = world.git(&world.clone, &["rev-parse", "HEAD"]);
+  let listener = TcpListener::bind(("127.0.0.1", world.port)).expect("the world's port");
+  let _seen = stand_in_origin(listener, login_page_only());
+
+  let run = world.live_capture_against(world.port, &before, &head, "/?session=abc");
+
+  assert_eq!(run.code, 7, "{}", world.report(&run));
+  assert!(
+    run.stdout.contains(&format!(
+      "live screenshot: commit {short} view /?session=abc size 1536×900: live-shot: /?session=abc at 1536×900: \
+       the page is the access-key login page, not the app"
+    )),
+    "{}",
+    world.report(&run)
+  );
+  assert!(
+    run.stdout.contains(&format!("live capture stage: commit {short} failed: view /?session=abc size 1536×900")),
+    "{}",
+    world.report(&run)
+  );
+  assert!(run.stdout.contains(&format!("live view check: commit {short} not judged")), "{}", world.report(&run));
+  let shots = world.root().join("logs/live-screenshots/switch_test").join(&short);
+  let pictures: Vec<String> = fs::read_dir(&shots)
+    .expect("the commit's capture directory")
+    .map(|entry| entry.expect("a directory entry").file_name().to_string_lossy().into_owned())
+    .filter(|name| name.ends_with(".png"))
+    .collect();
+  assert!(pictures.is_empty(), "a login page is never kept as a picture: {pictures:?}");
 }
 
 /// The switch's own capture step, run for real against a target whose View line the live server does not know: the
@@ -277,7 +462,7 @@ fn test_a_view_the_live_server_does_not_know_exits_7_through_the_switch_and_stay
   assert_eq!(current, Path::new(&target), "the new release stays switched: {}", world.report(&run));
   assert!(run.stdout.contains(&format!("live screenshot: commit {short}: ")), "{}", world.report(&run));
   assert!(run.stdout.contains("View line `/?session=5f1c0d2e`"), "{}", world.report(&run));
-  assert!(run.stdout.contains("live screenshot capture failed"), "{}", world.report(&run));
+  assert!(run.stdout.contains("live capture stage failed"), "{}", world.report(&run));
   assert!(!run.stdout.contains("SWITCH COMPLETE:"), "{}", world.report(&run));
 }
 

@@ -148,6 +148,9 @@ impl World {
     copy_repo_file("scripts/switch-server.sh", &scripts.join("switch-server.sh"));
     copy_repo_file("scripts/install-slice-units.sh", &scripts.join("install-slice-units.sh"));
     copy_repo_file("scripts/systemd-user.sh", &scripts.join("systemd-user.sh"));
+    // The switch's live capture stage runs beside it, and the stage calls the page capture beside itself.
+    copy_repo_file("scripts/live-capture.sh", &scripts.join("live-capture.sh"));
+    copy_repo_file("scripts/live-shot.mjs", &scripts.join("live-shot.mjs"));
     let prompts = sandbox.dir("clone/prompts");
     copy_repo_file("prompts/live_view_check.md", &prompts.join("live_view_check.md"));
     // The switch sources the host release lock from beside itself.
@@ -439,7 +442,7 @@ impl World {
     let live_stub = match capture {
       Capture::Stub(live) => {
         env.insert("LIVE_SHOTS".to_string(), live.to_string());
-        "live_screenshots() { $LIVE_SHOTS; }"
+        "live_capture_stage() { $LIVE_SHOTS; }"
       }
       Capture::Real { known_view } => {
         env.insert("KNOWN_VIEW".to_string(), known_view.to_string());
@@ -473,40 +476,58 @@ switch_forward
     harness::run(&mut command)
   }
 
-  /// The switch's capture step, `live_screenshots` as `scripts/switch-server.sh` defines it, over the commits from
-  /// `old` to `target`. The release's `charliebot` answers `screenshots sizes`, and `screenshots resolve` passes only
-  /// `known_view`. A `node` stub touches `captured` when a capture runs. Returns the step's run and whether it captured.
-  pub fn live_capture(&self, old: &str, target: &str, known_view: &str) -> (Run, bool) {
+  /// The capture stage, `scripts/live-capture.sh`, over the commits from `old` to `target`, against a release CLI that
+  /// resolves each view listed in `known_views` (one per line) and judges every View as shown. A `node` stub records
+  /// each capture as `<view> <width>x<height>` and writes its PNG, so no server or browser runs. Returns the stage's
+  /// run and the captures in order.
+  pub fn live_capture(&self, old: &str, target: &str, known_views: &str) -> (Run, Vec<String>) {
+    let release = self.prepare_release(known_views);
+    let captured = self.root().join("captured");
+    self.sandbox.stub("node", CAPTURE_NODE_STUB);
+    let run = self.run_capture_stage(&release, old, target, self.port);
+    let captures = if captured.exists() {
+      fs::read_to_string(&captured).expect("the capture log").lines().map(str::to_string).collect()
+    } else {
+      Vec::new()
+    };
+    (run, captures)
+  }
+
+  /// The capture stage against the live server on `port`, with the real `node` and Chrome, and no stub for either.
+  /// Returns the stage's run.
+  pub fn live_capture_against(&self, port: u16, old: &str, target: &str, known_views: &str) -> Run {
+    let release = self.prepare_release(known_views);
+    self.run_capture_stage(&release, old, target, port)
+  }
+
+  /// The release directory that the capture stage calls: the capture CLI stub and the views it resolves.
+  fn prepare_release(&self, known_views: &str) -> PathBuf {
     let release = self.root().join("release");
     fs::create_dir_all(&release).expect("the release directory");
     let cli = release.join("charliebot");
     fs::write(&cli, CAPTURE_CLI_STUB).expect("the capture CLI stub");
     fs::set_permissions(&cli, fs::Permissions::from_mode(0o755)).expect("the capture CLI stub is executable");
-    let captured = self.root().join("captured");
-    self.sandbox.stub("node", "touch \"$CAPTURED\"\n");
+    fs::write(release.join("known-views.txt"), known_views).expect("the known views");
+    release
+  }
+
+  /// One run of `scripts/live-capture.sh` for the commits from `old` to `target`, against the server on `port`.
+  fn run_capture_stage(&self, release: &Path, old: &str, target: &str, port: u16) -> Run {
     let mut env = self.env.clone();
-    env.insert("CLONE".to_string(), self.clone.display().to_string());
-    env.insert("CAPTURE_OLD".to_string(), old.to_string());
-    env.insert("CAPTURE_TARGET".to_string(), target.to_string());
-    env.insert("CAPTURE_RELEASE".to_string(), release.display().to_string());
-    env.insert("KNOWN_VIEW".to_string(), known_view.to_string());
-    env.insert("CAPTURED".to_string(), captured.display().to_string());
-    env.insert("PORT".to_string(), self.port.to_string());
-    env.insert("KEY".to_string(), ACCESS_KEY.to_string());
-    env.insert("LOG".to_string(), self.root().join("switch.log").display().to_string());
+    env.insert("CHARLIEBOT_REPO_ROOT".to_string(), self.clone.display().to_string());
     env.insert("CHARLIEBOT_LOG_DIR".to_string(), self.root().join("logs").display().to_string());
-    let script = r#"
-source "$1" rust "$2"
-REPO_ROOT="$CLONE"
-OLD_SHA="$CAPTURE_OLD"
-TARGET_SHA="$CAPTURE_TARGET"
-RELEASE_DIR="$CAPTURE_RELEASE"
-live_screenshots
-"#;
+    env.insert("CAPTURED".to_string(), self.root().join("captured").display().to_string());
+    env.insert("PORT".to_string(), port.to_string());
+    env.insert("KEY".to_string(), ACCESS_KEY.to_string());
     let mut command = harness::command("bash", &env);
-    command.args(["-c", script, "bash"]).arg(repo_switch()).arg(target);
-    let run = harness::run(&mut command);
-    (run, captured.exists())
+    command
+      .arg(harness::repo_root().join("scripts/live-capture.sh"))
+      .arg("--release")
+      .arg(release)
+      .args(["--name", "switch_test"])
+      .arg(old)
+      .arg(target);
+    harness::run(&mut command)
   }
 
   /// The switch's probe turn, run in a shell against a stand-in server that answers with `behavior`. Returns the
@@ -646,15 +667,6 @@ preflight
       .arg(running_impl)
       .arg(self.root().join("preflight.runs"))
       .args(flags);
-    harness::run(&mut command)
-  }
-
-  /// The run of `body` in a shell that has sourced the switch script, with `REPO_ROOT` at the world's clone: the
-  /// clone-reading functions' unit under test.
-  pub fn clone_command(&self, body: &str) -> Run {
-    let script = format!("source \"$1\" rust {} && REPO_ROOT=\"$2\" && {body}", self.rust_sha);
-    let mut command = harness::command("bash", &self.env);
-    command.args(["-c", script.as_str(), "bash"]).arg(self.switch_script()).arg(&self.clone);
     harness::run(&mut command)
   }
 
@@ -1122,17 +1134,26 @@ pub fn fake_charliebot() -> PathBuf {
   PathBuf::from(env!("CARGO_BIN_EXE_fake-charliebot"))
 }
 
-/// The release CLI that the capture step calls in [`World::live_capture`]: `screenshots sizes` prints one window size,
-/// and `screenshots resolve` passes only the view named by `KNOWN_VIEW`.
+/// The release CLI that the capture stage calls in [`World::live_capture`]: `switch-helper` prints the port and the key
+/// from the environment, `screenshots sizes` prints one window size, `screenshots resolve` passes the views listed in
+/// `known-views.txt` beside it, and `backend run` judges each View of its task file as shown.
 const CAPTURE_CLI_STUB: &str = r#"#!/bin/sh
 case "$1 $2" in
+  "switch-helper home-helper") printf '%s\n%s\n' "$PORT" "$KEY" ;;
   "screenshots sizes") echo 1536x900 ;;
   "screenshots resolve")
-    if [ "$3" = "$KNOWN_VIEW" ]; then exit 0; fi
+    if grep -Fqx -- "$3" "$(dirname "$0")/known-views.txt"; then exit 0; fi
     echo "the View line \"$3\" must name a view on the live server" >&2
     exit 1 ;;
+  "backend run")
+    sed -n 's/^- View: //p' "$6" | while IFS= read -r view; do echo "VERDICT $view shows the page renders"; done ;;
   *) echo "unexpected: $*" >&2; exit 2 ;;
 esac
+"#;
+
+/// The `node` stand-in for one capture: it records `<view> <width>x<height>` and writes the PNG at the output path.
+const CAPTURE_NODE_STUB: &str = r#"echo "$3 $4x$5" >> "$CAPTURED"
+mkdir -p "$(dirname "$6")" && printf 'png\n' > "$6"
 "#;
 
 /// The run_finished fact that a run's stop leaves in the session's chat events.

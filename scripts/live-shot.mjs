@@ -1,18 +1,31 @@
-// The live page capture that `scripts/switch-server.sh` runs after a release switch: one page view, one window size,
-// one PNG of the size the release's window-size set names.
+// The live page capture that `scripts/live-capture.sh` runs for each View line and window size: one page view, one
+// window size, one PNG of the size the release's window-size set names.
 //
 //   CHARLIEBOT_ACCESS_KEY=<key> node scripts/live-shot.mjs <base url> <view path> <width> <height> <out file>
 //
 // The key travels in the environment: a command line is readable from every process, and the server serves the
-// page only to a caller that carries the key. The capture drives Chrome over the DevTools protocol on a pipe, the
-// same way `dev/readme-screenshots/capture.sh` does, so it needs no npm package. The emulated viewport is the
-// requested CSS size at device pixel ratio 1, so the PNG's pixel size must equal it; a capture that came out at
-// another size fails here instead of passing a screenshot the release's check would refuse.
+// page only to a caller that carries the key. The key reaches the CharlieBot origin only. A script that runs before
+// any page script of a document sets the key in that origin's localStorage, where the page's own script reads it,
+// and the capture adds it as the Authorization header of each request to that origin. Other origins get no key, and
+// no cookie is written: a cookie reaches every port on the host.
+//
+// The capture loads the view itself, with the key in place, so its first document is the view's. A document loaded
+// before the key is set opens the app's own access-key prompt (`initAuth` in web/static/js/config.js), and a capture
+// that photographed it would show a login card for the app. The capture never waits on an earlier document.
+//
+// It drives Chrome over the DevTools protocol on a pipe, the same way `dev/readme-screenshots/capture.sh` does, so it
+// needs no npm package. The emulated viewport is the requested CSS size at device pixel ratio 1, so the PNG's pixel
+// size must equal it; a capture that came out at another size fails here instead of passing a screenshot the release's
+// check would refuse.
+//
+// A capture is a picture of the app only when the rendered page shows so: the view must answer 200, and the page must
+// show neither the access-key login page nor the app's own access-key prompt. Any other page fails the capture, and no
+// PNG is written.
 //
 // Chrome resolves from LIVE_SHOT_CHROME, then the newest Playwright Chromium under ~/.cache/ms-playwright,
 // then `chromium`, `chromium-browser` and `google-chrome`.
 //
-// Failure: the message goes to stderr and the process exits 1, so the switch's capture step reports the failure.
+// Failure: the message goes to stderr and the process exits 1, so the capture stage reports the failure.
 
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -147,15 +160,6 @@ async function evaluate(page, expression) {
   return result.result.value;
 }
 
-async function waitFor(page, expression, label, timeoutMs = 15000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (await evaluate(page, expression)) return;
-    await sleep(100);
-  }
-  throw new Error(`the page never reached: ${label}`);
-}
-
 // Sets the Authorization header of one paused request. The key goes only to the base URL's origin: the page's own
 // Authorization header is dropped from every request, and the base URL's origin gets the key.
 async function answerPausedRequest(page, paused, origin) {
@@ -166,23 +170,62 @@ async function answerPausedRequest(page, paused, origin) {
   await page.send('Fetch.continueRequest', { requestId: paused.requestId, headers });
 }
 
+// The script that sets the key in the CharlieBot origin's localStorage before a document of that origin runs its own
+// scripts. Chrome runs it in every frame of the page, so the origin check keeps the key out of every other origin.
+function seedAccessKey(origin) {
+  return `if (location.origin === ${JSON.stringify(origin)}) ` +
+    `localStorage.setItem('charliebot_access_key', ${JSON.stringify(key)});`;
+}
+
+// The facts of the rendered page that decide whether it is the app: the access-key login page's form, and the app's
+// own access-key prompt when it is showing.
+async function renderedPageFacts(page) {
+  return evaluate(page, `(() => {
+    const prompt = document.getElementById('auth-overlay');
+    return {
+      loginForm: document.querySelector('input#k[type="password"]') !== null,
+      accessPrompt: prompt !== null && getComputedStyle(prompt).display !== 'none',
+    };
+  })()`);
+}
+
+// Refuses a capture that is not the app: the view must answer 200, and the rendered page must show neither the
+// access-key login page nor the app's access-key prompt.
+function refuseNonAppPage(status, facts) {
+  if (facts.loginForm) throw new Error('the page is the access-key login page, not the app');
+  if (status !== 200) throw new Error(`the view answered ${status ?? 'with no status'}, not 200`);
+  if (facts.accessPrompt) throw new Error("the app's access-key prompt covers the page, so the key was not accepted");
+}
+
 async function capture(browser, url) {
   const { targetId } = await browser.cdp.send('Target.createTarget', { url: 'about:blank' });
   const { sessionId } = await browser.cdp.send('Target.attachToTarget', { targetId, flatten: true });
   const page = { send: (method, params = {}) => browser.cdp.send(method, params, sessionId) };
   const origin = new URL(baseUrl).origin;
+  const loaded = new Set();
+  const statuses = new Map();
+  let capturing = true;
   let interceptFailure = null;
   browser.cdp.on('Fetch.requestPaused', (message) => {
-    if (message.sessionId !== sessionId) return;
+    if (message.sessionId !== sessionId || !capturing) return;
     answerPausedRequest(page, message.params, origin).catch((error) => {
       interceptFailure ??= error;
       console.error(`live-shot: a paused request was not answered: ${error.message}`);
     });
   });
+  browser.cdp.on('Page.lifecycleEvent', (message) => {
+    if (message.sessionId === sessionId && message.params.name === 'load') loaded.add(message.params.loaderId);
+  });
+  browser.cdp.on('Network.responseReceived', (message) => {
+    if (message.sessionId === sessionId && message.params.type === 'Document') {
+      statuses.set(message.params.loaderId, message.params.response.status);
+    }
+  });
   try {
     await page.send('Page.enable');
-    await page.send('Network.enable');
+    await page.send('Page.setLifecycleEventsEnabled', { enabled: true });
     await page.send('Runtime.enable');
+    await page.send('Network.enable');
     await page.send('Fetch.enable', { patterns: [{ urlPattern: '*' }] });
     await page.send('Emulation.setDeviceMetricsOverride', {
       width,
@@ -190,20 +233,21 @@ async function capture(browser, url) {
       deviceScaleFactor: 1,
       mobile: width < 600,
     });
-    // `/` is public, so this load needs no key. The page's own script reads the key from localStorage, which only the
-    // CharlieBot origin can read, and sends it with its requests to that origin. Navigations carry no localStorage, so
-    // `answerPausedRequest` adds the header to each request of the view. No cookie is written: a cookie reaches every
-    // port on the host, not only this origin.
-    await page.send('Page.navigate', { url: `${baseUrl}/` });
-    await waitFor(page, 'document.readyState === "complete"', 'the server root');
-    await evaluate(page, `localStorage.setItem('charliebot_access_key', ${JSON.stringify(key)});`);
-    await page.send('Page.navigate', { url });
-    await waitFor(page, 'document.readyState === "complete"', 'the loaded page');
+    await page.send('Page.addScriptToEvaluateOnNewDocument', { source: seedAccessKey(origin) });
+    const { loaderId, errorText } = await page.send('Page.navigate', { url });
+    if (errorText) throw new Error(`the navigation failed: ${errorText}`);
+    const deadline = Date.now() + 15000;
+    while (!loaded.has(loaderId)) {
+      if (Date.now() > deadline) throw new Error('the page never finished loading');
+      await sleep(50);
+    }
     await sleep(1000);
+    refuseNonAppPage(statuses.get(loaderId), await renderedPageFacts(page));
     const { data } = await page.send('Page.captureScreenshot', { format: 'png' });
     if (interceptFailure) throw interceptFailure;
     return Buffer.from(data, 'base64');
   } finally {
+    capturing = false;
     await browser.cdp.send('Target.closeTarget', { targetId });
   }
 }

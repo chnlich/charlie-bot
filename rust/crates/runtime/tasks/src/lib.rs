@@ -9,6 +9,7 @@ pub mod dispatch;
 mod entry;
 pub mod execution;
 pub mod git;
+pub mod github_api;
 pub mod handoff;
 pub mod land;
 pub mod master_queue;

@@ -38,6 +38,7 @@
 
 use std::collections::BTreeSet;
 use std::fs::DirBuilder;
+use std::future::Future;
 use std::io::Read as _;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -61,6 +62,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use crate::git;
+use crate::github_api::{GhOutput, RestOutcome, rest_get, run_gh};
 use crate::review_text;
 use crate::web_screenshots;
 
@@ -848,12 +850,21 @@ pub async fn land(
     push_task_branch(&ctx, &ctx.branch_name).await?;
     let (pr_url, pr_number) = ensure_draft_pr(&ctx, &ctx.repo, published, &pr_text).await?;
     let expected = expected_workflow_paths(&workflow_files_at(&ctx.worktree, &sha).await?)?;
-    let evaluation = read_ci_state(&ctx.worktree, &ctx.repo, &sha).await?;
-    let elapsed = match &head_pushed_at {
-      Some(pushed_at) => elapsed_secs(pushed_at)?,
-      None => 0,
+    let (evaluation, verdict) = match read_ci_state(&ctx.worktree, &ctx.repo, &sha).await? {
+      CiRead::Evaluated(evaluation) => {
+        let elapsed = match &head_pushed_at {
+          Some(pushed_at) => elapsed_secs(pushed_at)?,
+          None => 0,
+        };
+        let verdict = judge_ci(&expected, &evaluation.runs, &evaluation.check_runs, &evaluation.statuses, elapsed);
+        (*evaluation, verdict)
+      }
+      // The watch that this state registers waits out the quota and then reads the head sha again.
+      CiRead::RateLimited { reset } => {
+        tracing::info!(target: "charliebot_tasks", branch = %ctx.branch_name, reset, "land_ci_read_rate_limited");
+        (CiEvaluation::unread(), CiVerdict::Waiting)
+      }
     };
-    let verdict = judge_ci(&expected, &evaluation.runs, &evaluation.check_runs, &evaluation.statuses, elapsed);
 
     let base_record = LandingRecord {
       state: String::new(),
@@ -1345,6 +1356,11 @@ struct CiEvaluation {
 }
 
 impl CiEvaluation {
+  /// The evaluation of a read the rate limit refused: no runs, no check runs and no statuses.
+  fn unread() -> Self {
+    Self { runs: Value::Array(Vec::new()), check_runs: Value::Array(Vec::new()), statuses: Value::Array(Vec::new()) }
+  }
+
   fn check_rows(&self) -> Vec<CheckRow> {
     let mut rows = Vec::new();
     if let Some(check_runs) = self.check_runs.as_array() {
@@ -1381,15 +1397,34 @@ impl CiEvaluation {
   }
 }
 
-async fn read_ci_state(workdir: &Path, repo: &str, sha: &str) -> anyhow::Result<CiEvaluation> {
-  let runs = gh_json(workdir, &["api", &format!("repos/{repo}/actions/runs?head_sha={sha}&per_page=100")]).await?;
-  let check_runs = gh_json(workdir, &["api", &format!("repos/{repo}/commits/{sha}/check-runs?per_page=100")]).await?;
-  let statuses = gh_json(workdir, &["api", &format!("repos/{repo}/commits/{sha}/status")]).await?;
-  Ok(CiEvaluation {
+/// One read of a head sha's CI state. A rate-limited read holds no evaluation: the landing waits for the
+/// quota instead of judging a state it did not read.
+enum CiRead {
+  Evaluated(Box<CiEvaluation>),
+  RateLimited { reset: i64 },
+}
+
+async fn read_ci_state(workdir: &Path, repo: &str, sha: &str) -> anyhow::Result<CiRead> {
+  let run = |args: Vec<String>| async move { run_gh(workdir, &args).await };
+  let paths = [
+    format!("repos/{repo}/actions/runs?head_sha={sha}&per_page=100"),
+    format!("repos/{repo}/commits/{sha}/check-runs?per_page=100"),
+    format!("repos/{repo}/commits/{sha}/status"),
+  ];
+  let mut bodies = Vec::with_capacity(paths.len());
+  for path in &paths {
+    match rest_get(&run, path, None).await? {
+      RestOutcome::Body { value, .. } => bodies.push(value),
+      RestOutcome::RateLimited { reset } => return Ok(CiRead::RateLimited { reset }),
+      RestOutcome::NotModified => anyhow::bail!("gh api {path} answered 304 to a GET without an ETag"),
+    }
+  }
+  let [runs, check_runs, statuses]: [Value; 3] = bodies.try_into().expect("one body per path");
+  Ok(CiRead::Evaluated(Box::new(CiEvaluation {
     runs: runs.get("workflow_runs").cloned().unwrap_or(Value::Array(Vec::new())),
     check_runs: check_runs.get("check_runs").cloned().unwrap_or(Value::Array(Vec::new())),
     statuses: statuses.get("statuses").cloned().unwrap_or(Value::Array(Vec::new())),
-  })
+  })))
 }
 
 /// The one CI verdict over a head sha. Expected workflows are matched by workflow file path;
@@ -1545,21 +1580,10 @@ async fn gh_json(workdir: &Path, args: &[&str]) -> anyhow::Result<Value> {
 }
 
 async fn gh_stdout(workdir: &Path, args: &[&str]) -> anyhow::Result<Vec<u8>> {
-  let mut command = tokio::process::Command::new("gh");
-  command
-    .args(args)
-    .current_dir(workdir)
-    .stdout(std::process::Stdio::piped())
-    .stderr(std::process::Stdio::piped())
-    .kill_on_drop(true);
-  let output = tokio::time::timeout(GH_TIMEOUT, command.output()).await;
-  let output = match output {
-    Ok(Ok(output)) => output,
-    Ok(Err(error)) => anyhow::bail!("gh {} failed to start: {error}", args.join(" ")),
-    Err(_) => anyhow::bail!("gh {} timed out after {}s", args.join(" "), GH_TIMEOUT.as_secs()),
-  };
-  if !output.status.success() {
-    anyhow::bail!("gh {} failed: {}", args.join(" "), String::from_utf8_lossy(&output.stderr).trim());
+  let owned: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
+  let output = run_gh(workdir, &owned).await?;
+  if !output.success {
+    anyhow::bail!("gh {} failed: {}", owned.join(" "), output.stderr.trim());
   }
   Ok(output.stdout)
 }
@@ -1594,8 +1618,9 @@ async fn ensure_waiting_trigger(ctx: &TaskLanding, repo: &str, pr_number: i64, s
   }
 }
 
-/// Seconds between the CI gate's polls for the first check on a head sha.
-const CHECK_REGISTRATION_POLL_SECS: u64 = 10;
+/// The pause between the CI gate's registration polls of a head sha. A poll whose answer is unchanged costs no
+/// count against the primary rate limit (a 304), so the pause only bounds how fast a registration is noticed.
+pub const CHECK_REGISTRATION_POLL: Duration = Duration::from_secs(30);
 /// Seconds the CI gate's watch may run past `TIMEOUT_SECS`. `start_and_register` in
 /// `rust/crates/app/cli/src/commands/session_trigger.rs` starts the watch before it posts the
 /// registration that sets the wake's clock. A watch bounded at exactly `TIMEOUT_SECS` would exit
@@ -1603,21 +1628,85 @@ const CHECK_REGISTRATION_POLL_SECS: u64 = 10;
 const CI_WATCH_BOUND_MARGIN_SECS: i64 = 120;
 
 /// The CI gate's watch command for one head sha. An empty check list right after a push means GitHub
-/// has not registered the checks yet, so the command polls until the head sha has a check run or a
-/// commit status. It then watches the PR's checks to their end with fail-fast: exit 0 when every check
-/// passes, exit 1 at the first failure. The whole command ends at `TIMEOUT_SECS + CI_WATCH_BOUND_MARGIN_SECS`,
-/// so a PR that never gets a check wakes as the trigger's timeout.
+/// has not registered the checks yet, so `charliebot ci-wait` polls until the head sha has a check run or a
+/// commit status (`await_check_registration`). The command then watches the PR's checks to their end with
+/// fail-fast: exit 0 when every check passes, exit 1 at the first failure. The whole command ends at
+/// `TIMEOUT_SECS + CI_WATCH_BOUND_MARGIN_SECS`, so a PR that never gets a check wakes as the trigger's timeout.
 fn ci_gate_watch_command(repo: &str, pr_number: i64, sha: &str) -> String {
   let bound = TIMEOUT_SECS + CI_WATCH_BOUND_MARGIN_SECS;
   format!(
-    "timeout {bound} sh -c 'while :; do \
-     check_runs=$(gh api repos/{repo}/commits/{sha}/check-runs --jq .total_count) || exit $?; \
-     if [ \"$check_runs\" -gt 0 ]; then break; fi; \
-     statuses=$(gh api repos/{repo}/commits/{sha}/status --jq .total_count) || exit $?; \
-     if [ \"$statuses\" -gt 0 ]; then break; fi; \
-     sleep {CHECK_REGISTRATION_POLL_SECS}; \
-     done; gh pr checks {pr_number} --repo {repo} --watch --fail-fast'"
+    "timeout {bound} sh -c 'charliebot ci-wait --repo {repo} --sha {sha} || exit $?; \
+     gh pr checks {pr_number} --repo {repo} --watch --fail-fast'"
   )
+}
+
+/// The CI gate's registration wait: polls the head sha's check runs, then its commit statuses, until one of
+/// them exists. Each endpoint's ETag goes back with its next poll, so an unchanged answer is a 304, which GitHub
+/// does not count against the primary rate limit. A rate-limit 403 is reported through `report` with its reset
+/// time, and the poll waits until that time before it goes on. Any other failure ends the wait as an error.
+pub async fn await_check_registration<Run, Fut>(
+  run: &Run,
+  repo: &str,
+  sha: &str,
+  interval: Duration,
+  report: &dyn Fn(&str),
+) -> anyhow::Result<()>
+where
+  Run: Fn(Vec<String>) -> Fut,
+  Fut: Future<Output = anyhow::Result<GhOutput>>,
+{
+  let paths = [format!("repos/{repo}/commits/{sha}/check-runs"), format!("repos/{repo}/commits/{sha}/status")];
+  let mut etags: [Option<String>; 2] = [None, None];
+  loop {
+    for (path, etag) in paths.iter().zip(etags.iter_mut()) {
+      let Some((body, fresh_etag)) = poll_until_answered(run, path, etag.as_deref(), report).await? else {
+        continue;
+      };
+      let total = body
+        .get("total_count")
+        .and_then(Value::as_u64)
+        .with_context(|| format!("gh api {path} printed no total_count"))?;
+      if total > 0 {
+        return Ok(());
+      }
+      *etag = fresh_etag;
+    }
+    tokio::time::sleep(interval).await;
+  }
+}
+
+/// One endpoint's answer: its body with the ETag to send next, or `None` when the body is unchanged. A
+/// rate-limit 403 is reported and waited out before the same request is sent again.
+async fn poll_until_answered<Run, Fut>(
+  run: &Run,
+  path: &str,
+  etag: Option<&str>,
+  report: &dyn Fn(&str),
+) -> anyhow::Result<Option<(Value, Option<String>)>>
+where
+  Run: Fn(Vec<String>) -> Fut,
+  Fut: Future<Output = anyhow::Result<GhOutput>>,
+{
+  loop {
+    match rest_get(run, path, etag).await? {
+      RestOutcome::Body { value, etag: next_etag } => return Ok(Some((value, next_etag))),
+      RestOutcome::NotModified => return Ok(None),
+      RestOutcome::RateLimited { reset } => {
+        let reset_at = OffsetDateTime::from_unix_timestamp(reset)
+          .with_context(|| format!("the X-RateLimit-Reset epoch {reset} is out of range"))?
+          .format(&Rfc3339)
+          .expect("the RFC 3339 format accepts a valid timestamp");
+        report(&format!("GitHub REST quota is exhausted; {path} waits until {reset_at}"));
+        tokio::time::sleep(duration_until(reset)).await;
+      }
+    }
+  }
+}
+
+/// The time from now until the epoch second `reset`, zero when that second has passed.
+fn duration_until(reset: i64) -> Duration {
+  let seconds = (reset - OffsetDateTime::now_utc().unix_timestamp()).max(0);
+  Duration::from_secs(u64::try_from(seconds).expect("the seconds are clamped to zero or more"))
 }
 
 /// The wake label of one head sha's checks; the dedup key of the landing's triggers.
@@ -1893,7 +1982,8 @@ async fn open_task_prs(ctx: &TaskLanding, repo: &str) -> anyhow::Result<Vec<Open
 
 #[cfg(test)]
 mod tests {
-  use std::collections::HashSet;
+  use std::cell::RefCell;
+  use std::collections::{HashSet, VecDeque};
 
   use super::*;
   use serde_json::json;
@@ -2322,98 +2412,177 @@ mod tests {
     assert_eq!(trigger_message(&sha), "ci gate eeeeeeeeeeee");
   }
 
-  /// The stub `gh` of the watch command. `api` reports the check-run count: `GH_REGISTRATION_POLLS` empty
-  /// polls, then one check run. `pr checks` records the poll count it started after and exits `GH_WATCH_EXIT`.
+  /// The stubs of the watch command: `charliebot ci-wait` exits `CI_WAIT_EXIT`, and `gh pr checks` records that
+  /// the PR check watch started and exits `GH_WATCH_EXIT`.
+  const CI_WAIT_STUB: &str = "echo ran >> \"$GH_STATE/ci-wait\"\nexit \"$CI_WAIT_EXIT\"\n";
   const GH_WATCH_STUB: &str = r#"
 case "$1 $2" in
-  "api "*/check-runs)
-    if [ "${GH_API_FAIL_ENDPOINT:-}" = "check-runs" ]; then exit 9; fi
-    polls=$(($(cat "$GH_STATE/polls" 2>/dev/null || echo 0) + 1))
-    echo "$polls" > "$GH_STATE/polls"
-    if [ "$polls" -gt "$GH_REGISTRATION_POLLS" ]; then echo 1; else echo 0; fi
-    ;;
-  "api "*/status)
-    if [ "${GH_API_FAIL_ENDPOINT:-}" = "status" ]; then exit 9; fi
-    echo 0
-    ;;
   "pr checks")
-    cat "$GH_STATE/polls" > "$GH_STATE/watch-started-after"
+    echo started > "$GH_STATE/watch"
     exit "$GH_WATCH_EXIT"
     ;;
   *) echo "unexpected gh $*" >&2; exit 2 ;;
 esac
 "#;
 
-  /// Runs the CI gate's watch command against the stub `gh` with a stub `sleep` that returns at once. Returns
-  /// the run and the number of registration polls the watch started after.
-  fn run_ci_gate_watch(registration_polls: u32, watch_exit: u8) -> (charliebot_shell_harness::Run, u32) {
+  /// Runs the CI gate's watch command with the stubbed `ci-wait` and `gh`. Returns the run and whether the PR check
+  /// watch started; the stubs' state is read before the sandbox is dropped.
+  fn run_ci_gate_watch(ci_wait_exit: u8, watch_exit: u8) -> (charliebot_shell_harness::Run, bool) {
     let sandbox = charliebot_shell_harness::Sandbox::new();
     let state = sandbox.dir("state");
+    sandbox.stub("charliebot", CI_WAIT_STUB);
     sandbox.stub("gh", GH_WATCH_STUB);
-    sandbox.stub("sleep", "exit 0\n");
     let mut env = sandbox.env();
     env.insert("GH_STATE".to_string(), state.display().to_string());
-    env.insert("GH_REGISTRATION_POLLS".to_string(), registration_polls.to_string());
+    env.insert("CI_WAIT_EXIT".to_string(), ci_wait_exit.to_string());
     env.insert("GH_WATCH_EXIT".to_string(), watch_exit.to_string());
     let cmd = ci_gate_watch_command("acme/widgets", 7, &"a".repeat(40));
     let mut command = charliebot_shell_harness::command("bash", &env);
     command.arg("-c").arg(&cmd);
     let run = charliebot_shell_harness::run(&mut command);
-    let started_after = std::fs::read_to_string(state.join("watch-started-after"))
-      .unwrap_or_else(|error| panic!("the watch never started: {error}\n{}", run.describe()));
-    (run, started_after.trim().parse().expect("the poll count is a number"))
-  }
-
-  /// Runs the watch command with one failing registration lookup and returns its sandbox for assertions.
-  fn run_ci_gate_watch_with_api_failure(failed_endpoint: &str) -> (charliebot_shell_harness::Run, std::path::PathBuf) {
-    let sandbox = charliebot_shell_harness::Sandbox::new();
-    let state = sandbox.dir("state");
-    sandbox.stub("gh", GH_WATCH_STUB);
-    sandbox.stub("sleep", "exit 0\n");
-    let mut env = sandbox.env();
-    env.insert("GH_STATE".to_string(), state.display().to_string());
-    env.insert("GH_REGISTRATION_POLLS".to_string(), "100".to_string());
-    env.insert("GH_WATCH_EXIT".to_string(), "0".to_string());
-    env.insert("GH_API_FAIL_ENDPOINT".to_string(), failed_endpoint.to_string());
-    let cmd = ci_gate_watch_command("acme/widgets", 7, &"a".repeat(40));
-    let mut command = charliebot_shell_harness::command("bash", &env);
-    command.arg("-c").arg(&cmd);
-    (charliebot_shell_harness::run(&mut command), state)
+    let watch_started = state.join("watch").exists();
+    (run, watch_started)
   }
 
   #[test]
-  fn an_empty_check_list_then_passing_checks_ends_completed() {
-    let (run, started_after) = run_ci_gate_watch(2, 0);
-    assert_eq!(run.code, 0, "{}", run.describe());
-    assert_eq!(started_after, 3, "the watch starts once the head sha has its first check");
+  fn a_registered_head_sha_starts_the_pr_check_watch_and_keeps_its_exit() {
+    for watch_exit in [0, 1] {
+      let (run, watch_started) = run_ci_gate_watch(0, watch_exit);
+      assert_eq!(run.code, i32::from(watch_exit), "{}", run.describe());
+      assert!(watch_started, "the PR check watch starts once the registration wait returns");
+    }
   }
 
   #[test]
-  fn an_empty_check_list_then_a_failing_check_ends_failed() {
-    let (run, started_after) = run_ci_gate_watch(2, 1);
-    assert_eq!(run.code, 1, "{}", run.describe());
-    assert_eq!(started_after, 3, "the watch starts once the head sha has its first check");
-  }
-
-  #[test]
-  fn passing_checks_from_the_start_end_completed() {
-    let (run, started_after) = run_ci_gate_watch(0, 0);
-    assert_eq!(run.code, 0, "{}", run.describe());
-    assert_eq!(started_after, 1);
-  }
-
-  #[test]
-  fn a_failed_check_run_lookup_fails_without_starting_the_watch() {
-    let (run, state) = run_ci_gate_watch_with_api_failure("check-runs");
+  fn a_failed_registration_wait_fails_without_starting_the_watch() {
+    let (run, watch_started) = run_ci_gate_watch(9, 0);
     assert_eq!(run.code, 9, "{}", run.describe());
-    assert!(!state.join("watch-started-after").exists(), "the PR check watch must not start after an API error");
+    assert!(!watch_started, "the PR check watch must not start after a failed registration wait");
   }
 
-  #[test]
-  fn a_failed_status_lookup_fails_without_starting_the_watch() {
-    let (run, state) = run_ci_gate_watch_with_api_failure("status");
-    assert_eq!(run.code, 9, "{}", run.describe());
-    assert!(!state.join("watch-started-after").exists(), "the PR check watch must not start after an API error");
+  /// Replies to the registration poll's calls in order, and records the arguments of each call.
+  struct Script {
+    replies: RefCell<VecDeque<GhOutput>>,
+    calls: RefCell<Vec<Vec<String>>>,
+  }
+
+  impl Script {
+    fn new(replies: Vec<GhOutput>) -> Self {
+      Self { replies: RefCell::new(VecDeque::from(replies)), calls: RefCell::new(Vec::new()) }
+    }
+
+    fn run(&self) -> impl Fn(Vec<String>) -> std::future::Ready<anyhow::Result<GhOutput>> + '_ {
+      move |args: Vec<String>| {
+        self.calls.borrow_mut().push(args);
+        let next = self.replies.borrow_mut().pop_front().expect("the script has a reply for each call");
+        std::future::ready(Ok(next))
+      }
+    }
+  }
+
+  fn json_reply(body: Value, etag: &str) -> GhOutput {
+    GhOutput {
+      success: true,
+      stdout: format!("HTTP/2.0 200 OK\r\nEtag: {etag}\r\n\r\n{body}").into_bytes(),
+      stderr: String::new(),
+    }
+  }
+
+  fn not_modified() -> GhOutput {
+    GhOutput {
+      success: false,
+      stdout: b"HTTP/2.0 304 Not Modified\r\n\r\n".to_vec(),
+      stderr: "gh: HTTP 304".to_string(),
+    }
+  }
+
+  fn rate_limited(reset: i64) -> GhOutput {
+    GhOutput {
+      success: false,
+      stdout: format!(
+        "HTTP/2.0 403 Forbidden\r\nX-RateLimit-Remaining: 0\r\nX-RateLimit-Reset: {reset}\r\n\r\n{{\"message\":\"x\"}}"
+      )
+      .into_bytes(),
+      stderr: "gh: API rate limit exceeded (HTTP 403)".to_string(),
+    }
+  }
+
+  fn server_error() -> GhOutput {
+    GhOutput {
+      success: false,
+      stdout: b"HTTP/2.0 500 Internal Server Error\r\n\r\n".to_vec(),
+      stderr: "gh: Internal Server Error (HTTP 500)".to_string(),
+    }
+  }
+
+  const WATCHED_REPO: &str = "acme/widgets";
+  const WATCHED_SHA: &str = "abcdef0123456789abcdef0123456789abcdef01";
+
+  #[tokio::test(start_paused = true)]
+  async fn a_rate_limited_registration_poll_waits_until_the_reset_then_continues() {
+    let reset = OffsetDateTime::now_utc().unix_timestamp() + 60;
+    let script = Script::new(vec![rate_limited(reset), json_reply(json!({"total_count": 1}), "\"checks-1\"")]);
+    let reports = RefCell::new(Vec::new());
+    let report = |line: &str| reports.borrow_mut().push(line.to_string());
+    let start = tokio::time::Instant::now();
+    await_check_registration(&script.run(), WATCHED_REPO, WATCHED_SHA, Duration::from_secs(30), &report)
+      .await
+      .expect("the poll continues after the quota returns");
+    let waited = start.elapsed();
+    assert!(
+      (Duration::from_secs(59)..=Duration::from_secs(61)).contains(&waited),
+      "the poll waits until the reset second, which is 60 s away; it waited {waited:?}"
+    );
+    assert_eq!(script.calls.borrow().len(), 2, "the same check-runs request is sent again after the reset");
+    let reports = reports.borrow();
+    assert_eq!(reports.len(), 1, "the 403 is reported once");
+    assert!(reports[0].contains("quota is exhausted") && reports[0].contains("waits until"), "{}", reports[0]);
+  }
+
+  #[tokio::test(start_paused = true)]
+  async fn an_unchanged_registration_poll_sends_its_etag_and_reads_the_304_as_still_empty() {
+    let script = Script::new(vec![
+      json_reply(json!({"total_count": 0}), "\"checks-1\""),
+      json_reply(json!({"total_count": 0}), "\"status-1\""),
+      not_modified(),
+      not_modified(),
+      json_reply(json!({"total_count": 1}), "\"checks-2\""),
+    ]);
+    let report = |_: &str| panic!("no rate limit was hit");
+    await_check_registration(&script.run(), WATCHED_REPO, WATCHED_SHA, Duration::from_secs(30), &report)
+      .await
+      .expect("a registered check run ends the wait");
+    let calls = script.calls.borrow();
+    assert_eq!(calls.len(), 5, "check-runs, status, then both again, then check-runs");
+    assert!(!calls[0].iter().any(|arg| arg.starts_with("If-None-Match")), "the first poll has no ETag to send");
+    assert_eq!(calls[2][3], "If-None-Match: \"checks-1\"", "{:?}", calls[2]);
+    assert_eq!(calls[3][3], "If-None-Match: \"status-1\"", "{:?}", calls[3]);
+  }
+
+  #[tokio::test(start_paused = true)]
+  async fn a_commit_status_registers_the_head_sha_without_a_check_run() {
+    let script = Script::new(vec![
+      json_reply(json!({"total_count": 0}), "\"checks-1\""),
+      json_reply(json!({"total_count": 1}), "\"status-1\""),
+    ]);
+    let report = |_: &str| panic!("no rate limit was hit");
+    await_check_registration(&script.run(), WATCHED_REPO, WATCHED_SHA, Duration::from_secs(30), &report)
+      .await
+      .expect("a commit status ends the wait");
+    assert_eq!(script.calls.borrow().len(), 2);
+  }
+
+  #[tokio::test(start_paused = true)]
+  async fn a_failed_registration_poll_is_an_error_and_waits_for_nothing() {
+    let script = Script::new(vec![server_error()]);
+    let report = |_: &str| panic!("a 500 is not a rate limit");
+    let start = tokio::time::Instant::now();
+    let error = await_check_registration(&script.run(), WATCHED_REPO, WATCHED_SHA, Duration::from_secs(30), &report)
+      .await
+      .unwrap_err();
+    assert!(error.to_string().contains("answered HTTP 500"), "{error:#}");
+    assert_eq!(script.calls.borrow().len(), 1);
+    assert_eq!(start.elapsed(), Duration::ZERO, "a failure does not sleep");
   }
 
   #[test]

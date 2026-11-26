@@ -3,6 +3,7 @@
 pub mod backend;
 pub mod backup;
 pub mod bash_hook;
+pub mod ci_wait;
 pub mod compaction_context;
 pub mod config;
 pub mod delegate;

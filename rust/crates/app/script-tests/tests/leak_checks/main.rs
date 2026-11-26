@@ -313,6 +313,102 @@ fn a_pr_create_refuses_an_existing_claimed_path_and_allows_own_and_absent_claims
   assert_eq!(creates, 2, "{}", run.describe());
 }
 
+// -- github-post.sh pr-create of moved code --
+
+/// A work clone whose topic renames `tools/old_name.sh`. The base names the old path at `docs/index.md` line 3 and at
+/// `tests/fixtures/captured.txt` line 2, a captured reply that keeps its old text.
+fn rename_repo(sandbox: &Sandbox, env: &Env) -> PathBuf {
+  let origin = sandbox.dir("origin.git");
+  let clone = sandbox.dir("clone");
+  git(env, sandbox.root(), &["init", "--bare", "-q", origin.to_str().unwrap()]);
+  git(env, sandbox.root(), &["init", "-q", "-b", "main", clone.to_str().unwrap()]);
+  git(env, &clone, &["remote", "add", "origin", origin.to_str().unwrap()]);
+  std::fs::create_dir_all(clone.join("tools")).unwrap();
+  std::fs::create_dir_all(clone.join("docs")).unwrap();
+  std::fs::create_dir_all(clone.join("tests/fixtures")).unwrap();
+  std::fs::write(clone.join("tools/old_name.sh"), "echo old\n").unwrap();
+  std::fs::write(clone.join("docs/index.md"), "# Index\n\nThe script is tools/old_name.sh here.\n").unwrap();
+  std::fs::write(clone.join("tests/fixtures/captured.txt"), "header\nrun tools/old_name.sh\n").unwrap();
+  git(env, &clone, &["add", "-A"]);
+  git(env, &clone, &["commit", "-q", "-m", "seed commit"]);
+  git(env, &clone, &["push", "-q", "origin", "main"]);
+  git(env, &clone, &["switch", "-c", HEAD_BRANCH]);
+  git(env, &clone, &["mv", "tools/old_name.sh", "tools/new_name.sh"]);
+  git(env, &clone, &["commit", "-q", "-m", "rename the script"]);
+  clone
+}
+
+/// Commits the topic's reference update in `docs/index.md`, the one reference the base names outside recorded data.
+fn point_docs_at_new_name(env: &Env, clone: &Path) {
+  std::fs::write(clone.join("docs/index.md"), "# Index\n\nThe script is tools/new_name.sh here.\n").unwrap();
+  git(env, clone, &["commit", "-q", "-am", "point the docs at the new name"]);
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_create_refuses_a_renamed_path_the_tree_still_names_until_the_reference_moves() {
+  let sandbox = Sandbox::new();
+  let (env, gh_log, _home) = post(&sandbox);
+  let clone = rename_repo(&sandbox, &env);
+  let body = body_file(&sandbox, "body.md", CLEAN_BODY);
+
+  let run = pr_create(&env, &clone, &body);
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("docs/index.md:3"), "{}", run.stderr);
+  assert!(gh_log_lines(&gh_log).is_empty(), "no pull request was created");
+
+  // The base's captured reply also names the old path, so the body names that recorded line as well.
+  point_docs_at_new_name(&env, &clone);
+  let named = body_file(&sandbox, "named.md", &format!("{CLEAN_BODY}Left: tests/fixtures/captured.txt:2\n"));
+  let run = pr_create(&env, &clone, &named);
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(gh_log_lines(&gh_log)[0].contains("pr create"), "{}", gh_log_lines(&gh_log)[0]);
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_create_accepts_a_recorded_line_that_keeps_its_old_name_only_when_the_body_names_it() {
+  let sandbox = Sandbox::new();
+  let (env, gh_log, _home) = post(&sandbox);
+  let clone = rename_repo(&sandbox, &env);
+  point_docs_at_new_name(&env, &clone);
+
+  let unnamed = body_file(&sandbox, "unnamed.md", CLEAN_BODY);
+  let run = pr_create(&env, &clone, &unnamed);
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("tests/fixtures/captured.txt:2"), "{}", run.stderr);
+  assert!(gh_log_lines(&gh_log).is_empty(), "no pull request was created");
+
+  let named = body_file(&sandbox, "named.md", &format!("{CLEAN_BODY}Left: tests/fixtures/captured.txt:2\n"));
+  let run = pr_create(&env, &clone, &named);
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(gh_log_lines(&gh_log)[0].contains("pr create"), "{}", gh_log_lines(&gh_log)[0]);
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_reference_file_that_another_branch_claims_still_blocks_its_update() {
+  let sandbox = Sandbox::new();
+  let (env, gh_log, _home) = post(&sandbox);
+  let clone = rename_repo(&sandbox, &env);
+  point_docs_at_new_name(&env, &clone);
+  let body = body_file(&sandbox, "body.md", &format!("{CLEAN_BODY}Left: tests/fixtures/captured.txt:2\n"));
+
+  write_inflight_list(&env, &[("docs/index.md", OTHER_CLAIMANT)]);
+  let run = pr_create(&env, &clone, &body);
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(
+    run.stderr.lines().any(|line| line.contains("docs/index.md") && line.contains(OTHER_CLAIMANT)),
+    "{}",
+    run.stderr
+  );
+  assert!(gh_log_lines(&gh_log).is_empty(), "no pull request was created");
+
+  write_inflight_list(&env, &[]);
+  let run = pr_create(&env, &clone, &body);
+  assert_eq!(run.code, 0, "{}", run.describe());
+}
+
 // -- github-post.sh pr-create of the code-style direction --
 
 /// The lines of a code-style round's rule file: a heading, a blank line, an indented continuation line, and a line

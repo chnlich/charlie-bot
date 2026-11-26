@@ -708,6 +708,7 @@ impl World {
       "github-post.sh",
       "side-record.sh",
       "code-style-rules.sh",
+      "moved-references.sh",
       "skill-reads.sh",
     ] {
       harness::copy_file(&harness::repo_root().join("dev/improve").join(name), &scripts.join(name));

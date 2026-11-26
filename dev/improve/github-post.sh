@@ -48,6 +48,10 @@
 # not refuse. The pull request's own head branch claims nothing for itself. A refusal names each claimed path with its
 # claimant and sends nothing.
 #
+# pr-create also refuses a diff that deletes or renames a path which the head's tree still names outside recorded
+# data, or names a recorded line that the body does not name as <path>:<line> (dev/improve/moved-references.sh). A
+# refusal names each line and sends nothing. pr-merge does not repeat this check.
+#
 # usage:
 #   github-post.sh pr-create --title <title> --body-file <file> [--evidence-dir <dir>] [--draft] [gh pr create args...]
 #   github-post.sh pr-comment --body-file <file> [--verdict-head <sha>] [gh pr comment args...]
@@ -69,6 +73,7 @@ scanner="$repo_root/dev/check-skills-host-leak.sh"
 source "$repo_root/dev/push-text-lists.sh"
 source "$repo_root/dev/improve/side-record.sh"
 source "$repo_root/dev/improve/code-style-rules.sh"
+source "$repo_root/dev/improve/moved-references.sh"
 
 tmp_dir=$(mktemp -d)
 trap 'rm -rf "$tmp_dir"' EXIT
@@ -305,6 +310,7 @@ case "$subcommand" in
       printf 'PR changes a path that live work claims; nothing was sent.\n' >&2
       exit 2
     }
+    moved_references_check "$tmp_dir" "$pr_head" "$body_file" || exit 2
     without_evidence_dir
     gh pr create "${gh_args[@]}"
     ;;

@@ -71,7 +71,7 @@ impl<M> ThreadRead<'_, M> {
       (None, Some(summon)) => summon,
       (None, None) => self.messages.len().saturating_sub(self.limit),
     };
-    let last = self.messages.len().min(first + self.limit);
+    let last = first + self.limit.min(self.messages.len() - first);
     let unread_in_window = self.messages[first..last].iter().filter(|message| unread(message)).count();
     (first, last, self.unread_ids.len() - unread_in_window)
   }
@@ -196,5 +196,10 @@ mod tests {
   #[test]
   fn a_limit_past_the_listing_holds_every_message() {
     assert_eq!(bounds(&["a", "b"], &["a"], &[], 10), (0, 2, 0));
+  }
+
+  #[test]
+  fn the_largest_limit_still_holds_the_pending_summon_and_unread() {
+    assert_eq!(bounds(&["a", "b", "c"], &["c"], &["b"], usize::MAX), (1, 3, 0));
   }
 }

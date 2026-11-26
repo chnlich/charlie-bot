@@ -6,6 +6,7 @@ mod backend_retry;
 pub mod cold_read;
 pub mod completion;
 pub mod dispatch;
+mod entry;
 pub mod execution;
 pub mod git;
 pub mod handoff;
@@ -35,6 +36,8 @@ pub mod verify_trailer;
 pub mod web_screenshots;
 pub mod worker;
 
+pub use entry::register;
+
 #[cfg(test)]
 mod test_fixtures;
 
@@ -42,14 +45,3 @@ mod test_fixtures;
 /// dev-dependencies turn the feature on, so a production build carries none of the fake backends or scripts.
 #[cfg(feature = "test-fixtures")]
 pub mod test_support;
-
-use charliebot_registry::{Registry, RegistryError};
-
-/// Register task orchestration routes and the execution startup step.
-pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
-  registry.router_patterns(routes::routes, routes::ROUTE_PATTERNS)?;
-  registry.pre_recovery_step("task_execution", execution::pre_recovery_step)?;
-  registry.recovery_step("task_recovery", recovery::recovery_step)?;
-  registry.worktree_removal(git::remove_worktree_hook)?;
-  registry.let_go_step("task_execution", recovery::let_go_step)
-}

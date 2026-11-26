@@ -16,7 +16,7 @@ Rules that hold for every hook kind:
 
 ## Composition root
 
-`rust/crates/app/packages/src/lib.rs` owns the package list, one entry per package. The list order is the server's
+`rust/crates/app/packages/src/entry.rs` owns the package list, one entry per package. The list order is the server's
 registration order:
 
 ```rust
@@ -27,7 +27,7 @@ const PACKAGES: &[(&str, RegisterFn)] = &[
 ];
 ```
 
-The list is crate-private; `registry()` is the crate's only `pub` item.
+The list is private to its module; `registry()` and `seed_default_cron_tasks()` are the crate's `pub` items.
 
 Before `PACKAGES`, `RUNTIME` registers hooks owned by the runtime itself. Its first entry is
 `("runtime.agents", charliebot_agents::register_runtime)`. It installs `agent_environment` and then

@@ -134,7 +134,7 @@ roots copy.
   `static` declared inside `thread_local!` included.
   *Purpose:* a public static lets any module change shared state without the owning module's checks, so no reader can
   tell which code changed it, and the access function gives those checks one place to live.
-- **The PACKAGES list alone decides registration order.** The `PACKAGES` list in `rust/crates/app/packages/src/lib.rs`
+- **The PACKAGES list alone decides registration order.** The `PACKAGES` list in `rust/crates/app/packages/src/entry.rs`
   sets the order in which packages register; `RUNTIME` in the same file registers before it.
   *Purpose:* routes, page parts, metadata keys, template paths and lifespan steps follow registration order
   (`docs/registry.md` in the repository root), so a second list that set that order would change the server's output

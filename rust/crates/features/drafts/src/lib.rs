@@ -7,20 +7,12 @@
 
 mod api;
 mod card;
+mod entry;
 mod lock;
 mod log;
 mod turn_contribution;
 
+pub use entry::register;
+
 #[cfg(test)]
 mod test_support;
-
-use std::sync::Arc;
-
-use charliebot_registry::{Registry, RegistryError};
-use turn_contribution::DraftsTurnContribution;
-
-/// `register`: the two draft routes and the three chat renderers.
-pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
-  registry.router_patterns(api::routes, api::ROUTE_PATTERNS)?;
-  registry.turn_contribution("drafts", Arc::new(DraftsTurnContribution))
-}

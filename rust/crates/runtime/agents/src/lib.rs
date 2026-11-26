@@ -8,6 +8,7 @@ pub mod backend_types;
 pub mod call_resolve;
 pub mod cli_base;
 pub mod cli_host;
+mod entry;
 pub mod event_builders;
 pub mod fake_probe;
 pub mod gh_wrapper;
@@ -22,16 +23,6 @@ pub mod ssh_guard;
 pub mod temporary_unavailable;
 pub mod transport;
 
-use charliebot_registry::{Registry, RegistryError};
-
 pub use backend_types::build_backend;
+pub use entry::register_runtime;
 pub use one_shot::{agent_one_shot_text, one_shot_text};
-
-/// Register session cgroup and backend pool startup steps before package registration, and the local work guard's
-/// variables for every agent child process.
-pub fn register_runtime(registry: &mut Registry) -> Result<(), RegistryError> {
-  registry.pre_recovery_step("session_cgroups", agent_environment::session_cgroup_step)?;
-  registry.pre_recovery_step("backend_pool", backend_pool::pre_recovery_step)?;
-  registry.child_env("local_work_guard", local_work_guard::child_env)?;
-  model_pool::register(registry)
-}

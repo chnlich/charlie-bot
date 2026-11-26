@@ -6,6 +6,7 @@
 mod api;
 pub mod backfill;
 pub mod channel_service;
+mod entry;
 pub mod listener_connection;
 pub mod reply_event;
 mod sidebar;
@@ -15,15 +16,7 @@ pub mod test_support;
 pub mod thread_entry;
 pub mod thread_read;
 
-use std::sync::Arc;
-
-use charliebot_registry::{Registry, RegistryError};
-
-/// `register`: the router, then the sidebar contribution.
-pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
-  registry.router(api::routes, api::matches)?;
-  registry.sidebar_contribution("chat_threads", Arc::new(sidebar::ChatThreadsSidebar))
-}
+pub use entry::register;
 
 #[cfg(test)]
 mod tests {

@@ -831,9 +831,15 @@ impl ServeWorld {
 
   /// A synthetic home of `sessions` sessions, generated with `mock-home generate` under the sandbox, and its path.
   fn seed_home(&self, name: &str, sessions: &str) -> PathBuf {
+    self.seed_home_of_shape(name, sessions, "default")
+  }
+
+  /// A synthetic home of `sessions` sessions of `shape`, generated with `mock-home generate` under the sandbox, and its
+  /// path. Only the default shape carries a cron fixture.
+  fn seed_home_of_shape(&self, name: &str, sessions: &str, shape: &str) -> PathBuf {
     let seed = self.sandbox.dir(name);
     let mut command = harness::command(mock_home(), &self.env);
-    command.arg("generate").arg(&seed).args(["--sessions", sessions, "--seed", "3"]);
+    command.arg("generate").arg(&seed).args(["--sessions", sessions, "--seed", "3", "--shape", shape]);
     let run = harness::run(&mut command);
     assert_eq!(run.code, 0, "{}", run.describe());
     seed
@@ -1282,6 +1288,35 @@ fn test_trial_serve_seeded_home_passes_the_mock_home_check() {
   assert_eq!(run.code, 0, "{}", run.describe());
   assert!(run.stdout.contains("check passed: 30 sessions"), "{}", run.describe());
   assert_eq!(fs::read_dir(tree_root).expect("the tree root").count(), 0, "{}", run.describe());
+}
+
+/// A serve trial on a seed with no cron fixture (the bench's view shape) binds each seeded default to the seed's first
+/// session, so the trial starts and the scheduler has no session to create. Without the fallback it fails at CronBound,
+/// since the seed manifest lists no fixture task to bind.
+#[test]
+#[ignore = "integration"]
+fn test_trial_serve_view_seed_binds_the_seeded_defaults_to_its_first_session() {
+  let world = ServeWorld::new();
+  let seed = world.seed_home_of_shape("seed", "20", "view");
+  let tree_root = world.tree_root();
+  let copied = world.sandbox.dir("trial-cron");
+  let copied_text = copied.display().to_string();
+
+  let run = world.serve(
+    tree_root,
+    &seed,
+    &["sh", "-c", "cp \"$CHARLIEBOT_HOME\"/config.d/cron.d/*.yaml \"$1\"", "sh", &copied_text],
+  );
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  let manifest: serde_json::Value =
+    serde_json::from_slice(&fs::read(seed.join("manifest.json")).expect("the manifest")).expect("the manifest JSON");
+  assert!(manifest.get("cron_tasks").is_none(), "a view seed's manifest lists no cron fixture: {manifest}");
+  let bound = manifest["sessions"][0]["id"].as_str().expect("the seed's first session");
+  for task in ["memory-curator", "storage-cool", "proactive-agent"] {
+    let text = fs::read_to_string(copied.join(format!("{task}.yaml"))).expect("a default task file");
+    assert!(text.lines().any(|line| line == format!("session_id: {bound}")), "{task} binds the seed session: {text}");
+  }
 }
 
 /// The command that reads the chat page's status. `/?session=` is the chat shell: it renders without redirecting to a

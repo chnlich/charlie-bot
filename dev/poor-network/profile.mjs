@@ -118,13 +118,6 @@ export const OTHER_VIEWS = Object.freeze({
 // task-tree nodes, so the server takes a message.
 export const BENCH_SESSIONS = 14;
 
-// The repo's default cron tasks (configs/cron.default.yaml: memory-curator, storage-cool, proactive-agent). Since commit
-// 0cae6f846 the server seeds them at startup, and the scheduler binds each to a root session at its first tick, 60 s
-// after start, so every trial home lists three sessions that the mock home does not hold. A live home holds these
-// three sessions in its default view already, so VIEW.rows counts them: the mock home holds VIEW.rows less
-// BENCH_SESSIONS less these, and measureView waits for the first tick before it counts.
-export const DEFAULT_CRON_ROWS = 3;
-
 // The live readback of a release's default view, from one visible tab for 4.02 h: status polls about 20 per minute at
 // 5,767 bytes received each, and full-list fetches, 174 at 113,791 bytes each. Together they receive about 206 KB a
 // minute. The background scenario's before-numbers are compared with it as a second calibration check.

@@ -18,7 +18,9 @@ use charliebot_store::metadata::BASE_BRANCH_FIELD;
 use serde_json::{Map, Value, json};
 
 use crate::plan_verbs::{self, Amendment, SessionLocks, VerbError};
-use crate::plans::{self, PLAN_AMEND_TRIGGER_DEFAULT, PLAN_AMEND_TRIGGERS, PLAN_CLOSE_MODES, PLANS_FILE};
+use crate::plans::{
+  self, PLAN_AMEND_TRIGGER_DEFAULT, PLAN_AMEND_TRIGGERS, PLAN_CLOSE_MODES, PLANS_FILE, PlanCloseMode,
+};
 
 /// The state of the plan routes: the feature context, and the session locks that the verbs share.
 #[derive(Clone)]
@@ -261,7 +263,7 @@ impl ApproveRequest {
 struct CloseRequest {
   session_id: String,
   plan_id: Value,
-  close_as: String,
+  close_as: PlanCloseMode,
 }
 
 impl CloseRequest {
@@ -271,7 +273,9 @@ impl CloseRequest {
     };
     let session_id = text_field(&fields, SESSION_ID);
     let plan_id = fields.remove("plan_id").unwrap_or_else(|| unreachable!("a validated plan_id is present"));
-    Ok(Self { session_id, plan_id, close_as: text_field(&fields, "close_as") })
+    let close_as = PlanCloseMode::from_spelling(&text_field(&fields, "close_as"))
+      .unwrap_or_else(|| unreachable!("the close_as literal admits only the close modes"));
+    Ok(Self { session_id, plan_id, close_as })
   }
 }
 

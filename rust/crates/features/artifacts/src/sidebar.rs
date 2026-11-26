@@ -14,7 +14,7 @@ use charliebot_store::sidebar_state;
 use serde_json::{Map, Value};
 
 use crate::plan_paths;
-use crate::plans::{self, AWAITING_APPROVAL_STATE, LoadFailure, PLANS_FILE};
+use crate::plans::{self, LoadFailure, PLANS_FILE, PlanState};
 
 /// The artifacts package's sidebar contribution: the pending-approval flag, and the registry a fork copies.
 pub(crate) struct ArtifactsSidebar;
@@ -47,7 +47,7 @@ fn pending_plan_approval(plans_path: &Path, session_id: &str) -> bool {
   for entry in &read.errors {
     tracing::warn!(session_id, error = %entry.error, "plan_registry_read_failed");
   }
-  read.plans.iter().any(|plan| plan.get("state").and_then(Value::as_str) == Some(AWAITING_APPROVAL_STATE))
+  read.plans.iter().any(|plan| plan.get("state").and_then(Value::as_str) == Some(PlanState::AwaitingApproval.as_str()))
 }
 
 /// The copy of the parent's `plans.json` and every artifact it references into the child session.

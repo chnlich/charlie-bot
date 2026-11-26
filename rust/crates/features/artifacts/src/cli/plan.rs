@@ -125,8 +125,8 @@ struct CloseArgs {
   #[arg(long)]
   plan: i64,
   /// How the lineage ends
-  #[arg(long = "as", value_parser = plans::PLAN_CLOSE_MODES)]
-  close_as: String,
+  #[arg(long = "as")]
+  close_as: plans::PlanCloseMode,
 }
 
 #[derive(Args)]
@@ -167,26 +167,34 @@ pub fn main(args: &[OsString], host: &LazyHost) -> Result<(), CliExit> {
     Verb::Diff(args) => json_out::print_result(&build_diff(&session_id, &args, host)?),
     Verb::Present(args) => {
       let (title, file) = (args.title.clone(), args.file.clone());
-      register(&session_id, "present", present_payload(&session_id, &args), move |plans| {
-        readback_present(plans, &title, &file)
-      })?;
+      register(
+        &session_id,
+        api::PLAN_PRESENT_PATH,
+        Some(PRESENT_REMINDER),
+        present_payload(&session_id, &args),
+        move |plans| readback_present(plans, &title, &file),
+      )?;
     }
     Verb::Amend(args) => {
       let (plan, file) = (args.plan, args.file.clone());
-      register(&session_id, "amend", amend_payload(&session_id, &args), move |plans| {
-        readback_amend(plans, plan, &file)
-      })?;
+      register(
+        &session_id,
+        api::PLAN_AMEND_PATH,
+        Some(AMEND_REMINDER),
+        amend_payload(&session_id, &args),
+        move |plans| readback_amend(plans, plan, &file),
+      )?;
     }
     Verb::Approve(args) => {
       let plan = args.plan;
-      register(&session_id, "approve", approve_payload(&session_id, &args), move |plans| {
+      register(&session_id, api::PLAN_APPROVE_PATH, None, approve_payload(&session_id, &args), move |plans| {
         readback_approve(plans, plan)
       })?;
     }
     Verb::Close(args) => {
-      let (plan, close_as) = (args.plan, args.close_as.clone());
-      register(&session_id, "close", close_payload(&session_id, &args), move |plans| {
-        readback_close(plans, plan, &close_as)
+      let (plan, close_as) = (args.plan, args.close_as);
+      register(&session_id, api::PLAN_CLOSE_PATH, None, close_payload(&session_id, &args), move |plans| {
+        readback_close(plans, plan, close_as)
       })?;
     }
   }
@@ -231,27 +239,21 @@ fn approve_payload(session_id: &str, args: &ApproveArgs) -> Value {
 }
 
 fn close_payload(session_id: &str, args: &CloseArgs) -> Value {
-  json!({ (SESSION_ID): session_id, "plan_id": args.plan, "close_as": args.close_as })
+  json!({ (SESSION_ID): session_id, "plan_id": args.plan, "close_as": args.close_as.as_str() })
 }
 
-/// The post of one registering verb, answering a sent-but-lost call from the session's own registry and adding the
-/// verb's reminder when the server's response carries none.
+/// The post of one registering verb to its `path`, answering a sent-but-lost call from the session's own registry and
+/// adding the verb's `reminder` when the server's response carries none.
 fn register(
   session_id: &str,
-  verb: &str,
+  path: &str,
+  reminder: Option<&str>,
   payload: Value,
   readback: impl FnOnce(&[Value]) -> Option<Value> + 'static,
 ) -> Result<(), CliExit> {
-  let endpoint = format!("/api/internal/plan/{verb}");
   let session = session_id.to_string();
   let readback = move || readback_plan(&session, readback);
-  let mut result = client::post(&endpoint, payload, Some(Box::new(readback)), &[])?;
-  let reminder = match verb {
-    "present" => Some(PRESENT_REMINDER),
-    "amend" => Some(AMEND_REMINDER),
-    "approve" | "close" => None,
-    _ => unreachable!("register takes the verbs present, amend, approve and close, not {verb}"),
-  };
+  let mut result = client::post(path, payload, Some(Box::new(readback)), &[])?;
   if let Some(reminder) = reminder
     && let Value::Object(members) = &mut result
     && !members.contains_key("reminder")
@@ -334,10 +336,10 @@ fn readback_approve(plans: &[Value], plan_id: Option<i64>) -> Option<Value> {
   }
 }
 
-fn readback_close(plans: &[Value], plan_id: i64, close_as: &str) -> Option<Value> {
+fn readback_close(plans: &[Value], plan_id: i64, close_as: plans::PlanCloseMode) -> Option<Value> {
   plans.iter().find_map(|plan| {
     let closed_as = plan.get("closed").and_then(|closed| closed.get("as")).and_then(Value::as_str);
-    (plan.get("id").and_then(Value::as_i64) == Some(plan_id) && closed_as == Some(close_as))
+    (plan.get("id").and_then(Value::as_i64) == Some(plan_id) && closed_as == Some(close_as.as_str()))
       .then(|| json!({ "plan": plan["id"], "state": plan["state"] }))
   })
 }

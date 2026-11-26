@@ -12,7 +12,6 @@ use std::time::{Duration, Instant};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::fsutil;
 use charliebot_core::metadata_slot::{METADATA_FILE_NAME, MetadataFile, MetadataSlot};
-use charliebot_core::proc_identity::PID_START_FIELD;
 use charliebot_core::timefmt;
 use lru::LruCache;
 use serde_json::{Map, Value};
@@ -27,16 +26,11 @@ use crate::event_types::SharedChatEvent;
 use crate::hooks::{EventRenderer, RuntimeEventHooks};
 use crate::layout;
 use crate::metadata::{
-  ARCHIVE_OFFSET, BASE_BRANCH_FIELD, CC_SESSION_ID_FIELD, CC_SESSION_STARTED_AT, CREATED_AT_FIELD, EXIT_CODE_FIELD,
-  HAS_PENDING_TRIGGER, HAS_RUNNING_TASKS, HAS_UNREAD, KEEP_WORKTREE_FIELD, MetadataReadError, NATIVE_BACKEND,
-  NATIVE_MODEL, NEXT_TRIGGER_AT, PARENT_SESSION_ID, PENDING_TRIGGER_COUNT, REPO_PATH_FIELD, ROUND_RATINGS, RUN_BACKEND,
-  RoundRating, SCHEDULE_ALLOW_FAILURE, SCHEDULE_CRON, SCHEDULE_ENABLED, SCHEDULE_NEXT_RUN, SCHEDULE_TIMEZONE,
-  SCHEMA_VERSION_FIELD, SUCCESSOR_SESSION_ID, SessionMetadata, SessionStatus, TASK_PARENT_ID_FIELD, TASK_TYPE_FIELD,
-  THINKING_SINCE, UPDATED_AT_FIELD, UtcDateTime, WORK_STATE,
+  HAS_UNREAD, MetadataReadError, RoundRating, SESSION_DECLARED_FIELDS, SessionMetadata, SessionStatus,
+  THREAD_DECLARED_FIELDS, UtcDateTime,
 };
 use crate::projection::MessageProjection;
 use crate::run_facts::RunFactsMemo;
-use crate::sidebar_state::HAS_PENDING_PLAN_APPROVAL;
 use crate::streaming::StreamingManager;
 #[cfg(test)]
 use crate::task_tree_state::IdentityHook;
@@ -1347,69 +1341,8 @@ fn validate_slots(slots: &[MetadataSlot]) -> StoreResult<()> {
     }
     owners.push((slot.owner, slot.on));
     let declared: &[&str] = match slot.on {
-      MetadataFile::Session => &[
-        "id",
-        "name",
-        "status",
-        HAS_UNREAD,
-        HAS_RUNNING_TASKS,
-        WORK_STATE,
-        HAS_PENDING_TRIGGER,
-        PENDING_TRIGGER_COUNT,
-        NEXT_TRIGGER_AT,
-        HAS_PENDING_PLAN_APPROVAL,
-        "starred",
-        THINKING_SINCE,
-        RUN_BACKEND,
-        CREATED_AT_FIELD,
-        UPDATED_AT_FIELD,
-        CC_SESSION_ID_FIELD,
-        CC_SESSION_STARTED_AT,
-        "backend",
-        SCHEDULE_CRON,
-        SCHEDULE_ENABLED,
-        SCHEDULE_NEXT_RUN,
-        SCHEDULE_TIMEZONE,
-        SCHEDULE_ALLOW_FAILURE,
-        PARENT_SESSION_ID,
-        SUCCESSOR_SESSION_ID,
-        SCHEMA_VERSION_FIELD,
-        TASK_PARENT_ID_FIELD,
-        "profile",
-        "task",
-        "created_by_event",
-        "origin_ref",
-        "subtree_prompt_ref",
-        "node_prompt_ref",
-        "native_prompt_hash",
-        NATIVE_BACKEND,
-        NATIVE_MODEL,
-        ROUND_RATINGS,
-        "group",
-        ARCHIVE_OFFSET,
-      ],
-      MetadataFile::Thread => &[
-        "id",
-        "session_id",
-        "description",
-        "status",
-        "created_at",
-        "started_at",
-        "completed_at",
-        "pid",
-        PID_START_FIELD,
-        EXIT_CODE_FIELD,
-        "branch_name",
-        BASE_BRANCH_FIELD,
-        REPO_PATH_FIELD,
-        "worktree_path",
-        "context",
-        "backend",
-        "model",
-        KEEP_WORKTREE_FIELD,
-        "tried_backends",
-        TASK_TYPE_FIELD,
-      ],
+      MetadataFile::Session => SESSION_DECLARED_FIELDS,
+      MetadataFile::Thread => THREAD_DECLARED_FIELDS,
     };
     if let Some(after) = slot.after
       && !declared.contains(&after)

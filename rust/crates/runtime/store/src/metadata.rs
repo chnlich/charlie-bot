@@ -7,6 +7,7 @@ use std::path::Path;
 use anyhow::Context as _;
 use charliebot_core::json_loads;
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot};
+use charliebot_core::proc_identity::PID_START_FIELD;
 use charliebot_core::text_repr::{self, JsonStyle};
 use serde::de::{IgnoredAny, MapAccess, Visitor};
 use serde::ser::SerializeMap;
@@ -537,6 +538,75 @@ pub struct ThreadMetadata {
   pub extra: Map<String, Value>,
 }
 
+/// The top-level keys that `SessionMetadata::to_json_string` writes, transient ones included, in the order it writes
+/// them. A slot field may not take one of these names: `validate_slots` in `store.rs` refuses it when the store opens.
+pub const SESSION_DECLARED_FIELDS: &[&str] = &[
+  "id",
+  "name",
+  STATUS_FIELD,
+  HAS_UNREAD,
+  HAS_RUNNING_TASKS,
+  WORK_STATE,
+  HAS_PENDING_TRIGGER,
+  PENDING_TRIGGER_COUNT,
+  NEXT_TRIGGER_AT,
+  "has_pending_plan_approval",
+  "starred",
+  THINKING_SINCE,
+  RUN_BACKEND,
+  CREATED_AT_FIELD,
+  UPDATED_AT_FIELD,
+  CC_SESSION_ID_FIELD,
+  CC_SESSION_STARTED_AT,
+  BACKEND_FIELD,
+  SCHEDULE_CRON,
+  SCHEDULE_ENABLED,
+  SCHEDULE_NEXT_RUN,
+  SCHEDULE_TIMEZONE,
+  SCHEDULE_ALLOW_FAILURE,
+  PARENT_SESSION_ID,
+  SUCCESSOR_SESSION_ID,
+  SCHEMA_VERSION_FIELD,
+  TASK_PARENT_ID_FIELD,
+  "profile",
+  "task",
+  "created_by_event",
+  "origin_ref",
+  "subtree_prompt_ref",
+  "node_prompt_ref",
+  "native_prompt_hash",
+  NATIVE_BACKEND,
+  NATIVE_MODEL,
+  ROUND_RATINGS,
+  "group",
+  ARCHIVE_OFFSET,
+];
+
+/// The top-level keys of a thread metadata object, in the order `ThreadMetadata` declares them. A slot field may not
+/// take one of these names.
+pub const THREAD_DECLARED_FIELDS: &[&str] = &[
+  "id",
+  "session_id",
+  "description",
+  STATUS_FIELD,
+  "created_at",
+  "started_at",
+  "completed_at",
+  "pid",
+  PID_START_FIELD,
+  EXIT_CODE_FIELD,
+  "branch_name",
+  BASE_BRANCH_FIELD,
+  REPO_PATH_FIELD,
+  "worktree_path",
+  "context",
+  BACKEND_FIELD,
+  "model",
+  KEEP_WORKTREE_FIELD,
+  "tried_backends",
+  TASK_TYPE_FIELD,
+];
+
 /// Session metadata.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct SessionMetadata {
@@ -981,6 +1051,27 @@ mod tests {
     assert_eq!(&keys[group + 1..group + 3], &["probe_note", "probe_count"]);
     assert_eq!(keys.last(), Some(&"left_by_deleted_package"));
     assert_eq!(value["probe_count"], 0);
+  }
+
+  #[test]
+  fn declared_field_lists_name_the_keys_their_writers_produce() {
+    let session = SessionMetadata::new("synthetic-id", "session", TaskProfile::Manager);
+    let session_keys: Value = serde_json::from_str(&session.to_json_string(&[], false)).unwrap();
+    let thread: ThreadMetadata =
+      serde_json::from_str(r#"{"session_id":"synthetic-session","description":"synthetic"}"#).unwrap();
+    let thread_keys = serde_json::to_value(&thread).unwrap();
+    let sorted_keys = |value: &Value| -> Vec<String> {
+      let mut keys: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
+      keys.sort();
+      keys
+    };
+    let sorted_names = |declared: &[&str]| -> Vec<String> {
+      let mut names: Vec<String> = declared.iter().map(|name| name.to_string()).collect();
+      names.sort();
+      names
+    };
+    assert_eq!(sorted_keys(&session_keys), sorted_names(SESSION_DECLARED_FIELDS));
+    assert_eq!(sorted_keys(&thread_keys), sorted_names(THREAD_DECLARED_FIELDS));
   }
 
   #[test]

@@ -339,9 +339,8 @@ impl CronScheduler {
 
   /// The reason a due fire of `task` does not run, or `None` when it runs. Before this check, `maybe_run` checks the
   /// backend of the bound session for a task that takes one (a handler does not), and fails such a fire rather than
-  /// skipping it. An archived bound session skips it next, since its inputs are no longer read (S2 b). Then the task's
-  /// own work holds it: a prompt task's trigger input and its round (S2 a). A host that awaits login approval holds it
-  /// last (S2 c).
+  /// skipping it. An archived bound session skips it next, since its inputs are no longer read. Then the task's own
+  /// work holds it: a prompt task's trigger input and its round. A host that awaits login approval holds it last.
   async fn skip_reason(
     &self,
     task: &ScheduledTaskConfig,
@@ -510,8 +509,8 @@ impl CronScheduler {
     Ok(TaskRunResult { session_id: session.id, thread_id: None })
   }
 
-  /// A prompt task's fire: its trigger input goes to the bound session, which decides whether and when the round runs
-  /// (S1). A template that cannot be read posts an error to the session and records a skip, and no worker starts.
+  /// A prompt task's fire: its trigger input goes to the bound session, which decides whether and when the round runs.
+  /// A template that cannot be read posts an error to the session and records a skip, and no worker starts.
   async fn admit_prompt_fire(
     &self,
     task: &ScheduledTaskConfig,

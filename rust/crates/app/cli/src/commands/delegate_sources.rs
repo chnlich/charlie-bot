@@ -3,7 +3,7 @@ use std::process::Command;
 
 use charliebot_cli_common::exit::CliExit;
 
-use super::{is_heading, is_next_heading};
+use super::task_spec_headings::{is_heading, is_next_heading};
 
 struct Repository {
   root: PathBuf,

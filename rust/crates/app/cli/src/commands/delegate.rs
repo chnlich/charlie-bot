@@ -24,6 +24,10 @@ use serde_json::{Map, Value, json};
 
 #[path = "delegate_sources.rs"]
 mod delegate_sources;
+#[path = "task_spec_headings.rs"]
+mod task_spec_headings;
+
+use task_spec_headings::{is_heading, is_next_heading};
 
 const DELEGATE_EPILOG: &str = r#"Task spec (--task-spec-file), six sections:
 
@@ -541,14 +545,6 @@ fn session_events(home: &Path, session_id: &str) -> Result<Option<Vec<Value>>, C
     }
   }
   Ok(Some(events))
-}
-
-fn is_heading(line: &str, heading: &str) -> bool {
-  line.strip_prefix("## ").is_some_and(|name| name.trim_end_matches([' ', '\t']) == heading)
-}
-
-fn is_next_heading(line: &&str) -> bool {
-  line.starts_with("## ") && line.len() > 3
 }
 
 #[cfg(test)]

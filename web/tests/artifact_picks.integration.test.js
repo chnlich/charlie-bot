@@ -8,10 +8,11 @@
 // - the page's own parser reads the shared fixture (rust/.../tests/data/plan_template_forks.json),
 //   the browser side of the fixture that artifact_check.rs asserts on the Rust side;
 // - each option is a button, and no text box stands beside the options;
-// - two picks and one comment share one tray and one Send; the Send posts one message after the undo window, to the
-//   session a comment on the page reaches (the session named in the address, or the session the app shows inside the
-//   plan panel);
-// - Undo inside the window posts nothing.
+// - two picks and one comment share one tray and one Send; the Send posts one message at once, to the session a
+//   comment on the page reaches (the session named in the address, or the session the app shows inside the plan
+//   panel);
+// - the bottom-sheet tray folds to one line and expands on tap; with every question picked neither the no-pick line
+//   nor Rest as recommended shows, and with nothing pending no panel covers the plan.
 //
 // - with one pick made and one pending comment open, no floating control of the page layer (the tray, the shortcut
 //   buttons, the anchored comment cards, the comment trigger and the composer) covers a content box at any scroll
@@ -54,8 +55,8 @@ const PAGE_READY = 'typeof window.__cbcPageForks === "function" && !!document.qu
 const PANEL_READY = '(() => { const frame = document.getElementById("panel"); ' +
   'const doc = frame && frame.contentDocument; return !!doc && !!doc.defaultView && ' +
   'typeof doc.defaultView.__cbcPageForks === "function" && !!doc.querySelector(".__cbc-tray"); })()';
-// The undo window is five seconds; the wait leaves room for the post.
-const SEND_WAIT_MS = 9000;
+// A send posts at once; the wait leaves room for the request and its render.
+const SEND_WAIT_MS = 1500;
 // The tray's list is rebuilt on the next animation frame, so a count read straight after a click waits for one.
 const FRAME_WAIT_MS = 100;
 // The page's open questions that have option buttons, in page order.
@@ -154,7 +155,7 @@ async function openPage(cdp, url, viewport, ready) {
   await page.send('Runtime.enable');
   if (viewport) {
     await page.send('Emulation.setDeviceMetricsOverride',
-      {width: viewport.width, height: viewport.height, deviceScaleFactor: 1, mobile: false});
+      {width: viewport.width, height: viewport.height, deviceScaleFactor: viewport.scale || 1, mobile: false});
   }
   await page.send('Page.navigate', {url});
   const deadline = Date.now() + 15000;
@@ -325,21 +326,6 @@ const PICK_AND_OVERSIZED_COMMENT = `(() => {
   document.querySelector('.__cbc-add').click();
 })()`;
 
-async function saveKeepaliveLimitScreenshot(page, width, height) {
-  const directory = process.env.CHARLIEBOT_KEEPALIVE_LIMIT_SHOTS_DIR;
-  if (!directory) return;
-  // Put the page and the rail at their lower edges so page text clears the tray and lower rail controls are visible.
-  await page.evaluate('document.body.scrollTo(0, document.body.scrollHeight)');
-  await page.evaluate('(() => { const dock = document.querySelector(".__cbc-dock"); ' +
-    'dock.scrollTop = dock.scrollHeight; })()');
-  await sleep(FRAME_WAIT_MS);
-  const {data} = await page.send('Page.captureScreenshot', {format: 'png'});
-  const outputDirectory = path.resolve(directory);
-  fs.mkdirSync(outputDirectory, {recursive: true});
-  fs.writeFileSync(path.join(outputDirectory, `keepalive_limit_error_${width}x${height}.png`),
-    Buffer.from(data, 'base64'));
-}
-
 test('two picks and a comment share one tray and one Send, which posts one message to the comment target', async () => {
   await withTwoQuestionPage(async (page, sent) => {
     const fixture = JSON.parse(fs.readFileSync(FIXTURE_PATH, 'utf8'));
@@ -373,67 +359,19 @@ const TRAY_STATUS_IS_ERROR = 'document.querySelector(".__cbc-tray-status")' +
 const TRAY_ITEMS = 'document.querySelectorAll(".__cbc-tray-item").length';
 const SEND_DISABLED = 'document.querySelector(".__cbc-tray-send").disabled';
 const CLICK_SEND = 'document.querySelector(".__cbc-tray-send").click()';
-const CLICK_UNDO = 'Array.from(document.querySelectorAll(".__cbc-tray-action"))' +
-  '.find((button) => button.textContent.includes("Undo")).click()';
-
-test('Undo inside the undo window posts nothing, keeps the picks and the comment pending, and says so in the tray',
-  async () => {
-    await withTwoQuestionPage(async (page, sent) => {
-      await page.evaluate(TWO_PICKS_AND_A_COMMENT);
-      await page.evaluate(CLICK_SEND);
-      await page.evaluate(CLICK_UNDO);
-      await sleep(SEND_WAIT_MS);
-
-      assert.deepEqual(sent, []);
-      assert.equal(await page.evaluate(TRAY_ITEMS), 3);
-      assert.equal(await page.evaluate(TRAY_STATUS_SHOWN), true, 'the tray says the send was undone');
-      assert.equal(await page.evaluate(TRAY_STATUS_IS_ERROR), false);
-    });
-  });
-
-// The fetch wrapper records what each post carried, so a check tells a leave flush (keepalive) from a window send.
-// With `rejectKeepalive`, every keepalive post fails the way the browser fails one over its quota.
-const patchFetch = (rejectKeepalive) => `(() => { const real = window.fetch; window.__cbcFetchCalls = [];
-  window.fetch = function(url, options) {
-    const keepalive = Boolean(options && options.keepalive);
-    window.__cbcFetchCalls.push({url: String(url), keepalive});
-    if (keepalive && ${rejectKeepalive}) return Promise.reject(new TypeError('keepalive quota exhausted'));
-    return real(url, options);
-  }; })()`;
-const PATCH_FETCH = patchFetch(false);
-const REJECT_KEEPALIVE_FETCH = patchFetch(true);
-// Only the message posts: the tray also fetches the target session's name over the same global.
-const FETCH_CALLS = 'window.__cbcFetchCalls.filter((call) => call.url.endsWith("/message"))';
 const ONE_PICK = `${PICKABLE_FORKS}[0].querySelector(".__cbc-pick").click()`;
 
-test('leaving the page flushes the pending send at once, as one keepalive post', async () => {
+test('one Send click posts once at once, and a later pagehide adds no second post', async () => {
   await withTwoQuestionPage(async (page, sent) => {
-    await page.evaluate(PATCH_FETCH);
-    await page.evaluate(ONE_PICK);
+    await page.evaluate(TWO_PICKS_AND_A_COMMENT);
     await sleep(FRAME_WAIT_MS);
     await page.evaluate(CLICK_SEND);
+    // No five-second window: the request leaves the page immediately.
+    await sleep(300);
+    assert.equal(sent.length, 1, 'the click posts at once, with no timer between click and POST');
     await page.evaluate('window.dispatchEvent(new PageTransitionEvent("pagehide"))');
-    await sleep(1500);
-
-    assert.equal(sent.length, 1, 'the leave flushes the message instead of cancelling it');
-    assert.equal(sent[0].session, VIEWER, 'the message goes to the comment target');
-    assert.deepEqual(await page.evaluate(FETCH_CALLS).then((calls) => calls.map((call) => call.keepalive)), [true],
-      'one post, keepalive, so it outlives the page');
-  });
-});
-
-test('a session switch flushes the pending send at once, as one keepalive post', async () => {
-  await withTwoQuestionPage(async (page, sent) => {
-    await page.evaluate(PATCH_FETCH);
-    await page.evaluate(ONE_PICK);
-    await sleep(FRAME_WAIT_MS);
-    await page.evaluate(CLICK_SEND);
-    await page.evaluate('document.dispatchEvent(new Event("charliebot:session-view-teardown"))');
-    await sleep(1500);
-
-    assert.equal(sent.length, 1, 'the teardown flushes the message instead of cancelling it');
-    assert.deepEqual(await page.evaluate(FETCH_CALLS).then((calls) => calls.map((call) => call.keepalive)), [true],
-      'one post, keepalive');
+    await sleep(500);
+    assert.equal(sent.length, 1, 'a leave after Send posts nothing more');
   });
 });
 
@@ -504,70 +442,94 @@ test('Send with nothing pending is disabled and the tray says what to do', async
     assert.equal(await page.evaluate(SEND_DISABLED), true);
     assert.equal(await page.evaluate(TRAY_STATUS_SHOWN), true);
     assert.equal(await page.evaluate(TRAY_STATUS_IS_ERROR), false);
-  });
+  }, {viewport: {width: 1280, height: 800, scale: 1}});
 });
 
-// The task's 1280 px capture plus each window size that `charliebot land --help` lists.
-const LAND_WINDOW_SIZES = [
-  {width: 1280, height: 800}, {width: 1536, height: 900}, {width: 1400, height: 1000}, {width: 390, height: 844},
-];
-for (const {width, height} of LAND_WINDOW_SIZES) {
-  test(`an oversized leave flush keeps the entries and explains the 64 KiB limit in the tray at ${width}x${height}`,
-    async () => {
-      await withTwoQuestionPage(async (page, sent) => {
-        await page.evaluate(PICK_AND_OVERSIZED_COMMENT);
-        await sleep(FRAME_WAIT_MS);
-        assert.equal(await page.evaluate(TRAY_ITEMS), 2, 'one pick and one oversized comment are pending');
+// The bottom sheet's folded tray: one line with the pending count, target, Send and the Show list control. Chao's
+// window is 839 CSS px wide at device scale 1.875 (1573 device px), 800 CSS px tall.
+const TRAY_MODE = 'document.querySelector(".__cbc-tray").getAttribute("data-cbc-mode")';
+const TRAY_HEIGHT_RATIO = '(() => { const r = document.querySelector(".__cbc-tray").getBoundingClientRect();' +
+  ' return r.height / window.innerHeight; })()';
+const PICK_ROW_DISPLAY = 'getComputedStyle(document.querySelector(".__cbc-tray-picks")).display';
+const TRAY_HEADER_TEXT = 'document.querySelector(".__cbc-tray-header").textContent';
+const TRAY_SEND_TEXT = 'document.querySelector(".__cbc-tray-send").textContent';
+const CLICK_EXPAND = 'document.querySelector(".__cbc-tray-expand").click()';
 
-        await page.evaluate(CLICK_SEND);
-        assert.match(await page.evaluate(TRAY_STATUS), /64 KiB.*Keep this page open/,
-          'the reader sees why leaving during Undo cannot send the batch');
-        await page.evaluate('document.dispatchEvent(new Event("charliebot:session-view-teardown"))');
-        await sleep(100);
+for (const {label, viewport} of [
+  {label: '839x800 at scale 1.875', viewport: {width: 839, height: 800, scale: 1.875}},
+  {label: '390x844', viewport: {width: 390, height: 844, scale: 1}},
+]) {
+  test(`the pending tray folds to one line and expands on tap at ${label}`, async () => {
+    await withTwoQuestionPage(async (page) => {
+      await page.evaluate(TWO_PICKS_AND_A_COMMENT);
+      await sleep(FRAME_WAIT_MS);
 
-        assert.equal(sent.length, 0, 'the oversized keepalive body is not posted');
-        assert.equal(await page.evaluate(TRAY_ITEMS), 2, 'both entries remain pending');
-        assert.equal(await page.evaluate(TRAY_STATUS_IS_ERROR), true, 'the tray keeps an error result');
-        const status = await page.evaluate(TRAY_STATUS);
-        assert.match(status, /64 KiB.*press Send to try again/, 'the tray states the reason and next action');
-        assert.doesNotMatch(status, /\.\./, 'the reason and the next sentence join with one period');
-        await saveKeepaliveLimitScreenshot(page, width, height);
-      }, {viewport: {width, height}});
-    });
+      assert.equal(await page.evaluate(TRAY_MODE), 'collapsed', 'the bottom sheet starts folded to one line');
+      assert.equal(await page.evaluate(TRAY_ITEMS), 3, 'all three entries are pending');
+      const ratio = await page.evaluate(TRAY_HEIGHT_RATIO);
+      assert.ok(ratio <= 0.12, `the folded tray covers ${(ratio * 100).toFixed(1)}% of the window, at most 12%`);
+      assert.equal(await page.evaluate(TRAY_SEND_TEXT), 'Send 3', 'the one line names the count, not a repeated target');
+      assert.ok((await page.evaluate(TRAY_HEADER_TEXT)).includes('Viewing session'),
+        'the one line names the target session');
+
+      await page.evaluate(CLICK_EXPAND);
+      await sleep(FRAME_WAIT_MS);
+      assert.equal(await page.evaluate(TRAY_MODE), 'expanded', 'the Show list control opens the list');
+      assert.equal(await page.evaluate(TRAY_ITEMS), 3, 'the expanded list keeps every card');
+
+      await page.evaluate(CLICK_EXPAND);
+      await sleep(FRAME_WAIT_MS);
+      assert.equal(await page.evaluate(TRAY_MODE), 'collapsed', 'Hide list folds it again');
+    }, {viewport});
+  });
 }
 
-test('a rejected leave flush keeps the entries, shows the failure in the tray, and is not retried', async () => {
-  await withTwoQuestionPage(async (page, sent) => {
-    await page.evaluate(REJECT_KEEPALIVE_FETCH);
-    await page.evaluate(ONE_PICK);
-    await sleep(FRAME_WAIT_MS);
-    await page.evaluate(CLICK_SEND);
-    await page.evaluate('window.dispatchEvent(new PageTransitionEvent("pagehide"))');
-    await sleep(1500);
-
-    assert.equal(sent.length, 0, 'the rejected post never reached the server');
-    assert.deepEqual(await page.evaluate(FETCH_CALLS).then((calls) => calls.map((call) => call.keepalive)), [true],
-      'one keepalive attempt, with no retry after the page has left');
-    assert.equal(await page.evaluate(TRAY_ITEMS), 1, 'the pick stays pending');
-    assert.equal(await page.evaluate(TRAY_STATUS_IS_ERROR), true, 'the tray shows the failure');
-    assert.match(await page.evaluate(TRAY_STATUS), /Page-leave send failed \(keepalive quota exhausted\)\. Keep this/,
-      'the tray gives the browser reason and the next action');
-  });
+test('with every question picked neither the no-pick line nor Rest as recommended shows, at either width', async () => {
+  for (const viewport of [{width: 1536, height: 900, scale: 1}, {width: 390, height: 844, scale: 1}]) {
+    await withTwoQuestionPage(async (page) => {
+      await page.evaluate(TWO_PICKS_AND_A_COMMENT);
+      await sleep(FRAME_WAIT_MS);
+      assert.equal(await page.evaluate(PICK_ROW_DISPLAY), 'none',
+        'the pick row with its Rest as recommended button is hidden');
+    }, {viewport});
+  }
 });
 
-test('an oversized batch sent from the open page posts as one normal request, not keepalive', async () => {
+test('with nothing pending the Plans tab at 390 px shows only the one-line question panel', async () => {
+  await withPlanPage(async (page) => {
+    await sleep(FRAME_WAIT_MS);
+    assert.equal(await page.evaluate(TRAY_MODE), 'empty', 'the tray is the compact question line');
+    assert.equal(await page.evaluate('getComputedStyle(document.querySelector(".__cbc-tray-header")).display'),
+      'none', 'the pending header is not drawn');
+    assert.equal(await page.evaluate('getComputedStyle(document.querySelector(".__cbc-tray-list")).display'),
+      'none', 'no pending list covers the plan');
+    assert.equal(await page.evaluate('getComputedStyle(document.querySelector(".__cbc-tray-actions")).display'),
+      'none', 'no action row covers the plan');
+    const ratio = await page.evaluate(TRAY_HEIGHT_RATIO);
+    assert.ok(ratio <= 0.12, `the one line covers ${(ratio * 100).toFixed(1)}% of the window, at most 12%`);
+  }, {viewport: {width: 390, height: 844, scale: 1}});
+});
+
+test('the header names the target session by its readable name with nothing pending', async () => {
+  await withTwoQuestionPage(async (page) => {
+    await sleep(FRAME_WAIT_MS);
+    assert.equal(await page.evaluate(TRAY_ITEMS), 0, 'nothing is pending');
+    const header = await page.evaluate(TRAY_HEADER_TEXT);
+    assert.ok(header.includes('Viewing session'), 'the header names the session, not a bare id: ' + header);
+    assert.equal(header.includes(VIEWER.slice(0, 8)), false, 'the bare id is not shown');
+  }, {viewport: {width: 1536, height: 900, scale: 1}});
+});
+
+test('an oversized batch posts as one normal request', async () => {
   await withTwoQuestionPage(async (page, sent) => {
-    await page.evaluate(PATCH_FETCH);
     await page.evaluate(PICK_AND_OVERSIZED_COMMENT);
     await sleep(FRAME_WAIT_MS);
     await page.evaluate(CLICK_SEND);
     await sleep(SEND_WAIT_MS);
 
-    assert.equal(sent.length, 1, 'the in-page send posts the whole batch');
+    assert.equal(sent.length, 1, 'the send posts the whole batch');
     assert.equal(sent[0].session, VIEWER, 'the message goes to the comment target');
-    assert.ok(Buffer.byteLength(sent[0].body.content, 'utf8') > 64 * 1024, 'the batch is over the leave limit');
-    assert.deepEqual(await page.evaluate(FETCH_CALLS).then((calls) => calls.map((call) => call.keepalive)), [false],
-      'one normal post, not keepalive');
+    assert.ok(Buffer.byteLength(sent[0].body.content, 'utf8') > 64 * 1024, 'the batch is over 64 KiB');
     assert.equal(await page.evaluate(TRAY_ITEMS), 0, 'the sent entries leave the list');
     assert.equal(await page.evaluate(TRAY_STATUS_IS_ERROR), false, 'a delivered send is not shown as an error');
   });

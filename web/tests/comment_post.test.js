@@ -1,7 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
-const {TextEncoder} = require('node:util');
 
 const { readStatic } = require('./read_static');
 
@@ -12,7 +11,6 @@ function loadCommentPost(fetchImpl) {
   const context = {
     fetch: fetchImpl,
     crypto: {randomUUID: () => `comment-request-${++requestSequence}`},
-    TextEncoder,
     setTimeout: (callback) => { callback(); return 1; },
   };
   vm.createContext(context);
@@ -109,23 +107,6 @@ test('postCommentMessage sends the comment-tray request shape', async () => {
   assert.equal(body.request_id, 'comment-request-1');
 });
 
-test('postCommentMessage reports an oversized keepalive body and allows the same message while the page stays open',
-  async () => {
-    const calls = [];
-    const context = loadCommentPost(async (url, options = {}) => {
-      calls.push({url, options});
-      return {ok: true, status: 202, json: async () => ({})};
-    });
-    const content = 'é'.repeat(32768);
-
-    await assert.rejects(context.postCommentMessage('s', content, {keepalive: true}), /64 KiB/);
-    assert.equal(calls.length, 0, 'the over-limit request is rejected before fetch');
-
-    await context.postCommentMessage('s', content);
-    assert.equal(calls.length, 1, 'the normal send is not subject to the keepalive limit');
-    assert.ok(Buffer.byteLength(calls[0].options.body, 'utf8') > 64 * 1024);
-  });
-
 test('buildClickMessage owns the shared numbered reference and answer format', () => {
   const context = loadCommentPost();
   const message = context.buildClickMessage('[Status · Waiting on you]', [{
@@ -173,17 +154,6 @@ test('postCommentMessage retries a network error and a 5xx with one request id',
   ]);
 });
 
-test('postCommentMessage surfaces a rejected keepalive request instead of retrying after page leave', async () => {
-  let attempts = 0;
-  const context = loadCommentPost(async () => {
-    attempts += 1;
-    throw new TypeError('keepalive quota exhausted');
-  });
-
-  await assert.rejects(context.postCommentMessage('s', 'c', {keepalive: true}), /keepalive quota exhausted/);
-  assert.equal(attempts, 1, 'the caller gets the failure so the tray can show its next action');
-});
-
 test('postCommentMessage treats a 202 dispatch_error as accepted without retry', async () => {
   let attempts = 0;
   const context = loadCommentPost(async () => {
@@ -208,118 +178,4 @@ test('postCommentMessage stops on a 4xx and preserves the auth and HTTP messages
   });
   await assert.rejects(badRequest.postCommentMessage('s', 'c'), {message: 'Comment post failed: HTTP 409'});
   assert.equal(attempts, 1);
-});
-
-// The undo window runs on a clock the test owns: each setTimeout call queues its step, and the test runs them.
-function loadCommentPostWithClock(fetchImpl) {
-  const timers = [];
-  const cleared = [];
-  let requestSequence = 0;
-  const makeEventTarget = () => {
-    const listeners = new Map();
-    return {
-      addEventListener(name, listener) {
-        const registered = listeners.get(name) || [];
-        registered.push(listener);
-        listeners.set(name, registered);
-      },
-      removeEventListener(name, listener) {
-        const registered = listeners.get(name) || [];
-        listeners.set(name, registered.filter((current) => current !== listener));
-      },
-      dispatch(name) {
-        for (const listener of listeners.get(name) || []) listener();
-      },
-    };
-  };
-  const context = {
-    fetch: fetchImpl,
-    crypto: {randomUUID: () => `comment-request-${++requestSequence}`},
-    TextEncoder,
-    window: makeEventTarget(),
-    document: makeEventTarget(),
-    setTimeout: (callback, delay) => {
-      timers.push({callback, delay});
-      return timers.length;
-    },
-    clearTimeout: (id) => { cleared.push(id); },
-  };
-  vm.createContext(context);
-  vm.runInContext(COMMENT_POST_JS, context, {filename: 'comment_post.js'});
-  return {context, timers, cleared};
-}
-
-const ACCEPTED = async () => ({ok: true, status: 202, json: async () => ({input_event_id: 'event-1'})});
-
-test('startUndoableSend waits five seconds, then runs post once inside the timer and settles with its result', async () => {
-  const {context, timers} = loadCommentPostWithClock(ACCEPTED);
-  const calls = [];
-  const handle = context.startUndoableSend(async (options) => {
-    calls.push(options);
-    return {input_event_id: 'event-1'};
-  });
-  assert.deepEqual(timers.map((timer) => timer.delay), [5000]);
-  assert.equal(calls.length, 0);
-
-  timers.shift().callback();
-
-  assert.deepEqual(calls.map((options) => options.keepalive), [false],
-    'post runs when the window closes, with no extra tick, and not keepalive');
-  assert.equal(handle.sending, true);
-  assert.equal(handle.cancel(), false, 'cancel after the post has begun returns false');
-  assert.deepEqual(await handle.sent, {input_event_id: 'event-1'});
-});
-
-test('cancel inside the window posts nothing and settles null', async () => {
-  const {context, timers, cleared} = loadCommentPostWithClock(ACCEPTED);
-  let posts = 0;
-  const handle = context.startUndoableSend(async () => {
-    posts += 1;
-  });
-  assert.equal(handle.cancel(), true);
-
-  assert.deepEqual(cleared, [1], 'the pending timer is cleared');
-  assert.equal(await handle.sent, null);
-  assert.equal(handle.cancel(), false, 'a second cancel finds the window already closed');
-  assert.equal(posts, 0);
-  assert.equal(timers.length, 1, 'only the window timer was ever queued');
-});
-
-test('pagehide flushes the window at once, posting once with keepalive so the post outlives the page', async () => {
-  const {context, cleared} = loadCommentPostWithClock(ACCEPTED);
-  const calls = [];
-  const handle = context.startUndoableSend(async (options) => {
-    calls.push(options);
-    return {input_event_id: 'event-1'};
-  });
-  context.window.dispatch('pagehide');
-
-  assert.deepEqual(await handle.sent, {input_event_id: 'event-1'}, 'the flush posts and settles with its result');
-  assert.deepEqual(cleared, [1], 'the pending window timer is cleared');
-  assert.deepEqual(calls.map((options) => options.keepalive), [true], 'exactly one post, keepalive');
-  assert.equal(handle.cancel(), false, 'a flush closes the undo window, so Undo finds nothing to cancel');
-});
-
-test('session-view teardown flushes the window at once, posting once with keepalive', async () => {
-  const {context, cleared} = loadCommentPostWithClock(ACCEPTED);
-  const calls = [];
-  const handle = context.startUndoableSend(async (options) => {
-    calls.push(options);
-    return {input_event_id: 'event-1'};
-  });
-  context.document.dispatch('charliebot:session-view-teardown');
-
-  assert.deepEqual(await handle.sent, {input_event_id: 'event-1'});
-  assert.deepEqual(cleared, [1]);
-  assert.deepEqual(calls.map((options) => options.keepalive), [true], 'exactly one post, keepalive');
-  context.window.dispatch('pagehide');
-  assert.equal(calls.length, 1, 'one leave event does not post a second time');
-});
-
-test('a failed post rejects the undo window with the post error', async () => {
-  const {context, timers} = loadCommentPostWithClock(async () => ({ok: false, status: 409}));
-  const handle = context.startUndoableSend(() => context.postCommentMessage('s', 'c'));
-  timers.shift().callback();
-
-  await assert.rejects(handle.sent, {message: 'Comment post failed: HTTP 409'});
 });

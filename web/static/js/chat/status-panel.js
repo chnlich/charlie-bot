@@ -228,17 +228,9 @@
     return span;
   }
 
-  function cancelDone(key) {
-    const entry = pendingDone.get(key);
-    if (!entry) return;
-    entry.undo.cancel();
-    pendingDone.delete(key);
-    renderPanel();
-  }
-
-  // The done checkbox of one stored item. Checking it starts the Status click; unchecking inside the undo window
-  // cancels it. The box is checked and disabled once the server reports the item answered and while the post is under
-  // way. A status read that failed leaves it unchecked and disabled, since the item's state is then unknown.
+  // The done checkbox of one stored item. Checking it posts the Status click at once. The box is checked and
+  // disabled once the server reports the item answered and while the post is under way. A status read that failed
+  // leaves it unchecked and disabled, since the item's state is then unknown.
   function doneCheckbox(click, answered) {
     const key = doneKey(click.sessionId, click.waitingVersion, click.position);
     const pending = pendingDone.get(key);
@@ -251,30 +243,23 @@
     box.setAttribute('aria-label', DONE_TITLE);
     box.dataset.doneCheck = 'true';
     box.checked = answered || Boolean(pending);
-    box.disabled = answered || unknown || Boolean(pending && pending.undo.sending);
+    box.disabled = answered || unknown || Boolean(pending);
     box.onchange = () => {
       if (box.checked) scheduleClick(click);
-      else cancelDone(key);
     };
     return box;
   }
 
-  // The one click path of the Status view: a checked done checkbox. The click waits its undo window, then posts one
-  // click message to the owning session. Leaving the page or switching sessions flushes the window at once
-  // (comment_post.js startUndoableSend), so the post runs then with keepalive. A new click replaces the item's earlier
-  // notice.
+  // The one click path of the Status view: a checked done checkbox posts one click message to the owning session at
+  // once. The post is in flight until it settles; a new click replaces the item's earlier notice.
   function scheduleClick(click) {
     const key = doneKey(click.sessionId, click.waitingVersion, click.position);
     if (pendingDone.has(key)) return;
     itemNotices.delete(key);
-    const entry = {...click, clickMs: Date.now(), undo: null};
-    entry.undo = startUndoableSend((options) => postClick(entry, options));
+    const entry = {...click, clickMs: Date.now(), sending: true};
     pendingDone.set(key, entry);
-    entry.undo.sent.then(
-      (posted) => {
-        // A cancelled click has already left pendingDone, in cancelDone.
-        if (posted !== null) finishClick(key, entry, null);
-      },
+    postClick(entry).then(
+      () => finishClick(key, entry, null),
       (err) => finishClick(key, entry, err),
     );
     renderPanel();
@@ -297,10 +282,9 @@
     return body;
   }
 
-  // The Status click's post, the delayed send's one attempt: an answer other than 202 is an error.
+  // The Status click's post, one request at once: an answer other than 202 is an error.
   // A failed click reports "Not sent" and the user clicks again; the post itself never retries.
-  // keepalive is startUndoableSend's flag: true only when a leave flushed the send.
-  async function postClick(entry, {keepalive}) {
+  async function postClick(entry) {
     renderPanel();
     const content = buildClickMessage(CLICK_HEADER, [{
       reference: 'Waiting on you · session ' + entry.sessionId + ' · list ' + entry.waitingVersion +
@@ -312,7 +296,6 @@
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       credentials: 'same-origin',
-      keepalive,
       body: JSON.stringify({content, uploaded_files: [], request_id: requestId}),
     });
     if (response.status !== 202) throw new Error('HTTP ' + response.status);
@@ -476,9 +459,9 @@
     controls.className = 'flex items-center gap-2 text-xs';
     controls.dataset.waitingHeaderControls = 'true';
     const currentVersion = panelStatus && panelStatus.waiting_version;
-    // A click whose list has since changed has no row now, so its checkbox stays here until its window closes.
+    // A click whose list has since changed has no row now, so its checkbox stays here until its post settles.
     for (const entry of pendingForSession(panelSessionId)) {
-      if (entry.waitingVersion === currentVersion || entry.undo.sending) continue;
+      if (entry.waitingVersion === currentVersion) continue;
       controls.appendChild(doneCheckbox(entry, false));
       controls.appendChild(textSpan('text-slate-400', DONE_LABEL));
     }

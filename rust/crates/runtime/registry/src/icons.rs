@@ -267,7 +267,7 @@ mod tests {
       assert_eq!(document.root_element().tag_name().name(), "svg", "icon '{key}' has an SVG root");
       count += 1;
     }
-    assert_eq!(count, 51);
+    assert_eq!(count, 50);
   }
 
   #[test]
@@ -341,7 +341,7 @@ mod tests {
     let fixture: ParityFixture =
       serde_json::from_str(include_str!("../../../../../web/tests/icons_parity.json")).unwrap();
     let icons = Icons::load(&repository_root()).unwrap();
-    assert_eq!(icons.script(Some(&["close", "dot", "starred", "done", "undo"])).unwrap(), fixture.script);
+    assert_eq!(icons.script(Some(&["close", "dot", "starred", "done"])).unwrap(), fixture.script);
     for case in fixture.cases {
       assert_eq!(
         icons.svg(&case.key, case.size, &case.cls, &case.attrs).unwrap(),

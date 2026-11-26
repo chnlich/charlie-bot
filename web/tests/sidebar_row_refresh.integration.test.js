@@ -17,6 +17,7 @@ const {createElement} = require('./dom_element_stub');
 const NO_STORED_COPY = {get: () => null};
 
 const PAGE_TIMERS_JS = readStatic('page-timers.js');
+const RELOAD_GUARD_JS = readStatic('reload-guard.js');
 const WEBSOCKET_JS = readStatic('websocket.js');
 const WEBSOCKET_HANDLERS_JS = readStatic('websocket-handlers.js');
 
@@ -116,6 +117,7 @@ function buildPage({painted = [], filter = 'all', partial = true} = {}) {
   standInForUsageJs(context);
   standInForOfflineShell(context);
   runStaticModules(context, sidebarModules());
+  vm.runInContext(RELOAD_GUARD_JS, context, {filename: 'reload-guard.js'});
   vm.runInContext(WEBSOCKET_JS, context, {filename: 'websocket.js'});
   vm.runInContext(WEBSOCKET_HANDLERS_JS, context, {filename: 'websocket-handlers.js'});
   context.registerWorkspaceBadge(() => {

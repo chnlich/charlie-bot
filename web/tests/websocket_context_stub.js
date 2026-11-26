@@ -18,6 +18,8 @@ const { readStatic } = require('./read_static');
 const PAGE_TIMERS_JS = readStatic('page-timers.js');
 const WEBSOCKET_JS = readStatic('websocket.js');
 const STREAM_DRAFT_JS = readStatic('stream-draft.js');
+// The reload guard's helpers, which the page loads before websocket.js.
+const RELOAD_GUARD_JS = readStatic('reload-guard.js');
 const WEBSOCKET_HANDLERS_JS = readStatic('websocket-handlers.js');
 
 // websocket.js's connect deadline, one timer per connect attempt. Harnesses that record timers leave it out.
@@ -90,6 +92,7 @@ function loadWebsocketContext(extraContext) {
 function loadWebsocketModules(context) {
   prepareWebsocketGlobals(context);
   loadPageTimersOnce(context);
+  vm.runInContext(RELOAD_GUARD_JS, context, {filename: 'reload-guard.js'});
   vm.runInContext(STREAM_DRAFT_JS, context, {filename: 'stream-draft.js'});
   vm.runInContext(WEBSOCKET_JS, context, {filename: 'websocket.js'});
   vm.runInContext(WEBSOCKET_HANDLERS_JS, context, {filename: 'websocket-handlers.js'});

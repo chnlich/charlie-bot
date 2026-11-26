@@ -188,14 +188,17 @@ function checkPageScriptRelease(path) {
     if (!response.ok) throw new Error('the page script did not load: ' + path);
     if (response.headers.get('X-Asset-Version') === STATIC_ASSET_VERSION) return;
     reloadPageToRelease('feature_version');
-    throw new Error('the page runs another release and reloads before the script runs: ' + path);
+    throw new Error('the page runs another release; the script waits for its reload: ' + path);
   });
 }
 
 // The reload to the release's code. The chat page's offline shell refreshes its stored shell first, so the
 // navigation answers with the release's shell (offline-shell.js). A page without a shell (the usage, cron or diff
-// pages) reloads at once. The chat page defines the shell; the other pages do not load its script.
+// pages) reloads at once. The chat page defines the shell; the other pages do not load its script. The guard holds a
+// reload that starts within the window of the last one, and the caller's script then fails rather than reloading again.
 function reloadPageToRelease(cause) {
+  if (staleReloadWaitMs() > 0) return;
+  markStaleReload();
   if (typeof reloadAfterRefreshingShell === 'function') {
     reloadAfterRefreshingShell(cause);
     return;

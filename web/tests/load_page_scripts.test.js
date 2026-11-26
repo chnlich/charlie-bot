@@ -11,6 +11,7 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const UTILS_JS = fs.readFileSync(path.join(__dirname, '..', 'static', 'js', 'utils.js'), 'utf8');
+const RELOAD_GUARD_JS = fs.readFileSync(path.join(__dirname, '..', 'static', 'js', 'reload-guard.js'), 'utf8');
 // pageAssetUrl is defined in config.js, which the page loads before utils.js. The harness runs that one function,
 // so the loaders' URLs are the page's own.
 const PAGE_ASSET_URL_JS = /^function pageAssetUrl\(path\) \{\n[\s\S]*?\n\}/m.exec(
@@ -31,6 +32,11 @@ function buildContext() {
     reloadPastStoredShell: (cause) => reloads.push({cause, path: 'main'}),
     reloadAfterRefreshingShell: (cause) => reloads.push({cause, path: 'refresh'}),
     console: {error() {}},
+    sessionStorage: {
+      items: new Map(),
+      getItem(key) { return this.items.has(key) ? this.items.get(key) : null; },
+      setItem(key, value) { this.items.set(key, String(value)); },
+    },
     document: {
       createElement: () => ({}),
       head: {appendChild(script) { appended.push(script); }},
@@ -42,6 +48,7 @@ function buildContext() {
   context.globalThis = context;
   vm.createContext(context);
   vm.runInContext(PAGE_ASSET_URL_JS, context, {filename: 'config.js'});
+  vm.runInContext(RELOAD_GUARD_JS, context, {filename: 'reload-guard.js'});
   vm.runInContext(UTILS_JS, context, {filename: 'utils.js'});
   return {context, appended, reloads, fetched};
 }
@@ -85,9 +92,17 @@ test('a feature script from another release reloads the page with its cause and 
   context.serverRelease = 'v2';
 
   const loading = context.loadPageScripts('feature', ['/a.js']);
-  await assert.rejects(loading, /the page runs another release and reloads before the script runs: \/a\.js/);
+  await assert.rejects(loading, /the page runs another release; the script waits for its reload: \/a\.js/);
   assert.deepEqual(appended, [], 'the script does not run');
   assert.deepEqual(reloads, [{cause: 'feature_version', path: 'refresh'}]);
+});
+
+test('a feature script that finds another release again within the guard window reloads once, not again', async () => {
+  const {context, reloads} = buildContext();
+  context.serverRelease = 'v2';
+  await assert.rejects(context.loadPageScripts('feature', ['/a.js']), /another release/);
+  await assert.rejects(context.loadPageScripts('feature-again', ['/a.js']), /another release/);
+  assert.deepEqual(reloads, [{cause: 'feature_version', path: 'refresh'}], 'the guard holds the second reload');
 });
 
 test('a file on another origin keeps its own URL; a same-origin one takes the page version', async () => {

@@ -476,22 +476,10 @@ function handleCatchupComplete(data) {
 // The reload guard caps the automatic reloads at one per tab per 60 seconds, so a stale cache cannot turn them into
 // a loop. A visible tab the guard holds shows the banner. A hidden tab waits out the window and reloads if still
 // hidden.
-const STALE_PAGE_RELOAD_KEY = 'charliebot-stale-page-reload-at';
-const STALE_PAGE_RELOAD_GUARD_MS = 60000;
 let protocolStale = false;
 let releaseCodePending = false;
 let swapInFlight = false;
 let guardTimer = null;
-
-function staleReloadWaitMs() {
-  const lastReload = Number(sessionStorage.getItem(STALE_PAGE_RELOAD_KEY));
-  if (!lastReload) return 0;
-  return Math.max(0, lastReload + STALE_PAGE_RELOAD_GUARD_MS - Date.now());
-}
-
-function markStaleReload() {
-  sessionStorage.setItem(STALE_PAGE_RELOAD_KEY, String(Date.now()));
-}
 
 function handleStalePageClose() {
   protocolStale = true;

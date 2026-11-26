@@ -423,7 +423,7 @@ pub async fn run_probe(host: &CliHost, prompt: &str, system_prompt: &str) -> any
     bail!("no probe backend resolvable: backends.calls.probe is unset");
   }
   let mut attempts = Vec::new();
-  for option in backend_pool::one_shot_members(&host.cfg, Arc::clone(&host.pool), "probe", target) {
+  for option in backend_pool::one_shot_members(&host.cfg, Arc::clone(&host.pool), CallClass::Probe.key(), target) {
     let option = option?;
     let (error_type, outcome) =
       match backend_types::build_backend(Arc::clone(&host.registry), &option, &host.cfg, LaunchArgs::default()) {

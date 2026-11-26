@@ -50,7 +50,7 @@ const ROUTER_FILENAME: &str = "router.yaml";
 const TEXT_LIMIT: usize = 20_000;
 
 /// The role whose text keeps its last characters. Every other role is a delegation, labelled with its task type.
-const THREAD_ROLE: &str = "thread";
+const THREAD_ROLE: &str = config::CallClass::Thread.key();
 
 /// Keys of the rules-file form that this router no longer reads. A file that still has one is refused.
 const OLD_FORM_FIELDS: &[&str] = &["routine", "design", "strong"];

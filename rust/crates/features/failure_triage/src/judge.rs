@@ -199,7 +199,9 @@ pub async fn judge_signature(backends: &JudgeBackends<'_>, input: &JudgeInput) -
   let prompt = user_prompt(input);
   let target = backends.cfg.backends.calls.get(CallClass::Triage);
   let mut last_error = None;
-  for option in backend_pool::one_shot_members(backends.cfg, Arc::clone(&backends.pool), "triage", target) {
+  for option in
+    backend_pool::one_shot_members(backends.cfg, Arc::clone(&backends.pool), CallClass::Triage.key(), target)
+  {
     let option = option.map_err(|error| JudgeError::Call(format!("{error:#}")))?;
     match attempt(backends, &option, &prompt, system, input).await {
       Ok(judgement) => return Ok(judgement),

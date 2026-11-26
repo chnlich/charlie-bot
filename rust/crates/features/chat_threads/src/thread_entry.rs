@@ -1624,8 +1624,8 @@ async fn route_thread_session(
     .chain(cfg.backends.pools.iter().map(|pool| pool.id.clone()))
     .collect::<Vec<_>>();
   let pool = backend_pool::backend_pool(features).map_err(ThreadReplyError::failure)?;
-  let decided = match pool.route(&cfg, "thread", &text, &candidates, None).await {
-    Ok(answer) => pool.decide(&cfg, "thread", answer).map_err(ThreadReplyError::failure)?,
+  let decided = match pool.route(&cfg, CallClass::Thread.key(), &text, &candidates, None).await {
+    Ok(answer) => pool.decide(&cfg, CallClass::Thread.key(), answer).map_err(ThreadReplyError::failure)?,
     Err(error) => {
       tracing::warn!(event = "thread_route_failed", session = session_id, error = %error);
       backend_pool::RoutedRequest::failed(&error)

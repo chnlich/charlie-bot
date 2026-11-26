@@ -11,6 +11,8 @@ Your branch prefix is `improve/decoupling/`.
 - the responsibilities inside one crate under `rust/`
 - a user-setting finding, where the fix moves the setting to the single record that owns it
 
+landing.md's moved-code rule covers the references outside this scope.
+
 Change a dependency edge or move code to the crate that owns it.
 A change to one function's behavior belongs to another direction.
 A configuration-in-code finding may sit in any tracked file that runs: `rust/`, `web/`, `dev/` and `scripts/`.

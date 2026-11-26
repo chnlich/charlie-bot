@@ -12,7 +12,7 @@ Your branch prefix is `improve/code_style/`.
 - the `static/` and `templates/` directories of the features under `web/features/`
 
 Change files inside this scope only.
-A file outside the scope belongs to another direction.
+A file outside the scope belongs to another direction, except a reference that landing.md's moved-code rule covers.
 
 ## Rules
 

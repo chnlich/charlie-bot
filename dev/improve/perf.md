@@ -12,6 +12,8 @@ Keep performance changes in:
 - the server code in `rust/`
 - the pages in `web/`
 
+landing.md's moved-code rule covers the references outside this scope.
+
 ## Topics
 
 Rank topics by the user's wait in seconds: page topics use slow-network load time, and GET-route topics use slow-network

@@ -10,6 +10,8 @@ Your branch prefix is `improve/dead_code/`.
 - `rust/`
 - `web/`
 
+landing.md's moved-code rule covers the references outside this scope.
+
 Delete a public item, code or feature whose callers do not exist.
 The tree then carries only code that something uses.
 A compatibility layer in `rust/` that mirrors Python behavior is dead when no caller uses it.

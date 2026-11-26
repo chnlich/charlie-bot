@@ -257,6 +257,16 @@ The round lands a whole topic, not a fragment.
 For a fresh topic, create the branch with `git switch -c improve/<direction>/<topic slug> origin/main`.
 The branch name records the topic for the abandoned-topic check.
 
+A change that moves, renames or deletes code or a file updates every reference to the old name or path in the
+repository, in the same pull request. Docs, comments, tests and CI path maps count, and a direction's Scope does not
+limit them. Recorded data keeps its old text: a fixture, a golden or a captured reply, such as
+`dev/poor-network/reply-fixture.txt`. The pull request body names each line of recorded data that keeps an old name,
+as `<path>:<line>`.
+`pr-create` refuses a diff that leaves a deleted or renamed path named outside recorded data, or a recorded line that
+the body does not name, and it names each such line (`dev/improve/moved-references.sh`). That check spells each path in
+full, so a bare file name or a renamed symbol is the round's to find.
+A reference in a file that another branch claims blocks the pull request, as Step 3 states.
+
 When the topic touches `rust/`, run the checks from the `rust/` directory of the clone, on the remote host where
   the round already runs.
 The remote host is the host that the host rule names for agent compiles, so the checks satisfy that rule.

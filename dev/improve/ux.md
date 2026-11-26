@@ -13,6 +13,8 @@ Keep UX changes in these areas:
 - the `static/` and `templates/` directories of features under `web/features/`
 - endpoints those files call
 
+landing.md's moved-code rule covers the references outside this scope.
+
 A page change may include its endpoint. An endpoint-only change belongs to the performance direction. Each direction
 keeps one category of change so the review has one scope owner.
 

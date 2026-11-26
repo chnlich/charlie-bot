@@ -342,7 +342,13 @@ fn prompt_paths(body: &Value, repo: &Path) -> Vec<PathBuf> {
   entries
     .filter_map(|entry| entry.get("prompt_file").and_then(Value::as_str))
     .filter(|pointer| !pointer.is_empty())
-    .filter_map(|pointer| resolve_path(pointer, repo).ok())
+    .filter_map(|pointer| match resolve_path(pointer, repo) {
+      Ok(path) => Some(path),
+      Err(error) => {
+        tracing::warn!(pointer, error = %error, "cron_prompt_path_unresolvable");
+        None
+      }
+    })
     .collect()
 }
 
@@ -356,8 +362,13 @@ fn snapshot_fingerprint(directory: &Path, prompt_paths: &[PathBuf]) -> anyhow::R
         if !path.is_file() || !name.ends_with(".yaml") || name.starts_with('.') {
           continue;
         }
-        let modified =
-          path.metadata().map(|metadata| modified_seconds(metadata.mtime(), metadata.mtime_nsec())).unwrap_or(0.0);
+        let modified = match path.metadata() {
+          Ok(metadata) => modified_seconds(metadata.mtime(), metadata.mtime_nsec()),
+          Err(error) => {
+            tracing::warn!(path = %path.display(), error = %error, "cron_file_metadata_unreadable");
+            0.0
+          }
+        };
         cron_files.push((name.to_string(), modified));
       }
     }
@@ -369,7 +380,10 @@ fn snapshot_fingerprint(directory: &Path, prompt_paths: &[PathBuf]) -> anyhow::R
   for path in prompt_paths {
     let metadata = match path.metadata() {
       Ok(metadata) => metadata,
-      Err(_) => return Ok(SnapshotFingerprint { cron_files, prompt_files: None }),
+      Err(error) => {
+        tracing::warn!(path = %path.display(), error = %error, "cron_prompt_metadata_unreadable");
+        return Ok(SnapshotFingerprint { cron_files, prompt_files: None });
+      }
     };
     prompt_files.push((path.clone(), modified_seconds(metadata.mtime(), metadata.mtime_nsec())));
   }

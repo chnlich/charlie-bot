@@ -1053,8 +1053,13 @@ fn parse_field(field: &str, min: u32, max: u32, names: &[(&str, u32)]) -> anyhow
   let wildcard = field == "*" || field == "?";
   let mut values = HashSet::new();
   for member in field.split(',') {
-    let (range, step) =
-      member.split_once('/').map_or((member, 1), |(range, step)| (range, step.parse::<u32>().unwrap_or(0)));
+    let (range, step) = match member.split_once('/') {
+      Some((range, step)) => {
+        let step = step.parse::<u32>().map_err(|error| anyhow::anyhow!("invalid cron step in {field:?}: {error}"))?;
+        (range, step)
+      }
+      None => (member, 1),
+    };
     if step == 0 {
       anyhow::bail!("invalid cron step in {field:?}");
     }

@@ -68,8 +68,8 @@ pub struct ScheduledTaskConfig {
   /// enabled.
   #[serde(default = "default_true")]
   pub enabled: bool,
-  /// Set `true` to show a failed last run as needing review. The cron page then shows it in amber, marked "review
-  /// needed", instead of red. The fire and its failure record do not change. Absent, `false`.
+  /// Set `true` to mark a failed last run as needing review. The task's session row in the sidebar then shows that run
+  /// in amber with "review needed", instead of red. The fire and its failure record do not change. Absent, `false`.
   #[serde(default)]
   pub allow_failure: bool,
   /// The session that the task's fires reach. Absent or empty, the scheduler creates a session for the task on a later

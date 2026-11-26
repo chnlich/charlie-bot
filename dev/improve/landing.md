@@ -116,22 +116,20 @@ The driver writes each screenshot into the round's evidence directory (Step 5). 
 
 ### The lock of a side
 
-A side whose evidence is screenshots or clicks, and which reports no timing, runs with the bench lock off. The entry
-runs with `IMPROVE_TRIAL_USE_LOCK=0`.
+Only an improve-ux side runs beside the bench lock. Its entry runs with `IMPROVE_TRIAL_USE_LOCK=0`, and
+`dev/improve/trial-side.sh` refuses that value for every other direction. Screenshots and clicks do not depend on a
+quiet host, and the bench's scopes keep CPU priority over the improve scopes, so the side does not take the bench's CPU.
+The side's evidence records the bench-lock holder (the process that holds the lock, or `none`) at the side's start and
+at its end.
 
-- Screenshots and clicks do not depend on a quiet host.
-- The bench's scopes keep CPU priority over the improve scopes, so the side does not take the bench's CPU.
-- The side's evidence records the bench-lock holder (the process that holds the lock, or `none`) at the side's start and
-  at its end.
+Every other direction's screenshot side holds the bench lock from trial startup through its screenshots, its clicks and
+trial shutdown. It keeps the default of `IMPROVE_TRIAL_USE_LOCK`. A side that reports any timing or byte-over-time
+measurement holds the lock the same way, because a timing taken beside a bench measures that bench's CPU contention.
 
-A side that reports any timing or byte-over-time measurement holds the bench lock from trial startup through its
-measurements and trial shutdown. It keeps the default of `IMPROVE_TRIAL_USE_LOCK`.
-
-- A timing taken beside a bench measures that bench's CPU contention.
-
-A side that holds the bench lock waits at most 15 minutes for it. If the wait expires, that side takes no screenshot or
-measurement. The round reports no result from an incomplete pair. It stops without opening a pull request and names the
-held bench lock in its stop reason. The next scheduled fire tries again.
+A side that holds the bench lock waits at most the lock's wait limit, 15 minutes in a round. If the wait expires, that
+side takes no screenshot or measurement. The round reports no result from an incomplete pair, stops without opening a
+pull request, and names the held bench lock in its stop reason. The round reports the stop, and a later fire takes the
+topic again.
 
 ### Input profile, clicks and writes
 

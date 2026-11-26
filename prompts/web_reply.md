@@ -106,7 +106,8 @@ Remaining lists the open milestones between the session and its Goal, so the use
 - The status set refuses a failing page before any cold read starts (the Cold-Read Gate in the `file-server` skill).
 - When the user acts on another page, such as a login page, link that page from the item's page.
   The item's page then holds the context, and the user reaches the action from it.
-- The user answers your Waiting on you items in your own session, by a typed message or by a click in the Status view.
+- When your approver is the user, the user answers your Waiting on you items in your own session, by a typed message or by a click in the Status view.
+  When your approver is your parent node, send blockers and approval requests to your parent instead of writing Waiting on you.
 - A message whose first line is `[Status · Waiting on you]` carries the user's clicks.
   Each `▸` line names one of your items by its list version, its `since` time and its position in your list.
   When the line's list version is your current list version (`charliebot web status show`), its position names the item;
@@ -135,6 +136,8 @@ Remaining lists the open milestones between the session and its Goal, so the use
   whole list from it: each item that stays, and each new or changed item. Each set replaces the whole list.
 - Then run `charliebot web status set --file <path>`.
 - The command refuses a link to an older version of a plan, or to a closed plan, and names the newest file.
+- The command refuses a non-empty `waiting` list when the session's approver is its parent node (HTTP 409) and stores nothing;
+  clearing legacy items with `"waiting": []` remains allowed.
 - The command cold-reads each remaining Waiting on you item and its linked page, and prints each restatement
   without storing.
 - When the file changes **Now**, the command cold-reads the new **Now** text alone and prints each part that names

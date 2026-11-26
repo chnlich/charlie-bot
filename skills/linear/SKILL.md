@@ -201,6 +201,7 @@ query($teamId: String!) {
 
 ## Rules
 
+- **Subtree rules:** When subtree rules define a project's Linear language, record format, or authenticated CLI wrapper, follow those subtree rules inside that project.
 - **English only:** All ticket titles and descriptions must be written in English, regardless of conversation language.
 - **Default assignee:** Use the host-configured default assignee if one is set (host-specific skill / MEMORY); otherwise leave unassigned and ask the user.
 - **Issue writes:** In a sub session (any session with a parent task, at any depth), issue creation, updates, and

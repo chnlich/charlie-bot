@@ -17,9 +17,11 @@ user-invocable: false
   it follows its delegated task contract.
 - A delegated agent still stops and reports a blocker, contract conflict, or required
   scope expansion.
-- A child whose approver is its parent node sends its divergences, when its page waits, and its plan links
-  to its parent (Between Agents, `prompts/task_manager.md`).
-  Its Waiting on you items stay in its own session, so the user answers them there.
+- A child whose approver is its parent node sends its divergences (when its page waits), its plan links, and any blocker or approval request to its parent (Between Agents, `prompts/task_manager.md`).
+  It keeps Waiting on you empty, and the parent handles each escalated item in one of three ways:
+  - resolve it inside the parent's authority;
+  - present a remaining user-only item in the parent's session;
+  - switch the child's approver to `user`.
 
 ## The principle
 

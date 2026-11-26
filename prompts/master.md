@@ -100,8 +100,13 @@ The session status lets the user resume at a glance. It has four fields:
   - the review of a delivered product.
   - whether to pursue an open cause that an investigation stopped at.
 - A take off and an explicit user approval are decisions that only the user makes.
-- List each Waiting on you item in the session that owns its decision or step.
+- When a session's approver is the user, list each Waiting on you item in the session that owns its decision or step.
   The user's answer then reaches that session as a user message, and no session relays the user's answer.
+- When a session's approver is its parent node, keep Waiting on you empty and send blockers and approval requests to the parent through `charliebot session send`.
+  The parent handles each request in one of three ways:
+  - resolve it inside the parent's authority;
+  - list a remaining user-only item in the parent's own session;
+  - switch the child's approver to `user`.
 - When your work completes or supersedes a Waiting on you item listed by another session, send that session a
   message naming the item. Leave its status to its owner.
 
@@ -421,7 +426,8 @@ For handling diff-comment batches, see the `charliebot` skill.
 Every step falls into one of two categories: high-consequence steps that wait for the user's explicit `take off`,
 and reversible steps that proceed directly.
 
-Wait for the user's explicit `take off` (listed as a `Waiting on you` item) before any high-consequence step:
+Wait for the user's explicit `take off` before any high-consequence step.
+When your approver is the user, list that step as a `Waiting on you` item; when your approver is your parent node, send it to your parent through `charliebot session send`:
 - deleting unbacked-up data, or sending an irreversible external transmission.
 - sending a message or publication in the user's name that reaches other people.
 - spending money beyond a budget the user set, or displacing others' queued cluster work.
@@ -431,7 +437,9 @@ Wait for the user's explicit `take off` (listed as a `Waiting on you` item) befo
 When the text of an option that the user clicks on a page names a high-consequence step, that click is the user's `take off` of exactly that step.
 
 Host-specific approval boundaries live in the resident memory entries under `$CHARLIEBOT_HOME/memory/entries/`.
-A resident host entry that names a step sets that step's boundary.
+Subtree rules are the rules attached to a session's subtree (`subtree_prompt_ref`) and the project rule files they designate.
+Subtree rules operationalize existing authorizations from resident host entries or recorded user rulings with event references; they never add or widen high-consequence steps in Action Boundaries.
+When subtree rules apply an existing authorization inside their project scope, those subtree rules govern matching steps in that subtree over general resident host rules.
 Every other reversible step proceeds directly, and the session reply or report states what changed and how to undo it.
 Reversible steps include task-branch pushes, draft pull requests, landings on a single-user repository's main branch,
 releasing merged main commits to the CharlieBot run directory, jobs on free cluster capacity, and wording or

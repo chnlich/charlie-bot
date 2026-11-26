@@ -19,7 +19,7 @@ use charliebot_core::text_repr::{JsonStyle, json_dumps};
 use charliebot_registry::FeatureContext;
 use charliebot_store::compact::CompactValue;
 use charliebot_store::control_events::SOURCE_SESSION_ID_FIELD;
-use charliebot_store::metadata::{SessionMetadata, SessionStatus, UtcDateTime};
+use charliebot_store::metadata::{SessionMetadata, SessionStatus, TaskApprover, UtcDateTime};
 use charliebot_store::{Store, session_channel};
 use charliebot_user_text_checks as user_text_checks;
 use serde::{Deserialize, Serialize};
@@ -391,6 +391,24 @@ fn require_waiting_context(items: &[WaitingItem]) -> Result<(), WebReplyError> {
   Ok(())
 }
 
+/// Refuse a non-empty `waiting` list when the session's approver is its parent node, so parent-approved sessions
+/// escalate blockers and approval requests to their parent instead of writing user-facing Waiting on you items.
+fn refuse_parent_approved_waiting(meta: &SessionMetadata, patch: &StatusPatch) -> Result<(), WebReplyError> {
+  let approver = meta.task.as_ref().map_or(TaskApprover::User, |task| task.approver);
+  if approver == TaskApprover::Parent && patch.waiting.as_deref().is_some_and(|items| !items.is_empty()) {
+    return Err(WebReplyError::Refused {
+      status: StatusCode::CONFLICT,
+      detail: concat!(
+        "Status set refused; nothing was stored: this session's approver is its parent node, so it cannot add ",
+        "Waiting on you items. Send blockers or approval requests to your parent via `charliebot session send`, ",
+        "or pass `\"waiting\": []` to clear legacy items."
+      )
+      .into(),
+    });
+  }
+  Ok(())
+}
+
 /// The item indexes and reasons for links the browser cannot render.
 fn page_link_refusals(items: &[WaitingItem]) -> Vec<(usize, String)> {
   items
@@ -463,6 +481,7 @@ pub async fn record_ask_check(
 pub async fn unread_waiting(features: &FeatureContext, session_id: &str, text: &str) -> Result<Value, WebReplyError> {
   let meta = reply::require_manager_session(features, session_id).await?;
   let patch = parse_patch(text)?;
+  refuse_parent_approved_waiting(&meta, &patch)?;
   let scan_context = reply::file_link_scan_context(features, session_id)?;
   reply::refuse_dead_links(scanned_texts(&patch), &scan_context)?;
   let items = patch.waiting.as_deref().unwrap_or_default();
@@ -627,6 +646,7 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
   let scan_context = reply::file_link_scan_context(features, session_id)?;
   let meta = reply::require_manager_session(features, session_id).await?;
   let patch = parse_patch(text)?;
+  refuse_parent_approved_waiting(&meta, &patch)?;
   reply::refuse_dead_links(scanned_texts(&patch), &scan_context)?;
   require_waiting_context(patch.waiting.as_deref().unwrap_or_default())?;
   let stored = stored_status(&meta)?;
@@ -2762,5 +2782,124 @@ mod tests {
     let after = read_status(&home.features, root).await.expect("the status reads after the set");
     assert_eq!(held(&after), [root.to_string(), child.to_string()]);
     assert_eq!(after[WEB_STATUS]["waiting"], json!([]));
+  }
+
+  /// Creates a manager child under `parent` with an explicit `approver` on its task spec.
+  async fn child_with_approver(home: &Home, parent: &str, name: &str, approver: TaskApprover) -> String {
+    let request = charliebot_store::CreateTask {
+      request_id: format!("child-{name}"),
+      task_parent_id: Some(parent.to_string()),
+      profile: charliebot_store::metadata::TaskProfile::Manager,
+      task: Some(charliebot_store::metadata::TaskSpec { approver, ..Default::default() }),
+      name: Some(name.to_string()),
+      backend: None,
+      group: None,
+      session_id: None,
+    };
+    home
+      .features
+      .store
+      .create_task(request, charliebot_store::TaskCaller::Operator, Map::new())
+      .await
+      .expect("the child task is created")
+      .id
+  }
+
+  #[tokio::test]
+  async fn parent_approved_session_refuses_non_empty_waiting_with_409_and_stores_nothing() {
+    let home = Home::new();
+    let root = home.manager("root", None).await;
+    let child = child_with_approver(&home, &root, "parent-approved", TaskApprover::Parent).await;
+    let expected_detail = concat!(
+      "Status set refused; nothing was stored: this session's approver is its parent node, so it cannot add ",
+      "Waiting on you items. Send blockers or approval requests to your parent via `charliebot session send`, ",
+      "or pass `\"waiting\": []` to clear legacy items."
+    );
+    let unread_patch = json!({"waiting": [waiting_item("Approve merge")]}).to_string();
+    let dead_link_patch = json!({
+      "now": "Waiting",
+      "waiting": [{"text": "Review [missing](artifacts/missing.html)", "context": "Ready now."}],
+    })
+    .to_string();
+
+    for (endpoint, uri) in [("unread", "/api/internal/web/status/unread"), ("set", "/api/internal/web/status")] {
+      for (case, patch) in [("unread_item", &unread_patch), ("dead_link", &dead_link_patch)] {
+        let (status, response) = home.send(Method::POST, uri, Some(json!({"session_id": child, "text": patch}))).await;
+
+        assert_eq!(status, StatusCode::CONFLICT, "{endpoint} {case}");
+        assert_eq!(response["detail"], json!(expected_detail), "{endpoint} {case}");
+        assert_eq!(stored(&home, &child).await, Value::Null, "{endpoint} {case}");
+        assert!(status_events(&home, &child).is_empty(), "{endpoint} {case}");
+      }
+    }
+  }
+
+  #[tokio::test]
+  async fn parent_approved_session_allows_clearing_legacy_waiting_with_empty_list() {
+    let home = Home::new();
+    let root = home.manager("root", None).await;
+    let child = child_with_approver(&home, &root, "parent-approved", TaskApprover::Parent).await;
+    write_stored_status(
+      &home,
+      &child,
+      json!({
+        "now": "Legacy",
+        "waiting": [waiting_item("Legacy item")],
+        "updated_at": "2026-11-01T00:00:00Z",
+      }),
+    )
+    .await;
+
+    let unread =
+      unread_waiting(&home.features, &child, r#"{"waiting": []}"#).await.expect("clearing waiting passes unread check");
+    assert_eq!(unread, json!({"unread": []}));
+
+    let cleared =
+      set_status(&home.features, &child, r#"{"waiting": []}"#).await.expect("clearing legacy waiting stores");
+    assert_eq!(cleared["waiting"], json!([]));
+    assert_eq!(stored(&home, &child).await["waiting"], json!([]));
+    assert_eq!(stored(&home, &child).await["now"], json!("Legacy"));
+    assert_eq!(status_events(&home, &child).len(), 1);
+  }
+
+  #[tokio::test]
+  async fn parent_approved_session_allows_updating_now_alone() {
+    let home = Home::new();
+    let root = home.manager("root", None).await;
+    let child = child_with_approver(&home, &root, "parent-approved", TaskApprover::Parent).await;
+
+    let unread = unread_waiting(&home.features, &child, VALID_SET).await.expect("updating now passes unread check");
+    assert_eq!(unread, json!({"unread": []}));
+
+    let saved = set_status(&home.features, &child, VALID_SET).await.expect("updating now stores");
+    assert_eq!(saved["now"], json!("Running"));
+    assert_eq!(stored(&home, &child).await["now"], json!("Running"));
+    assert_eq!(stored(&home, &child).await["waiting"], json!([]));
+    assert_eq!(status_events(&home, &child).len(), 1);
+  }
+
+  #[tokio::test]
+  async fn user_approved_and_default_sessions_keep_allowing_waiting_items() {
+    let home = Home::new();
+    let root = home.manager("root", None).await;
+    let default_child = home.child(&root, "default-child").await;
+    let user_child = child_with_approver(&home, &root, "user-child", TaskApprover::User).await;
+
+    for sid in [&root, &default_child, &user_child] {
+      let item = planned_item("Approve deploy", Value::Null);
+      let payload = json!({"waiting": [item.clone()]}).to_string();
+
+      assert_eq!(
+        unread_waiting(&home.features, sid, &payload).await.expect("unread checks"),
+        json!({"unread": [item]})
+      );
+      record_ask_check(&home.features, sid, &item, "synthetic-haiku", "continue is recommended.")
+        .await
+        .expect("the waiting item cold read records");
+      let saved = set_status(&home.features, sid, &payload).await.expect("waiting stores");
+
+      assert_eq!(without_item_times(&saved["waiting"]), json!([item]));
+      assert_eq!(without_item_times(&stored(&home, sid).await["waiting"]), json!([item]));
+    }
   }
 }

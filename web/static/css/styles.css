@@ -90,7 +90,8 @@
    hides the span, open does the reverse. */
 .turn-wrap[data-turn-open="false"] > :not(.turn-row) { display: none; }
 .turn-wrap[data-turn-open="true"] > .turn-row { display: none; }
-.turn-wrap > :not(.turn-row) + :not(.turn-row) { margin-top: 0.75rem; }
+/* Rows that share a turn wrapper or a flat segment keep the list's 0.75rem gap between them. */
+.turn-wrap > :not(.turn-row) + :not(.turn-row), .turn-flat > * + * { margin-top: 0.75rem; }
 /* The row's columns follow its content. The tag and the steps/time keep their own
    width. The conclusion takes the width its text needs, up to 45% of the row, and
    the title takes the rest. A short conclusion then hands its spare width to the

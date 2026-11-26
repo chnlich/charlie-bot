@@ -102,7 +102,10 @@ Never include revert/keep-only-report decision rules in delegate prompts — tho
 
 ### Delegation spec hard format
 
-`charliebot delegate --help` states the six sections of a delegation spec and the Source Files rule.
+`charliebot delegate --help` states the six sections of a delegation spec and the Source Files rule. For a task with
+`--repo`, name repository files in the body by relative path, or by `<branch>:<path>` for another pushed branch, which
+the worker reads with `git show origin/<branch>:<path>`; Source Files lists only paths outside its local copies or
+`- (none)`.
 Put patch-created files in a side note.
 
 Specs must not forbid test edits: tests asserting removed behavior get updated or deleted with it.

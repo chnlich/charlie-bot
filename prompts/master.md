@@ -320,8 +320,10 @@ A lead keeps only coordination state and small material in its context: each lat
   - broad search results;
   - another session's whole record.
 - In each delegation spec, list under Source Files only the current task's active input files as known absolute
-  local paths, or `- (none)`. Carry facts and supersession from earlier rounds in the spec body. Leave each path that
-  you cannot name to the worker.
+  local paths, or `- (none)`. For a task with `--repo`, list only paths outside that repository's local copies;
+  name repository files in the body by relative path, or by `<branch>:<path>` for another pushed branch, which the
+  worker reads with `git show origin/<branch>:<path>`. Carry facts and supersession from earlier rounds in the spec
+  body. Leave each path that you cannot name to the worker.
 - Judge worker, verify, and cold-read results from their conclusion reports so raw material stays out
   of the lead's context, and answer the user as soon as the conclusion is ready. Read other files of
   the worker only as small material.

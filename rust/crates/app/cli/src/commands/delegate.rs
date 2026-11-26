@@ -22,25 +22,30 @@ use clap::error::ErrorKind;
 use clap::{CommandFactory, FromArgMatches, Parser};
 use serde_json::{Map, Value, json};
 
+#[path = "delegate_sources.rs"]
+mod delegate_sources;
+
 const DELEGATE_EPILOG: &str = r#"Task spec (--task-spec-file), six sections:
 
   ## Goal - one concise deliverable.
-  ## Source Files - absolute paths, or `- (none)`; verify requires a listed path.
+  ## Source Files - existing absolute host paths, or `- (none)`; verify requires a listed path.
+  With --repo, list only paths outside that repository's local copies. Name repository files in
+  the body by relative path; for another pushed branch use <branch>:<path>, read with
+  `git show origin/<branch>:<path>`.
   ## Required Behavior - the target outcomes, permission or safety boundaries, and external contracts.
   ## Acceptance Tests - the observable results that show each target outcome holds.
   ## Reviewer Checklist - concrete checks beyond "tests passed".
   ## Out of Scope - things the worker must not change.
 
-  The worker already carries the task_base.md and worker.md rules of its task type and the skills it loads: the spec does not restate them.
+  The worker carries its task_base.md, worker.md, and loaded skill rules; the spec does not restate them.
 
   --repo and --base-branch: give both, or omit both for a repo-less implement, quick-edit, or
   script-run task. verify forbids both.
-  --keep-worktree 1 keeps the worktree for long-running processes whose WorkDir lives there. Its
-  branch is released at task end; 0 cleans up.
+  --keep-worktree 1 keeps the worktree for long-running processes using it as WorkDir. Its branch
+  is released at task end; 0 cleans up.
   --request-id: replay id; the same id returns the original child. Default: derived from the
-  request content, so an identical spec re-delegated from the same session returns the existing
-  child; pass an explicit id for intentional same-spec siblings. An id that starts with `cron:` is
-  refused: that prefix belongs to scheduled rounds.
+  request content, so the same spec from the same session returns the existing child; pass an
+  explicit id for same-spec siblings. The `cron:` prefix belongs to scheduled rounds and is refused.
 
 Bound task (--bound-task <name>):
 
@@ -213,6 +218,9 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   let task_spec_file = cli.task_spec_file.as_deref().expect("clap requires --task-spec-file without --bound-task");
   let task_spec = files::read_required_text_file("--task-spec-file", task_spec_file)?;
   validate_task_spec_markdown(&task_spec, task_type)?;
+  if let Some(repo) = &cli.repo {
+    delegate_sources::check_source_files(&task_spec, Path::new(repo))?;
+  }
   let home = charliebot_core::home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
   validate_requester_words(&task_spec, &home)?;
 
@@ -651,5 +659,71 @@ mod tests {
   fn a_non_verify_spec_keeps_accepting_none_only_sources() {
     let spec = SOURCE_FILES_SPEC.replace("## Source Files\n", "## Source Files\n\n- (none)\n");
     validate_task_spec_markdown(&spec, StoreTaskType::Implement.as_str()).expect("- (none) stays legal off verify");
+  }
+
+  #[test]
+  #[ignore = "integration"]
+  fn source_files_reject_local_repository_copies_only() {
+    use std::fs;
+    use std::os::unix::fs::symlink;
+    use std::process::Command;
+
+    fn git(dir: &Path, args: &[&str]) {
+      let output = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+      assert!(output.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&output.stderr));
+    }
+    fn spec(source: &Path) -> String {
+      SOURCE_FILES_SPEC.replace("## Source Files\n", &format!("## Source Files\n- {}\n", source.display()))
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    fs::create_dir(&repo).unwrap();
+    git(&repo, &["init", "-q"]);
+    git(&repo, &["config", "user.name", "Test"]);
+    git(&repo, &["config", "user.email", "test@example.test"]);
+    fs::create_dir(repo.join("src")).unwrap();
+    fs::write(repo.join("src/code.rs"), "code").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-qm", "initial"]);
+    let clone = tmp.path().join("clone");
+    git(tmp.path(), &["clone", "-q", repo.to_str().unwrap(), clone.to_str().unwrap()]);
+    git(&repo, &["remote", "add", "origin", "git@example.test:owner/repo.git"]);
+    git(&clone, &["remote", "set-url", "origin", "https://example.test/owner/repo"]);
+    let worktree = tmp.path().join("worktree");
+    git(&repo, &["worktree", "add", "-q", "--detach", worktree.to_str().unwrap()]);
+    let link = tmp.path().join("linked-clone");
+    symlink(&clone, &link).unwrap();
+    let worktree_link = tmp.path().join("linked-worktree");
+    symlink(&worktree, &worktree_link).unwrap();
+
+    for (path, copy) in
+      [(&repo, &repo), (&worktree, &worktree), (&clone, &clone), (&link, &clone), (&worktree_link, &worktree)]
+    {
+      let source = path.join("src/code.rs");
+      let task = spec(&source);
+      validate_task_spec_markdown(&task, StoreTaskType::Implement.as_str()).unwrap();
+      let error = delegate_sources::check_source_files(&task, &repo).unwrap_err();
+      let message = error.body["error"].as_str().unwrap();
+      assert!(message.contains(copy.to_str().unwrap()), "{message}");
+      assert!(message.contains("src/code.rs"), "{message}");
+    }
+    let host_file = tmp.path().join("LESSONS.md");
+    fs::write(&host_file, "reference").unwrap();
+    delegate_sources::check_source_files(&spec(&host_file), &repo).unwrap();
+    let body_path = SOURCE_FILES_SPEC
+      .replace("## Source Files\n", "## Source Files\n- (none)\n")
+      .replace("## Required Behavior\n", &format!("## Required Behavior\n- {}\n", clone.join("src/code.rs").display()));
+    delegate_sources::check_source_files(&body_path, &repo).unwrap();
+    validate_task_spec_markdown(&spec(&clone.join("src/code.rs")), StoreTaskType::Implement.as_str()).unwrap();
+    git(&clone, &["remote", "remove", "origin"]);
+    delegate_sources::check_source_files(&spec(&clone.join("src/code.rs")), &repo).unwrap();
   }
 }

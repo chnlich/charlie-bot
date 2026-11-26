@@ -87,7 +87,7 @@ and your changes land directly on the host paths the task names.
 ## Task Spec Source Files
 - If the task text below is a structured task spec or contains a `## Source Files` section, read every listed source file before editing.
 - If the task spec and source files conflict, stop and report the conflict instead of inventing a merged requirement.
-- Source Files entries are read-only references into the base checkout. Make every edit inside your assigned worktree via repo-relative paths; writing to any path outside your worktree is forbidden.
+- Source Files entries name host paths outside the task repository's local copies. Read repository files named in the task body relative to your worktree; read `<branch>:<path>` from another pushed branch with `git show origin/<branch>:<path>`. Make every edit inside your assigned worktree via repo-relative paths; writing to any path outside your worktree is forbidden.
 
 <!-- section: user_decisions -->
 ## User Decisions

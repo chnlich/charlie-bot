@@ -30,6 +30,102 @@ const CASES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden");
 
 #[test]
 #[ignore = "integration"]
+fn delegate_refuses_repository_sources_before_posting() {
+  use std::fs;
+  use std::os::unix::fs::symlink;
+
+  fn git(dir: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+      .arg("-C")
+      .arg(dir)
+      .args(args)
+      .env("GIT_CONFIG_GLOBAL", "/dev/null")
+      .env("GIT_CONFIG_NOSYSTEM", "1")
+      .output()
+      .unwrap();
+    assert!(output.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&output.stderr));
+    String::from_utf8(output.stdout).unwrap()
+  }
+
+  let tmp = tempfile::tempdir().unwrap();
+  let repo = tmp.path().join("repo");
+  fs::create_dir(&repo).unwrap();
+  git(&repo, &["init", "-q"]);
+  git(&repo, &["config", "user.name", "Test"]);
+  git(&repo, &["config", "user.email", "test@example.test"]);
+  fs::write(repo.join("code.rs"), "code").unwrap();
+  git(&repo, &["add", "."]);
+  git(&repo, &["commit", "-qm", "initial"]);
+  let clone = tmp.path().join("clone");
+  git(tmp.path(), &["clone", "-q", repo.to_str().unwrap(), clone.to_str().unwrap()]);
+  git(&repo, &["remote", "add", "origin", "git@example.test:owner/repo.git"]);
+  git(&clone, &["remote", "set-url", "origin", "https://example.test/owner/repo.git"]);
+  let tree = tmp.path().join("tree");
+  git(&repo, &["worktree", "add", "-q", "--detach", tree.to_str().unwrap()]);
+  let link = tmp.path().join("link");
+  symlink(&clone, &link).unwrap();
+  let before_trees = git(&repo, &["worktree", "list", "--porcelain"]);
+  let before_branches = git(&repo, &["branch", "--list"]);
+  let home = tmp.path().join("home");
+  fs::create_dir(&home).unwrap();
+  let responses: [Value; 3] =
+    std::array::from_fn(|_| json!({"status": 200, "body": {"session_id": "child", "run_id": "run"}}));
+  let stub = start_stub(&responses);
+  fs::write(home.join("config.yaml"), format!("server:\n  port: {}\n", stub.port)).unwrap();
+  let spec = tmp.path().join("task.md");
+  for (source, copy) in [(tree.join("code.rs"), &tree), (clone.join("code.rs"), &clone), (link.join("code.rs"), &clone)]
+  {
+    fs::write(&spec, format!("## Goal\nTest\n## Source Files\n- {}\n## Required Behavior\nTest\n## Acceptance Tests\nTest\n## Reviewer Checklist\nTest\n## Out of Scope\nNone\n", source.display())).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_charliebot"))
+      .args([
+        "delegate",
+        "--session",
+        "test",
+        "--repo",
+        repo.to_str().unwrap(),
+        "--base-branch",
+        "main",
+        "--task-spec-file",
+        spec.to_str().unwrap(),
+        "--keep-worktree",
+        "0",
+      ])
+      .env("CHARLIEBOT_HOME", &home)
+      .env_remove("CHARLIEBOT_SESSION_ID")
+      .output()
+      .unwrap();
+    assert!(!output.status.success());
+    let error = String::from_utf8(output.stderr).unwrap();
+    assert!(error.contains(copy.to_str().unwrap()), "{error}");
+    assert!(error.contains("code.rs"), "{error}");
+  }
+  assert!(stub.requests.lock().unwrap().is_empty());
+  assert!(!home.join("sessions").exists());
+  assert_eq!(git(&repo, &["worktree", "list", "--porcelain"]), before_trees);
+  assert_eq!(git(&repo, &["branch", "--list"]), before_branches);
+
+  let host_file = tmp.path().join("LESSONS.md");
+  fs::write(&host_file, "host reference").unwrap();
+  for (source, body, with_repo) in [
+    (host_file.display().to_string(), String::new(), true),
+    ("(none)".to_string(), clone.join("code.rs").display().to_string(), true),
+    (clone.join("code.rs").display().to_string(), String::new(), false),
+  ] {
+    fs::write(&spec, format!("## Goal\nTest\n## Source Files\n- {source}\n## Required Behavior\n{body}\n## Acceptance Tests\nTest\n## Reviewer Checklist\nTest\n## Out of Scope\nNone\n")).unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_charliebot"));
+    command.args(["delegate", "--session", "test", "--task-spec-file", spec.to_str().unwrap(), "--keep-worktree", "0"]);
+    if with_repo {
+      command.args(["--repo", repo.to_str().unwrap(), "--base-branch", "main"]);
+    }
+    let output = command.env("CHARLIEBOT_HOME", &home).env_remove("CHARLIEBOT_SESSION_ID").output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+  }
+  assert_eq!(stub.requests.lock().unwrap().len(), 3);
+  stub.stop();
+}
+
+#[test]
+#[ignore = "integration"]
 fn golden_cases() {
   let mut failures = Vec::new();
   let mut cases = 0;

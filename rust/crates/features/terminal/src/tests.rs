@@ -36,6 +36,8 @@ impl ScopedEnv {
   }
 
   fn set(&self, key: &'static str, value: Option<&OsStr>) {
+    // SAFETY: `self._lock` holds `ENV_LOCK` while `self` lives, so no other `ScopedEnv` changes the environment
+    // at the same time.
     unsafe {
       match value {
         Some(value) => std::env::set_var(key, value),
@@ -48,6 +50,7 @@ impl ScopedEnv {
 impl Drop for ScopedEnv {
   fn drop(&mut self) {
     for (key, value) in &self.original {
+      // SAFETY: `self._lock` stays held while `drop` runs, since fields drop only after `Drop::drop` returns.
       unsafe {
         match value {
           Some(value) => std::env::set_var(key, value),

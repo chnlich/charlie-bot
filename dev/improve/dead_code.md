@@ -11,6 +11,7 @@ Your branch prefix is `improve/dead_code/`.
 - `web/`
 
 landing.md's moved-code rule covers the references outside this scope.
+A change to a web page takes its screenshots and serve trial from landing.md's Web page evidence section.
 
 Delete a public item, code or feature whose callers do not exist.
 The tree then carries only code that something uses.

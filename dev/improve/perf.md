@@ -13,6 +13,7 @@ Keep performance changes in:
 - the pages in `web/`
 
 landing.md's moved-code rule covers the references outside this scope.
+A change to a web page takes its screenshots and serve trial from landing.md's Web page evidence section.
 
 ## Topics
 
@@ -39,16 +40,9 @@ pair, stops without opening a pull request and names the held bench lock in its 
 tries again.
 The poor-network bench exposes this limit through its `--lock-wait` contract; an improve round uses 900 seconds.
 
-## Mock home
-
-The runner supplies one complete shared mock home with the production number of sessions. Both sides read the same
-data, and the round does not change it. This keeps the workload representative and the comparison fair.
-
 ## Binaries
 
-The before and after servers use the same release profile on the same host. When server code changes, the before server
-represents `origin/main` and the after server represents the branch. For a web-only change, both trees use the same
-server binary. The intended change is the only source difference between the sides.
+The before and after servers' binaries follow landing.md's Web page evidence section.
 
 When Rust unit tests change, the parallel-run and isolated-run limits are both 0.08 seconds. The repository's timing
 gate checks tests above the parallel threshold alone and fails tests that remain over the isolated limit. The pull
@@ -56,13 +50,13 @@ request evidence reports each changed test's isolated time.
 
 ## Serving
 
-Each side runs one serve trial against the shared mock home. The `$IMPROVE_KIT_DIR/dev/improve/trial-side.sh` entry holds
-the host's bench lock from trial startup through measurements and shutdown. Builds stay outside the lock. The round's scope owns
-the memory limit; the trial adds no separate scope.
+Each side runs one serve trial against the shared mock home, as landing.md's Web page evidence section sets. The
+`$IMPROVE_KIT_DIR/dev/improve/trial-side.sh` entry holds the host's bench lock from trial startup through measurements
+and shutdown, because a perf side reports timing. Builds stay outside the lock. The round's scope owns the memory limit;
+the trial adds no separate scope.
 
-The trial exports `CHARLIEBOT_SERVE_URL`, `CHARLIEBOT_SERVE_AUTH_HEADER` and `CHARLIEBOT_SERVE_PID` to its measurement
-command. Requests and process measurements use that trial's server. The mock-home check is a prerequisite for each
-side; if its server reads outside the shared mock home, stop the round without using that side's evidence.
+The mock-home check is a prerequisite for each side; if its server reads outside the shared mock home, stop the round
+without using that side's evidence.
 
 The before and after workload uses the same host, fixture, measurement order and load model. A result is reported only
 when both sides complete under comparable conditions.

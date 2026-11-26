@@ -13,6 +13,7 @@ Your branch prefix is `improve/code_style/`.
 
 Change files inside this scope only.
 A file outside the scope belongs to another direction, except a reference that landing.md's moved-code rule covers.
+A change to a web page takes its screenshots and serve trial from landing.md's Web page evidence section.
 
 ## Rules
 

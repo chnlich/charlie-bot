@@ -16,13 +16,23 @@ use serde_yaml::Value;
 const LEGACY_KEYS: &[(&str, &str)] =
   &[("code_server_bin", "code_server.bin"), ("code_server_config", "code_server.config")];
 
-/// The `code_server:` section: `bin` names the executable (`PATH` is searched when unset), and `config` the code-server
-/// config file, relative to the repository.
+/// The `code_server:` section of the config file.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CodeServerConfig {
+  /// The code-server executable. Unset or empty, it is `code-server`. A name with no directory part is searched along
+  /// `PATH`. A name with one is used as it stands, and a relative one resolves against the server's working directory.
+  /// Each `.` part drops before the lookup, so `./code-server` is searched along `PATH` like `code-server`. `~` expands
+  /// to the home directory. When no executable is found, the diff page hides its open button, and the open route
+  /// answers 404 with `code-server not available on this host`.
   #[serde(default)]
   pub bin: Option<String>,
+  /// The code-server config file. When the open route starts code-server, it passes this file as `--config`. A relative
+  /// path resolves against the repository root, and `~` expands to the home directory. Absent, it is `code-server.yaml`
+  /// in the repository's `configs` directory.
+  /// The route reads this file at each open. The port is the integer after the last `:` in its `bind-addr` string. The
+  /// route checks that port on 127.0.0.1, and it starts code-server when nothing listens there.
+  /// A missing file, or one with no `bind-addr` string, fails each open, and the page shows an error that names it.
   #[serde(default = "default_config")]
   pub config: String,
 }

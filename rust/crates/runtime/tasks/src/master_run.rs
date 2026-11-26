@@ -579,17 +579,8 @@ impl RunProcess for TurnProcess<'_> {
           .collect();
         let built =
           backend_types::build_backend(Arc::clone(&self.features.registry), &self.option, &self.item.cfg, launch_args)?;
-        if launch
-          .backend_kwargs
-          .get(charliebot_registry::midturn_delivery::BACKEND_KWARG)
-          .and_then(Value::as_bool)
-          .unwrap_or(false)
-        {
-          charliebot_registry::midturn_delivery::bind_process(
-            &self.item.task_run.run_id,
-            built.backend.midturn_run_id(),
-          )
-          .await?;
+        if let Some(state) = built.backend.midturn_state() {
+          charliebot_registry::midturn_delivery::bind_process(state);
         }
         let runner = Arc::new(AgentRunner::new(&built.backend_type, built.backend, built.launch.clone()));
         self.was_built = true;
@@ -1110,10 +1101,6 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
     charliebot_agents::transport::final_stdout::event_buffer_limit(&log_dir, subprocess_buffer_bytes(&cfg)?);
   let resume_meta = metadata.clone();
   let resume_run_id = item.task_run.run_id.clone();
-  // A restarted server holds no bound first lines in memory, so the Run's raw logs supply them before any relay binds.
-  if crate::midturn_delivery::is_manager_session(&metadata) {
-    charliebot_registry::midturn_delivery::seed_from_run_logs(&resume_run_id, &log_dir).await?;
-  }
   charliebot_agents::transport::final_stdout::recover(
     Arc::clone(&features.registry),
     Some(&option),

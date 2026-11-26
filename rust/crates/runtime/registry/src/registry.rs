@@ -830,6 +830,11 @@ pub trait AgentBackend: Send {
   fn midturn_run_id(&self) -> Option<String> {
     None
   }
+  /// The live-input state of this process, when the turn takes live user input (`midturn_delivery`). The runner
+  /// sets its run directory and resumes it before the initial prompt is written.
+  fn midturn_state(&self) -> Option<Arc<crate::midturn_delivery::DeliveryState>> {
+    None
+  }
   /// The write of the run's first stdin payload, with its stdin left open for mid-turn writes. `exited` reports the
   /// child's exit. The runner writes `stdin_prompt` and closes stdin when this returns `None`.
   fn write_stdin_prompt(

@@ -877,13 +877,9 @@ impl TaskCompletion {
   ) -> StoreResult<Vec<String>> {
     // Mid-turn delivery names every input it handed the live Run in the run's raw log, and the finish claim reads the
     // same record. The request excludes those ids whether or not the run's durable claim carries them yet.
-    let transport_dir = self.store().run_dir(session_id, &run.id);
     let mut excluded_inputs = run.input_event_ids.iter().cloned().collect::<HashSet<_>>();
-    excluded_inputs.extend(
-      midturn_delivery::delivered_input_ids(&transport_dir, &run.id)
-        .await
-        .map_err(|error| StoreError::new(error.to_string()))?,
-    );
+    let facts = self.store().load_all_facts(session_id)?;
+    excluded_inputs.extend(midturn_delivery::delivered_input_ids(&facts, &run.id));
     let blockers = {
       let _guard = self.store().control_lock().await;
       let meta = self.store().load_task_meta(session_id).await?;
@@ -2654,21 +2650,25 @@ mod tests {
       .unwrap();
   }
 
-  /// The raw-log replay lines of one gated manager turn: the initial prompt's echo and one delivered input's echo.
-  fn write_delivered_echo(
+  /// The persisted `input_delivered` event that mid-turn delivery records for one input the live Run took.
+  async fn write_delivered_echo(
     features: &charliebot_registry::context::FeatureContext,
     session_id: &str,
     run_id: &str,
     input_id: &str,
   ) {
-    let raw_log = features.store.run_dir(session_id, run_id).join(charliebot_store::run_records::RAW_LOG_NAME);
-    std::fs::write(
-      raw_log,
-      format!(
-        "{{\"type\":\"user\",\"isReplay\":true,\"uuid\":\"{run_id}\"}}\n{{\"type\":\"user\",\"isReplay\":true,\"uuid\":\"{input_id}\"}}\n"
-      ),
-    )
-    .unwrap();
+    features
+      .store
+      .append_chat_event(
+        session_id,
+        json!({
+          "type": charliebot_core::event_types::INPUT_DELIVERED,
+          (charliebot_core::event_types::INPUT_EVENT_ID): input_id,
+          "run_id": run_id,
+        }),
+      )
+      .await
+      .unwrap();
   }
 
   /// The completion owner with its dispatcher in the fixture's startup state, as the server holds both.
@@ -2709,7 +2709,7 @@ mod tests {
       test_fixtures::manager_session(&features, "self-archive-live", "fable", None, "claude-self-archive").await;
     let run = live_manager_turn(&features, &meta.id, "self-archive-run").await;
     append_pending_input(&features, &meta.id, "in-midturn").await;
-    write_delivered_echo(&features, &meta.id, &run.id, "in-midturn");
+    write_delivered_echo(&features, &meta.id, &run.id, "in-midturn").await;
 
     let completion = dispatching_completion(&features);
     let (status, answer) =
@@ -2739,7 +2739,7 @@ mod tests {
       test_fixtures::manager_session(&features, "self-archive-failed", "fable", None, "claude-self-archive").await;
     let run = live_manager_turn(&features, &meta.id, "self-archive-run").await;
     append_pending_input(&features, &meta.id, "in-midturn").await;
-    write_delivered_echo(&features, &meta.id, &run.id, "in-midturn");
+    write_delivered_echo(&features, &meta.id, &run.id, "in-midturn").await;
 
     let completion = dispatching_completion(&features);
     let (status, _) =
@@ -2775,7 +2775,7 @@ mod tests {
     let run = live_manager_turn(&features, &meta.id, "self-archive-run").await;
     append_pending_input(&features, &meta.id, "in-midturn").await;
     append_pending_input(&features, &meta.id, "in-queued").await;
-    write_delivered_echo(&features, &meta.id, &run.id, "in-midturn");
+    write_delivered_echo(&features, &meta.id, &run.id, "in-midturn").await;
 
     let completion = dispatching_completion(&features);
     let error = completion

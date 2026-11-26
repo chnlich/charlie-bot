@@ -2533,16 +2533,12 @@ impl TaskExecutionAdapter {
       let raw_log = raw_log.clone();
       Box::pin(async move {
         let finished: anyhow::Result<bool> = async {
-          // The finish recorder claims only the echoed pending ids, so a queued message the live Run never took
-          // stays pending for the next turn.
-          crate::midturn_delivery::claim_finish_inputs(
-            dispatch.as_ref(),
-            &meta,
-            &run_id,
-            raw_log.parent().context("the run's raw log has no transport directory")?,
-            exit_code == 0,
-          )
-          .await?;
+          // The finish recorder claims only the inputs the live Run delivered, as its persisted events name them, so a
+          // queued message the live Run never took stays pending for the next turn.
+          let delivered =
+            crate::midturn_delivery::delivered_input_ids(&features.store.load_all_facts(&session_id)?, &run_id);
+          crate::midturn_delivery::claim_finish_inputs(dispatch.as_ref(), &meta, &run_id, delivered, exit_code == 0)
+            .await?;
           features
             .store
             .record_observation(

@@ -1,20 +1,16 @@
-//! Live user-message delivery for web manager turns.
+//! Live user-message delivery for manager turns, the runtime half that every backend shares.
 //!
-//! One module owns the serialized stdin writes, the replay acknowledgements and the stdin close of one Run. The
-//! backend writes the Run prompt as the first stream-json user line and keeps stdin open. Each bound process's
-//! first line carries the uuid `initial_line_uuid` derives and `bind_process` registers, so a relayed process never
-//! resends a uuid the transcript it resumes already holds. The dispatcher offers each pending web user message
-//! while the turn runs. The backend's replay of a delivered line becomes a non-rendered `input_delivered` event,
-//! and the first result closes stdin. A restarted server seeds a re-attached Run's first lines from the replayed uuids
-//! its raw logs hold (`seed_from_run_logs`), so the next process takes a line the conversation does not hold.
+//! A backend that takes live input supplies a `MidturnCodec`, which owns its wire format: it encodes one stdin write
+//! per message and reads the agent's output into three neutral signals (inputs delivered, turn ended, usage). This
+//! module owns everything around the codec: the serialized stdin writes, the de-duplication of input ids, the request
+//! ledger (an append-only input log written before each write), the `input_delivered` events, and the turn end that
+//! closes the input. It names no backend, model, option or CLI, and no wire field.
 //!
-//! The module is the delivery state both sides share: the agent runtime writes into it, and the task queue reads it.
-//! The stream-json launch arguments that turn the path on are the backend's, behind its lifecycle
-//! (`BackendLifecycle::midturn_launch_kwargs`).
+//! The backend that has no codec keeps today's behavior: its pending input waits for the next turn.
 
 use std::collections::{HashMap, HashSet};
-use std::fmt;
-use std::io::{BufRead, BufReader};
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{
   Arc, Mutex, OnceLock,
@@ -24,64 +20,177 @@ use std::sync::{
 use anyhow::{Context, bail};
 use charliebot_core::event_types;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
-use charliebot_store::run_records::{RAW_LOG_NAME, RunKind};
-use serde::de::{IgnoredAny, MapAccess, Visitor};
-use serde::{Deserialize, Deserializer};
+use charliebot_store::run_records::{MIDTURN_INPUT_LOG_NAME, RunKind};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::watch;
 
-/// The Claude stream-json field that marks a replayed user message. The backend's `translate_replay` and the task
-/// dispatcher's replay-line parser both read it, so they match this name instead of spelling it.
-pub const IS_REPLAY_FIELD: &str = "isReplay";
+use crate::backend::Translate;
 
 /// The `backend_kwargs` key that turns the live user-input path on for one Run. The backend's
-/// `midturn_launch_kwargs` writes it, and the task dispatcher reads it before binding the process, so both match
-/// this name instead of spelling it.
+/// `midturn_launch_kwargs` writes it, and the task dispatcher reads it before binding the process, so both match this
+/// name instead of spelling it.
 pub const BACKEND_KWARG: &str = "midturn_delivery";
-
-/// The uuid v5 namespace of a relayed process's first-line uuid. Namespaced derivation keeps every relay's uuid out
-/// of the random-uuid space that the copied transcript and the pending web inputs draw from.
-const FIRST_LINE_NAMESPACE: uuid::Uuid = uuid::Uuid::from_u128(0x5eed_1f0b_4a7d_5c6e_9a2b_3c1d_0e4f_2674);
 
 /// Whether the spawned child has exited, read by the mid-turn delivery path before it writes.
 pub type ExitedProbe = Arc<dyn Fn() -> bool + Send + Sync>;
 
-/// The stdin writer, the child's exit probe and the close flag of one Run's process.
-struct StdinState {
-  stdin: Option<Box<dyn tokio::io::AsyncWrite + Send + Unpin>>,
+/// One write to the agent's input: the request key that names it in the input log, and the bytes to write.
+pub struct EncodedInput {
+  pub key: String,
+  pub line: Vec<u8>,
+}
+
+/// A neutral signal of a codec's reading of the agent's output.
+#[derive(Debug, PartialEq, Eq)]
+pub enum MidturnSignal {
+  /// The agent has received the requests named by these keys, each counted once.
+  Delivered(Vec<String>),
+  /// The agent's turn has ended. The runtime closes the input under the write lock, and only while no written request
+  /// still awaits its answer.
+  TurnEnded,
+}
+
+/// What a codec makes of one raw output event: the events it translates to, and its neutral signals.
+pub struct Observed {
+  pub events: Vec<Value>,
+  pub signals: Vec<MidturnSignal>,
+}
+
+/// One backend's mid-turn wire format. The runtime calls it under its own locks; a codec does no I/O of its own.
+pub trait MidturnCodec: Send {
+  /// The Run's initial prompt as one stdin write.
+  fn encode_prompt(&mut self, prompt: &str) -> anyhow::Result<EncodedInput>;
+
+  /// One pending user input, as one stdin write. The key names the write in the input log.
+  fn encode_input(&mut self, input_id: &str, content: &str) -> anyhow::Result<EncodedInput>;
+
+  /// One raw output event, read in order.
+  fn observe(&mut self, raw: &Value) -> anyhow::Result<Observed>;
+
+  /// Whether the turn may end now: no written request still awaits its answer.
+  fn turn_may_end(&self) -> bool;
+
+  /// Rebuilds the codec's state after a restart. `logged_keys` names every write the input log holds, and the codec
+  /// reads its own output up to `cursor` (the follower's checkpoint) to learn which of them were answered.
+  fn resume(&mut self, logged_keys: &[String], transport_dir: &Path, cursor: u64) -> anyhow::Result<()>;
+}
+
+/// One input-log record: a write's key, and the input event ids it carries (none for the initial prompt).
+#[derive(Serialize, Deserialize)]
+struct LedgerLine {
+  key: String,
+  inputs: Vec<String>,
+}
+
+/// The stdin writer and the exit probe of one process of a Run.
+struct Writer {
+  stdin: Option<Box<dyn AsyncWrite + Send + Unpin>>,
   exited: Option<ExitedProbe>,
   closed: bool,
   write_error: Option<String>,
 }
 
-/// The replay evidence one Run accumulates: every input the delivery path attempted and wrote.
+/// The request ledger of one Run: each written key with its input ids, and every input id already logged.
 #[derive(Default)]
-struct Evidence {
-  attempted: HashSet<String>,
-  written: HashSet<String>,
+struct Ledger {
+  inputs_by_key: HashMap<String, Vec<String>>,
+  logged_inputs: HashSet<String>,
 }
 
-/// The serialized stdin writer and replay evidence for one Run (`_DeliveryState`).
-struct DeliveryState {
-  writer: tokio::sync::Mutex<StdinState>,
+/// The turn-end bookkeeping: a candidate end the codec signaled, and whether the turn has ended.
+#[derive(Default)]
+struct Turn {
+  candidate: bool,
+  ended: bool,
+}
+
+/// The delivery state of one Run's process: the codec, the writer, the ledger and the turn end.
+pub struct DeliveryState {
+  run_id: String,
+  writer: tokio::sync::Mutex<Writer>,
+  codec: Mutex<Box<dyn MidturnCodec>>,
+  ledger: Mutex<Ledger>,
+  input_log: OnceLock<PathBuf>,
+  turn: Mutex<Turn>,
   initial_written: (watch::Sender<bool>, watch::Receiver<bool>),
-  evidence: Mutex<Evidence>,
   released: AtomicBool,
-  /// The registered first-line uuid of every bound process, in bind order. The last one names the first line the
-  /// current process receives, and its echo is recognized as this Run's own initial line.
-  first_lines: Mutex<Vec<String>>,
 }
 
 impl DeliveryState {
-  fn new() -> Arc<DeliveryState> {
+  /// The state of one process of `run_id`, with its codec. The initial prompt is not yet written.
+  pub fn new(run_id: &str, codec: Box<dyn MidturnCodec>) -> Arc<Self> {
     Arc::new(Self {
-      writer: tokio::sync::Mutex::new(StdinState { stdin: None, exited: None, closed: false, write_error: None }),
+      run_id: run_id.to_string(),
+      writer: tokio::sync::Mutex::new(Writer { stdin: None, exited: None, closed: false, write_error: None }),
+      codec: Mutex::new(codec),
+      ledger: Mutex::new(Ledger::default()),
+      input_log: OnceLock::new(),
+      turn: Mutex::new(Turn::default()),
       initial_written: watch::channel(false),
-      evidence: Mutex::new(Evidence::default()),
       released: AtomicBool::new(false),
-      first_lines: Mutex::new(Vec::new()),
     })
+  }
+
+  /// The Run directory that holds the input log. Every write names it, so it is set before the first write.
+  pub fn set_run_dir(&self, run_dir: &Path) -> anyhow::Result<()> {
+    let path = run_dir.join(MIDTURN_INPUT_LOG_NAME);
+    let existing = self.input_log.get_or_init(|| path.clone());
+    if *existing != path {
+      bail!("Run {} names two input logs: {} and {}", self.run_id, existing.display(), path.display());
+    }
+    Ok(())
+  }
+
+  /// Loads the ledger from the input log and lets the codec rebuild its state from its output. A Run with no input log
+  /// yet has an empty ledger.
+  pub fn resume(&self, transport_dir: &Path, cursor: u64) -> anyhow::Result<()> {
+    let logged = self.read_input_log()?;
+    let keys = logged.iter().map(|line| line.key.clone()).collect::<Vec<_>>();
+    {
+      let mut ledger = self.ledger.lock().expect("mid-turn ledger mutex is not poisoned");
+      for line in logged {
+        ledger.logged_inputs.extend(line.inputs.iter().cloned());
+        ledger.inputs_by_key.insert(line.key, line.inputs);
+      }
+    }
+    self.codec.lock().expect("mid-turn codec mutex is not poisoned").resume(&keys, transport_dir, cursor)
+  }
+
+  fn read_input_log(&self) -> anyhow::Result<Vec<LedgerLine>> {
+    let Some(path) = self.input_log.get() else {
+      return Ok(Vec::new());
+    };
+    let text = match std::fs::read_to_string(path) {
+      Ok(text) => text,
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+      Err(error) => return Err(error).with_context(|| format!("reading the input log {}", path.display())),
+    };
+    text
+      .lines()
+      .map(|line| {
+        serde_json::from_str::<LedgerLine>(line)
+          .with_context(|| format!("the input log {} holds a line that is not a ledger record", path.display()))
+      })
+      .collect()
+  }
+
+  /// Appends one write to the input log, before the write itself.
+  fn log_write(&self, key: &str, inputs: Vec<String>) -> anyhow::Result<()> {
+    let path = self.input_log.get().with_context(|| format!("Run {} has no input log", self.run_id))?;
+    let mut line = serde_json::to_string(&LedgerLine { key: key.to_string(), inputs: inputs.clone() })?;
+    line.push('\n');
+    let mut file = OpenOptions::new()
+      .create(true)
+      .append(true)
+      .open(path)
+      .with_context(|| format!("opening the input log {}", path.display()))?;
+    file.write_all(line.as_bytes()).with_context(|| format!("appending to the input log {}", path.display()))?;
+    let mut ledger = self.ledger.lock().expect("mid-turn ledger mutex is not poisoned");
+    ledger.logged_inputs.extend(inputs.iter().cloned());
+    ledger.inputs_by_key.insert(key.to_string(), inputs);
+    Ok(())
   }
 
   async fn wait_initial_written(&self) {
@@ -92,18 +201,171 @@ impl DeliveryState {
       }
     }
   }
+
+  /// Writes the Run's initial prompt with its stdin left open. `exited` reports the child's exit.
+  pub async fn write_prompt(
+    &self,
+    stdin: Box<dyn AsyncWrite + Send + Unpin>,
+    exited: ExitedProbe,
+    prompt: &str,
+  ) -> anyhow::Result<()> {
+    let mut writer = self.writer.lock().await;
+    if *self.initial_written.1.borrow() {
+      bail!("Run {} already wrote its initial prompt", self.run_id);
+    }
+    writer.exited = Some(exited);
+    writer.stdin = Some(stdin);
+    let result = self.write_prompt_line(&mut writer, prompt).await;
+    if let Err(error) = &result {
+      writer.write_error = Some(error.to_string());
+    }
+    self.initial_written.0.send_replace(true);
+    result
+  }
+
+  async fn write_prompt_line(&self, writer: &mut Writer, prompt: &str) -> anyhow::Result<()> {
+    let encoded = self.codec.lock().expect("mid-turn codec mutex is not poisoned").encode_prompt(prompt)?;
+    self.log_write(&encoded.key, Vec::new())?;
+    send(writer, &encoded.line).await
+  }
+
+  /// Each composed input written once to the live stdin, returning the input ids this call wrote.
+  ///
+  /// `inputs` carries one composed `(input id, content)` pair per pending user event. An id is logged once per Run: a
+  /// later offer of the same id writes nothing.
+  pub async fn offer(&self, inputs: Vec<(String, String)>) -> anyhow::Result<Vec<String>> {
+    self.wait_initial_written().await;
+    let mut writer = self.writer.lock().await;
+    if let Some(error) = &writer.write_error {
+      return Err(anyhow::anyhow!(error.clone()));
+    }
+    let mut written = Vec::new();
+    if self.released.load(Ordering::Acquire) || writer.closed {
+      return Ok(written);
+    }
+    if writer.stdin.is_none() || writer.exited.as_ref().is_some_and(|exited| exited()) {
+      return Ok(written);
+    }
+    for (input_id, content) in inputs {
+      if self.ledger.lock().expect("mid-turn ledger mutex is not poisoned").logged_inputs.contains(&input_id) {
+        continue;
+      }
+      let encoded =
+        self.codec.lock().expect("mid-turn codec mutex is not poisoned").encode_input(&input_id, &content)?;
+      self.log_write(&encoded.key, vec![input_id.clone()])?;
+      send(&mut writer, &encoded.line).await?;
+      written.push(input_id);
+    }
+    Ok(written)
+  }
+
+  /// Reads one raw output event through the codec. Each delivered request becomes an `input_delivered` event for each
+  /// input id it carries, and a turn end is kept as a candidate until `settle_turn` applies it.
+  pub fn observe(&self, raw: &Value) -> anyhow::Result<Vec<Value>> {
+    let observed = self.codec.lock().expect("mid-turn codec mutex is not poisoned").observe(raw)?;
+    let mut events = observed.events;
+    for signal in observed.signals {
+      match signal {
+        MidturnSignal::Delivered(keys) => {
+          let ledger = self.ledger.lock().expect("mid-turn ledger mutex is not poisoned");
+          for key in keys {
+            for input_id in ledger.inputs_by_key.get(&key).into_iter().flatten() {
+              events.push(json!({
+                "type": event_types::INPUT_DELIVERED,
+                (event_types::INPUT_EVENT_ID): input_id,
+                "run_id": self.run_id,
+              }));
+            }
+          }
+        }
+        MidturnSignal::TurnEnded => self.turn.lock().expect("mid-turn turn mutex is not poisoned").candidate = true,
+      }
+    }
+    Ok(events)
+  }
+
+  /// Applies a candidate turn end under the write lock. The input closes only when no written request still awaits its
+  /// answer; otherwise the candidate lapses, and the answer that clears the last request signals it again.
+  pub async fn settle_turn(&self) -> anyhow::Result<()> {
+    let candidate = std::mem::take(&mut self.turn.lock().expect("mid-turn turn mutex is not poisoned").candidate);
+    if !candidate {
+      return Ok(());
+    }
+    self.wait_initial_written().await;
+    let mut writer = self.writer.lock().await;
+    if writer.closed || self.released.load(Ordering::Acquire) {
+      return Ok(());
+    }
+    if writer.stdin.is_none() {
+      bail!("Run {} has no subprocess stdin to close", self.run_id);
+    }
+    if !self.codec.lock().expect("mid-turn codec mutex is not poisoned").turn_may_end() {
+      return Ok(());
+    }
+    writer.closed = true;
+    writer.stdin = None;
+    self.turn.lock().expect("mid-turn turn mutex is not poisoned").ended = true;
+    Ok(())
+  }
+
+  /// Whether the turn has ended: the codec signaled it and no write was pending.
+  pub fn turn_ended(&self) -> bool {
+    self.turn.lock().expect("mid-turn turn mutex is not poisoned").ended
+  }
+
+  /// Marks the Run's state released once its terminal fact is recorded.
+  fn release(&self) {
+    self.released.store(true, Ordering::Release);
+    self.initial_written.0.send_replace(true);
+  }
 }
 
-fn runs() -> &'static Mutex<HashMap<String, Arc<DeliveryState>>> {
-  static RUNS: OnceLock<Mutex<HashMap<String, Arc<DeliveryState>>>> = OnceLock::new();
+async fn send(writer: &mut Writer, line: &[u8]) -> anyhow::Result<()> {
+  let stdin = writer.stdin.as_mut().context("the mid-turn stdin writer is missing")?;
+  stdin.write_all(line).await?;
+  stdin.flush().await?;
+  Ok(())
+}
+
+/// The process states of the Runs this server runs, keyed by Run id, with the count of processes each Run has bound.
+#[derive(Default)]
+struct RunEntry {
+  state: Option<Arc<DeliveryState>>,
+  processes: usize,
+}
+
+fn runs() -> &'static Mutex<HashMap<String, RunEntry>> {
+  static RUNS: OnceLock<Mutex<HashMap<String, RunEntry>>> = OnceLock::new();
   RUNS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 fn state_of(run_id: &str) -> Option<Arc<DeliveryState>> {
-  runs().lock().expect("mid-turn delivery registry is not poisoned").get(run_id).cloned()
+  runs().lock().expect("mid-turn delivery registry is not poisoned").get(run_id).and_then(|entry| entry.state.clone())
 }
 
-/// True for a manager session, web or bound to a chat thread: the session that takes live user input and the status.
+/// How many processes this server has bound to `run_id`. A relayed process reads it to number itself.
+pub fn bound_processes(run_id: &str) -> usize {
+  runs().lock().expect("mid-turn delivery registry is not poisoned").get(run_id).map_or(0, |entry| entry.processes)
+}
+
+/// Registers `state` as the delivery state of its Run's live process, so the dispatcher can offer inputs to it.
+pub fn bind_process(state: Arc<DeliveryState>) {
+  let mut registry = runs().lock().expect("mid-turn delivery registry is not poisoned");
+  let entry = registry.entry(state.run_id.clone()).or_default();
+  entry.state = Some(state);
+  entry.processes += 1;
+}
+
+/// The translator of a run with live input: each raw event goes through the codec (`DeliveryState::observe`).
+pub struct MidturnTranslate(pub Arc<DeliveryState>);
+
+impl Translate for MidturnTranslate {
+  fn translate(&mut self, raw: Value) -> anyhow::Result<Vec<Value>> {
+    self.0.observe(&raw)
+  }
+}
+
+/// Whether a manager session takes live user input. Its turn is a manager turn of a manager profile.
 pub fn is_manager_session(meta: &SessionMetadata) -> bool {
   meta.profile == TaskProfile::Manager
 }
@@ -113,9 +375,9 @@ pub fn is_gated_turn(meta: &SessionMetadata, turn: bool, run_kind: RunKind) -> b
   turn && run_kind == RunKind::ManagerTurn && is_manager_session(meta)
 }
 
-/// The Run id that enables the stream-json input path, or `None` for the plain-text stdin path.
+/// The Run id that enables the live input path, or `None` for the plain-text stdin path.
 ///
-/// `Err` when a gated web manager turn carries no Run id: the initial prompt and every offer write name it.
+/// `Err` when a gated web manager turn carries no Run id: the initial prompt and every offer name it.
 pub fn launch_kwargs(
   meta: &SessionMetadata,
   turn: bool,
@@ -125,465 +387,101 @@ pub fn launch_kwargs(
   if !is_gated_turn(meta, turn, run_kind) {
     return Ok(None);
   }
-  let run_id = run_id.filter(|value| !value.is_empty());
-  match run_id {
+  match run_id.filter(|value| !value.is_empty()) {
     Some(run_id) => Ok(Some(run_id.to_string())),
     None => bail!("a gated web manager turn needs its Run id"),
   }
 }
 
-/// The binding of a gated process, with this Run's replay evidence preserved.
-///
-/// `backend_run_id` is `backend.midturn_run_id()`: `None` leaves the plain-text stdin path unbound. Each bind
-/// registers the process's first-line uuid, so a relay writes its continuation prompt under a uuid the transcript
-/// it resumes does not hold.
-pub async fn bind_process(run_id: &str, backend_run_id: Option<String>) -> anyhow::Result<()> {
-  let Some(backend_run_id) = backend_run_id else {
-    return Ok(());
-  };
-  if backend_run_id != run_id {
-    bail!("the mid-turn backend Run id does not match its task Run");
-  }
-  let state = runs()
-    .lock()
-    .expect("mid-turn delivery registry is not poisoned")
-    .entry(run_id.to_string())
-    .or_insert_with(DeliveryState::new)
-    .clone();
-  let mut writer = state.writer.lock().await;
-  writer.stdin = None;
-  writer.exited = None;
-  writer.closed = false;
-  writer.write_error = None;
-  let mut first_lines = state.first_lines.lock().expect("first-line mutex is not poisoned");
-  let process = first_lines.len();
-  first_lines.push(initial_line_uuid(run_id, process));
-  drop(first_lines);
-  state.initial_written.0.send_replace(false);
-  Ok(())
-}
-
-/// The stream-json uuid of the first line one gated process of the Run receives. The first process writes the Run
-/// id, and every relay derives one from the Run id and its process number. Claude Code 2.1.312 and later skip a
-/// stdin line whose uuid the transcript they resume already holds, so a relayed process must never resend the Run
-/// id. This function is the one owner of that derivation.
-pub fn initial_line_uuid(run_id: &str, process: usize) -> String {
-  match process {
-    0 => run_id.to_string(),
-    _ => uuid::Uuid::new_v5(&FIRST_LINE_NAMESPACE, format!("{run_id}:{process}").as_bytes()).to_string(),
-  }
-}
-
-/// Extend the Run's first lines past the ones this server bound, while `held` names the next one.
-///
-/// Process `n` of a Run takes `initial_line_uuid(run_id, n)`. The loop takes each consecutive first line that `held`
-/// names, so the next bound process takes the first line that `held` does not name. A Run this server has not seen
-/// gets a state with no initial prompt pending, so its mid-turn offers see no wait. Calling it again adds nothing new.
-pub fn seed_first_lines(run_id: &str, held: &HashSet<String>) {
-  let state = runs()
-    .lock()
-    .expect("mid-turn delivery registry is not poisoned")
-    .entry(run_id.to_string())
-    .or_insert_with(|| {
-      let state = DeliveryState::new();
-      state.initial_written.0.send_replace(true);
-      state
-    })
-    .clone();
-  let mut first_lines = state.first_lines.lock().expect("first-line mutex is not poisoned");
-  loop {
-    let next = initial_line_uuid(run_id, first_lines.len());
-    if !held.contains(&next) {
-      break;
-    }
-    first_lines.push(next);
-  }
-}
-
-/// Seed a re-attached Run's first lines from the replayed uuids its raw legs hold (`seed_first_lines`).
-///
-/// A restarted server holds no first lines in memory, so the Run's next bound process would number itself from zero
-/// and resend the Run id. The scan parses every raw line of the Run, so it rides a blocking thread. An unreadable leg
-/// stops the seed with its error.
-pub async fn seed_from_run_logs(run_id: &str, transport_dir: &Path) -> anyhow::Result<()> {
-  let scan_dir = transport_dir.to_path_buf();
-  let held = tokio::task::spawn_blocking(move || replayed_user_uuids(&scan_dir))
-    .await
-    .context("the raw-log scan task stopped before it finished")??;
-  seed_first_lines(run_id, &held);
-  Ok(())
-}
-
-/// Whether a replayed uuid names a first line this Run's delivery wrote, rather than a mid-turn web input. Such a
-/// uuid is the Run id itself, or the uuid one of the Run's bound processes registered at `bind_process`.
-pub fn is_first_line(run_id: &str, uuid: &str) -> bool {
-  if uuid == run_id {
-    return true;
-  }
-  state_of(run_id).is_some_and(|state| {
-    state.first_lines.lock().expect("first-line mutex is not poisoned").iter().any(|line| line == uuid)
-  })
-}
-
-/// The three fields of a raw transport line that the replay scan reads. The map visitor keeps the last duplicate key
-/// and ignores unrelated fields without constructing their values.
-struct ReplayLine {
-  kind: Option<Value>,
-  is_replay: Option<Value>,
-  uuid: Option<Value>,
-}
-
-impl<'de> Deserialize<'de> for ReplayLine {
-  fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-  where
-    D: Deserializer<'de>,
-  {
-    struct ReplayLineVisitor;
-
-    impl<'de> Visitor<'de> for ReplayLineVisitor {
-      type Value = ReplayLine;
-
-      fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("a JSON object")
-      }
-
-      fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-      where
-        A: MapAccess<'de>,
-      {
-        let mut line = ReplayLine { kind: None, is_replay: None, uuid: None };
-        while let Some(key) = map.next_key::<String>()? {
-          match key.as_str() {
-            "type" => line.kind = Some(map.next_value()?),
-            IS_REPLAY_FIELD => line.is_replay = Some(map.next_value()?),
-            "uuid" => line.uuid = Some(map.next_value()?),
-            _ => {
-              let _: IgnoredAny = map.next_value()?;
-            }
-          }
-        }
-        Ok(line)
-      }
-    }
-
-    deserializer.deserialize_map(ReplayLineVisitor)
-  }
-}
-
-/// Read every replayed user uuid from every raw transport leg of one Run directory.
-///
-/// A replayed user line is the CLI's echo of a stdin line it accepted. The set therefore holds each uuid the Run's
-/// conversation received, the first lines included. A missing directory holds no legs. An unreadable directory or leg
-/// is an error, because a uuid the set omits could be one the conversation holds. A raw line that is not a JSON object
-/// is skipped, and a line without its newline ends the scan of its leg.
-pub fn replayed_user_uuids(transport_dir: &Path) -> anyhow::Result<HashSet<String>> {
-  let entries = match std::fs::read_dir(transport_dir) {
-    Ok(entries) => entries,
-    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(HashSet::new()),
-    Err(error) => {
-      return Err(error).with_context(|| format!("reading the run transport {}", transport_dir.display()));
-    }
-  };
-  let mut raw_paths = Vec::<PathBuf>::new();
-  for entry in entries {
-    let path = entry.with_context(|| format!("reading the run transport {}", transport_dir.display()))?.path();
-    let is_leg = path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with(RAW_LOG_NAME));
-    let is_file =
-      std::fs::metadata(&path).with_context(|| format!("reading the raw log {}", path.display()))?.is_file();
-    if is_leg && is_file {
-      raw_paths.push(path);
-    }
-  }
-  raw_paths.sort();
-  let mut replayed = HashSet::new();
-  let mut line = Vec::new();
-  for raw_path in raw_paths {
-    let raw_file =
-      std::fs::File::open(&raw_path).with_context(|| format!("reading the raw log {}", raw_path.display()))?;
-    let mut raw_lines = BufReader::new(raw_file);
-    loop {
-      line.clear();
-      raw_lines.read_until(b'\n', &mut line).with_context(|| format!("reading the raw log {}", raw_path.display()))?;
-      let Some(complete) = line.strip_suffix(b"\n") else {
-        break;
-      };
-      let Ok(event) = serde_json::from_slice::<ReplayLine>(complete) else {
-        continue;
-      };
-      if event.kind.as_ref().and_then(Value::as_str) != Some(event_types::USER)
-        || event.is_replay.as_ref().and_then(Value::as_bool) != Some(true)
-      {
-        continue;
-      }
-      if let Some(input_id) = event.uuid.as_ref().and_then(Value::as_str)
-        && !input_id.is_empty()
-      {
-        replayed.insert(input_id.to_string());
-      }
-    }
-  }
-  Ok(replayed)
-}
-
-/// The encoded stream-json line of one user input.
-fn user_line(uuid: &str, content: &str) -> Vec<u8> {
-  let mut line = json!({
-    "type": "user",
-    "uuid": uuid,
-    "message": {"role": "user", "content": content},
-  })
-  .to_string()
-  .into_bytes();
-  line.push(b'\n');
-  line
-}
-
-/// The Run prompt written as the first JSON message, with stdin left open.
-///
-/// The line's uuid is the one `bind_process` registered for this process. It is the Run id for the first process,
-/// and a fresh derived uuid for a relay, whose copied transcript already holds the earlier first lines.
-pub async fn write_initial_prompt(
-  run_id: Option<String>,
-  stdin: Box<dyn tokio::io::AsyncWrite + Send + Unpin>,
-  exited: ExitedProbe,
-  prompt: String,
-) -> anyhow::Result<()> {
-  let run_id = run_id.filter(|value| !value.is_empty()).context("a gated web manager turn needs its Run id")?;
-  let state =
-    state_of(&run_id).with_context(|| format!("Run {run_id} has no mid-turn delivery state for its initial prompt"))?;
-  let mut writer = state.writer.lock().await;
-  if *state.initial_written.1.borrow() {
-    bail!("Run {run_id} already wrote its initial stream-json prompt");
-  }
-  let first_line = {
-    let first_lines = state.first_lines.lock().expect("first-line mutex is not poisoned");
-    first_lines.last().expect("the bound process registered its first-line uuid").clone()
-  };
-  writer.exited = Some(exited);
-  writer.stdin = Some(stdin);
-  let result = write_line(writer.stdin.as_mut().expect("the writer was just stored"), &first_line, &prompt).await;
-  if let Err(error) = result {
-    writer.write_error = Some(error.to_string());
-    state.initial_written.0.send_replace(true);
-    return Err(error);
-  }
-  state.initial_written.0.send_replace(true);
-  Ok(())
-}
-
-async fn write_line(
-  stdin: &mut Box<dyn tokio::io::AsyncWrite + Send + Unpin>,
-  uuid: &str,
-  content: &str,
-) -> anyhow::Result<()> {
-  stdin.write_all(&user_line(uuid, content)).await?;
-  stdin.flush().await?;
-  Ok(())
-}
-
-/// Each composed input written once to the live Run's stdin, returning the ids this call wrote.
-///
-/// `inputs` carries one composed `(event id, content)` pair per pending web user event. An id is attempted once per
-/// Run: a later offer of the same event writes nothing.
+/// Offers `inputs` to the live process of `run_id`, returning the input ids it wrote (`DeliveryState::offer`).
 pub async fn offer(run_id: &str, inputs: Vec<(String, String)>) -> anyhow::Result<Vec<String>> {
   let Some(state) = state_of(run_id) else {
     return Ok(Vec::new());
   };
-  state.wait_initial_written().await;
-  let mut writer = state.writer.lock().await;
-  if let Some(error) = &writer.write_error {
-    return Err(anyhow::anyhow!(error.clone()));
-  }
-  let mut written = Vec::new();
-  if state.released.load(Ordering::Acquire) || writer.closed {
-    return Ok(written);
-  }
-  if writer.stdin.is_none() || writer.exited.as_ref().is_some_and(|exited| exited()) {
-    return Ok(written);
-  }
-  for (input_id, content) in inputs {
-    {
-      let mut evidence = state.evidence.lock().expect("mid-turn evidence mutex is not poisoned");
-      if evidence.attempted.contains(&input_id) {
-        continue;
-      }
-      evidence.attempted.insert(input_id.clone());
-    }
-    write_line(writer.stdin.as_mut().expect("the checked stdin writer exists"), &input_id, &content).await?;
-    state.evidence.lock().expect("mid-turn evidence mutex is not poisoned").written.insert(input_id.clone());
-    written.push(input_id);
-  }
-  Ok(written)
+  state.offer(inputs).await
 }
 
-/// The non-rendered acknowledgement of a replay of a delivered user message.
-pub fn translate_replay(run_id: Option<&str>, event: &Value) -> anyhow::Result<Vec<Value>> {
-  if event.get("type").and_then(Value::as_str) != Some(event_types::USER)
-    || event.get(IS_REPLAY_FIELD) != Some(&Value::Bool(true))
-  {
-    return Ok(vec![event.clone()]);
-  }
-  let run_id = run_id.filter(|value| !value.is_empty()).context("a replayed Claude user message has no Run id")?;
-  let input_id = match event.get("uuid") {
-    Some(Value::String(input_id)) if !input_id.is_empty() => input_id.clone(),
-    _ => bail!("a replayed Claude user message has no uuid"),
-  };
-  if is_first_line(run_id, &input_id) {
-    return Ok(Vec::new());
-  }
-  if let Some(state) = state_of(run_id)
-    && !state.evidence.lock().expect("mid-turn evidence mutex is not poisoned").written.contains(&input_id)
-  {
-    bail!("Run {run_id} replayed user input {input_id} without a matching stdin write");
-  }
-  Ok(vec![json!({
-    "type": event_types::INPUT_DELIVERED,
-    (event_types::INPUT_EVENT_ID): input_id,
-    "run_id": run_id,
-  })])
-}
-
-/// The close of gated stdin under the write lock at the first result event.
-pub async fn on_backend_event(run_id: Option<String>, event: &Value) -> anyhow::Result<()> {
-  let Some(run_id) = run_id else {
-    return Ok(());
-  };
-  if event.get("type").and_then(Value::as_str) != Some(event_types::RESULT) {
-    return Ok(());
-  }
-  let state =
-    state_of(&run_id).with_context(|| format!("Run {run_id} has no mid-turn delivery state for its result event"))?;
-  state.wait_initial_written().await;
-  let mut writer = state.writer.lock().await;
-  if writer.closed || state.released.load(Ordering::Acquire) {
-    return Ok(());
-  }
-  if writer.stdin.is_none() {
-    bail!("Run {run_id} has no subprocess stdin to close");
-  }
-  writer.closed = true;
-  writer.stdin = None;
-  Ok(())
-}
-
-/// The release of process state after the Run's terminal fact is recorded.
+/// Releases the Run's process state once its terminal fact is recorded.
 pub fn release_run(run_id: &str) {
-  let Some(state) = runs().lock().expect("mid-turn delivery registry is not poisoned").remove(run_id) else {
+  let Some(entry) = runs().lock().expect("mid-turn delivery registry is not poisoned").remove(run_id) else {
     return;
   };
-  state.released.store(true, Ordering::Release);
-  state.initial_written.0.send_replace(true);
+  if let Some(state) = entry.state {
+    state.release();
+  }
+}
+
+/// Reads the input log of a Run directory: the keys of every write it logged.
+pub fn logged_keys(run_dir: &Path) -> anyhow::Result<Vec<String>> {
+  let path = run_dir.join(MIDTURN_INPUT_LOG_NAME);
+  match std::fs::read_to_string(&path) {
+    Ok(text) => text
+      .lines()
+      .map(|line| {
+        serde_json::from_str::<LedgerLine>(line)
+          .map(|record| record.key)
+          .with_context(|| format!("the input log {} holds a line that is not a ledger record", path.display()))
+      })
+      .collect(),
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+    Err(error) => Err(error).with_context(|| format!("reading the input log {}", path.display())),
+  }
 }
 
 #[cfg(test)]
 mod tests {
-  use serde_json::json;
-
   use super::*;
 
-  fn run_id(suffix: &str) -> String {
-    format!("11111111-2222-3333-4444-5555555555{suffix}")
+  /// A codec that encodes each write as one line, names it by its input id, and signals delivery and turn end from
+  /// the raw events it reads: a `delivered` event delivers the key it names, and a `result` event ends the turn.
+  struct TestCodec {
+    unanswered: HashSet<String>,
   }
 
-  #[test]
-  fn a_relay_uuid_differs_from_every_uuid_the_transcript_holds() {
-    let id = run_id("60");
-    assert_eq!(initial_line_uuid(&id, 0), id, "the first process keeps the Run id");
-    let first_relay = initial_line_uuid(&id, 1);
-    let second_relay = initial_line_uuid(&id, 2);
-    assert_ne!(first_relay, id);
-    assert_ne!(first_relay, second_relay, "every relay of one run derives its own uuid");
-    assert!(uuid::Uuid::parse_str(&first_relay).is_ok(), "the derived uuid stays a uuid: {first_relay}");
-    let other_run = run_id("61");
-    assert_ne!(first_relay, initial_line_uuid(&other_run, 1), "the derivation names the run");
+  impl MidturnCodec for TestCodec {
+    fn encode_prompt(&mut self, prompt: &str) -> anyhow::Result<EncodedInput> {
+      self.unanswered.insert("run".to_string());
+      Ok(EncodedInput { key: "run".to_string(), line: format!("{prompt}\n").into_bytes() })
+    }
+
+    fn encode_input(&mut self, input_id: &str, content: &str) -> anyhow::Result<EncodedInput> {
+      self.unanswered.insert(input_id.to_string());
+      Ok(EncodedInput { key: input_id.to_string(), line: format!("{content}\n").into_bytes() })
+    }
+
+    fn observe(&mut self, raw: &Value) -> anyhow::Result<Observed> {
+      let mut signals = Vec::new();
+      if let Some(key) = raw.get("delivered").and_then(Value::as_str) {
+        self.unanswered.remove(key);
+        signals.push(MidturnSignal::Delivered(vec![key.to_string()]));
+      }
+      if raw.get("type").and_then(Value::as_str) == Some("result") {
+        self.unanswered.remove("run");
+        signals.push(MidturnSignal::TurnEnded);
+      }
+      Ok(Observed { events: vec![raw.clone()], signals })
+    }
+
+    fn turn_may_end(&self) -> bool {
+      self.unanswered.is_empty()
+    }
+
+    fn resume(&mut self, logged_keys: &[String], _transport_dir: &Path, _cursor: u64) -> anyhow::Result<()> {
+      self.unanswered.extend(logged_keys.iter().cloned());
+      Ok(())
+    }
   }
 
-  #[tokio::test]
-  async fn the_relay_echo_is_recognized_and_an_unexpected_uuid_stays_an_error() {
-    let id = run_id("62");
-    let message_id = "22222222-2222-3333-4444-555555555562";
-    let relay_uuid = {
-      bind_process(&id, Some(id.clone())).await.unwrap();
-      bind_process(&id, Some(id.clone())).await.unwrap();
-      initial_line_uuid(&id, 1)
-    };
+  #[derive(Clone, Default)]
+  struct Recording(Arc<Mutex<Vec<u8>>>);
 
-    assert!(is_first_line(&id, &id));
-    assert!(is_first_line(&id, &relay_uuid));
-    assert_eq!(
-      translate_replay(Some(&id), &json!({"type": "user", "uuid": relay_uuid, "isReplay": true})).unwrap(),
-      Vec::<Value>::new()
-    );
-    assert!(
-      translate_replay(Some(&id), &json!({"type": "user", "uuid": message_id, "isReplay": true})).is_err(),
-      "an echo of an unregistered uuid without a matching write stays an error"
-    );
-
-    let state = state_of(&id).expect("the bound run has delivery state");
-    state.evidence.lock().expect("mid-turn evidence mutex is not poisoned").written.insert(message_id.to_string());
-    assert_eq!(
-      translate_replay(Some(&id), &json!({"type": "user", "uuid": message_id, "isReplay": true})).unwrap().len(),
-      1,
-      "the echo of a written web input still becomes one acknowledgement"
-    );
-    release_run(&id);
-  }
-
-  #[tokio::test]
-  async fn each_bound_process_writes_its_prompt_under_the_registered_uuid() {
-    let id = run_id("63");
-    bind_process(&id, Some(id.clone())).await.unwrap();
-    let first = written_first_uuid(&id).await;
-    assert_eq!(first, id, "the first process writes the Run id");
-
-    bind_process(&id, Some(id.clone())).await.unwrap();
-    let relay = written_first_uuid(&id).await;
-    assert_eq!(relay, initial_line_uuid(&id, 1));
-    assert_ne!(relay, first, "the relayed process resends no uuid the transcript already holds");
-    release_run(&id);
-  }
-
-  #[tokio::test]
-  async fn a_seed_extends_the_first_lines_past_the_uuids_the_logs_hold() {
-    let id = run_id("64");
-    let held = HashSet::from([id.clone(), initial_line_uuid(&id, 1), "web-input-1".to_string()]);
-    seed_first_lines(&id, &held);
-    seed_first_lines(&id, &held);
-    bind_process(&id, Some(id.clone())).await.unwrap();
-    assert_eq!(
-      written_first_uuid(&id).await,
-      initial_line_uuid(&id, 2),
-      "the next process takes the first line after the held ones, and a repeated seed adds nothing"
-    );
-    release_run(&id);
-  }
-
-  async fn written_first_uuid(run_id: &str) -> String {
-    let recorded = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
-    write_initial_prompt(
-      Some(run_id.to_string()),
-      Box::new(RecordingStdin(std::sync::Arc::clone(&recorded))),
-      Arc::new(|| false),
-      "prompt".to_string(),
-    )
-    .await
-    .unwrap();
-    let line = String::from_utf8(recorded.lock().expect("recording stdin mutex is not poisoned").clone()).unwrap();
-    serde_json::from_str::<Value>(line.trim_end()).expect("the written line is stream-json")["uuid"]
-      .as_str()
-      .expect("the line carries a uuid")
-      .to_string()
-  }
-
-  struct RecordingStdin(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-
-  impl tokio::io::AsyncWrite for RecordingStdin {
+  impl AsyncWrite for Recording {
     fn poll_write(
       self: std::pin::Pin<&mut Self>,
       _cx: &mut std::task::Context<'_>,
       buf: &[u8],
     ) -> std::task::Poll<std::io::Result<usize>> {
-      self.0.lock().expect("recording stdin mutex is not poisoned").extend_from_slice(buf);
+      self.0.lock().expect("recording mutex is not poisoned").extend_from_slice(buf);
       std::task::Poll::Ready(Ok(buf.len()))
     }
 
@@ -600,5 +498,91 @@ mod tests {
     ) -> std::task::Poll<std::io::Result<()>> {
       std::task::Poll::Ready(Ok(()))
     }
+  }
+
+  fn codec() -> Box<dyn MidturnCodec> {
+    Box::new(TestCodec { unanswered: HashSet::new() })
+  }
+
+  fn lines(recording: &Recording) -> Vec<String> {
+    String::from_utf8(recording.0.lock().unwrap().clone()).unwrap().lines().map(str::to_string).collect()
+  }
+
+  #[tokio::test]
+  async fn each_input_is_logged_before_its_write_and_written_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let run_id = "run-offer-once";
+    let state = DeliveryState::new(run_id, codec());
+    state.set_run_dir(dir.path()).unwrap();
+    let recording = Recording::default();
+    state.write_prompt(Box::new(recording.clone()), Arc::new(|| false), "prompt").await.unwrap();
+    bind_process(Arc::clone(&state));
+
+    assert_eq!(offer(run_id, vec![("m1".into(), "first".into())]).await.unwrap(), ["m1"]);
+    assert_eq!(offer(run_id, vec![("m1".into(), "first".into())]).await.unwrap(), Vec::<String>::new());
+    assert_eq!(lines(&recording), ["prompt", "first"]);
+    assert_eq!(logged_keys(dir.path()).unwrap(), ["run", "m1"]);
+    release_run(run_id);
+  }
+
+  #[tokio::test]
+  async fn a_delivered_request_becomes_one_input_delivered_event_and_a_turn_end_waits_for_answers() {
+    let dir = tempfile::tempdir().unwrap();
+    let run_id = "run-settle";
+    let state = DeliveryState::new(run_id, codec());
+    state.set_run_dir(dir.path()).unwrap();
+    state.write_prompt(Box::new(Recording::default()), Arc::new(|| false), "prompt").await.unwrap();
+    bind_process(Arc::clone(&state));
+    offer(run_id, vec![("m2".into(), "second".into())]).await.unwrap();
+
+    // The turn-end candidate of the prompt's answer lapses while `m2` awaits its answer.
+    state.observe(&json!({"type": "result"})).unwrap();
+    state.settle_turn().await.unwrap();
+    assert!(!state.turn_ended());
+
+    let events = state.observe(&json!({"delivered": "m2"})).unwrap();
+    assert_eq!(events[1]["type"], event_types::INPUT_DELIVERED);
+    assert_eq!(events[1][event_types::INPUT_EVENT_ID], "m2");
+    assert_eq!(events[1]["run_id"], run_id);
+    assert_eq!(state.observe(&json!({"delivered": "m2"})).unwrap().len(), 2, "the codec's own delivery repeats");
+
+    state.observe(&json!({"type": "result"})).unwrap();
+    state.settle_turn().await.unwrap();
+    assert!(state.turn_ended());
+    assert_eq!(offer(run_id, vec![("m3".into(), "late".into())]).await.unwrap(), Vec::<String>::new());
+    release_run(run_id);
+  }
+
+  #[tokio::test]
+  async fn a_restarted_state_rebuilds_its_ledger_from_the_input_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let run_id = "run-resume";
+    let first = DeliveryState::new(run_id, codec());
+    first.set_run_dir(dir.path()).unwrap();
+    first.write_prompt(Box::new(Recording::default()), Arc::new(|| false), "prompt").await.unwrap();
+    bind_process(Arc::clone(&first));
+    offer(run_id, vec![("m4".into(), "kept".into())]).await.unwrap();
+    release_run(run_id);
+
+    let restarted = DeliveryState::new(run_id, codec());
+    restarted.set_run_dir(dir.path()).unwrap();
+    restarted.resume(dir.path(), 0).unwrap();
+    let recording = Recording::default();
+    restarted.writer.lock().await.stdin = Some(Box::new(recording.clone()));
+    restarted.writer.lock().await.exited = Some(Arc::new(|| false));
+    restarted.initial_written.0.send_replace(true);
+    assert_eq!(restarted.offer(vec![("m4".into(), "kept".into())]).await.unwrap(), Vec::<String>::new());
+    assert_eq!(restarted.offer(vec![("m5".into(), "new".into())]).await.unwrap(), ["m5"]);
+    assert_eq!(lines(&recording), ["new"], "the logged input is not written again");
+    assert_eq!(logged_keys(dir.path()).unwrap(), ["run", "m4", "m5"]);
+  }
+
+  #[tokio::test]
+  async fn an_input_log_line_that_is_not_a_ledger_record_is_an_error() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join(MIDTURN_INPUT_LOG_NAME), "not json\n").unwrap();
+    let state = DeliveryState::new("run-broken-log", codec());
+    state.set_run_dir(dir.path()).unwrap();
+    assert!(state.resume(dir.path(), 0).is_err());
   }
 }

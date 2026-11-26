@@ -1,14 +1,13 @@
 //! The dispatcher half of live user-message delivery for web manager turns.
 //!
-//! The delivery state itself — the serialized stdin writes, the replay acknowledgements and the stdin close — lives in
-//! the runtime (`charliebot_registry::midturn_delivery`), which the Claude Code backend writes into. This module
-//! offers the pending inputs to the live Run, records the acknowledgements on the manager item, and claims the echoed
-//! inputs at the finish.
+//! The delivery state lives in the runtime (`charliebot_registry::midturn_delivery`), and each backend writes into it
+//! through its codec. This module offers the pending inputs to the live Run, records the acknowledgements on the
+//! manager item, and claims the inputs the Run delivered, as its persisted `input_delivered` events name them, at the
+//! finish.
 
 use std::collections::HashSet;
 use std::path::Path;
 
-use anyhow::Context;
 use charliebot_agents::backend_types;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types;
@@ -72,17 +71,7 @@ pub fn record_ack(user_event_ids: &mut Vec<String>, item_run_id: &str, event: &V
   Ok(())
 }
 
-/// Read non-initial replay uuids from every raw transport leg of this Run (`_echoed_input_ids`).
-///
-/// A uuid the delivery wrote as a bound process's first line (`charliebot_registry::midturn_delivery::is_first_line`)
-/// names the initial or continuation prompt, not a pending web input. It therefore stays out of the set.
-fn echoed_input_ids(transport_dir: &Path, run_id: &str) -> anyhow::Result<HashSet<String>> {
-  let mut echoed = charliebot_registry::midturn_delivery::replayed_user_uuids(transport_dir)?;
-  echoed.retain(|input_id| !charliebot_registry::midturn_delivery::is_first_line(run_id, input_id));
-  Ok(echoed)
-}
-
-/// The dispatcher operation that binds replay evidence to a Run.
+/// The dispatcher operation that binds delivered inputs to a Run.
 pub trait ClaimEchoedInputs: Send + Sync {
   /// Append the still-pending USER events that the launched manager Run echoed.
   fn claim_echoed_user_inputs<'a>(
@@ -93,36 +82,29 @@ pub trait ClaimEchoedInputs: Send + Sync {
   ) -> BoxFuture<'a, anyhow::Result<Vec<String>>>;
 }
 
-/// The input ids mid-turn delivery handed one Run. They come from the replay record in its raw log that the finish
-/// claim reads, whether or not the Run's durable claim already names them.
-///
-/// The scan parses every raw line of the Run, so it rides a blocking thread like the round-notice projection of the
-/// same files. On the async runtime's worker threads it would freeze every concurrent request and WebSocket at turn
-/// end (`b03c38579`).
-pub async fn delivered_input_ids(transport_dir: &Path, run_id: &str) -> anyhow::Result<HashSet<String>> {
-  let scan_run_id = run_id.to_string();
-  let scan_dir = transport_dir.to_path_buf();
-  tokio::task::spawn_blocking(move || echoed_input_ids(&scan_dir, &scan_run_id))
-    .await
-    .context("the raw-log scan task stopped before it finished")?
+/// The input ids mid-turn delivery handed one Run, read from the Run's persisted `input_delivered` events. The finish
+/// claim and the close check both read them, so a delivery counts once the runtime has recorded it.
+pub fn delivered_input_ids(facts: &[ChatEvent], run_id: &str) -> HashSet<String> {
+  facts
+    .iter()
+    .filter(|event| event.get("type").and_then(CompactValue::as_str) == Some(event_types::INPUT_DELIVERED))
+    .filter(|event| event.get("run_id").and_then(CompactValue::as_str) == Some(run_id))
+    .filter_map(|event| event.get(event_types::INPUT_EVENT_ID).and_then(CompactValue::as_str).map(str::to_string))
+    .collect()
 }
 
-/// Claim only pending user events whose uuids the successful Run echoed (`claim_finish_inputs`).
+/// Claim only pending user events whose ids the successful Run delivered (`claim_finish_inputs`).
 pub async fn claim_finish_inputs(
   dispatcher: &dyn ClaimEchoedInputs,
   meta: &SessionMetadata,
   run_id: &str,
-  transport_dir: &Path,
+  delivered: HashSet<String>,
   successful: bool,
 ) -> anyhow::Result<Vec<String>> {
-  if !is_gated_turn(meta, true, RunKind::ManagerTurn) || !successful {
+  if !is_gated_turn(meta, true, RunKind::ManagerTurn) || !successful || delivered.is_empty() {
     return Ok(Vec::new());
   }
-  let echoed = delivered_input_ids(transport_dir, run_id).await?;
-  if echoed.is_empty() {
-    return Ok(Vec::new());
-  }
-  dispatcher.claim_echoed_user_inputs(&meta.id, run_id, &echoed).await
+  dispatcher.claim_echoed_user_inputs(&meta.id, run_id, &delivered).await
 }
 
 /// Build the fresh raw-log translator used to follow or reconcile one Run (`midturn_delivery.fresh_translate`).
@@ -169,7 +151,7 @@ mod tests {
   use charliebot_registry::backend::LaunchArgs;
   use charliebot_registry::midturn_delivery as claude_midturn;
   use charliebot_store::metadata::{SessionMetadata, TaskProfile};
-  use charliebot_store::run_records::{RAW_LOG_NAME, RunKind};
+  use charliebot_store::run_records::RunKind;
   use serde_json::json;
   use tokio::io::AsyncWrite;
 
@@ -240,15 +222,14 @@ mod tests {
     let agent_event =
       ChatEvent::from(json!({"id": "agent-1", "type": event_types::AGENT_MESSAGE, "content": "Keep this queued."}));
     let recorded = Arc::new(Mutex::new(Vec::<u8>::new()));
-    claude_midturn::bind_process(run_id, backend.midturn_run_id()).await.unwrap();
-    claude_midturn::write_initial_prompt(
-      Some(run_id.to_string()),
-      Box::new(RecordingStdin(Arc::clone(&recorded))),
-      Arc::new(|| false),
-      "Initial prompt".to_string(),
-    )
-    .await
-    .unwrap();
+    let state = backend.midturn_state().expect("a gated Claude run has delivery state");
+    std::fs::create_dir_all(home.path().join("run")).unwrap();
+    state.set_run_dir(&home.path().join("run")).unwrap();
+    state
+      .write_prompt(Box::new(RecordingStdin(Arc::clone(&recorded))), Arc::new(|| false), "Initial prompt")
+      .await
+      .unwrap();
+    claude_midturn::bind_process(Arc::clone(&state));
 
     let written = offer(&features, &meta, &run, &[user_event, agent_event]).await.unwrap();
     assert_eq!(written, [message_id.to_string()]);
@@ -297,7 +278,8 @@ mod tests {
       Vec::<String>::new()
     );
 
-    claude_midturn::on_backend_event(Some(run_id.to_string()), &json!({"type": "result"})).await.unwrap();
+    state.observe(&json!({"type": "result"})).unwrap();
+    state.settle_turn().await.unwrap();
     let late = ChatEvent::from(json!({"id": "late-after-result", "type": event_types::USER, "content": "Too late."}));
     assert_eq!(offer(&features, &meta, &run, &[late]).await.unwrap(), Vec::<String>::new());
     assert_eq!(
@@ -310,45 +292,5 @@ mod tests {
 
   fn user_event_ref(message_id: &str) -> ChatEvent {
     ChatEvent::from(json!({"id": message_id, "type": event_types::USER, "content": "Please change the answer."}))
-  }
-
-  #[tokio::test]
-  async fn echoed_ids_are_the_complete_non_initial_replays_of_every_raw_leg() {
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(
-      dir.path().join(RAW_LOG_NAME),
-      concat!(
-        "{\"type\":\"user\",\"isReplay\":true,\"uuid\":\"in-1\"}\n",
-        "{\"type\":\"user\",\"isReplay\":true,\"uuid\":\"run-1\"}\n",
-        "{\"type\":\"user\",\"isReplay\":false,\"uuid\":\"in-2\"}\n",
-        "{\"type\":\"assistant\",\"isReplay\":true,\"uuid\":\"in-3\"}\n",
-        "not json\n",
-        "{\"type\":\"user\",\"isReplay\":true,\"uuid\":\"\"}\n",
-        "{\"type\":\"user\",\"isReplay\":true,\"uuid\":5}\n",
-        "{\"type\":\"user\",\"isReplay\":true,\"uuid\":\"in-4\"}\r\n",
-        "{\"type\":\"assistant\",\"type\":\"user\",",
-        "\"isReplay\":false,\"isReplay\":true,\"uuid\":\"in-old\",\"uuid\":\"in-duplicate\"}\n",
-        "{\"type\":\"user\",\"isReplay\":true,\"uuid\":\"in-superseded\",\"uuid\":5}\n",
-        "{\"type\":\"user\",\"isReplay\":true,\"uuid\":\"in-6\"}",
-      ),
-    )
-    .unwrap();
-    let relay_uuid = charliebot_registry::midturn_delivery::initial_line_uuid("run-1", 1);
-    std::fs::write(
-      dir.path().join(format!("{RAW_LOG_NAME}.1")),
-      format!(
-        "{{\"type\":\"user\",\"isReplay\":true,\"uuid\":\"in-5\"}}\n{{\"type\":\"user\",\"isReplay\":true,\"uuid\":\"{relay_uuid}\"}}\n"
-      ),
-    )
-    .unwrap();
-    charliebot_registry::midturn_delivery::bind_process("run-1", Some("run-1".to_string())).await.unwrap();
-    charliebot_registry::midturn_delivery::bind_process("run-1", Some("run-1".to_string())).await.unwrap();
-    let echoed = echoed_input_ids(dir.path(), "run-1").unwrap();
-    charliebot_registry::midturn_delivery::release_run("run-1");
-    assert_eq!(
-      echoed,
-      HashSet::from(["in-1".to_string(), "in-4".to_string(), "in-5".to_string(), "in-duplicate".to_string()]),
-      "the relay's continuation-prompt echo is not a web input"
-    );
   }
 }

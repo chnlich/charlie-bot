@@ -1,14 +1,225 @@
-//! The Claude Code side of live user-message delivery for web manager turns.
+//! The Claude Code side of live user-message delivery for manager turns.
 //!
-//! The delivery state lives in the runtime (`charliebot_registry::midturn_delivery`). It holds the serialized stdin
-//! writes, the replay acknowledgements and the stdin close. This backend and the task queue both use it. This module
-//! holds the Claude-specific part: the stream-json launch arguments that turn the path on, which the lifecycle returns
-//! to the runtime (`BackendLifecycle::midturn_launch_kwargs`), and the replay translator.
+//! The runtime owns the delivery state (`charliebot_registry::midturn_delivery`): the serialized stdin writes, the
+//! input log and the turn end. This module holds Claude's wire format as that state's codec, `ClaudeMidturnCodec`.
+//! Each input is one stream-json user line. The CLI echoes every line it accepts as a replayed user line, and that echo is the
+//! delivery signal. The first line of each relayed process carries a uuid the transcript it resumes does not hold.
+//! The stream-json launch arguments are returned to the runtime by the lifecycle (`midturn_launch_kwargs`).
 
-use charliebot_registry::backend::{LaunchContext, LaunchKind, Translate};
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, bail};
+use charliebot_core::event_types;
+use charliebot_registry::backend::{LaunchContext, LaunchKind};
+use charliebot_registry::midturn_delivery::{EncodedInput, MidturnCodec, MidturnSignal, Observed, bound_processes};
 use charliebot_store::metadata::SessionMetadata;
-use charliebot_store::run_records::RunKind;
-use serde_json::{Map, Value};
+use charliebot_store::run_records::{RAW_LOG_NAME, RunKind};
+use serde::de::{IgnoredAny, MapAccess, Visitor};
+use serde::{Deserialize, Deserializer};
+use serde_json::{Map, Value, json};
+
+/// The stream-json field that marks a replayed user message: the CLI's echo of a line it accepted.
+pub const IS_REPLAY_FIELD: &str = "isReplay";
+
+/// The uuid v5 namespace of a relayed process's first-line uuid. Namespaced derivation keeps every relay's uuid out of
+/// the random-uuid space that the copied transcript and the pending web inputs draw from.
+const FIRST_LINE_NAMESPACE: uuid::Uuid = uuid::Uuid::from_u128(0x5eed_1f0b_4a7d_5c6e_9a2b_3c1d_0e4f_2674);
+
+/// The stream-json uuid of the first line one process of the Run receives. The first process writes the Run id, and
+/// every relay derives one from the Run id and its process number. Claude Code 2.1.312 and later skip a stdin line
+/// whose uuid the transcript they resume already holds, so a relayed process must never resend the Run id.
+pub fn initial_line_uuid(run_id: &str, process: usize) -> String {
+  match process {
+    0 => run_id.to_string(),
+    _ => uuid::Uuid::new_v5(&FIRST_LINE_NAMESPACE, format!("{run_id}:{process}").as_bytes()).to_string(),
+  }
+}
+
+/// The encoded stream-json line of one user input.
+fn user_line(uuid: &str, content: &str) -> Vec<u8> {
+  let mut line = json!({
+    "type": "user",
+    "uuid": uuid,
+    "message": {"role": "user", "content": content},
+  })
+  .to_string()
+  .into_bytes();
+  line.push(b'\n');
+  line
+}
+
+/// The Claude codec of one process of a Run. `process` numbers the process among the Run's relays; the inputs it or an
+/// earlier process of the Run wrote are the echoes it accepts.
+pub struct ClaudeMidturnCodec {
+  run_id: String,
+  process: usize,
+  written: HashSet<String>,
+}
+
+impl ClaudeMidturnCodec {
+  /// The codec of the next process of `run_id`: its number is the count of processes this server has bound, and a
+  /// restart extends it past the first lines the Run's logs hold (`resume`).
+  pub fn new(run_id: &str) -> Self {
+    Self { run_id: run_id.to_string(), process: bound_processes(run_id), written: HashSet::new() }
+  }
+
+  /// Whether a uuid names a first line this Run wrote: the Run id, or the first line of this process or an earlier one.
+  fn is_first_line(&self, uuid: &str) -> bool {
+    uuid == self.run_id || (0..=self.process).any(|process| initial_line_uuid(&self.run_id, process) == uuid)
+  }
+}
+
+impl MidturnCodec for ClaudeMidturnCodec {
+  fn encode_prompt(&mut self, prompt: &str) -> anyhow::Result<EncodedInput> {
+    let uuid = initial_line_uuid(&self.run_id, self.process);
+    Ok(EncodedInput { key: uuid.clone(), line: user_line(&uuid, prompt) })
+  }
+
+  fn encode_input(&mut self, input_id: &str, content: &str) -> anyhow::Result<EncodedInput> {
+    self.written.insert(input_id.to_string());
+    Ok(EncodedInput { key: input_id.to_string(), line: user_line(input_id, content) })
+  }
+
+  fn observe(&mut self, raw: &Value) -> anyhow::Result<Observed> {
+    if raw.get("type").and_then(Value::as_str) == Some(event_types::RESULT) {
+      return Ok(Observed { events: vec![raw.clone()], signals: vec![MidturnSignal::TurnEnded] });
+    }
+    if raw.get("type").and_then(Value::as_str) != Some(event_types::USER)
+      || raw.get(IS_REPLAY_FIELD) != Some(&Value::Bool(true))
+    {
+      return Ok(Observed { events: vec![raw.clone()], signals: Vec::new() });
+    }
+    let input_id = match raw.get("uuid") {
+      Some(Value::String(input_id)) if !input_id.is_empty() => input_id.clone(),
+      _ => bail!("a replayed Claude user message has no uuid"),
+    };
+    if self.is_first_line(&input_id) {
+      return Ok(Observed { events: Vec::new(), signals: Vec::new() });
+    }
+    if !self.written.contains(&input_id) {
+      bail!("Run {} replayed user input {input_id} without a matching stdin write", self.run_id);
+    }
+    Ok(Observed { events: Vec::new(), signals: vec![MidturnSignal::Delivered(vec![input_id])] })
+  }
+
+  /// Claude keeps no request waiting for an answer that the input close would cut off: the first result ends its turn.
+  fn turn_may_end(&self) -> bool {
+    true
+  }
+
+  fn resume(&mut self, logged_keys: &[String], transport_dir: &Path, _cursor: u64) -> anyhow::Result<()> {
+    self.written.extend(logged_keys.iter().cloned());
+    // The first lines the Run's logs hold belong to earlier processes, so this one takes the first line after them.
+    let held = replayed_user_uuids(transport_dir)?;
+    while held.contains(&initial_line_uuid(&self.run_id, self.process)) {
+      self.process += 1;
+    }
+    Ok(())
+  }
+}
+
+/// The three fields of a raw transport line that the replay scan reads. The map visitor keeps the last duplicate key
+/// and ignores unrelated fields without constructing their values.
+struct ReplayLine {
+  kind: Option<Value>,
+  is_replay: Option<Value>,
+  uuid: Option<Value>,
+}
+
+impl<'de> Deserialize<'de> for ReplayLine {
+  fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+  where
+    D: Deserializer<'de>,
+  {
+    struct ReplayLineVisitor;
+
+    impl<'de> Visitor<'de> for ReplayLineVisitor {
+      type Value = ReplayLine;
+
+      fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a JSON object")
+      }
+
+      fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+      where
+        A: MapAccess<'de>,
+      {
+        let mut line = ReplayLine { kind: None, is_replay: None, uuid: None };
+        while let Some(key) = map.next_key::<String>()? {
+          match key.as_str() {
+            "type" => line.kind = Some(map.next_value()?),
+            IS_REPLAY_FIELD => line.is_replay = Some(map.next_value()?),
+            "uuid" => line.uuid = Some(map.next_value()?),
+            _ => {
+              let _: IgnoredAny = map.next_value()?;
+            }
+          }
+        }
+        Ok(line)
+      }
+    }
+
+    deserializer.deserialize_map(ReplayLineVisitor)
+  }
+}
+
+/// Read every replayed user uuid from every raw transport leg of one Run directory.
+///
+/// A replayed user line is the CLI's echo of a stdin line it accepted. The set therefore holds each uuid the Run's
+/// conversation received, the first lines included. A missing directory holds no legs. An unreadable directory or leg
+/// is an error, because a uuid the set omits could be one the conversation holds. A raw line that is not a JSON object
+/// is skipped, and a line without its newline ends the scan of its leg.
+pub fn replayed_user_uuids(transport_dir: &Path) -> anyhow::Result<HashSet<String>> {
+  use std::io::BufRead;
+
+  let entries = match std::fs::read_dir(transport_dir) {
+    Ok(entries) => entries,
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(HashSet::new()),
+    Err(error) => {
+      return Err(error).with_context(|| format!("reading the run transport {}", transport_dir.display()));
+    }
+  };
+  let mut raw_paths = Vec::<PathBuf>::new();
+  for entry in entries {
+    let path = entry.with_context(|| format!("reading the run transport {}", transport_dir.display()))?.path();
+    let is_leg = path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with(RAW_LOG_NAME));
+    let is_file =
+      std::fs::metadata(&path).with_context(|| format!("reading the raw log {}", path.display()))?.is_file();
+    if is_leg && is_file {
+      raw_paths.push(path);
+    }
+  }
+  raw_paths.sort();
+  let mut replayed = HashSet::new();
+  let mut line = Vec::new();
+  for raw_path in raw_paths {
+    let raw_file =
+      std::fs::File::open(&raw_path).with_context(|| format!("reading the raw log {}", raw_path.display()))?;
+    let mut raw_lines = std::io::BufReader::new(raw_file);
+    loop {
+      line.clear();
+      raw_lines.read_until(b'\n', &mut line).with_context(|| format!("reading the raw log {}", raw_path.display()))?;
+      let Some(complete) = line.strip_suffix(b"\n") else {
+        break;
+      };
+      let Ok(event) = serde_json::from_slice::<ReplayLine>(complete) else {
+        continue;
+      };
+      if event.kind.as_ref().and_then(Value::as_str) != Some(event_types::USER)
+        || event.is_replay.as_ref().and_then(Value::as_bool) != Some(true)
+      {
+        continue;
+      }
+      if let Some(input_id) = event.uuid.as_ref().and_then(Value::as_str)
+        && !input_id.is_empty()
+      {
+        replayed.insert(input_id.to_string());
+      }
+    }
+  }
+  Ok(replayed)
+}
 
 /// The launch arguments that enable the stream-json input path when `meta` is a gated web manager turn, else empty.
 pub fn launch_kwargs(
@@ -34,17 +245,6 @@ pub fn insert_launch_kwargs(backend_kwargs: &mut Map<String, Value>, ctx: &Launc
   Ok(())
 }
 
-/// The gated translator: replays of delivered inputs become `input_delivered` events.
-pub struct MidturnTranslate {
-  pub(crate) run_id: Option<String>,
-}
-
-impl Translate for MidturnTranslate {
-  fn translate(&mut self, raw: Value) -> anyhow::Result<Vec<Value>> {
-    charliebot_registry::midturn_delivery::translate_replay(self.run_id.as_deref(), &raw)
-  }
-}
-
 #[cfg(test)]
 mod tests {
   use std::sync::{Arc, Mutex};
@@ -52,10 +252,10 @@ mod tests {
 
   use charliebot_registry::Registry;
   use charliebot_registry::backend::{AgentBackend, Env, LaunchArgs};
-  use charliebot_registry::midturn_delivery::{
-    bind_process, initial_line_uuid, offer, release_run, seed_from_run_logs, translate_replay,
-  };
+  use charliebot_registry::midturn_delivery::{DeliveryState, bind_process, offer, release_run};
   use serde_json::{Value, json};
+
+  use super::{ClaudeMidturnCodec, initial_line_uuid};
 
   use crate::backend::ClaudeCodeBackend;
   use charliebot_agents::agent_environment::AgentBaseEnvironment;
@@ -90,17 +290,19 @@ mod tests {
     }
   }
 
-  #[test]
-  fn replay_becomes_non_rendered_input_delivered_event() {
+  #[tokio::test]
+  async fn replay_becomes_non_rendered_input_delivered_event() {
     let run_id = "11111111-2222-3333-4444-555555555560";
     let message_id = "22222222-2222-3333-4444-555555555560";
-    assert_eq!(
-      translate_replay(Some(run_id), &json!({"type": "user", "uuid": run_id, "isReplay": true})).unwrap(),
-      Vec::<Value>::new()
-    );
+    let dir = tempfile::tempdir().unwrap();
+    let state = DeliveryState::new(run_id, Box::new(ClaudeMidturnCodec::new(run_id)));
+    state.set_run_dir(dir.path()).unwrap();
+    state.write_prompt(Box::new(tokio::io::sink()), Arc::new(|| false), "Initial prompt").await.unwrap();
+    bind_process(Arc::clone(&state));
+    offer(run_id, vec![(message_id.to_string(), "Continue.".to_string())]).await.unwrap();
+    assert_eq!(state.observe(&json!({"type": "user", "uuid": run_id, "isReplay": true})).unwrap(), Vec::<Value>::new());
 
-    let delivered =
-      translate_replay(Some(run_id), &json!({"type": "user", "uuid": message_id, "isReplay": true})).unwrap();
+    let delivered = state.observe(&json!({"type": "user", "uuid": message_id, "isReplay": true})).unwrap();
 
     assert_eq!(delivered.len(), 1);
     assert_eq!(delivered[0]["type"], "input_delivered");
@@ -154,7 +356,7 @@ mod tests {
       disabled_cgroup(),
     )
     .unwrap();
-    bind_process(run_id, backend.midturn_run_id()).await.unwrap();
+    bind_process(backend.midturn_state().expect("a gated Claude run has delivery state"));
     let events = Arc::new(Mutex::new(Vec::<Value>::new()));
     std::fs::create_dir_all(root.path().join("cwd")).unwrap();
     let mut request = RunRequest::new(
@@ -268,7 +470,7 @@ mod tests {
       disabled_cgroup(),
     )
     .unwrap();
-    bind_process(run_id, backend.midturn_run_id()).await.unwrap();
+    bind_process(backend.midturn_state().expect("a gated Claude run has delivery state"));
     std::fs::create_dir_all(root.join("cwd")).unwrap();
     let mut request = RunRequest::new(
       prompt.to_string(),
@@ -368,7 +570,6 @@ mod tests {
     assert_eq!(first.exit_code, Some(0));
 
     release_run(run_id);
-    seed_from_run_logs(run_id, &root.path().join("run")).await.unwrap();
     let follow_up = run_one_leg(root.path(), &stub, run_id, crate::claude_relay::CONTINUATION_PROMPT, overlay).await;
     assert_eq!(follow_up.exit_code, Some(0), "the follow-up produced a result after the restart");
     assert_eq!(

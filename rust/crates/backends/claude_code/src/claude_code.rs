@@ -5,7 +5,7 @@ use std::env;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use anyhow::{Context, bail};
@@ -34,7 +34,8 @@ use charliebot_core::web_search::{MCP_PATH, MCP_SERVER_NAME, TOOL_NAME};
 
 use super::claude_launch;
 use super::login_dirs;
-use super::midturn_delivery::MidturnTranslate;
+use super::midturn_delivery::ClaudeMidturnCodec;
+use charliebot_registry::midturn_delivery::{DeliveryState, MidturnTranslate};
 
 pub const HEADLESS_DISALLOWED_TOOLS: &str = concat!(
   "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Workflow,SendMessage,ListAgents,",
@@ -203,6 +204,8 @@ pub struct ClaudeCodeBackend {
   instructions_file: Option<PathBuf>,
   midturn_delivery: bool,
   midturn_run_id: Option<String>,
+  /// The live-input state of this process: its codec and its writes. `None` unless the turn takes live input.
+  midturn_state: Option<Arc<DeliveryState>>,
   /// The CharlieBot run id of this manager turn. The read-budget hook entries name it.
   run_id: Option<String>,
   can_delegate: bool,
@@ -243,6 +246,10 @@ impl ClaudeCodeBackend {
       Some(_) => bail!("midturn_run_id must be a string"),
     }
     .filter(|value| !value.is_empty());
+    let midturn_state = match &midturn_run_id {
+      Some(run_id) if midturn_delivery => Some(DeliveryState::new(run_id, Box::new(ClaudeMidturnCodec::new(run_id)))),
+      _ => None,
+    };
     let run_id = match launch.backend_kwargs.get("run_id") {
       None | Some(Value::Null) => None,
       Some(Value::String(value)) => Some(value.clone()),
@@ -274,6 +281,7 @@ impl ClaudeCodeBackend {
       instructions_file: launch.instructions_file,
       midturn_delivery,
       midturn_run_id,
+      midturn_state,
       run_id,
       can_delegate,
     })
@@ -496,33 +504,29 @@ impl AgentBackend for ClaudeCodeBackend {
     self.midturn_delivery.then(|| self.midturn_run_id.clone()).flatten()
   }
 
+  fn midturn_state(&self) -> Option<Arc<DeliveryState>> {
+    self.midturn_state.clone()
+  }
+
   fn write_stdin_prompt(
     &self,
     stdin: Box<dyn AsyncWrite + Send + Unpin>,
     exited: ExitedProbe,
     prompt: &str,
   ) -> Option<BoxFuture<'static, anyhow::Result<()>>> {
-    if !self.midturn_delivery {
-      return None;
-    }
-    let run_id = self.midturn_run_id.clone();
+    let state = self.midturn_state.clone()?;
     let prompt = prompt.to_string();
-    Some(Box::pin(async move {
-      charliebot_registry::midturn_delivery::write_initial_prompt(run_id, stdin, exited, prompt).await
-    }))
+    Some(Box::pin(async move { state.write_prompt(stdin, exited, &prompt).await }))
   }
 
-  fn on_event<'a>(&'a self, event: &'a Value) -> Option<BoxFuture<'a, anyhow::Result<()>>> {
-    if !self.midturn_delivery {
-      return None;
-    }
-    let run_id = self.midturn_run_id.clone();
-    Some(Box::pin(async move { charliebot_registry::midturn_delivery::on_backend_event(run_id, event).await }))
+  fn on_event<'a>(&'a self, _event: &'a Value) -> Option<BoxFuture<'a, anyhow::Result<()>>> {
+    let state = self.midturn_state.clone()?;
+    Some(Box::pin(async move { state.settle_turn().await }))
   }
 
   fn translator(&self) -> Box<dyn Translate> {
-    match self.midturn_run_id() {
-      Some(run_id) => Box::new(MidturnTranslate { run_id: Some(run_id) }),
+    match self.midturn_state.clone() {
+      Some(state) => Box::new(MidturnTranslate(state)),
       None => Box::new(CapturedEvents),
     }
   }
@@ -729,6 +733,10 @@ impl AgentBackend for AnthropicEndpointBackend {
 
   fn midturn_run_id(&self) -> Option<String> {
     self.backend.midturn_run_id()
+  }
+
+  fn midturn_state(&self) -> Option<Arc<DeliveryState>> {
+    self.backend.midturn_state()
   }
 
   fn write_stdin_prompt(

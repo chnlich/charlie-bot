@@ -206,6 +206,11 @@ impl AgentRunner {
     let mut backend = self.backend.lock().await;
     let transport = backend.transport();
     backend.prepare_transport(&log_dir)?;
+    let midturn_state = backend.midturn_state();
+    if let Some(state) = &midturn_state {
+      state.set_run_dir(&log_dir)?;
+      state.resume(&log_dir, 0)?;
+    }
     let command = backend.build_command(&request.prompt)?;
     let stdin_prompt = backend.stdin_prompt(&request.prompt);
     let child_environment = launch_loop::build_child_env(
@@ -377,15 +382,25 @@ impl AgentRunner {
     }
     let stdin_error = finish_stdin(stdin_task, request.cleanup_timeout, pid).await.err();
     let mut hang_diagnostics = None;
-    let exit_code = match wait_for_exit(&active, request.cleanup_timeout).await? {
+    let mut stopped_after_turn = false;
+    let mut exit_code = match wait_for_exit(&active, request.cleanup_timeout).await? {
       Some(code) => Some(code),
       None => {
         tracing::warn!(target: "charliebot_agents", pid, "backend_wait_timeout_after_result");
         hang_diagnostics = Some(capture_process_diagnostics(pid).await);
         self.graceful_shutdown(&active, request.cleanup_timeout, "backend_sigkill_after_result").await?;
+        stopped_after_turn = true;
         wait_for_exit(&active, request.cleanup_timeout).await?
       }
     };
+    // A process the runtime stopped after its codec ended the turn ends as success: the stop is the run's close, not
+    // a failure. A process that exited without the turn end keeps its own exit code.
+    if exit_code.is_some_and(|code| code != 0)
+      && midturn_state.as_ref().is_some_and(|state| state.turn_ended())
+      && stopped_after_turn
+    {
+      exit_code = Some(0);
+    }
     if let Some(code) = exit_code {
       self.record_exit_code(code);
     }

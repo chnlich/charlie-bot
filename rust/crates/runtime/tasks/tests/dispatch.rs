@@ -913,17 +913,22 @@ async fn manager_finish_claims_only_echoed_pending_user_ids() {
   let echoed_id = echoed["id"].as_str().unwrap().to_string();
   let queued_id = queued["id"].as_str().unwrap().to_string();
   let agent_id = agent["id"].as_str().unwrap().to_string();
-  let transport_dir = harness.store.run_dir(&manager.id, run_id);
-  std::fs::create_dir_all(&transport_dir).unwrap();
-  let raw_path = transport_dir.join(run_records::RAW_LOG_NAME);
-  let replay = |uuid: &str| json!({"type": event_types::USER, "uuid": uuid, "isReplay": true}).to_string();
-  std::fs::write(&raw_path, format!("{}\n{}\n{}\n", replay(run_id), replay(&echoed_id), replay(&agent_id))).unwrap();
-
+  // The live Run delivered the echoed input; the runtime recorded that as a persisted `input_delivered` event.
+  harness
+    .store
+    .append_chat_event(
+      &manager.id,
+      json!({"type": event_types::INPUT_DELIVERED, event_types::INPUT_EVENT_ID: echoed_id, "run_id": run_id}),
+    )
+    .await
+    .unwrap();
+  let facts = harness.store.load_all_facts(&manager.id).unwrap();
+  let delivered = charliebot_tasks::midturn_delivery::delivered_input_ids(&facts, run_id);
   let claimed = charliebot_tasks::midturn_delivery::claim_finish_inputs(
     harness.dispatcher.as_ref(),
     &manager,
     run_id,
-    &transport_dir,
+    delivered,
     true,
   )
   .await

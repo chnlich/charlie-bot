@@ -465,6 +465,17 @@ cell reruns it under the same bound. In D2 (run 20261115T095852Z) the bench's ow
 3.6 s late in the two B release repetitions. The second open navigated about 8.7 s into the hold and failed with
 `net::ERR_TIMED_OUT` 40.3 s later. Every other load failure stays the repetition's record, as before.
 
+**Probe reads.** A segment starts with one probe: a repetition of the reference cell, run inside the first step after
+each take of the lock. The gate passes a probe whose rate is inside 3.0 to 10.0, and it compares no probe with another.
+Near idle on the bench host, the probe's rate flips between two levels about 1.7 times apart, and the cells throttle at
+their own fixed rate either way. Each probe that a segment takes, retries included, is one entry of `probeReads` on each
+row unit of the segment: its `rate` (null when the host spoiled that read) and its `load1`, the host's one-minute load
+sampled before the read. Each row unit also carries `probeMedian`, the bench's median of those rates (nearest rank, so
+an even count takes its lower middle value). `report.mjs`, given a before and an after side, prints a probe flag for
+each segment whose `probeMedian` differs by more than 10 % of the before median, and names both medians. A flag does
+not change the exit status. Segments pair by number, so a segment that only one side has is not compared, and a before
+side assembled from stored rows has no units to compare.
+
 **The newest-row target.** The target of a repetition is the newest row the For you view paints on the first screen:
 the last message of the bootstrap whose role the view paints (`user`, `web_reply`, `web_reply_notice`, `draft`, or a
 `system` row whose text starts with `Error: `) and that carries an id. Separators and the other roles have no node in
@@ -675,9 +686,11 @@ the restore, and resets the tunnels in reset mode. Two tests drive the shaping p
 server over the same link while the proxy refuses every other authority, and a scheduled reset window resets the open
 tunnels when it starts. The front tests read the TLS record sizes the front writes and check them against Go's. The
 report's tests check the calibration gate: it reads the during-refresh holds, not the scored scenario's random-phase
-holds, and only the reference before side's line carries a verdict. The chrome tests check the browser teardown: a
-closed browser fails its unanswered DevTools calls and drops its pipe handles. The scenario tests check the status
-counting against synthetic poll records of both answer shapes: the baseline's whole row map and the change's `{token,
+holds, and only the reference before side's line carries a verdict. They also check the probe flag: segments pair by
+number, a median that moved over 10 % is flagged, and the cross-side exit status does not change. The chrome tests
+check the browser teardown: a closed browser fails its unanswered DevTools calls and drops its pipe handles. The
+scenario tests check the status counting against synthetic poll records of both answer shapes: the baseline's whole row
+map and the change's `{token,
 rows, gone}`. A poll that finishes after the window is not counted, and its unread body does not fail the window; a
 poll that finishes inside the window with no body read does. The tab tests check the switch's row handling against a
 stub sidebar that keeps rows back: a row absent from the document or hidden in it is clicked only after its group's
@@ -702,9 +715,10 @@ search view's arithmetic (see "Search view").
 The step-gate tests check the yield rule (a process queued behind the lock gets it after the step it waits for, and
 nothing yields when nothing waits), the cap kill (a capped step's browsers and proxies stop, and the step runs once
 more), the descriptor's close-on-exec, and that closing the gate releases the lock. The segment tests check the rate
-gate: a probe outside 3.0 to 10.0, or outside the 10 % band of the cells' rate, is discarded and rerun once; a second
-failure is exit 5 with the discarded segments kept in `units[]`. They also check which unit starts each segment, that a
-probe runs inside its unit's step so one hold covers both, and that a bench which yields after every step still
-measures one cell per hold. The store tests check the reuse rule (R, Chrome, seed and tree all equal, and load-safe),
-the stale rule, the open group, the 24 h window, the saving of load-safe rows only, and the assembly of a before side
-from stored and measured rows. The scenario-map tests check the default four and the path rules.
+gate: a probe outside 3.0 to 10.0 is discarded and rerun once, and a probe inside the range passes whatever its ratio to
+other probes; a second failure is exit 5 with the discarded segments kept in `units[]`. They also check which reads and
+median each row carries, which unit starts each segment, that a probe runs inside its unit's step so one hold covers
+both, and that a bench which yields after every step still measures one cell per hold. The store tests check the reuse
+rule (R, Chrome, seed and tree all equal, and load-safe), the stale rule, the open group, the 24 h window, the saving of
+load-safe rows only, and the assembly of a before side from stored and measured rows. The scenario-map tests check the
+default four and the path rules.

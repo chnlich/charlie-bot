@@ -133,16 +133,16 @@ function readRow(root, rev, row) {
   return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null;
 }
 
-// The probe rates of the units that measured a row. A rep's unit is named `<row> <repetition>`; an open cell's unit is
-// named `<cell id> <repetition>`, where the cell's condition names the row.
-function rateSamples(side, row) {
+// The probe medians of the units that measured a row. A rep's unit is named `<row> <repetition>`; an open cell's
+// unit is named `<cell id> <repetition>`, where the cell's condition names the row.
+function probeMediansOf(side, row) {
   const matches = row === REFERENCE_ROW
     ? (unit) => unit.name.startsWith('reference ')
     : row.startsWith(OPEN_PREFIX)
       ? (unit) => unit.kind === 'open' && cellConditionOf(unit.name) === row.slice(OPEN_PREFIX.length)
       : (unit) => unit.kind === 'rep' && unit.name.startsWith(`${row} `);
-  return side.units.filter((unit) => matches(unit) && unit.probeRate !== null && unit.probeRate !== undefined)
-    .map((unit) => unit.probeRate);
+  return side.units.filter((unit) => matches(unit) && unit.probeMedian !== undefined)
+    .map((unit) => unit.probeMedian);
 }
 
 // The condition of an open cell from its unit name: `A link 3` is the link condition. The reference cell's name is
@@ -171,7 +171,7 @@ function rowRecord(side, row, key, createdAt) {
     createdAt,
     failsTargets,
     capped,
-    probeRates: rateSamples(side, row),
+    probeMedians: probeMediansOf(side, row),
     openRate: row.startsWith(OPEN_PREFIX) || row === REFERENCE_ROW ? side.open.cpu.rate : null,
     reps,
     cells,

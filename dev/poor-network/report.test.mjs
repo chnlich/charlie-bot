@@ -9,7 +9,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 
 import { CALIBRATION_HOLD_MS, CALIBRATION_REFERENCE } from './profile.mjs';
-import { METRICS, calibrate, formatSide, regressions, summarize } from './report.mjs';
+import { METRICS, calibrate, formatProbeFlag, formatSide, probeFlags, regressions, summarize } from './report.mjs';
 
 // One background repetition's calibration fields. `random` is the scored scenario's hold, which the gate must not read.
 function rep(duringMs, randomMs) {
@@ -84,6 +84,7 @@ function switchSide(name, switchMs, switchFloorMs) {
     commit: 'test',
     chrome: { version: 'test' },
     metrics: { switch: summarize([{ switchMs, switchFloorMs }], metric) },
+    units: [],
   };
 }
 
@@ -114,6 +115,46 @@ test('the cross-side CLI exits 4 on a regression and 0 without one', () => {
     const clean = run(switchSide('before', 2000, 400), switchSide('after', 500, 400));
     assert.equal(clean.status, 0);
     assert.match(clean.stdout, /regressions: none/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// One side's probe medians: each entry is a segment's number and its median, carried by one of the segment's row units.
+function probeSide(name, medians) {
+  return {
+    side: name,
+    commit: 'test',
+    chrome: { version: 'test' },
+    metrics: {},
+    units: medians.map(([segment, probeMedian]) => ({
+      kind: 'rep', name: `background ${segment}`, segment, probeMedian,
+    })),
+  };
+}
+
+test('a probe flag names a segment whose probe median moved over 10 %, and not one that moved less', () => {
+  const flags = probeFlags(probeSide('before', [[1, 4.0], [2, 4.0]]), probeSide('after', [[1, 4.5], [2, 4.3]]));
+  assert.deepEqual(flags, [{ segment: 1, before: 4.0, after: 4.5 }]);
+  const line = formatProbeFlag(flags[0]);
+  assert.ok(line.includes('4.00') && line.includes('4.50'), 'the flag names both medians');
+});
+
+test('a probe flag pairs segments by number, so a segment only one side has is not compared', () => {
+  assert.deepEqual(probeFlags(probeSide('before', [[1, 4.0], [2, 4.0]]), probeSide('after', [[1, 4.0]])), []);
+});
+
+test('the cross-side CLI prints a probe flag and still exits 0 when no scenario regresses', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pn-report-'));
+  const report = new URL('./report.mjs', import.meta.url).pathname;
+  try {
+    const beforePath = path.join(dir, 'before.json');
+    const afterPath = path.join(dir, 'after.json');
+    fs.writeFileSync(beforePath, JSON.stringify(probeSide('before', [[1, 4.0]])));
+    fs.writeFileSync(afterPath, JSON.stringify(probeSide('after', [[1, 4.5]])));
+    const result = spawnSync(process.execPath, [report, beforePath, afterPath], { encoding: 'utf8' });
+    assert.equal(result.status, 0);
+    assert.ok(result.stdout.includes('4.00') && result.stdout.includes('4.50'), 'the flag names both medians');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

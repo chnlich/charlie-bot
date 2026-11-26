@@ -84,12 +84,12 @@ test('the store keeps scenarios and open conditions as rows, never search; the r
   assert.deepEqual(rowsOf(['background'], []), ['background']);
 });
 
-test('saveRows stores only the load-safe rows, marks a row that failed its target, and keeps the probe rates', () => {
+test('saveRows stores only the load-safe rows, marks a row that failed its target, and keeps the probe medians', () => {
   const root = scratch();
   const side = {
     units: [
-      { kind: 'rep', name: 'background 1', status: 'ok', probeRate: 3.9 },
-      { kind: 'rep', name: 'held 1', status: 'ok', probeRate: 3.9 },
+      { kind: 'rep', name: 'background 1', status: 'ok', segment: 1, probeMedian: 3.9 },
+      { kind: 'rep', name: 'held 1', status: 'ok', segment: 1, probeMedian: 3.9 },
     ],
     reps: {
       background: [{ startedAt: '2026-11-22T10:00:00Z', finishedAt: '2026-11-22T10:01:00Z' }],
@@ -106,7 +106,7 @@ test('saveRows stores only the load-safe rows, marks a row that failed its targe
   assert.equal(fs.existsSync(heldFile), false, 'a row that is not load-safe is not stored');
   const record = JSON.parse(fs.readFileSync(path.join(root, KEY.rev, 'background.json'), 'utf8'));
   assert.equal(record.failsTargets, true);
-  assert.deepEqual(record.probeRates, [3.9]);
+  assert.deepEqual(record.probeMedians, [3.9]);
   assert.deepEqual(record.key, KEY);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, KEY.rev, 'rev.json'), 'utf8')), {
     rev: KEY.rev,
@@ -127,7 +127,7 @@ test('assembleBefore merges a stored open row beside the measured side and names
     key: KEY,
     failsTargets: false,
     capped: 0,
-    probeRates: [3.2],
+    probeMedians: [3.2],
     openRate: 3.2,
     reps: null,
     cells: [cell],

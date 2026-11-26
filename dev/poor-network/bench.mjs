@@ -12,6 +12,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import { ServerApi } from './api.mjs';
@@ -314,7 +315,7 @@ function makeCertificate(dir) {
 
 function buildSide({
   args, startedAt, finishedAt, status, error, results, openResult, searchResult, assets, sessions, view, otherViews,
-  replyBytes, chromeVersion, units, yields, cpuReference,
+  replyBytes, chromeVersion, units, yields,
 }) {
   const side = {
     side: args.side,
@@ -367,7 +368,6 @@ function buildSide({
     // lock.
     units,
     yields,
-    cpuReference,
     metrics: {},
     calibration: null,
   };
@@ -489,8 +489,8 @@ async function main() {
     segments = new Segments({
       gate,
       probe: () => openProbe(ctx, ctx.prepared.reference),
+      loadAverage: () => os.loadavg()[0],
       side: args.side,
-      reference: args.openCpuRate ?? null,
     });
     ctx.unit = async (kind, name, body) => {
       const outcome = await segments.unit(kind, name, body);
@@ -578,7 +578,6 @@ async function main() {
     chromeVersion: ctx.chromeVersion,
     units: gate.units,
     yields: gate.yields,
-    cpuReference: segments?.reference ?? null,
   });
   fs.writeFileSync(args.out, `${JSON.stringify(side, null, 2)}\n`);
   process.stderr.write(`wrote ${args.out}\n`);

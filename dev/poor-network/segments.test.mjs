@@ -1,6 +1,7 @@
-// Tests of the bench's segments: the rate verdict, the probe that starts each segment inside its unit's step, the
-// rerun of a probe that fails the gate, exit status 5 when the rerun fails too, the probe that a yield makes due
-// again, and a bench that yields after every step measuring a cell per hold.
+// Tests of the bench's segments: the rate verdict (a range, not a band), the probe that starts each segment inside
+// its unit's step, the rerun of a probe that fails the gate, exit status 5 when the rerun fails too, the reads and
+// median a row carries, the probe that a yield makes due again, and a bench that yields after every step measuring a
+// cell per hold.
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -41,7 +42,9 @@ function fakeGate({ yields = [], yieldEveryStep = false } = {}) {
   };
 }
 
-function segmentsWith(gate, rates, reference = null) {
+// Segments over scripted probes: the k-th probe reads rates[k - 1] and its load1 is k, because the load is sampled
+// before each probe's read.
+function segmentsWith(gate, rates) {
   const queue = rates.map((rate) => probeAt(rate));
   let probes = 0;
   const segments = new Segments({
@@ -50,19 +53,31 @@ function segmentsWith(gate, rates, reference = null) {
       probes += 1;
       return queue.shift();
     },
+    loadAverage: () => probes + 1,
     side: 'after',
-    reference,
   });
   return { segments, probes: () => probes };
 }
 
-test('the rate gate passes a rate inside the range and inside the band of the cells, and fails either outside', () => {
-  assert.equal(rateVerdict(3.5, null).ok, true);
-  assert.equal(rateVerdict(4.9, null).ok, true, 'a rate a host reads at moderate load');
-  assert.equal(rateVerdict(RATE_MIN - 0.1, null).ok, false, 'below the range');
-  assert.equal(rateVerdict(RATE_MAX + 0.1, null).ok, false, 'above the range');
-  assert.equal(rateVerdict(3.8, 4.0).ok, true, 'inside the band');
-  assert.equal(rateVerdict(4.0, 3.5).ok, false, 'more than 10 % from the cells rate');
+test('the rate gate passes a rate inside the range whatever its ratio to other probes, and fails outside it', () => {
+  assert.equal(rateVerdict(RATE_MIN).ok, true, 'the range includes both ends');
+  assert.equal(rateVerdict(3.5).ok, true);
+  assert.equal(rateVerdict(4.9).ok, true, 'a rate a host reads at moderate load');
+  assert.equal(rateVerdict(RATE_MAX).ok, true);
+  assert.equal(rateVerdict(RATE_MIN - 0.1).ok, false, 'below the range');
+  assert.equal(rateVerdict(RATE_MAX + 0.1).ok, false, 'above the range');
+});
+
+test('a probe at 1.5x the first segment\'s rate passes, because both rates are inside the range', async () => {
+  const gate = fakeGate({ yields: [{ waiterPids: [42], seenToReleaseMs: 3 }] });
+  const { segments, probes } = segmentsWith(gate, [4.0, 6.0]);
+  await segments.unit('rep', 'background 1', () => 1);
+  await segments.unit('rep', 'background 2', () => 2);
+  assert.equal(probes(), 2);
+  assert.deepEqual(gate.units.map((unit) => unit.kind), ['probe', 'rep', 'probe', 'rep']);
+  assert.equal(gate.units.filter((unit) => unit.discarded).length, 0);
+  assert.equal(gate.units[3].segment, 2);
+  assert.equal(gate.units[3].probeMedian, 6.0);
 });
 
 test('a probe that fails the gate is discarded and run once more; the passing probe starts the segment', async () => {
@@ -83,7 +98,9 @@ test('a probe that fails the gate is discarded and run once more; the passing pr
   assert.equal(passed.probeRate, 4.0);
   assert.equal(rep.kind, 'rep');
   assert.equal(rep.segment, 1);
-  assert.equal(rep.probeRate, 4.0);
+  assert.deepEqual(rep.probeReads, [{ rate: RATE_MAX + 0.5, load1: 1 }, { rate: 4.0, load1: 2 }],
+    'the discarded read is one of the segment\'s reads');
+  assert.equal(rep.probeMedian, 4.0, 'the median of two reads is the lower middle value');
 });
 
 test('two probes that fail the gate end the run with exit status 5', async () => {
@@ -99,10 +116,15 @@ test('two probes that fail the gate end the run with exit status 5', async () =>
   assert.equal(gate.calls.length, 1, 'a rate failure throws inside the unit\'s step');
 });
 
-test('a probe outside the band of the cells fails even inside the range', async () => {
+test('a probe below the range is run once more, then exits 5 as one above it does', async () => {
   const gate = fakeGate();
-  const { segments } = segmentsWith(gate, [3.0, 3.0], 4.0);
-  await assert.rejects(segments.unit('rep', 'held 1', () => 'never'), RateGateError);
+  const { segments, probes } = segmentsWith(gate, [RATE_MIN - 0.5, RATE_MIN - 0.5]);
+  await assert.rejects(segments.unit('rep', 'held 1', () => 'never'), (error) => {
+    assert.ok(error instanceof RateGateError);
+    assert.equal(error.exitCode, 5);
+    return true;
+  });
+  assert.equal(probes(), 2);
 });
 
 test('a probe runs once per segment: a step without a yield does not start a new one', async () => {
@@ -143,10 +165,34 @@ test('a capped step starts no segment: the probes stay in the units and the next
   assert.equal(probes(), 2);
   assert.deepEqual(gate.units.filter((unit) => unit.kind === 'probe').map((unit) => unit.segment), [1, 1],
     'the capped step\'s probe does not advance the segment');
-  assert.equal(segments.reference, null);
 });
 
-test('a yield makes the next unit start with a new probe; the reference stays the first accepted rate', async () => {
+test('a capped step\'s probe read belongs to the segment that the next step starts', async () => {
+  // The first step passes its cap after its probe has run; the second step finishes inside its cap.
+  const outcomes = ['capped', 'ok'];
+  const units = [];
+  const gate = {
+    units,
+    async step(kind, name, body) {
+      const value = await body();
+      const status = outcomes.shift();
+      const unit = { kind, name, status, attempt: 1 };
+      units.push(unit);
+      return status === 'ok' ? { status, value, unit, yielded: false } : { status, unit, yielded: false };
+    },
+  };
+  const { segments, probes } = segmentsWith(gate, [4.0, 3.9]);
+  const capped = await segments.unit('rep', 'background 1', () => 'capped');
+  assert.equal(capped.status, 'capped');
+  const outcome = await segments.unit('rep', 'background 2', () => 'measured');
+  assert.equal(outcome.status, 'ok');
+  assert.equal(probes(), 2);
+  assert.equal(outcome.unit.segment, 1);
+  assert.deepEqual(outcome.unit.probeReads, [{ rate: 4.0, load1: 1 }, { rate: 3.9, load1: 2 }]);
+  assert.equal(outcome.unit.probeMedian, 3.9);
+});
+
+test('a yield makes the next unit start with a new probe; each segment\'s rows carry its own median', async () => {
   // The first step gives the lock up; the second does not.
   const gate = fakeGate({ yields: [{ waiterPids: [42], seenToReleaseMs: 3 }] });
   const { segments, probes } = segmentsWith(gate, [4.0, 3.9]);
@@ -154,8 +200,10 @@ test('a yield makes the next unit start with a new probe; the reference stays th
   await segments.unit('rep', 'background 2', () => 2);
   assert.equal(probes(), 2);
   assert.deepEqual(gate.units.map((unit) => unit.kind), ['probe', 'rep', 'probe', 'rep']);
-  assert.equal(segments.reference, 4.0, 'the first accepted rate is the cells rate');
+  assert.equal(gate.units[1].probeMedian, 4.0);
   assert.equal(gate.units[3].segment, 2);
+  assert.deepEqual(gate.units[3].probeReads, [{ rate: 3.9, load1: 2 }]);
+  assert.equal(gate.units[3].probeMedian, 3.9);
 });
 
 test('a bench that yields after every step measures one cell per lock hold', async () => {
@@ -167,7 +215,7 @@ test('a bench that yields after every step measures one cell per lock hold', asy
   const segments = new Segments({
     gate,
     side: 'after',
-    reference: null,
+    loadAverage: () => 1,
     probe: async () => {
       probes += 1;
       assert.ok(probes <= LIMIT, `the bench probed ${probes} times without measuring a cell`);

@@ -70,8 +70,8 @@ function randomTag() {
 }
 
 // The median of a list of numbers, or null when no value is there: a cell whose repetitions all missed the
-// newest message has no median.
-function median(values) {
+// newest message has no median. The bench's medians are nearest-rank, so an even count takes its lower middle value.
+export function median(values) {
   const sorted = values.filter((value) => value !== null).sort((a, b) => a - b);
   return sorted.length === 0 ? null : percentile(sorted, 0.5);
 }

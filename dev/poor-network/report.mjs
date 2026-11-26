@@ -1,6 +1,8 @@
 // The report of one side: each metric's repetitions become a median, a 90th percentile and a verdict against its target.
-// Run as `node report.mjs <side.json>...` it prints the summary table of the given sides, and with a before and an after
-// side it also prints the cross-side verdict and exits 4 when a scenario that passed before fails after.
+// Run as `node report.mjs <side.json>...` it prints the summary table of the given sides, and with a before and an
+// after side it also prints a probe flag for each segment whose probe median moved over 10 % between them, then the
+// cross-side verdict. It exits 4 when a scenario that passed before fails after. A flag does not change the exit
+// status.
 
 import fs from 'node:fs';
 
@@ -354,6 +356,45 @@ export function regressions(before, after) {
   return found;
 }
 
+// A flag is a segment whose probe median moved by more than this share of its before median. A flag reports how far the
+// probe drifted between the sides; it does not change a verdict.
+export const PROBE_FLAG_SHARE = 0.1;
+
+// Each segment's probe median, by segment number. Every row unit of a segment carries its median (segments.mjs), so a
+// side without row units, such as a before side assembled from stored rows, has no medians.
+export function segmentMedians(side) {
+  const medians = new Map();
+  for (const unit of side.units) {
+    if (unit.probeMedian !== undefined) {
+      medians.set(unit.segment, unit.probeMedian);
+    }
+  }
+  return medians;
+}
+
+// The segments whose probe median differs between the sides by more than PROBE_FLAG_SHARE of the before median. The
+// sides pair by segment number, so a segment that only one side has is not compared.
+export function probeFlags(before, after) {
+  const afterMedians = segmentMedians(after);
+  const flags = [];
+  for (const [segment, beforeMedian] of segmentMedians(before)) {
+    if (!afterMedians.has(segment)) {
+      continue;
+    }
+    const afterMedian = afterMedians.get(segment);
+    if (Math.abs(afterMedian / beforeMedian - 1) > PROBE_FLAG_SHARE) {
+      flags.push({ segment, before: beforeMedian, after: afterMedian });
+    }
+  }
+  return flags;
+}
+
+export function formatProbeFlag({ segment, before, after }) {
+  const change = (after / before - 1) * 100;
+  return `probe flag: segment ${segment} probe median ${before.toFixed(2)} before, ${after.toFixed(2)} after ` +
+    `(${change >= 0 ? '+' : ''}${change.toFixed(1)} %); the flag does not change the verdict`;
+}
+
 // The calibration: on the before side, a switch clicked while a background list refresh is in flight must wait for at
 // least CALIBRATION_HOLD_MS to render. The holds are the background repetitions' switchDuringRefreshMs, whose clicks
 // the bench lands inside a refresh; the gate reads their median. The after side reports the same holds without the
@@ -592,6 +633,9 @@ function main(paths) {
   const after = sides.find((side) => side.side === 'after');
   if (!before || !after) {
     return;
+  }
+  for (const flag of probeFlags(before, after)) {
+    console.log(formatProbeFlag(flag));
   }
   const failed = regressions(before, after);
   if (failed.length === 0) {

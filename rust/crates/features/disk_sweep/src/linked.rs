@@ -5,6 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use charliebot_core::git::worktree_remove_args;
 
 use crate::git;
 
@@ -51,7 +52,7 @@ pub(crate) fn remove_linked_worktrees(linked: &[LinkedWorktree]) -> Result<Optio
       .path
       .to_str()
       .with_context(|| format!("linked worktree path {} is not UTF-8", worktree.path.display()))?;
-    let output = git::run_git(&worktree.main_repo, &["worktree", "remove", path], None)?;
+    let output = git::run_git(&worktree.main_repo, &worktree_remove_args(path), None)?;
     if !output.status.success() {
       return Ok(Some(git::decode_error(&output.stderr)));
     }

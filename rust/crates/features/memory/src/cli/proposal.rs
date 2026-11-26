@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use charliebot_cli_common::args as cli_args;
 use charliebot_cli_common::exit::CliExit;
-use charliebot_core::git::ancestry_args;
+use charliebot_core::git::{ancestry_args, worktree_add_existing_branch_args};
 use charliebot_core::{home, paths, str_methods, text_repr};
 use clap::{Args, Parser, Subcommand};
 
@@ -208,7 +208,7 @@ fn ensure_worktree(memory_dir: &Path, worktree: &Path) -> ProposalResult<()> {
   if !worktree.exists() {
     let worktree_path =
       worktree.to_str().ok_or_else(|| ProposalError::Cli(CliExit::error("the proposal worktree path is not UTF-8")))?;
-    git(memory_dir, &["worktree", "add", worktree_path, PROPOSAL_BRANCH])?;
+    git(memory_dir, &worktree_add_existing_branch_args(worktree_path, PROPOSAL_BRANCH))?;
   }
   Ok(())
 }

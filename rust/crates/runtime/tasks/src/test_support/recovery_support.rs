@@ -34,6 +34,7 @@ use charliebot_core::config::{
 };
 use charliebot_core::credentials::load_credentials;
 use charliebot_core::event_types;
+use charliebot_core::git::worktree_add_new_branch_args;
 use charliebot_core::home::CHARLIEBOT_HOME_ENV;
 use charliebot_core::hot_reload::HotReload;
 use charliebot_core::repo_root::RepoRoot;
@@ -977,7 +978,7 @@ impl SyntheticRepo {
     }
     run_git(
       &self.repo,
-      &["worktree", "add", "-b", branch, path.to_str().context("worktree path is UTF-8")?, "origin/main"],
+      &worktree_add_new_branch_args(branch, path.to_str().context("worktree path is UTF-8")?, "origin/main"),
     )?;
     Ok(())
   }

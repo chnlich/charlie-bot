@@ -110,7 +110,12 @@ impl Fixture {
   }
 
   fn account(&self, label: &str) -> ClaudeQuotaAccount {
-    ClaudeQuotaAccount::new(label, self.credentials.clone(), Arc::clone(&self.state), self.http())
+    ClaudeQuotaAccount::new(label, self.credentials.clone(), self.cron_dir(), Arc::clone(&self.state), self.http())
+  }
+
+  /// The cron task directory of this fixture: absent, so no improve host is named and no keyed round holds a login.
+  fn cron_dir(&self) -> PathBuf {
+    self.login_dir.join("cron.d")
   }
 
   /// Runs `body` with `PATH` naming only the fake `claude`, so the version probe never starts a real CLI.
@@ -401,7 +406,7 @@ fn a_renewal_uses_the_token_another_writer_left_in_the_file() {
       &http,
       "work",
       &fixture.login_dir,
-      &[],
+      &fixture.cron_dir(),
       "tok-stored",
       &RenewalTrigger::Usage401,
     ))

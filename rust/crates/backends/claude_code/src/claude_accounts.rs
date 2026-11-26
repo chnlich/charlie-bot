@@ -24,7 +24,7 @@ use std::time::{Instant, UNIX_EPOCH};
 
 use anyhow::{Context, anyhow, bail};
 use charliebot_core::backend_types;
-use charliebot_core::config::{BackendOption, CharlieBotConfig, HOST_AUTH_SECTION_KEY, HostAuthConfig};
+use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types::{RATE_LIMIT_RESETS_AT, RATE_LIMIT_STATUS, RATE_LIMIT_STATUS_REJECTED};
 use charliebot_core::model_id;
 use charliebot_core::paths;
@@ -865,20 +865,41 @@ fn process_login(cfg: &CharlieBotConfig, pid: u32) -> anyhow::Result<Option<clau
   )
 }
 
-/// The improve hosts whose launch directories a hold read covers: the hosts that `host_auth.browser_logins` names, in
-/// config order and once each. A config without the section names none.
-pub fn improve_hosts(cfg: &CharlieBotConfig) -> Vec<String> {
-  let logins = cfg
-    .section_value(HOST_AUTH_SECTION_KEY)
-    .and_then(|value| value.downcast_ref::<HostAuthConfig>())
-    .map_or(&[][..], |host_auth| host_auth.browser_logins.as_slice());
-  let mut hosts: Vec<String> = Vec::new();
-  for host in logins.iter().filter_map(|login| login.host.as_deref()) {
-    if !hosts.iter().any(|known| known == host) {
-      hosts.push(host.to_string());
+/// The improve hosts whose launch directories a hold read covers: the `improve_host` that each cron task file under
+/// `cron_dir` names, in file-name order and once each. Only a cron task starts a keyed round, and the cron loader
+/// requires each such host to be a `host_auth.browser_logins` host; the other login hosts start no round. A missing
+/// directory names none. A file that cannot be read or parsed is an error, so the caller holds every login.
+pub fn improve_hosts(cron_dir: &Path) -> anyhow::Result<Vec<String>> {
+  #[derive(serde::Deserialize)]
+  struct CronTaskHost {
+    #[serde(default)]
+    improve_host: Option<String>,
+  }
+  let entries = match fs::read_dir(cron_dir) {
+    Ok(entries) => entries,
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+    Err(error) => return Err(error).with_context(|| format!("reading {}", cron_dir.display())),
+  };
+  let mut files = Vec::new();
+  for entry in entries {
+    let path = entry.with_context(|| format!("listing {}", cron_dir.display()))?.path();
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else { continue };
+    if path.is_file() && name.ends_with(".yaml") && !name.starts_with('.') {
+      files.push(path);
     }
   }
-  hosts
+  files.sort();
+  let mut hosts: Vec<String> = Vec::new();
+  for path in files {
+    let text = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let task: CronTaskHost = serde_yaml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+    if let Some(host) = task.improve_host
+      && !hosts.contains(&host)
+    {
+      hosts.push(host);
+    }
+  }
+  Ok(hosts)
 }
 
 /// What the hold check found for one login: a live keyed round holds it, nothing holds it, or a source could not be
@@ -2692,6 +2713,22 @@ mod tests {
     let dir = root.join(pid);
     fs::create_dir_all(&dir).unwrap();
     fs::write(dir.join("environ"), environ).unwrap();
+  }
+
+  #[test]
+  fn the_hold_read_covers_the_cron_tasks_improve_hosts_and_no_other_login_host() {
+    let root = tempfile::tempdir().unwrap();
+    let cron = root.path().join("cron.d");
+    fs::create_dir(&cron).unwrap();
+    fs::write(cron.join("improve-ux.yaml"), "improve_host: host3\ncron: 0 * * * *\n").unwrap();
+    fs::write(cron.join("improve-perf.yaml"), "improve_host: host3\n").unwrap();
+    fs::write(cron.join("daily.yaml"), "cron: 0 8 * * *\nprompt_file: prompts/daily.md\n").unwrap();
+    fs::write(cron.join("notes.txt"), "improve_host: host9\n").unwrap();
+
+    assert_eq!(improve_hosts(&cron).unwrap(), vec!["host3".to_string()]);
+    assert!(improve_hosts(&root.path().join("missing")).unwrap().is_empty());
+    fs::write(cron.join("broken.yaml"), "improve_host: [unclosed\n").unwrap();
+    assert!(improve_hosts(&cron).is_err(), "an unparsable cron task file must read as unreadable");
   }
 
   #[test]

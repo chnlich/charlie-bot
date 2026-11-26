@@ -17,7 +17,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, bail};
 use backon::{BackoffBuilder, ExponentialBuilder};
 use charliebot_compat::http_client::{self, Settings};
-use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::config::{CRON_D_DIR_NAME, CharlieBotConfig};
 use charliebot_core::fsutil;
 use charliebot_core::headers::bearer_value;
 use charliebot_core::oauth::{
@@ -146,8 +146,8 @@ impl QuotaAccounts {
       pool_dirs.insert(label.clone(), abspath(&host.expand(raw))?.to_string_lossy().into_owned());
     }
     let logins = derive_login_dirs(host, &pool)?;
-    // The improve hosts whose launch directories a renewal's hold check reads, once for every account of this derive.
-    let hold_hosts = claude_accounts::improve_hosts(cfg);
+    // The cron task files whose `improve_host` names the hosts a renewal's hold check reads.
+    let cron_dir = cfg.config_d_dir().join(CRON_D_DIR_NAME);
 
     let mut by_dir = self.by_dir.lock().expect("the Claude quota accounts are not poisoned");
     let mut accounts: Vec<Arc<dyn QuotaAccount>> = Vec::new();
@@ -159,12 +159,12 @@ impl QuotaAccounts {
         None => Arc::new(ClaudeQuotaAccount::new(
           &label,
           dir.join(CREDENTIALS_FILE),
+          cron_dir.clone(),
           Arc::clone(&self.state),
           Arc::clone(&self.http),
         )),
       };
       account.set_login_dir(pool_dirs.get(&label).cloned());
-      account.set_hold_hosts(hold_hosts.clone());
       accounts.push(Arc::clone(&account) as Arc<dyn QuotaAccount>);
       by_dir.insert(dir.clone(), account);
       live.insert(dir);
@@ -181,20 +181,26 @@ pub struct ClaudeQuotaAccount {
   /// The login directory of a pool entry, or `None` for an account that is not one. Only a pool entry carries the
   /// `login_required` mark.
   login_dir: Mutex<Option<String>>,
-  /// The improve hosts a renewal's hold check reads, from `host_auth` as the last `derive` read it.
-  hold_hosts: Mutex<Vec<String>>,
+  /// The cron task directory whose `improve_host` values name the hosts a renewal's hold check reads.
+  cron_dir: PathBuf,
   state: Arc<ClaudeAccountState>,
   http: Arc<QuotaHttp>,
   round: Arc<Mutex<Round>>,
 }
 
 impl ClaudeQuotaAccount {
-  pub fn new(label: &str, credentials_path: PathBuf, state: Arc<ClaudeAccountState>, http: Arc<QuotaHttp>) -> Self {
+  pub fn new(
+    label: &str,
+    credentials_path: PathBuf,
+    cron_dir: PathBuf,
+    state: Arc<ClaudeAccountState>,
+    http: Arc<QuotaHttp>,
+  ) -> Self {
     Self {
       label: label.to_string(),
       credentials_path,
       login_dir: Mutex::new(None),
-      hold_hosts: Mutex::new(Vec::new()),
+      cron_dir,
       state,
       http,
       round: Arc::new(Mutex::new(Round::default())),
@@ -207,7 +213,7 @@ impl ClaudeQuotaAccount {
       label: label.to_string(),
       credentials_path: self.credentials_path.clone(),
       login_dir: Mutex::new(None),
-      hold_hosts: Mutex::new(self.hold_hosts()),
+      cron_dir: self.cron_dir.clone(),
       state: Arc::clone(&self.state),
       http: Arc::clone(&self.http),
       round: Arc::clone(&self.round),
@@ -220,14 +226,6 @@ impl ClaudeQuotaAccount {
 
   fn login_dir(&self) -> Option<String> {
     self.login_dir.lock().expect("the login directory is not poisoned").clone()
-  }
-
-  fn set_hold_hosts(&self, hosts: Vec<String>) {
-    *self.hold_hosts.lock().expect("the hold hosts are not poisoned") = hosts;
-  }
-
-  fn hold_hosts(&self) -> Vec<String> {
-    self.hold_hosts.lock().expect("the hold hosts are not poisoned").clone()
   }
 
   fn set_error(&self, message: &str) {
@@ -334,7 +332,7 @@ impl ClaudeQuotaAccount {
       &self.http,
       &self.label,
       &login_dir,
-      &self.hold_hosts(),
+      &self.cron_dir,
       failed_token,
       &RenewalTrigger::Usage401,
     )
@@ -416,7 +414,7 @@ pub async fn renew_login(
   http: &QuotaHttp,
   label: &str,
   login_dir: &Path,
-  hosts: &[String],
+  cron_dir: &Path,
   observed_token: &str,
   trigger: &RenewalTrigger,
 ) -> anyhow::Result<Renewal> {
@@ -427,8 +425,21 @@ pub async fn renew_login(
   if file.expires_at_ms - now_millis() >= claude_accounts::RENEWABLE_TOKEN_MAX_SECONDS * 1000 {
     return Ok(skipped(label, trigger, "band", None));
   }
+  let hosts = match claude_accounts::improve_hosts(cron_dir) {
+    Ok(hosts) => hosts,
+    Err(error) => {
+      tracing::warn!(
+        target: "charliebot_agents",
+        account = label,
+        trigger = trigger.label(),
+        error = %format!("{error:#}"),
+        "ext_usage_cron_tasks_unreadable"
+      );
+      return Ok(skipped(label, trigger, "unreadable", Some("unreadable:cron_tasks".to_string())));
+    }
+  };
   let hold_dir = login_dir.to_path_buf();
-  let check = claude_accounts::HoldCheck::new(hosts.to_vec(), claude_accounts::now_or(None));
+  let check = claude_accounts::HoldCheck::new(hosts, claude_accounts::now_or(None));
   let hold = tokio::task::spawn_blocking(move || check.hold(&hold_dir)).await.context("the hold check task failed")?;
   match hold {
     claude_accounts::Hold::Free => {}
@@ -1124,6 +1135,7 @@ fn now_millis() -> i64 {
 mod tests {
   use std::os::unix::fs::PermissionsExt;
 
+  use charliebot_core::config::CONFIG_D_DIR_NAME;
   use charliebot_registry::usage::PANEL_EXPIRED;
 
   use super::*;
@@ -1385,13 +1397,11 @@ mod tests {
     assert!(!entry.contains_key("login_required"));
   }
 
-  /// The `accounts.claude` pool and the improve hosts of the live config.
+  /// The `accounts.claude` pool of the live config.
   #[derive(Default, serde::Deserialize)]
   struct LiveConfig {
     #[serde(default)]
     accounts: LiveAccounts,
-    #[serde(default)]
-    host_auth: LiveHostAuth,
   }
 
   #[derive(Default, serde::Deserialize)]
@@ -1406,20 +1416,9 @@ mod tests {
     config_dir: String,
   }
 
-  #[derive(Default, serde::Deserialize)]
-  struct LiveHostAuth {
-    #[serde(default)]
-    browser_logins: Vec<LiveHostLogin>,
-  }
-
-  #[derive(serde::Deserialize)]
-  struct LiveHostLogin {
-    #[serde(default)]
-    host: Option<String>,
-  }
-
-  /// A live login's config directory: `CHARLIEBOT_LIVE_RENEW_LOGIN` names its pool alias in the live config.
-  fn live_login() -> (String, PathBuf, Vec<String>) {
+  /// A live login's config directory and the cron task directory that names the improve hosts. The alias comes from
+  /// `CHARLIEBOT_LIVE_RENEW_LOGIN`, and the pool from the live config.
+  fn live_login() -> (String, PathBuf, PathBuf) {
     let alias = std::env::var("CHARLIEBOT_LIVE_RENEW_LOGIN")
       .expect("set CHARLIEBOT_LIVE_RENEW_LOGIN to the pool alias of an idle login under 3 h 50 min of life");
     let home = std::env::var_os("CHARLIEBOT_HOME")
@@ -1437,8 +1436,7 @@ mod tests {
       Some(rest) => home.parent().expect("the profile home has a parent").join(rest),
       None => PathBuf::from(&account.config_dir),
     };
-    let hosts: Vec<String> = config.host_auth.browser_logins.iter().filter_map(|login| login.host.clone()).collect();
-    (alias, dir, hosts)
+    (alias, dir, home.join(CONFIG_D_DIR_NAME).join(CRON_D_DIR_NAME))
   }
 
   /// A Claude CLI process that uses `config_dir`'s login, other than the process `except`, described by its PID and
@@ -1529,7 +1527,8 @@ mod tests {
   #[test]
   #[ignore = "live: renews one real login's token, once, on the host that holds the login files"]
   fn a_live_cli_survives_a_renewal_of_its_login_live() {
-    let (alias, dir, hosts) = live_login();
+    let (alias, dir, cron_dir) = live_login();
+    let hosts = claude_accounts::improve_hosts(&cron_dir).expect("the live cron task files are readable");
     let before = token_of(&dir);
     let file: Value = serde_json::from_str(&fs::read_to_string(dir.join(CREDENTIALS_FILE)).unwrap()).unwrap();
     let expires = file["claudeAiOauth"]["expiresAt"].as_i64().expect("the login file names its expiry");
@@ -1587,7 +1586,7 @@ mod tests {
     let http = test_support::quota_http();
     let trigger = RenewalTrigger::KeyedRound { run_id: "live-renewal-test".to_string() };
     let renewal = runtime
-      .block_on(renew_login(&quota, &http, &alias, &dir, &hosts, &before, &trigger))
+      .block_on(renew_login(&quota, &http, &alias, &dir, &cron_dir, &before, &trigger))
       .expect("the renewal call runs");
     let answer = format!("{renewal:?}");
 

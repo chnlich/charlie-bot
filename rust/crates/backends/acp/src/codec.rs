@@ -7,7 +7,8 @@
 //!  - `TurnEnded`: every request the codec wrote has been answered. The codec refuses any input after this point, so a
 //!    message can never be written into a turn that has already ended.
 //!  - usage: the turn's usage rides the `result` event that the turn end emits. Each response's usage is one request's
-//!    own count (the output counts are not running totals), so the turn sums each response once.
+//!    own count (`outputTokens` already includes `thoughtTokens`, and counts are not running totals across requests), so
+//!    the turn sums each response once.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
@@ -121,8 +122,14 @@ impl AcpCodec {
     let error = raw.get("error");
     if id == SESSION_ID {
       self.replay_open = false;
+      let session_id = raw.pointer("/result/sessionId").and_then(Value::as_str);
+      if error.is_none()
+        && let Some(session_id) = session_id
+      {
+        *self.session.lock().expect("ACP session mutex is not poisoned") = Some(session_id.to_string());
+      }
       if emit {
-        match (error, raw.pointer("/result/sessionId").and_then(Value::as_str)) {
+        match (error, session_id) {
           (None, Some(session_id)) => {
             events.push(json!({"type": event_types::SESSION_ATTACHED, "session_id": session_id}));
           }
@@ -223,14 +230,15 @@ impl AcpCodec {
     (self.next_id > FIRST_PROMPT_ID).then(|| self.next_id - 1)
   }
 
-  /// Adds one response's usage. Every response is one request, so each is added once.
+  /// Adds one response's usage. Every response is one request, so each is added once. `outputTokens` already includes
+  /// `thoughtTokens`.
   fn add_usage(&mut self, raw: &Value) {
     let Some(usage) = raw.pointer("/result/usage") else {
       return;
     };
     let count = |key: &str| usage.get(key).and_then(Value::as_i64).unwrap_or(0);
     self.usage.input += count("inputTokens");
-    self.usage.output += count("outputTokens") + count("thoughtTokens");
+    self.usage.output += count("outputTokens");
     self.usage.cache_read += count("cachedReadTokens");
     self.usage.cache_creation += count("cachedWriteTokens");
   }
@@ -247,6 +255,9 @@ impl AcpCodec {
       None,
     );
     event["result"] = json!(answer);
+    if self.initial_succeeded != Some(true) {
+      event[event_types::IS_ERROR] = json!(true);
+    }
     event
   }
 }
@@ -292,7 +303,9 @@ impl MidturnCodec for AcpCodec {
     self.next_id = ids.iter().max().map_or(FIRST_PROMPT_ID, |max| (max + 1).max(FIRST_PROMPT_ID));
     self.outstanding = ids.iter().copied().collect();
     self.undelivered = ids.iter().skip(1).copied().collect();
-    self.replay_open = false;
+    if cursor > 0 {
+      self.replay_open = false;
+    }
     // Output before the checkpoint was projected by the process that wrote it. Its requests and usage still count.
     for raw in read_output_before(&transport_dir.join(RAW_LOG_NAME), cursor)? {
       self.process(&raw, false);
@@ -439,5 +452,41 @@ mod tests {
     let last = codec.observe(&response(5, usage(20, 2, 0))).unwrap();
     assert_eq!(last.signals, vec![MidturnSignal::TurnEnded { succeeded: true }]);
     assert_eq!(last.events[0]["usage"][event_types::USAGE_INPUT_TOKENS], 30, "the answer before the checkpoint counts");
+  }
+
+  #[test]
+  fn output_tokens_are_not_double_counted_with_thought_tokens() {
+    let mut codec = codec();
+    codec.encode_prompt("Think").unwrap();
+    let ended = codec
+      .observe(&response(
+        4,
+        json!({"inputTokens": 100, "outputTokens": 196, "cachedReadTokens": 20, "thoughtTokens": 108,
+          "cachedWriteTokens": 0, "totalTokens": 316}),
+      ))
+      .unwrap();
+    assert_eq!(ended.events[0]["usage"][event_types::USAGE_OUTPUT_TOKENS], 196);
+    assert_eq!(ended.events[0][event_types::IS_ERROR], Value::Null);
+  }
+
+  #[test]
+  fn an_errored_initial_prompt_marks_the_result_as_error() {
+    let mut codec = codec();
+    codec.encode_prompt("Fail").unwrap();
+    let failed = codec.observe(&json!({"jsonrpc": "2.0", "id": 4, "error": {"message": "bad"}})).unwrap();
+    let result = failed.events.iter().find(|event| event["type"] == event_types::RESULT).unwrap();
+    assert_eq!(result[event_types::IS_ERROR], json!(true));
+  }
+
+  #[test]
+  fn resume_at_cursor_zero_discards_session_load_replay_until_session_response() {
+    let dir = tempfile::tempdir().unwrap();
+    let session: SharedSession = Arc::new(Mutex::new(Some("session-1".to_string())));
+    let mut codec = AcpCodec::new(session);
+    codec.resume(&["4".to_string()], dir.path(), 0).unwrap();
+    assert!(codec.observe(&chunk("history replay")).unwrap().events.is_empty());
+    codec.observe(&json!({"jsonrpc": "2.0", "id": SESSION_ID, "result": {"sessionId": "session-1"}})).unwrap();
+    let live = codec.observe(&chunk("live answer")).unwrap();
+    assert_eq!(live.events, vec![make_text_event("live answer")]);
   }
 }

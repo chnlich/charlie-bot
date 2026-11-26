@@ -53,7 +53,7 @@ pub async fn run(
   let session_id = result
     .get("sessionId")
     .and_then(Value::as_str)
-    .with_context(|| format!("agy answered {method} without a sessionId"))?
+    .with_context(|| format!("ACP agent answered {method} without a sessionId"))?
     .to_string();
   *session.lock().expect("ACP session mutex is not poisoned") = Some(session_id.clone());
 
@@ -70,8 +70,8 @@ async fn write_request(
   params: Value,
 ) -> anyhow::Result<()> {
   let request = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
-  stdin.write_all(&line_bytes(&request)).await.with_context(|| format!("writing {method} to agy"))?;
-  stdin.flush().await.with_context(|| format!("flushing {method} to agy"))?;
+  stdin.write_all(&line_bytes(&request)).await.with_context(|| format!("writing {method} to ACP agent"))?;
+  stdin.flush().await.with_context(|| format!("flushing {method} to ACP agent"))?;
   Ok(())
 }
 
@@ -83,12 +83,15 @@ async fn await_result(raw_path: &Path, exited: &ExitedProbe, id: u64) -> anyhow:
       .find(|line| line.get("id").and_then(Value::as_u64) == Some(id) && line.get("method").is_none());
     if let Some(response) = response {
       if let Some(error) = response.get("error") {
-        bail!("agy refused request {id}: {error}");
+        bail!("ACP agent refused request {id}: {error}");
       }
-      return response.get("result").cloned().with_context(|| format!("agy answered request {id} without a result"));
+      return response
+        .get("result")
+        .cloned()
+        .with_context(|| format!("ACP agent answered request {id} without a result"));
     }
     if exited() {
-      bail!("agy exited before it answered request {id}");
+      bail!("ACP agent exited before it answered request {id}");
     }
     tokio::time::sleep(POLL_INTERVAL).await;
   }

@@ -16,7 +16,7 @@ use charliebot_cli_common::client;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::fields::SESSION_ID;
 use charliebot_core::config::CharlieBotConfig;
-use charliebot_core::paths;
+use charliebot_core::{paths, timefmt};
 use charliebot_store::metadata::{
   COLD_READ_FIELD, COLD_READ_GENRE_FIELD, COLD_READ_PAGE_PATH_FIELD, COLD_READ_TRIGGER_FIELD, TASK_TYPE_FIELD, TaskType,
 };
@@ -26,7 +26,6 @@ use charliebot_tasks::routes as task_routes;
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use time::macros::format_description;
 
 use crate::artifact_check;
 
@@ -281,9 +280,7 @@ fn delegate_cold_read(
 ) -> Result<String, CliExit> {
   let page_bytes = std::fs::read(artifact).map_err(|error| CliExit::error(error.to_string()))?;
   let digest = format!("{:x}", Sha256::digest(&page_bytes));
-  let timestamp = time::OffsetDateTime::now_utc()
-    .format(&format_description!("[year][month][day]T[hour][minute][second]Z"))
-    .map_err(|error| CliExit::error(format!("could not format the request timestamp: {error}")))?;
+  let timestamp = format!("{}Z", timefmt::compact_utc(time::OffsetDateTime::now_utc()));
   let request_id = format!("cold-read:{session_id}:{}:{timestamp}", &digest[..12]);
   let description = format!("cold read of {}", paths::display(artifact));
   let payload = json!({

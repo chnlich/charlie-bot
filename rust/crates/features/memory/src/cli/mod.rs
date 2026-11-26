@@ -12,16 +12,15 @@ use charliebot_cli_common::exit::CliExit;
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_core::proc_identity::PID_START_FIELD;
 use charliebot_core::run_token::RUN_TOKEN_ENV;
-use charliebot_core::{config, credentials, event_types, home, run_token, str_methods};
+use charliebot_core::{config, credentials, event_types, home, run_token, str_methods, timefmt};
 use charliebot_store::chat_events::{self, LineRule};
 use charliebot_store::metadata::MetadataReadError;
 use charliebot_store::run_records::RunRecord;
 use charliebot_store::{layout, metadata, run_identity};
 use clap::{Args, Parser, Subcommand};
 use serde_json::{Value, json};
+use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
-use time::macros::format_description;
-use time::{OffsetDateTime, UtcOffset};
 
 use crate::store_root;
 
@@ -266,10 +265,7 @@ fn write_capture(
   clock: impl FnOnce() -> Result<OffsetDateTime, CliExit>,
 ) -> Result<PathBuf, CliExit> {
   crate::memory::ensure_store(memory_dir).map_err(|error| CliExit::error(error.to_string()))?;
-  let timestamp = clock()?
-    .to_offset(UtcOffset::UTC)
-    .format(format_description!("[year][month][day]T[hour][minute][second]Z"))
-    .map_err(|error| CliExit::error(error.to_string()))?;
+  let timestamp = format!("{}Z", timefmt::compact_utc(clock()?));
   let session_slug = session_slug8(sessions_root, cwd);
   let slug = slugify(title);
   let slug = if slug.is_empty() { "capture" } else { &slug };

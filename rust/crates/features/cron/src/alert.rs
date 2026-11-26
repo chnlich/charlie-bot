@@ -90,7 +90,13 @@ async fn send_telegram(
     return Ok(());
   }
   let status = response.status();
-  let body = response.text().await.unwrap_or_default();
+  let body = match response.text().await {
+    Ok(body) => body,
+    Err(error) => {
+      tracing::warn!(error = %error, "cron_alert_error_body_unreadable");
+      String::new()
+    }
+  };
   anyhow::bail!("Telegram API returned {status}: {}", body.chars().take(200).collect::<String>())
 }
 

@@ -360,8 +360,9 @@ fn the_round_environment_names_its_state_sources_and_its_round_home() {
   );
 }
 
-/// The round's tools start the browser that its start check ran: the round environment names that browser in each
-/// input that a round tool reads first, so no tool resolves a browser of its own inside a round.
+/// The round's tools and the repository's browser tests start the browser that the start check ran: the round
+/// environment names that browser in each input that reads a Chrome binary, so no test or tool resolves one of its own
+/// inside a round.
 #[test]
 #[ignore = "integration"]
 fn the_round_environment_hands_its_browser_to_each_tool_input() {
@@ -370,7 +371,14 @@ fn the_round_environment_hands_its_browser_to_each_tool_input() {
   assert_eq!(run.code, 0, "{}", run.describe());
   let env = world.claude_environment();
   let browser = world.browser_path().display().to_string();
-  for input in ["IMPROVE_BROWSER", "LIVE_SHOT_CHROME", "POOR_NETWORK_CHROME"] {
+  for input in [
+    "IMPROVE_BROWSER",
+    "LIVE_SHOT_CHROME",
+    "POOR_NETWORK_CHROME",
+    "CHARLIEBOT_TEST_CHROME_BIN",
+    "CHROME_BIN",
+    "README_CAPTURE_CHROME",
+  ] {
     assert_eq!(
       env.get(input),
       Some(&browser),

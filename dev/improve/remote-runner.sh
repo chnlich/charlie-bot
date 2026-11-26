@@ -1124,6 +1124,18 @@ check_boundary_starts() {
 # round at its start, which names the path that is missing.
 readonly BROWSER_BUILD='chromium-1248'
 
+# The environment inputs through which repository code and round tools pick a Chrome binary. The round environment sets
+# each of them to the round's browser. landing.md's "The round's browser" section lists the same names: change both
+# together.
+readonly ROUND_BROWSER_INPUTS=(
+  IMPROVE_BROWSER
+  LIVE_SHOT_CHROME
+  POOR_NETWORK_CHROME
+  CHARLIEBOT_TEST_CHROME_BIN
+  CHROME_BIN
+  README_CAPTURE_CHROME
+)
+
 # The round's browser: the one executable Chrome of the pinned build under the runner's own home. A round takes no
 # browser from PATH, because the system chromium is a snap wrapper, and snap-confine cannot start under the boundary.
 resolve_round_browser() {
@@ -1260,10 +1272,9 @@ ensure_member_cli "$review_kind" "$review_version"
 check_boundary_starts
 ROUND_BROWSER=$(resolve_round_browser)
 check_browser_starts "$ROUND_BROWSER"
-# The round's tools that resolve a browser of their own read these inputs first, so each one starts this browser.
-export IMPROVE_BROWSER=$ROUND_BROWSER
-export LIVE_SHOT_CHROME=$ROUND_BROWSER
-export POOR_NETWORK_CHROME=$ROUND_BROWSER
+for browser_input in "${ROUND_BROWSER_INPUTS[@]}"; do
+  export "$browser_input=$ROUND_BROWSER"
+done
 export PATH="$RUNNER_ROOT/members/$kind-$member_version/bin:$RUNNER_ROOT/members/$review_kind-$review_version/bin:$RUNNER_ROOT/bin/$commit:$PATH"
 
 # A failed scope is dead: an OOM kill or another fatal end leaves the unit failed, and systemd-run

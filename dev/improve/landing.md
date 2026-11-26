@@ -62,14 +62,18 @@ A round's report names the tool's revision for each scan it cites; the tool's st
 The runner resolves the round's browser before the round starts: the Chrome of the Playwright build that
 `remote-runner.sh` pins (`BROWSER_BUILD`) under the runner's own home. It starts that Chrome once under the write
 boundary. A browser that does not start ends the launch with exit 7, and stderr names its path and the error.
-The round environment names that browser in three variables:
+The round environment names that browser in each of these variables:
 
 - `IMPROVE_BROWSER`, for a round-written driver;
 - `LIVE_SHOT_CHROME`, which `scripts/live-shot.mjs` reads before its own lookup;
-- `POOR_NETWORK_CHROME`, which `dev/poor-network/run.sh` reads before its own lookup.
+- `POOR_NETWORK_CHROME`, which `dev/poor-network/run.sh` reads before its own lookup;
+- `CHARLIEBOT_TEST_CHROME_BIN`, which the Rust artifact check test and the `web/tests` browser integration tests read;
+- `CHROME_BIN`, which `scripts/sidebar-search/measure_common.js` reads as its launch `executablePath`;
+- `README_CAPTURE_CHROME`, which `dev/readme-screenshots/capture.sh` reads before its own lookup.
 
-A round's browser tools start the browser these variables name. A round-written Playwright driver passes
-`$IMPROVE_BROWSER` as the `executablePath` launch option. Outside a round, each tool keeps its own lookup.
+A round's browser tools and the repository's browser tests start the browser these variables name. A round-written
+Playwright driver passes `$IMPROVE_BROWSER` as the `executablePath` launch option. Outside a round, each tool keeps its
+own lookup.
 A round takes no browser from `PATH`, because the system chromium there is a snap wrapper that cannot start under the
 write boundary. No round changes `HOME` to find a browser.
 

@@ -288,6 +288,17 @@ fn unrelated_page() -> Respond {
   Arc::new(|_target, _head| (200, "text/html", "<!doctype html><title>Other page</title>".to_string()))
 }
 
+/// The app's Diff Viewer page, which uses its own page shell rather than the chat shell.
+fn diff_page() -> Respond {
+  Arc::new(|_target, _head| {
+    (
+      200,
+      "text/html",
+      "<!doctype html><title>Diff Viewer — CharlieBot@test</title><form id=\"diff-form\"></form>".to_string(),
+    )
+  })
+}
+
 /// The app's page as the stand-in serves it. Its access-key prompt opens when the page's localStorage holds no key, as
 /// the app's startup does (`initAuth` in `web/static/js/config.js`).
 const APP_PAGE: &str = r#"<!doctype html><title>CharlieBot</title>
@@ -422,6 +433,21 @@ fn test_a_capture_of_an_unrelated_200_page_fails_and_writes_no_picture() {
   assert_eq!(run.code, 1, "{}", run.describe());
   assert!(run.stderr.contains("the page is not the CharlieBot app"), "{}", run.describe());
   assert!(!out.exists(), "a page outside the app is never written as a picture: {}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_a_capture_accepts_the_charliebot_diff_page() {
+  let sandbox = Sandbox::new();
+  let listener = TcpListener::bind("127.0.0.1:0").expect("a port");
+  let port = listener.local_addr().expect("the port").port();
+  let _seen = stand_in_origin(listener, diff_page());
+  let out = sandbox.dir("shots").join("diff.png");
+
+  let run = run_live_shot(&sandbox, &format!("http://127.0.0.1:{port}"), "/diff", &out);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(out.exists(), "the Diff Viewer page was not captured: {}", run.describe());
 }
 
 /// The capture stage against a server that shows the login page: the commit's capture fails at its size with a line

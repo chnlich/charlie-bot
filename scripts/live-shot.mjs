@@ -197,9 +197,11 @@ function seedAccessKey(origin) {
 async function renderedPageFacts(page) {
   return evaluate(page, `(() => {
     const prompt = document.getElementById('auth-overlay');
+    const chatShell = prompt !== null && document.getElementById('sidebar') !== null &&
+      document.getElementById('messages') !== null;
+    const diffPage = document.getElementById('diff-form') !== null;
     return {
-      appShell: document.getElementById('auth-overlay') !== null &&
-        document.getElementById('sidebar') !== null && document.getElementById('messages') !== null,
+      appShell: chatShell || diffPage,
       loginForm: document.querySelector('input#k[type="password"]') !== null,
       accessPrompt: prompt !== null && getComputedStyle(prompt).display !== 'none',
     };

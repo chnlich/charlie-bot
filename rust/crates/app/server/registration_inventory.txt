@@ -72,6 +72,7 @@ routers	features.files	features.files
 websocket route	runtime.session_api	/ws/sessions/*
 websocket route	features.terminal	/ws/terminal
 websocket route	features.voice	/ws/voice/*
+service	features.artifacts	headless_renderer
 service	features.cron	cron_binding_context
 service	features.cron	scheduler
 service	features.slack	slack
@@ -220,4 +221,3 @@ recovery step	runtime.tasks	task_recovery
 recovery step	features.artifacts	headless_renderer_orphans
 trigger step	runtime.triggers	triggers
 let-go step	runtime.tasks	task_execution
-let-go step	features.artifacts	headless_renderer

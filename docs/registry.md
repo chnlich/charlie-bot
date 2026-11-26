@@ -293,8 +293,7 @@ lock. `restore_chain` takes the lock itself and returns the restored ids.
   in reverse order, stops early services in reverse order, closes shared clients, releases the fence, and logs
   `charliebot_shutdown`. On SIGINT and failed bind, the server then runs let-go steps in
   registration order and exits 0 or 1. SIGTERM skips let-go and is re-raised under its
-  default action. The registered order is `task_execution`, `headless_renderer`, then
-  `speech`.
+  default action. The registered let-go step is `task_execution`.
 - Example: `registry.recovery_step("sweep_orphans", sweep_orphans)?;`
 
 ## Route helpers

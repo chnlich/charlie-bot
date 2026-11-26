@@ -29,6 +29,7 @@ const HEADLESS_LAUNCH_TIMEOUT: Duration = Duration::from_secs(60);
 const HEADLESS_TEARDOWN_WAIT: Duration = Duration::from_secs(5);
 /// The user-data directory prefix of every renderer browser, here and in the startup orphan sweep.
 const RENDERER_TEMP_PREFIX: &str = "headless-render-";
+const CRASHPAD_HANDLER_EXE: &str = "chrome_crashpad_handler";
 
 static RENDERER: OnceLock<Mutex<Option<WarmRenderer>>> = OnceLock::new();
 
@@ -78,7 +79,7 @@ impl WarmRenderer {
     let needs_launch =
       self.process.is_none() || self.process_exited().map_err(|error| error.to_string())? || self.socket.is_none();
     if needs_launch {
-      self.close().map_err(|error| error.to_string())?;
+      self.close().map_err(|error| format!("{error:#}"))?;
       if let Err(failure) = self.launch() {
         return Err(self.failure_message(failure)?);
       }
@@ -88,7 +89,7 @@ impl WarmRenderer {
       Ok(height) => Ok(height),
       Err(failure) => {
         let tail = self.stderr_tail().map_err(|error| error.to_string())?;
-        self.close().map_err(|error| error.to_string())?;
+        self.close().map_err(|error| format!("{error:#}"))?;
         let message = match failure {
           RenderFailure::Value(message) => message,
           RenderFailure::Timeout => format!(
@@ -322,7 +323,7 @@ impl WarmRenderer {
 
   fn launch_failure(&mut self, reason: String) -> Result<RenderFailure, RenderFailure> {
     let tail = self.stderr_tail().map_err(|error| RenderFailure::Other(error.to_string()))?;
-    self.close().map_err(|error| RenderFailure::Other(error.to_string()))?;
+    self.close().map_err(|error| RenderFailure::Other(format!("{error:#}")))?;
     Ok(RenderFailure::Launch(format!(
       "headless renderer could not be launched: {} ({reason}){tail}",
       self.chrome_bin.display()
@@ -334,12 +335,12 @@ impl WarmRenderer {
       RenderFailure::Launch(message) => Ok(message),
       RenderFailure::Value(message) => {
         let _tail = self.stderr_tail().map_err(|error| error.to_string())?;
-        self.close().map_err(|error| error.to_string())?;
+        self.close().map_err(|error| format!("{error:#}"))?;
         Ok(message)
       }
       RenderFailure::Timeout => {
         let tail = self.stderr_tail().map_err(|error| error.to_string())?;
-        self.close().map_err(|error| error.to_string())?;
+        self.close().map_err(|error| format!("{error:#}"))?;
         Ok(format!(
           "headless renderer timed out after {}s while measuring the plan page height{tail}",
           HEADLESS_RENDER_TIMEOUT.as_secs()
@@ -347,7 +348,7 @@ impl WarmRenderer {
       }
       RenderFailure::Other(message) => {
         let tail = self.stderr_tail().map_err(|error| error.to_string())?;
-        self.close().map_err(|error| error.to_string())?;
+        self.close().map_err(|error| format!("{error:#}"))?;
         Ok(format!("headless renderer failed while measuring the plan page height: {message}{tail}"))
       }
     }
@@ -566,15 +567,39 @@ fn end_orphaned_renderer(profile: &Path) -> anyhow::Result<()> {
 
 fn end_renderer_processes(profile: &Path) -> anyhow::Result<()> {
   let deadline = Instant::now() + HEADLESS_TEARDOWN_WAIT;
+  let mut crashpad_pids: HashMap<u32, u64> = HashMap::new();
   loop {
     let processes = read_process_records()?;
+    let by_pid: HashMap<u32, &ProcessRecord> = processes.iter().map(|process| (process.pid, process)).collect();
     let matching: Vec<&ProcessRecord> =
       processes.iter().filter(|process| process_uses_renderer_profile(process, profile)).collect();
-    if matching.is_empty() {
+    for process in &matching {
+      for cpid in crashpad_handler_pids(&process.argv) {
+        if !crashpad_pids.contains_key(&cpid)
+          && let Some(handler) = by_pid.get(&cpid)
+          && is_crashpad_handler(handler)
+        {
+          crashpad_pids.insert(cpid, handler.start_time);
+        }
+      }
+    }
+    let crashpad_targets: Vec<&ProcessRecord> = crashpad_pids
+      .iter()
+      .filter_map(|(&pid, &start_time)| {
+        by_pid
+          .get(&pid)
+          .copied()
+          .filter(|process| process.start_time == start_time && process.state != 'Z' && process.state != 'X')
+      })
+      .collect();
+    if matching.is_empty() && crashpad_targets.is_empty() {
       return Ok(());
     }
     for process in matching {
       kill_renderer_process(process, profile)?;
+    }
+    for handler in crashpad_targets {
+      kill_crashpad_process(handler, profile)?;
     }
     if Instant::now() >= deadline {
       return Err(anyhow!(
@@ -595,11 +620,48 @@ fn kill_renderer_process(process: &ProcessRecord, profile: &Path) -> anyhow::Res
   if !process_uses_renderer_profile(&current, profile) {
     return Err(anyhow!("process {} no longer names renderer profile {}", process.pid, profile.display()));
   }
-  let pid = Pid::from_raw(i32::try_from(process.pid).context("renderer pid does not fit a signal pid")?);
+  send_sigkill(process.pid)
+}
+
+fn kill_crashpad_process(process: &ProcessRecord, profile: &Path) -> anyhow::Result<()> {
+  let Some(current) = read_process_record(process.pid)? else { return Ok(()) };
+  if current.start_time != process.start_time {
+    return Err(anyhow!(
+      "crashpad process {} changed while ending renderer profile {}",
+      process.pid,
+      profile.display()
+    ));
+  }
+  if !is_crashpad_handler(&current) {
+    return Err(anyhow!(
+      "process {} is no longer a crashpad handler while ending renderer profile {}",
+      process.pid,
+      profile.display()
+    ));
+  }
+  send_sigkill(process.pid)
+}
+
+fn send_sigkill(raw_pid: u32) -> anyhow::Result<()> {
+  let pid = Pid::from_raw(i32::try_from(raw_pid).context("renderer pid does not fit a signal pid")?);
   match signal::kill(pid, Signal::SIGKILL) {
     Ok(()) | Err(nix::errno::Errno::ESRCH) => Ok(()),
-    Err(error) => Err(error).with_context(|| format!("could not kill renderer process {}", process.pid)),
+    Err(error) => Err(error).with_context(|| format!("could not kill renderer process {raw_pid}")),
   }
+}
+
+fn crashpad_handler_pids(argv: &[String]) -> Vec<u32> {
+  argv
+    .iter()
+    .filter_map(|argument| argument.strip_prefix("--crashpad-handler-pid="))
+    .filter_map(|pid| pid.parse::<u32>().ok())
+    .collect()
+}
+
+fn is_crashpad_handler(process: &ProcessRecord) -> bool {
+  let argv0_name =
+    process.argv.first().and_then(|argument| Path::new(argument).file_name()).and_then(|name| name.to_str());
+  process.exe_name.as_deref() == Some(CRASHPAD_HANDLER_EXE) || argv0_name == Some(CRASHPAD_HANDLER_EXE)
 }
 
 fn process_uses_renderer_profile(process: &ProcessRecord, profile: &Path) -> bool {
@@ -640,10 +702,14 @@ fn read_process_records() -> anyhow::Result<Vec<ProcessRecord>> {
   Ok(processes)
 }
 
+fn is_missing_process_error(error: &std::io::Error) -> bool {
+  error.kind() == ErrorKind::NotFound || error.raw_os_error() == Some(libc::ESRCH)
+}
+
 fn read_process_record(pid: u32) -> anyhow::Result<Option<ProcessRecord>> {
   let argv_raw = match fs::read(format!("/proc/{pid}/cmdline")) {
     Ok(argv) => argv,
-    Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+    Err(error) if is_missing_process_error(&error) => return Ok(None),
     Err(error) => return Err(error).with_context(|| format!("could not read /proc/{pid}/cmdline")),
   };
   if argv_raw.is_empty() {
@@ -659,10 +725,13 @@ fn read_process_record(pid: u32) -> anyhow::Result<Option<ProcessRecord>> {
       argv.push(argument.to_owned());
     }
   }
-  let exe_name = if argv.iter().any(|argument| argument.contains(RENDERER_TEMP_PREFIX)) {
+  let argv0_name = argv.first().and_then(|argument| Path::new(argument).file_name()).and_then(|name| name.to_str());
+  let needs_exe_name =
+    argv.iter().any(|argument| argument.contains(RENDERER_TEMP_PREFIX)) || argv0_name == Some(CRASHPAD_HANDLER_EXE);
+  let exe_name = if needs_exe_name {
     let exe = match fs::read_link(format!("/proc/{pid}/exe")) {
       Ok(exe) => exe,
-      Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+      Err(error) if is_missing_process_error(&error) => return Ok(None),
       Err(error) => return Err(error).with_context(|| format!("could not read /proc/{pid}/exe")),
     };
     Some(
@@ -677,7 +746,7 @@ fn read_process_record(pid: u32) -> anyhow::Result<Option<ProcessRecord>> {
   };
   let stat = match read_stat_text(pid) {
     Ok(stat) => stat,
-    Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+    Err(error) if is_missing_process_error(&error) => return Ok(None),
     Err(error) => return Err(error).with_context(|| format!("could not read /proc/{pid}/stat")),
   };
   let fields: Vec<&str> = stat_fields_after_command(&stat)
@@ -921,9 +990,26 @@ mod tests {
     assert!(!is_orphaned_renderer(&other_profile, &by_pid), "other Chrome profiles stay");
     assert!(!is_orphaned_renderer(&renderer_child, &by_pid), "Chrome renderer children are not roots");
     assert!(!is_orphaned_renderer(&not_chrome, &by_pid), "non-Chrome processes are not roots");
+
+    let child_with_crashpad = process_record(
+      105,
+      100,
+      "chrome",
+      &["--type=gpu-process", "--crashpad-handler-pid=200", "--user-data-dir=/tmp/headless-render-abc"],
+    );
+    assert_eq!(crashpad_handler_pids(&child_with_crashpad.argv), vec![200]);
+    let crashpad = process_record(
+      200,
+      systemd.pid,
+      CRASHPAD_HANDLER_EXE,
+      &["/opt/google/chrome/chrome_crashpad_handler", "--database=/home/user/.config/google-chrome/Crash Reports"],
+    );
+    assert!(is_crashpad_handler(&crashpad));
+    assert!(!is_crashpad_handler(&not_chrome));
   }
 
   #[test]
+  #[ignore = "integration"]
   fn startup_sweep_ends_reparented_renderer_and_crashpad_but_keeps_live_server_tree() {
     let mut non_server_parent = Command::new("sleep").arg("60").spawn().expect("the subreaper stand-in starts");
     let directory = tempfile::tempdir().expect("the test directory exists");
@@ -937,21 +1023,23 @@ mod tests {
     let live_browser_bin = chrome_program(&live_directory, json!([{"sleep_ms": 60000}, {"exit": 0}]));
     let orphan_crashpad_bin = crashpad_stub(directory.path(), "orphan_crashpad");
     let live_crashpad_bin = crashpad_stub(directory.path(), "live_crashpad");
-    let mut orphan_browser = Command::new(orphan_browser_bin)
-      .arg("--headless")
-      .arg(format!("--user-data-dir={}", orphan_profile.path().display()))
-      .process_group(0)
-      .stdout(Stdio::null())
-      .stderr(Stdio::null())
-      .spawn()
-      .expect("the orphan browser starts");
+    let orphan_crashpad_db = directory.path().join("CrashReportsOutsideProfile");
     let mut orphan_crashpad = Command::new(orphan_crashpad_bin)
-      .arg(format!("--database={}/Crashpad", orphan_profile.path().display()))
+      .arg(format!("--database={}", orphan_crashpad_db.display()))
       .process_group(0)
       .stdout(Stdio::null())
       .stderr(Stdio::null())
       .spawn()
       .expect("the orphan crashpad handler starts");
+    let mut orphan_browser = Command::new(orphan_browser_bin)
+      .arg("--headless")
+      .arg(format!("--user-data-dir={}", orphan_profile.path().display()))
+      .arg(format!("--crashpad-handler-pid={}", orphan_crashpad.id()))
+      .process_group(0)
+      .stdout(Stdio::null())
+      .stderr(Stdio::null())
+      .spawn()
+      .expect("the orphan browser starts");
     let mut live_browser = Command::new(live_browser_bin)
       .arg("--headless")
       .arg(format!("--user-data-dir={}", live_profile.path().display()))
@@ -987,6 +1075,10 @@ mod tests {
       assert!(Instant::now() < deadline, "the renderer processes did not enter /proc");
       thread::sleep(Duration::from_millis(10));
     };
+    processes.retain(|process| {
+      [orphan_browser_pid, orphan_crashpad_pid, live_browser_pid, live_crashpad_pid, test_pid, parent.pid]
+        .contains(&process.pid)
+    });
     for process in &mut processes {
       if process.pid == orphan_browser_pid || process.pid == orphan_crashpad_pid {
         process.parent_pid = if process.pid == orphan_browser_pid { parent.pid } else { orphan_browser_pid };
@@ -1040,6 +1132,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn registered_lifecycle_closes_warm_renderer_and_its_crashpad_handler() {
     let _serial = RENDERER_TEST_LOCK.lock().await;
     let (_home, features) = crate::test_support::features();

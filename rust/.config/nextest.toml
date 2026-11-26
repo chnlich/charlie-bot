@@ -3,10 +3,15 @@
 # them the way the mutex did under `cargo test`.
 [test-groups]
 release-trials = { max-threads = 1 }
+headless-renderer = { max-threads = 1 }
 
 [[profile.default.overrides]]
 filter = 'binary_id(=charliebot-script-tests::release) and (test(/^test_trial_serve/) or test(/^test_trial_config/) or test(=test_trial_installs_the_commits_units_and_reloads_before_its_server_starts))'
 test-group = 'release-trials'
+
+[[profile.default.overrides]]
+filter = '(package(=charliebot-artifacts) and (test(/headless_render/) or test(=artifact_check::tests::test_warm_renderer_measures_real_page_height) or test(=artifact_check::tests::plan_page_height_probe_is_removed_after_a_renderer_launch_failure))) or binary_id(=charliebot-cli::artifact_renderer) or binary_id(=charliebot-server::startup_signal)'
+test-group = 'headless-renderer'
 
 # The profile CI runs nextest with (`cargo nextest run --profile ci`). A failure cancels nothing so the
 # JUnit report covers every test; the report carries each test's wall-clock time for the 0.1 s check.

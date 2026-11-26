@@ -57,7 +57,7 @@ in-flight requests up to 5 s. Rust stops services, closes the HTTP client and We
 and logs `charliebot_shutdown`. SIGTERM then restores and raises its default signal action;
 it skips let-go steps.
 
-SIGINT runs the `task_execution` and `headless_renderer` let-go steps after the shutdown line, then exits 0.
+SIGINT runs the `task_execution` let-go step after the shutdown line, then exits 0.
 A failed bind logs `bind_failed` with no `server_ready`, runs those steps after its shutdown line, and exits 1.
 
 Logs are text lines on stdout that open with the UTC time, the level, the file and line of the tracing call, and the

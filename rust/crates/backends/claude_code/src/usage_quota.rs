@@ -11,7 +11,6 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -542,10 +541,11 @@ fn failed(label: &str, trigger: &RenewalTrigger, path: &Path, detail: &str) -> R
 /// The Claude CLI's two refresh locks, taken in its order: `<login>/.oauth_refresh.lock`, then `<login>.lock`. Both
 /// are directories whose modification time shows a live holder; a lock untouched for [`LOCK_STALE`] may be taken over,
 /// and the holder refreshes the time every [`LOCK_UPDATE`]. Dropping the value removes both locks and stops the
-/// toucher.
+/// toucher at once.
 struct RefreshLocks {
   paths: [PathBuf; 2],
-  stopped: Arc<AtomicBool>,
+  /// Dropping this sender ends the toucher's wait.
+  stop: Option<std::sync::mpsc::Sender<()>>,
   toucher: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -564,10 +564,11 @@ impl RefreshLocks {
             let _ = fs::remove_dir_all(&first);
             continue;
           }
-          if Instant::now() >= deadline {
+          let remaining = deadline.saturating_duration_since(Instant::now());
+          if remaining.is_zero() {
             return Ok(None);
           }
-          std::thread::sleep(Duration::from_millis(100));
+          std::thread::sleep(remaining.min(Duration::from_millis(100)));
         }
         Err(error) => return Err(error).with_context(|| format!("taking {}", first.display())),
       }
@@ -583,24 +584,17 @@ impl RefreshLocks {
         return Err(error).with_context(|| format!("taking {}", second.display()));
       }
     }
-    let locks = Self { paths: [first, second], stopped: Arc::new(AtomicBool::new(false)), toucher: None };
+    let locks = Self { paths: [first, second], stop: None, toucher: None };
     Ok(Some(locks.touched()))
   }
 
-  /// Starts the thread that keeps both locks fresh while they are held.
+  /// Starts the thread that keeps both locks fresh until the sender drops.
   fn touched(mut self) -> Self {
     let paths = self.paths.clone();
-    let stopped = Arc::clone(&self.stopped);
+    let (stop, stopped) = std::sync::mpsc::channel::<()>();
+    self.stop = Some(stop);
     self.toucher = Some(std::thread::spawn(move || {
-      while !stopped.load(Ordering::Relaxed) {
-        let mut waited = Duration::ZERO;
-        while waited < LOCK_UPDATE && !stopped.load(Ordering::Relaxed) {
-          std::thread::sleep(Duration::from_millis(50));
-          waited += Duration::from_millis(50);
-        }
-        if stopped.load(Ordering::Relaxed) {
-          break;
-        }
+      while let Err(std::sync::mpsc::RecvTimeoutError::Timeout) = stopped.recv_timeout(LOCK_UPDATE) {
         for path in &paths {
           if let Ok(file) = fs::File::open(path) {
             let _ = file.set_modified(SystemTime::now());
@@ -614,7 +608,7 @@ impl RefreshLocks {
 
 impl Drop for RefreshLocks {
   fn drop(&mut self) {
-    self.stopped.store(true, Ordering::Relaxed);
+    self.stop.take();
     if let Some(toucher) = self.toucher.take() {
       let _ = toucher.join();
     }
@@ -1151,11 +1145,11 @@ mod tests {
     let root = tempfile::tempdir().unwrap();
     let login = root.path().join("login");
     fs::create_dir(&login).unwrap();
-    let locks = RefreshLocks::acquire(&login, Duration::from_millis(200)).unwrap().expect("the locks are free");
+    let locks = RefreshLocks::acquire(&login, Duration::ZERO).unwrap().expect("the locks are free");
     assert!(login.join(REFRESH_LOCK).is_dir());
     assert!(PathBuf::from(format!("{}.lock", login.display())).is_dir());
     // The second lock is held: another writer is told to give up at once, as the CLI's ELOCKED does.
-    assert!(RefreshLocks::acquire(&login, Duration::from_millis(200)).unwrap().is_none());
+    assert!(RefreshLocks::acquire(&login, Duration::ZERO).unwrap().is_none());
     drop(locks);
     assert!(!login.join(REFRESH_LOCK).exists());
     assert!(!PathBuf::from(format!("{}.lock", login.display())).exists());
@@ -1164,7 +1158,7 @@ mod tests {
     fs::create_dir(login.join(REFRESH_LOCK)).unwrap();
     let old = SystemTime::now() - LOCK_STALE - Duration::from_secs(1);
     fs::File::open(login.join(REFRESH_LOCK)).unwrap().set_modified(old).unwrap();
-    let taken = RefreshLocks::acquire(&login, Duration::from_millis(200)).unwrap();
+    let taken = RefreshLocks::acquire(&login, Duration::ZERO).unwrap();
     assert!(taken.is_some(), "a stale lock was not taken over");
   }
 
@@ -1176,10 +1170,10 @@ mod tests {
     fs::create_dir(login.join(REFRESH_LOCK)).unwrap();
 
     let started = Instant::now();
-    let locks = RefreshLocks::acquire(&login, Duration::from_millis(250)).unwrap();
+    let locks = RefreshLocks::acquire(&login, Duration::from_millis(50)).unwrap();
 
     assert!(locks.is_none(), "a live lock was taken over");
-    assert!(started.elapsed() >= Duration::from_millis(200), "the wait ended before its bound");
+    assert!(started.elapsed() >= Duration::from_millis(50), "the wait ended before its bound");
   }
 
   #[test]

@@ -27,7 +27,7 @@ const PACKAGES: &[(&str, RegisterFn)] = &[
 ];
 ```
 
-The list is crate-private; `registry()` is the crate's only `pub` item.
+The list is private to its module; `registry()` and `seed_default_cron_tasks()` are the crate's `pub` items.
 
 Before `PACKAGES`, `RUNTIME` registers hooks owned by the runtime itself. Its first entry is
 `("runtime.agents", charliebot_agents::register_runtime)`. It installs `agent_environment` and then

@@ -1,7 +1,9 @@
-//! `home-helper`: the profile-home reads of the switch — the port and key, one run's process liveness, and the
-//! outcome a run recorded. The live-run scan lives in `scan.rs`. The four read the same session layout.
+//! `home-helper`: the profile-home reads of the switch — the port and key, one run's process liveness, the outcome a
+//! run recorded, and the quota end that accounts for a run which failed over. The live-run scan lives in `scan.rs`.
+//! The reads share the same session layout.
 
 use std::ffi::OsString;
+use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::thread;
@@ -16,11 +18,15 @@ use charliebot_core::run_kind::RunKind;
 use charliebot_core::text_repr;
 use charliebot_store::chat_events::{self, LineRule, LogReadError};
 use charliebot_store::layout;
+use charliebot_store::run_logs::RUN_EVENTS_NAME;
 use charliebot_store::run_records::{RUN_METADATA_NAME, read_run_metadata};
 use serde_json::Value;
 
 use crate::common::{USAGE, exact, failed, metadata_read_failure, read_config};
 use crate::scan;
+
+/// The status the backend's rate-limit record carries when a quota end rejects the run's request.
+const RATE_LIMIT_REJECTED: &str = "rejected";
 
 /// How long the outcome read waits for a manager turn's finish callback to persist its fact.
 const MANAGER_TURN_OUTCOME_WAIT: Duration = Duration::from_secs(10);
@@ -35,6 +41,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
     Some("scan") => scan::scan(rest),
     Some("alive") => alive(rest),
     Some("outcome") => outcome(rest),
+    Some("own-failure") => own_failure(rest),
     _ => Err(CliExit::usage(USAGE)),
   }
 }
@@ -100,35 +107,111 @@ pub(crate) fn reattach(args: &[OsString]) -> Result<(), CliExit> {
   }
 }
 
-/// `outcome HOME SESSION RUN`: the outcome of the last `run_finished` fact for the run, from the session's archive
-/// files and then its live event log. The line is empty when no fact names the run.
+/// `outcome HOME SESSION RUN`: the outcome the run recorded, as [`run_outcome`] reads it. The line is empty when no
+/// fact names the run.
 fn outcome(args: &[OsString]) -> Result<(), CliExit> {
   let [home, session_id, run_id] = exact::<3>(args)?;
   let session = config::sessions_dir_in(Path::new(&home)).join(&session_id);
-  let metadata_path = layout::runs_dir(&session).join(&run_id).join(RUN_METADATA_NAME);
+  println!("{}", run_outcome(&session, &run_id)?);
+  Ok(())
+}
+
+/// The outcome text of the run: the last outcome that a `run_finished` fact names for it, read from the session's
+/// archive files and then its live event log. Empty when no fact names the run.
+fn run_outcome(session: &Path, run_id: &str) -> Result<String, CliExit> {
+  let metadata_path = layout::runs_dir(session).join(run_id).join(RUN_METADATA_NAME);
   let metadata =
     read_run_metadata(&metadata_path).map_err(|error| failed(metadata_read_failure(&metadata_path, error)))?;
   let manager_turn = metadata.get("kind").and_then(Value::as_str) == Some(RunKind::ManagerTurn.as_str());
   let mut outcome = Outcome::default();
-  for archive in chat_events::archive_files(&session).map_err(failed)? {
+  for archive in chat_events::archive_files(session).map_err(failed)? {
     for line in chat_events::read_lines(&archive, LineRule::Universal).map_err(failed)? {
       let line = line.map_err(failed)?;
-      outcome.read(&line.text, line.number, &archive, &run_id);
+      outcome.read(&line.text, line.number, &archive, run_id);
     }
   }
-  let live = layout::chat_events_path(&session);
+  let live = layout::chat_events_path(session);
   if live.is_file() {
     let text = chat_events::read_universal_text(&live).map_err(failed)?;
     let mut consumed = 0;
     let mut line_number = 0;
-    drain(&text, &mut consumed, &mut line_number, &mut outcome, &live, &run_id);
+    drain(&text, &mut consumed, &mut line_number, &mut outcome, &live, run_id);
     if manager_turn && !outcome.recorded {
       // Startup queues manager-turn recovery in the background, so give its finish callback time to persist the fact.
-      wait_for_outcome(&live, &mut consumed, &mut line_number, &mut outcome, &run_id).map_err(failed)?;
+      wait_for_outcome(&live, &mut consumed, &mut line_number, &mut outcome, run_id).map_err(failed)?;
     }
   }
-  println!("{}", outcome.text());
+  Ok(outcome.text())
+}
+
+/// `own-failure HOME SESSION RUN`: `quota SUCCESSOR` when the run ended failed on its own quota end and its session
+/// continued in the run the server started for it. The line is empty otherwise.
+///
+/// The readback and check A of the switch both apply this rule to a run that ended before the stop. It reads only the
+/// run's recorded facts. The outcome must be `failed`. The quota end is the run's last rate-limit record, when that
+/// record is a rejection. The successor is the one run of the session that names the run as its retry and has started.
+/// A run with no successor, or with no rejection of its own, is empty, and the switch counts it as died. A run with no
+/// record of its own has no recorded failure either, so it is empty too.
+fn own_failure(args: &[OsString]) -> Result<(), CliExit> {
+  let [home, session_id, run_id] = exact::<3>(args)?;
+  let session = config::sessions_dir_in(Path::new(&home)).join(&session_id);
+  let recorded = layout::runs_dir(&session).join(&run_id).join(RUN_METADATA_NAME).is_file();
+  let failed_run = recorded && run_outcome(&session, &run_id)? == "failed";
+  let successor =
+    if failed_run && quota_rejected(&session, &run_id)? { successor_run(&session, &run_id)? } else { None };
+  match successor {
+    Some(successor) => println!("quota {successor}"),
+    None => println!(),
+  }
   Ok(())
+}
+
+/// Whether the run's last rate-limit record rejects it. The backend writes its rate-limit records into the run's event
+/// log, so a run with no such record was not rejected.
+fn quota_rejected(session: &Path, run_id: &str) -> Result<bool, CliExit> {
+  let events = layout::runs_dir(session).join(run_id).join(RUN_EVENTS_NAME);
+  if !events.is_file() {
+    return Ok(false);
+  }
+  let mut last_status = None;
+  for line in chat_events::read_lines(&events, LineRule::Universal).map_err(failed)? {
+    let line = line.map_err(failed)?;
+    if !line.text.contains(event_types::RATE_LIMIT_EVENT) {
+      continue;
+    }
+    match chat_events::decode_line(line.text.as_bytes()) {
+      Ok(event) if event.get("type").and_then(Value::as_str) == Some(event_types::RATE_LIMIT_EVENT) => {
+        last_status = event.pointer("/rate_limit_info/status").and_then(Value::as_str).map(str::to_string);
+      }
+      Ok(_) => {}
+      Err(_) => eprintln!("skipped line {} of {}: not JSON", line.number, events.display()),
+    }
+  }
+  Ok(last_status.as_deref() == Some(RATE_LIMIT_REJECTED))
+}
+
+/// The one run of the session that names `run_id` as its retry and has started. Two or more such runs name no
+/// successor: the switch cannot tell which of them carries the work on, so the run counts as died.
+fn successor_run(session: &Path, run_id: &str) -> Result<Option<String>, CliExit> {
+  let mut successors = Vec::new();
+  for entry in fs::read_dir(layout::runs_dir(session)).map_err(failed)? {
+    let entry = entry.map_err(failed)?;
+    let metadata_path = entry.path().join(RUN_METADATA_NAME);
+    if !metadata_path.is_file() {
+      continue;
+    }
+    let metadata =
+      read_run_metadata(&metadata_path).map_err(|error| failed(metadata_read_failure(&metadata_path, error)))?;
+    let retries = metadata.get("retry_of_run_id").and_then(Value::as_str) == Some(run_id);
+    let started = metadata.get("started_at").is_some_and(|started| !started.is_null());
+    if retries && started {
+      successors.push(entry.file_name().to_string_lossy().into_owned());
+    }
+  }
+  Ok(match successors.as_slice() {
+    [only] => Some(only.clone()),
+    _ => None,
+  })
 }
 
 /// The complete live lines after `consumed`, with `consumed` advanced past them. A line still being written has no

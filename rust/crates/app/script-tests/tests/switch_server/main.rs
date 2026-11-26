@@ -567,6 +567,57 @@ fn test_prior_switch_approval_flag_passes_the_run_it_names() {
 
 #[test]
 #[ignore = "integration"]
+fn test_prior_switch_accepts_a_run_that_failed_over_on_its_quota_end() {
+  // A run that failed on its quota end, with the server's retry started in the same session. The prior switch's log
+  // records the run as died, as a switch without this rule does. Check A reads the run's own records instead.
+  let world = World::new();
+  world.seed_failed_run("run-failover");
+  world.seed_quota_rejection("run-failover");
+  world.seed_retry("run-failover", "run-retry");
+  world.seed_prior_switch(&["readback: run run-failover died during the switch: outcome failed"], &["run-failover"]);
+  world.seed_new_server_log(&[]);
+  let running = format!("rust {}", world.old_sha);
+
+  let run = world.stubbed_preflight(&running, "rust", &world.rust_sha);
+
+  assert_eq!(run.code, 0, "{}", world.report(&run));
+  let accounted = "check A: run run-failover ended on its own failure, failure kind quota, successor run run-retry";
+  assert!(run.stdout.contains(accounted), "{}", world.report(&run));
+  assert!(run.stdout.contains("every run of the prior switch"), "{}", world.report(&run));
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_prior_switch_refuses_a_quota_end_with_no_successor() {
+  let world = World::new();
+  world.seed_failed_run("run-stranded");
+  world.seed_quota_rejection("run-stranded");
+  world.seed_prior_switch(&[], &["run-stranded"]);
+  let running = format!("rust {}", world.old_sha);
+
+  let run = world.stubbed_preflight(&running, "rust", &world.rust_sha);
+
+  assert_eq!(run.code, 1, "{}", world.report(&run));
+  assert!(run.stdout.contains("unaccounted: run-stranded;"), "{}", world.report(&run));
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_prior_switch_refuses_a_failed_run_whose_retry_has_no_quota_end_of_its_own() {
+  let world = World::new();
+  world.seed_failed_run("run-silent");
+  world.seed_retry("run-silent", "run-silent-retry");
+  world.seed_prior_switch(&[], &["run-silent"]);
+  let running = format!("rust {}", world.old_sha);
+
+  let run = world.stubbed_preflight(&running, "rust", &world.rust_sha);
+
+  assert_eq!(run.code, 1, "{}", world.report(&run));
+  assert!(run.stdout.contains("unaccounted: run-silent;"), "{}", world.report(&run));
+}
+
+#[test]
+#[ignore = "integration"]
 fn test_prior_switch_refuses_a_host_with_no_switch_record_without_the_flag() {
   let world = World::new();
   world.remove_switch_records();
@@ -1204,6 +1255,27 @@ fn test_adoption_treats_a_reused_pid_as_an_ended_run() {
   assert!(run.stdout.contains(ended), "{}", run.describe());
 }
 
+#[test]
+#[ignore = "integration"]
+fn test_adoption_names_a_run_that_failed_over_on_its_quota_end_and_does_not_count_it_died() {
+  let mut world = World::new();
+  world.seed_live_run("run-failover", Some("claude-opus"));
+  let runs_file = world.scanned_runs_file();
+  world.live[0].kill().expect("kill the run's process");
+  world.live[0].wait().expect("reap the run's process");
+  world.record_outcome("run-failover", "failed");
+  world.seed_quota_rejection("run-failover");
+  world.seed_retry("run-failover", "run-retry");
+
+  let run = world.adopted(&runs_file, "");
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  let named = "readback: run run-failover ended on its own failure during the switch: outcome failed, \
+    failure kind quota, successor run run-retry";
+  assert!(run.stdout.contains(named), "{}", run.describe());
+  assert!(!run.stdout.contains("died during the switch"), "{}", run.describe());
+}
+
 // ---- the forward path's exit by the outcome of a stopped run --------------------------------------------------------
 
 #[test]
@@ -1261,6 +1333,27 @@ fn switch_exits_by_the_recorded_outcome_of_a_run_the_stop_ended(outcome: Option<
       world.report(&run)
     );
   }
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_switch_completes_when_a_run_failed_over_on_its_quota_end() {
+  // The stop ends the run, and its failed outcome is accounted for by its quota end and the retry the server started.
+  // So the switch exits 0 and names no died run.
+  let mut world = World::new();
+  world.seed_live_run("run-failover", Some("claude-opus"));
+  world.record_outcome("run-failover", "failed");
+  world.seed_quota_rejection("run-failover");
+  world.seed_retry("run-failover", "run-retry");
+  let pid = world.live[0].id();
+
+  let run = world.switch_forward(pid, &drain_line("run-failover"), ":");
+
+  assert_eq!(run.code, 0, "{}", world.report(&run));
+  let named = "readback: run run-failover ended on its own failure during the switch: outcome failed";
+  assert!(run.stdout.contains(named), "{}", world.report(&run));
+  assert!(run.stdout.contains("SWITCH COMPLETE: "), "{}", world.report(&run));
+  assert!(!run.stdout.contains("RECORDED RUN DIED"), "{}", world.report(&run));
 }
 
 // ---- the switch installs the slice units ---------------------------------------------------------------------------

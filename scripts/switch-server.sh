@@ -42,9 +42,11 @@
 # run too, except one that directly follows a task_run_quota_exhausted record for it: no other resume, quota, error or
 # refusal record of the run lies between the two. The server writes that pair for one quota end, and the failover then
 # retries the work in a run with its own id. Or it must end with outcome success in the switch's own log
-# (`readback: run <id> ended during the switch: outcome success`). The server is the newest server log launched inside
-# the switch's window, from its first stamp to its last. A run that is neither refuses the switch and is named. No
-# switch record, or a record without its runs file, refuses it too.
+# (`readback: run <id> ended during the switch: outcome success`). Or it must end failed on its own quota end, with a
+# run of its session that the server started for it as a retry: `own_failure` reads that rule from the run's records,
+# and the readback applies the same rule. The server is the newest server log launched inside the switch's window, from
+# its first stamp to its last. A run that is neither refuses the switch and is named. No switch record, or a record
+# without its runs file, refuses it too.
 # `--approve-unaccounted-runs` is the only override: pass it once the user approves the restart over the named runs.
 # Check B (no concurrent release or switch) is the host release lock. The switch takes it in run_detached before the
 # preflight, and scripts/release.sh takes it before its first stage, so a second release or switch exits at once while
@@ -237,15 +239,18 @@ RELEASE_DIR="$RELEASES_DIR/$TARGET_SHA"
 TARGET_RELEASE="$TARGET_SHA"
 HELPER_BIN=""   # the release's `charliebot`, chosen by helper_binary below
 
-# supports_switch_helper BIN: the binary exists and carries the reads the script calls: the subcommand group, and
-# `run-first-command`, the one read a release built between the group and this script lacks. The read is probed on a
-# home path that does not exist: a binary that has it answers the metadata read failure with exit 1, and one that
-# lacks it answers the unknown name with the usage exit 2.
+# supports_switch_helper BIN: the binary exists and carries the reads the script calls: the subcommand group,
+# `run-first-command` and `home-helper own-failure`, the reads a release built between the group and this script lacks.
+# Each read is probed on a home path that does not exist: a binary that has it does not answer the unknown name with
+# the usage exit 2, and one that lacks it does.
 supports_switch_helper() {
   [ -x "$1" ] || return 1
   "$1" switch-helper --help > /dev/null 2>&1 || return 1
   local rc
   "$1" switch-helper run-first-command "$1.probe-home" probe probe > /dev/null 2>&1
+  rc=$?
+  [ "$rc" -ne 2 ] || return 1
+  "$1" switch-helper home-helper own-failure "$1.probe-home" probe probe > /dev/null 2>&1
   rc=$?
   [ "$rc" -ne 2 ]
 }
@@ -276,7 +281,7 @@ helper() {
 # The home is read, never written, by this helper. `config` prints the port and the access key (one per line);
 # `scan` takes the running implementation (`rust <sha>`) and prints one line per live Run (live) and one per refusal
 # (block); `alive` prints alive or ended for a recorded (pid, pid start); `outcome` reads the terminal fact so
-# readback can distinguish a completed run from one the stop killed.
+# readback can distinguish a completed run from one the stop killed; `own-failure` reads the quota-end rule of adopted.
 home_helper() {
   local mode=$1
   shift
@@ -285,6 +290,7 @@ home_helper() {
     scan) helper home-helper scan "$HOME_DIR" "$REPO_ROOT" "$1" "$TARGET_SHA" ;;
     alive) helper home-helper alive "$1" "$2" ;;
     outcome) helper home-helper outcome "$HOME_DIR" "$1" "$2" ;;
+    own-failure) helper home-helper own-failure "$HOME_DIR" "$1" "$2" ;;
     *)
       log "unknown home helper mode $mode"
       return 1
@@ -473,13 +479,21 @@ run_process_ended() {
   [ "$(home_helper alive "$1" "$2")" = ended ]
 }
 
+# own_failure SESSION RUN: `quota SUCCESSOR` when the run ended failed on its own quota end and its session continued in
+# the run the server started for it, as `home-helper own-failure` states the rule; empty for any other run. The readback
+# and check A both call it, so the two apply one rule.
+own_failure() {
+  home_helper own-failure "$1" "$2"
+}
+
 # adopted: every live run recorded before the stop is accounted for by this launch's recovery. A run whose process still
 # runs must have a task_recovery_resume line. A run whose process has ended needs its recorded outcome: a run's process
-# survives a server stop by design, so an ended run died during the switch unless it completed on its own. A death is
-# logged and counted in DIED_RUNS without failing the readback: no switch back can adopt an ended run, so switch_forward
-# keeps the new server and exits 4.
+# survives a server stop by design, so an ended run is accounted for when it completed, or when it failed on its own
+# quota end and its session continued in the run the server started for it (own_failure). Any other ended run died
+# during the switch. A death is logged and counted in DIED_RUNS without failing the readback: no switch back can adopt
+# an ended run, so switch_forward keeps the new server and exits 4.
 adopted() {
-  local run_id pid pid_start session_id outcome
+  local run_id pid pid_start session_id outcome facts kind successor
   while IFS=$'\t' read -r _ session_id run_id _ pid pid_start; do
     if launch_has task_recovery_resume "run_id=$run_id"; then
       continue
@@ -491,10 +505,20 @@ adopted() {
       }
       if [ "$outcome" = success ]; then
         log "readback: run $run_id ended during the switch: outcome success"
-      else
-        log "readback: run $run_id died during the switch: outcome ${outcome:-none recorded}"
-        DIED_RUNS=$((DIED_RUNS + 1))
+        continue
       fi
+      facts="$(own_failure "$session_id" "$run_id")" || {
+        log "readback: cannot read the records of run $run_id"
+        return 1
+      }
+      if [ -n "$facts" ]; then
+        read -r kind successor <<< "$facts"
+        log "readback: run $run_id ended on its own failure during the switch: outcome $outcome, failure kind $kind," \
+          "successor run $successor"
+        continue
+      fi
+      log "readback: run $run_id died during the switch: outcome ${outcome:-none recorded}"
+      DIED_RUNS=$((DIED_RUNS + 1))
       continue
     fi
     log "readback: run $run_id was not adopted"
@@ -1479,10 +1503,11 @@ reattached_in_log() {
 }
 
 # check_prior_switch: check A of the standing switch rule. Each run that the prior switch recorded must be reattached on
-# the server that served when it ended, or end with outcome success in its own log. A run that is neither refuses the
-# switch and is named. --approve-unaccounted-runs lets the switch proceed over the named runs, and nothing else does.
+# the server that served when it ended, end with outcome success in its own log, or end failed on its own quota end with
+# the run its session continued in (own_failure). A run that is neither refuses the switch and is named.
+# --approve-unaccounted-runs lets the switch proceed over the named runs, and nothing else does.
 check_prior_switch() {
-  local prior runs server run why unaccounted=""
+  local prior runs server run session facts kind successor why unaccounted=""
   if ! prior="$(prior_switch_log)"; then
     why="no switch record under $LOG_DIR passed its preflight"
   elif [ ! -f "${prior%.log}.runs" ]; then
@@ -1490,9 +1515,15 @@ check_prior_switch() {
   else
     runs="${prior%.log}.runs"
     server="$(new_server_log "$prior")"
-    while IFS=$'\t' read -r _state _session run _rest; do
+    while IFS=$'\t' read -r _state session run _rest; do
       if [ -n "$server" ] && reattached_in_log "$server" "$run"; then continue; fi
       if grep -Fq "readback: run $run ended during the switch: outcome success" "$prior"; then continue; fi
+      facts="$(own_failure "$session" "$run")" || fail "cannot read the records of run $run"
+      if [ -n "$facts" ]; then
+        read -r kind successor <<< "$facts"
+        log "check A: run $run ended on its own failure, failure kind $kind, successor run $successor"
+        continue
+      fi
       unaccounted="$unaccounted $run"
     done < "$runs"
     if [ -z "$unaccounted" ]; then

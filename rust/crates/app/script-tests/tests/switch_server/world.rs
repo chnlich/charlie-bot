@@ -939,6 +939,53 @@ preflight
     record_outcome(&self.home, run_id, outcome);
   }
 
+  /// The record of a run that ended: its end time is set, and its outcome is recorded as failed.
+  pub fn seed_failed_run(&self, run_id: &str) {
+    let run_dir = self.home.join("sessions").join(SESSION).join("data/runs").join(run_id);
+    fs::create_dir_all(&run_dir).expect("the run directory");
+    let record = json!({
+      "id": run_id,
+      "session_id": SESSION,
+      "kind": "work",
+      "backend": "claude-haiku",
+      "started_at": "2026-11-26T16:20:25.188443Z",
+      "ended_at": "2026-11-26T17:27:25.658205Z",
+      "exit_code": -1,
+    });
+    fs::write(run_dir.join("metadata.json"), record.to_string()).expect("the run record");
+    self.record_outcome(run_id, "failed");
+  }
+
+  /// The event log of a run whose last rate-limit record rejects it: the quota end that stopped the run.
+  pub fn seed_quota_rejection(&self, run_id: &str) {
+    let events = self.home.join("sessions").join(SESSION).join("data/runs").join(run_id).join("events.jsonl");
+    let allowed = json!({
+      "type": "rate_limit_event",
+      "rate_limit_info": {"status": "allowed", "rateLimitType": "five_hour"},
+    });
+    let rejected = json!({
+      "type": "rate_limit_event",
+      "rate_limit_info": {"status": "rejected", "resetsAt": 1795727400u64, "rateLimitType": "five_hour"},
+    });
+    fs::write(&events, format!("{allowed}\n{rejected}\n")).expect("the run's event log");
+  }
+
+  /// The record of a run the server started as the retry of `failed_run`: it names the failed run and has started.
+  pub fn seed_retry(&self, failed_run: &str, run_id: &str) {
+    let run_dir = self.home.join("sessions").join(SESSION).join("data/runs").join(run_id);
+    fs::create_dir_all(&run_dir).expect("the retry's run directory");
+    let record = json!({
+      "id": run_id,
+      "session_id": SESSION,
+      "kind": "work",
+      "retry_of_run_id": failed_run,
+      "backend": "codex-gpt-luna",
+      "started_at": "2026-11-26T17:27:26.173585Z",
+      "ended_at": null,
+    });
+    fs::write(run_dir.join("metadata.json"), record.to_string()).expect("the retry's run record");
+  }
+
   /// A run's exit code, stdout and stderr, with the newest switch log.
   pub fn report(&self, run: &Run) -> String {
     let mut logs: Vec<PathBuf> = fs::read_dir(&self.logs)

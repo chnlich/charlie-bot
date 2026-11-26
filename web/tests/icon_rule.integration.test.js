@@ -121,6 +121,7 @@ const EXCEPTIONS = [
   ]),
   ...byFile('rust/crates/features/usage/src/page_tests.rs', [
     ["xt[\"ctx\"][\"rows\"][0][\"window\"], json!(\"2026-02-01 → 2026-02-09\"));", PROSE_REASON],
+    ["\"2026-03-09 00:00 PDT → no records this week yet\");", PROSE_REASON],
   ]),
   ...byFile('rust/crates/features/web_reply/src/reply.rs', [
     ["\"1. ▸ \\\"Keep the phone status toggle sticky while scrolling\\\"\\n\",", CHAT_TEXT_REASON],

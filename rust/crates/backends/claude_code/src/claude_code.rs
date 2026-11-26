@@ -36,7 +36,7 @@ use super::claude_launch;
 use super::login_dirs;
 use super::midturn_delivery::ClaudeMidturnCodec;
 use charliebot_registry::backend::MidturnTranslate;
-use charliebot_registry::midturn_delivery::DeliveryState;
+use charliebot_registry::midturn_delivery::{BACKEND_KWARG, DeliveryState, RUN_ID_KWARG};
 
 pub const HEADLESS_DISALLOWED_TOOLS: &str = concat!(
   "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Workflow,SendMessage,ListAgents,",
@@ -236,15 +236,15 @@ impl ClaudeCodeBackend {
       Some(_) => bail!("claude_session_id must be a string"),
     }
     .filter(|value| !value.is_empty());
-    let midturn_delivery = match launch.backend_kwargs.get(charliebot_registry::midturn_delivery::BACKEND_KWARG) {
+    let midturn_delivery = match launch.backend_kwargs.get(BACKEND_KWARG) {
       None | Some(Value::Null) => false,
       Some(Value::Bool(value)) => *value,
       Some(_) => bail!("midturn_delivery must be a boolean"),
     };
-    let midturn_run_id = match launch.backend_kwargs.get("midturn_run_id") {
+    let midturn_run_id = match launch.backend_kwargs.get(RUN_ID_KWARG) {
       None | Some(Value::Null) => None,
       Some(Value::String(value)) => Some(value.clone()),
-      Some(_) => bail!("midturn_run_id must be a string"),
+      Some(_) => bail!("{RUN_ID_KWARG} must be a string"),
     }
     .filter(|value| !value.is_empty());
     let midturn_state = match &midturn_run_id {

@@ -11,15 +11,11 @@ use charliebot_acp::codec::{AcpCodec, SharedSession};
 use charliebot_acp::handshake::{self, HandshakeSpec, SessionStart};
 use charliebot_agents::cli_base::{SKIP_PERMISSIONS_FLAG, framed_prompt, prepend_path_dir, strip_google_api_keys};
 use charliebot_registry::backend::{AgentBackend, Env, LaunchArgs, MidturnTranslate, Translate, TransportKind};
-use charliebot_registry::midturn_delivery::{DeliveryState, ExitedProbe};
+use charliebot_registry::midturn_delivery::{DeliveryState, ExitedProbe, RUN_ID_KWARG};
 use charliebot_store::run_records::RAW_LOG_NAME;
 use futures_util::future::BoxFuture;
 use serde_json::Value;
 use tokio::io::AsyncWrite;
-
-/// The backend kwarg that names the Run whose live input this process takes. A manager turn that takes live input
-/// carries it; a turn without it takes no mid-turn offers.
-pub const MIDTURN_RUN_ID_KWARG: &str = "midturn_run_id";
 
 /// The `agy acp` backend of one launch.
 pub struct AntigravityBackend {
@@ -39,10 +35,10 @@ pub struct AntigravityBackend {
 impl AntigravityBackend {
   /// The backend of one launch. A launch with no Run id has no mid-turn offers, and its state binds to no Run.
   pub fn from_launch(agy_bin: String, user_local_bin: String, model: &str, launch: LaunchArgs) -> anyhow::Result<Self> {
-    let midturn_run_id = match launch.backend_kwargs.get(MIDTURN_RUN_ID_KWARG) {
+    let midturn_run_id = match launch.backend_kwargs.get(RUN_ID_KWARG) {
       None | Some(Value::Null) => None,
       Some(Value::String(run_id)) => Some(run_id.clone()).filter(|run_id| !run_id.is_empty()),
-      Some(_) => bail!("{MIDTURN_RUN_ID_KWARG} must be a string"),
+      Some(_) => bail!("{RUN_ID_KWARG} must be a string"),
     };
     let session: SharedSession = Arc::new(Mutex::new(None));
     let run_id = midturn_run_id.as_deref().unwrap_or_default();
@@ -179,7 +175,7 @@ mod tests {
   fn a_run_without_a_run_id_takes_no_offers_and_a_run_id_names_the_process() {
     assert_eq!(backend(LaunchArgs::default()).midturn_run_id(), None);
     let launch = LaunchArgs {
-      backend_kwargs: serde_json::Map::from_iter([(MIDTURN_RUN_ID_KWARG.to_string(), Value::from("run-1"))]),
+      backend_kwargs: serde_json::Map::from_iter([(RUN_ID_KWARG.to_string(), Value::from("run-1"))]),
       ..LaunchArgs::default()
     };
     assert_eq!(backend(launch).midturn_run_id().as_deref(), Some("run-1"));

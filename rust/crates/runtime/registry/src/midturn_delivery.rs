@@ -30,6 +30,11 @@ use tokio::sync::watch;
 /// name instead of spelling it.
 pub const BACKEND_KWARG: &str = "midturn_delivery";
 
+/// The `backend_kwargs` key that names the Run whose live input the launched process takes. The backend's
+/// `midturn_launch_kwargs` writes it, and the backend reads it to bind its delivery state to that Run, so both match
+/// this name instead of spelling it.
+pub const RUN_ID_KWARG: &str = "midturn_run_id";
+
 /// Whether the spawned child has exited, read by the mid-turn delivery path before it writes.
 pub type ExitedProbe = Arc<dyn Fn() -> bool + Send + Sync>;
 

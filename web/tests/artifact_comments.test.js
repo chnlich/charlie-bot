@@ -154,7 +154,8 @@ test('batch tray labels and POST target use the hash session when it resolves', 
   assert.equal(header.textContent, 'Pending (1) \u2192 Viewing Session');
   assert.equal(sendBtn.textContent, 'Send 1 \u2192 Viewing Session');
 
-  await clickElement(sendBtn);
+  clickElement(sendBtn);
+  await flushPromises(5);
   assert.ok(calls.some((call) => call.url === '/api/chat/view-session/message' && call.method === 'POST'));
 });
 
@@ -192,7 +193,8 @@ test('hash session name 404 falls back to the injected server session id', async
   assert.equal(header.textContent, 'Pending (1) \u2192 Server Session');
   assert.equal(sendBtn.textContent, 'Send 1 \u2192 Server Session');
 
-  await clickElement(sendBtn);
+  clickElement(sendBtn);
+  await flushPromises(5);
   assert.ok(calls.some((call) => call.url === '/api/chat/server-session/message' && call.method === 'POST'));
   assert.equal(calls.some((call) => call.url === '/api/chat/missing-session/message'), false);
 });
@@ -543,7 +545,8 @@ async function expectTrayPostsTo(body, calls, sessionId, sessionName, postMessag
   assert.equal(header.textContent, 'Pending (1) \u2192 ' + sessionName);
   assert.equal(sendBtn.textContent, 'Send 1 \u2192 ' + sessionName);
 
-  await clickElement(sendBtn);
+  clickElement(sendBtn);
+  await flushPromises(5);
   assert.ok(calls.some((call) => call.url === '/api/chat/' + sessionId + '/message' && call.method === 'POST'),
     postMessage);
 }
@@ -1593,6 +1596,7 @@ function pickForkTwo() {
 
 test('a question inside a closed details or a demo is not a pick, all six genres have picks, and an unregistered page has none',
   () => {
+    const calls = [];
     const folded = makeElement();
     folded.tagName = 'DETAILS';
     folded.appendChild(makeOption('「hidden」: hidden choice.'));
@@ -1601,14 +1605,15 @@ test('a question inside a closed details or a demo is not a pick, all six genres
       makeOption('「drop」: drop the file.'),
     ], null);
     fork.appendChild(folded);
-    loadArtifactCommentsScript(PICK_PAGE_PATH, false, {bodyChildren: [fork], serverSessionId: 'owner'});
+    loadArtifactCommentsScript(PICK_PAGE_PATH, false,
+      {bodyChildren: [fork], serverSessionId: 'owner', fetch: pickFetchStub(calls)});
     assert.deepEqual(findChildByClass(fork, '__cbc-picks').children.map((b) => b.textContent), ['keep', 'drop']);
 
     for (const genre of ['plan', 'understanding', 'waiting', 'debug', 'explain', 'sitrep']) {
       const genreFork = pickForkOne();
       const {body: genreBody} = loadArtifactCommentsScript(
         `/absolute_filepath/data/home/user/.charliebot/sessions/owner/artifacts/${genre}_week.html`, false,
-        {bodyChildren: [genreFork], serverSessionId: 'owner'});
+        {bodyChildren: [genreFork], serverSessionId: 'owner', fetch: pickFetchStub(calls)});
       assert.deepEqual(
         findChildByClass(genreFork, '__cbc-picks').children.map((b) => b.textContent),
         ['keep', 'drop', 'This should not be a question推荐：「keep」: keep the file.'],
@@ -1621,7 +1626,7 @@ test('a question inside a closed details or a demo is not a pick, all six genres
     const other = pickForkOne();
     const {body: otherBody} = loadArtifactCommentsScript(
       '/absolute_filepath/data/home/user/.charliebot/sessions/owner/artifacts/notes_week.html', false,
-      {bodyChildren: [other], serverSessionId: 'owner'});
+      {bodyChildren: [other], serverSessionId: 'owner', fetch: pickFetchStub(calls)});
     assert.equal(findChildByClass(other, '__cbc-picks'), undefined);
     const otherTray = findChildByClass(stackOf(otherBody), '__cbc-tray');
     assert.equal(findChildByClass(otherTray, '__cbc-tray-picks').style.display, 'none',

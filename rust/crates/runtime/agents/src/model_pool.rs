@@ -420,7 +420,7 @@ impl MemberChange {
     Self { pool: pool.to_string(), from, to, reason, recovers_at, summary: None }
   }
 
-  /// The `quota_failover` chat event recording this change.
+  /// The `quota_failover` chat event that records the member switch and its reason.
   pub fn event(&self) -> Value {
     let mut event = Map::from_iter([
       ("type".to_string(), json!(event_types::QUOTA_FAILOVER)),

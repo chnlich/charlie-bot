@@ -438,6 +438,10 @@ main > header > a[title="View JSONL events"]:hover {
 /* The name follows the row's leading marks, and the row's action buttons come last. */
 .session-row > .session-row-name { order: 1; }
 .session-row > button { order: 3; }
+/* A row whose timestamp and backend name cannot share one line moves the backend name under the timestamp
+   instead of cutting it. The line can fall short at any width, when the list's scrollbar takes width or the
+   backend name is long; only the rows that cannot share one line grow taller, and no label is cut. */
+.session-row .session-row-name > span:has(> .session-time) { flex-wrap: wrap; }
 /* Pointer floor: a row action draws a 14px glyph in p-1's 8px, a 22px box. A named group
    header's two actions draw a 12px glyph in p-0.5's 4px, a 16px box. Both sit under the 24px
    minimum. The row's hover boxes are out of flow, so a 24px minimum grows each into the gap without
@@ -534,11 +538,10 @@ main > header > a[title="View JSONL events"]:hover {
    margins -- outer width 22px, the desktop star's slot -- so the row and
    header heights stay put. The desktop hover cover background is explicitly
    off, because a tap's sticky hover must not paint it. A phone row's second
-   line wraps rather than cutting a label: the gear's flow slot, and a leading
-   attention mark on some rows, leave less width than the timestamp and the
-   backend name need together, so the line keeps the timestamp whole and moves
-   the backend name under it. Only a row whose two labels cannot share one line
-   grows taller, and no label is cut. */
+   line wraps at the tighter 4px gap. On a phone the gear's flow slot, and a
+   leading attention mark on some rows, leave less width than the timestamp and
+   the backend name need together, so the clock is hidden: the date keeps the
+   time item short and the backend name beside it stays whole. */
 @media (hover: none) {
   #session-list .session-row > button { display: none; background: none; box-shadow: none; }
   #session-list .session-row .session-row-name > span:has(> .session-time) { flex-wrap: wrap; gap: 4px; }

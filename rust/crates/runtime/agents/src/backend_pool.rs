@@ -356,7 +356,8 @@ pub fn is_spent_quota_error(text: &str) -> bool {
 
 /// Sort one member failure from a launch verdict and its text. A stated quota verdict decides first. A spent
 /// quota text comes next. A refusal of authentication or model access follows. Anything else is other. Every record
-/// site uses this one sort, so a refusal no longer lands in the quota reason.
+/// site uses this one sort. A text that matches both a quota error and an access refusal is a quota failure, because
+/// the quota check runs first.
 pub fn classify_member_failure(text: &str, quota_exhausted: Option<bool>) -> MemberFailure {
   if quota_exhausted == Some(true) || is_spent_quota_error(text) {
     MemberFailure::Quota

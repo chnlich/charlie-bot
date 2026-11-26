@@ -71,6 +71,9 @@ follow their direction file).
   (Action Boundaries in `prompts/master.md`) from the question and the Waiting on you item you wrote;
   when it does and the entry does not name that step, keep the question in Waiting on you and ask for
   the take off of that step.
+- When that recommendation keeps the user in the loop, choose the reversible option you judge right that does
+  not wait for the user, and name the choice and the reply that undoes it; when the right action takes a
+  high-consequence step, keep the question in Waiting on you and ask for the take off that names that step.
 - When a reply that is not a pick says that a question should not be asked, settle only the Waiting on
   you item or page question that the reply quotes or names, or the sole open item, on that question's
   recommendation under the same high-consequence condition. When several items are open and the reply

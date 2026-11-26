@@ -2665,8 +2665,8 @@ mod tests {
     assert_eq!(serde_json::to_value(&forks).expect("the forks serialize"), expected);
   }
 
-  /// The rule files carry the not-a-question sentences: the two pick and chat-reply rules the skill's
-  /// Don't guess list holds, and the web reply's three-part answer for a marked pick.
+  /// The rule files carry the not-a-question sentences: the pick, in-the-loop and chat-reply rules the
+  /// skill's Don't guess list holds, and the web reply's three-part answer for a marked pick.
   #[test]
   fn the_rule_files_carry_the_not_a_question_sentences() {
     let skill = fs::read_to_string(repo_root().join("skills/plan-approval/SKILL.md")).expect("the skill reads");
@@ -2676,6 +2676,9 @@ mod tests {
   (Action Boundaries in `prompts/master.md`) from the question and the Waiting on you item you wrote;
   when it does and the entry does not name that step, keep the question in Waiting on you and ask for
   the take off of that step.
+- When that recommendation keeps the user in the loop, choose the reversible option you judge right that does
+  not wait for the user, and name the choice and the reply that undoes it; when the right action takes a
+  high-consequence step, keep the question in Waiting on you and ask for the take off that names that step.
 - When a reply that is not a pick says that a question should not be asked, settle only the Waiting on
   you item or page question that the reply quotes or names, or the sole open item, on that question's
   recommendation under the same high-consequence condition. When several items are open and the reply

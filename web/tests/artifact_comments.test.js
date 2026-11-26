@@ -1600,13 +1600,15 @@ test('a question inside a closed details or a demo is not a pick, and a sitrep p
     makeOption('「drop」: drop the file.'),
   ], null);
   fork.appendChild(folded);
-  loadArtifactCommentsScript(PICK_PAGE_PATH, false, {bodyChildren: [fork], serverSessionId: 'owner'});
+  loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
+    bodyChildren: [fork], serverSessionId: 'owner', fetch: FETCH_OK,
+  });
   assert.deepEqual(findChildByClass(fork, '__cbc-picks').children.map((b) => b.textContent), ['keep', 'drop']);
 
   const sitrep = pickForkOne();
   const {body: sitrepBody} = loadArtifactCommentsScript(
     '/absolute_filepath/data/home/user/.charliebot/sessions/owner/artifacts/sitrep_week.html', false,
-    {bodyChildren: [sitrep], serverSessionId: 'owner'});
+    {bodyChildren: [sitrep], serverSessionId: 'owner', fetch: FETCH_OK});
   assert.equal(findChildByClass(sitrep, '__cbc-picks'), undefined);
   const sitrepTray = findChildByClass(stackOf(sitrepBody), '__cbc-tray');
   assert.equal(findChildByClass(sitrepTray, '__cbc-tray-picks').style.display, 'none',
@@ -1661,7 +1663,8 @@ function postsOf(calls) {
   return calls.filter((call) => call.method === 'POST');
 }
 
-// A timer list the test runs by hand: each send opens one undo window, and the test decides when it closes.
+// A timer list the test runs by hand: the post's network-error and 5xx retries wait on it, and the test decides when
+// each retry runs.
 function manualTimers() {
   const timers = [];
   return {timers, setTimeout: (callback) => { timers.push(callback); return timers.length; }};
@@ -1670,14 +1673,12 @@ function manualTimers() {
 test('two picks and a comment share one tray and one Send, and that Send posts one message to the comment target',
   async () => {
     const calls = [];
-    const clock = manualTimers();
     const block = makeBlock('A paragraph the reader comments on.');
     const {body, listeners} = loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
       hash: '#cbsession=viewer',
       bodyChildren: [pickForkOne(), pickForkTwo(), block],
       serverSessionId: 'owner',
       fetch: pickFetchStub(calls),
-      setTimeout: clock.setTimeout,
     });
     const [fork1, fork2] = forksOf(body);
     clickElement(pickButton(fork1, 'keep'));
@@ -1690,8 +1691,6 @@ test('two picks and a comment share one tray and one Send, and that Send posts o
     assert.match(trayHeaderOf(body), /^Pending \(3\)/);
 
     clickElement(traySend(body));
-    assert.equal(clock.timers.length, 1, 'one undo window opens');
-    clock.timers.shift()();
     await flushPromises(5);
 
     const posts = postsOf(calls);
@@ -1714,64 +1713,31 @@ test('two picks and a comment share one tray and one Send, and that Send posts o
 
 test('a page opened on its own sends its picks to the session named in its address', async () => {
   const calls = [];
-  const clock = manualTimers();
   const {body} = loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
     hash: '#cbsession=viewer',
     bodyChildren: [pickForkOne()],
     serverSessionId: 'owner',
     fetch: pickFetchStub(calls),
-    setTimeout: clock.setTimeout,
   });
   clickElement(pickButton(forksOf(body)[0], 'keep'));
   clickElement(traySend(body));
-  clock.timers.shift()();
   await flushPromises(5);
   assert.deepEqual(postsOf(calls).map((call) => call.url), ['/api/chat/viewer/message']);
 });
 
 test('a page shown inside the app sends its picks to the session the app shows, not the page owner', async () => {
   const calls = [];
-  const clock = manualTimers();
   const {body} = loadArtifactCommentsScript(PICK_PAGE_PATH, true, {
     hash: '#cbsession=owner&cbpanel=1',
     bodyChildren: [pickForkOne()],
     serverSessionId: 'owner',
     parent: {planPanel: {currentSessionId: () => 'live'}},
     fetch: pickFetchStub(calls),
-    setTimeout: clock.setTimeout,
   });
   clickElement(pickButton(forksOf(body)[0], 'keep'));
   clickElement(traySend(body));
-  clock.timers.shift()();
   await flushPromises(5);
   assert.deepEqual(postsOf(calls).map((call) => call.url), ['/api/chat/live/message']);
-});
-
-test('Undo inside the undo window posts nothing and leaves the pick and the comment pending', async () => {
-  const calls = [];
-  const clock = manualTimers();
-  const cleared = [];
-  const block = makeBlock('A paragraph.');
-  const {body, listeners} = loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
-    hash: '#cbsession=viewer',
-    bodyChildren: [pickForkOne(), block],
-    serverSessionId: 'owner',
-    fetch: pickFetchStub(calls),
-    setTimeout: clock.setTimeout,
-    clearTimeout: (id) => { cleared.push(id); },
-  });
-  const [fork] = forksOf(body);
-  clickElement(pickButton(fork, 'keep'));
-  addBlockComment(body, listeners, block, 'A note.');
-  clickElement(traySend(body));
-  assert.equal(traySend(body).disabled, true, 'Send is off during the countdown');
-  assert.equal(pickButton(fork, 'drop').disabled, true, 'the options hold during the countdown');
-  clickElement(trayButton(body, 'Undo'));
-  await flushPromises(3);
-  assert.deepEqual(cleared, [1], 'the undo timer is cancelled');
-  assert.deepEqual(postsOf(calls), [], 'nothing is posted');
-  assert.equal(trayItemsOf(body).length, 2, 'both entries stay pending');
-  assert.equal(pickButton(fork, 'drop').disabled, false, 'the options open again');
 });
 
 test('Rest as recommended picks only the questions that have no pick yet', () => {
@@ -1838,7 +1804,6 @@ test('a 5xx holds the tray on Sending through the retry, then the entries leave 
     const [fork] = forksOf(body);
     clickElement(pickButton(fork, 'keep'));
     clickElement(traySend(body));
-    clock.timers.shift()();
     await flushPromises(3);
     assert.equal(posts, 1, 'the first post failed');
     assert.equal(traySend(body).disabled, true, 'the tray holds while the post retries');
@@ -1851,7 +1816,6 @@ test('a 5xx holds the tray on Sending through the retry, then the entries leave 
   });
 
 test('a 4xx shows the error, keeps the entries pending, and lets Send run again', async () => {
-  const clock = manualTimers();
   const fetch = async (url) => {
     if (!url.endsWith('/message')) return {ok: true, status: 200, async json() { return {name: ''}; }};
     return {ok: false, status: 403};
@@ -1861,18 +1825,15 @@ test('a 4xx shows the error, keeps the entries pending, and lets Send run again'
     bodyChildren: [pickForkOne()],
     serverSessionId: 'owner',
     fetch,
-    setTimeout: clock.setTimeout,
   });
   clickElement(pickButton(forksOf(body)[0], 'keep'));
   clickElement(traySend(body));
-  clock.timers.shift()();
   await flushPromises(5);
   assert.equal(trayItemsOf(body).length, 1, 'the pick stays pending');
   assert.equal(traySend(body).disabled, false, 'Send runs again');
 });
 
 test('a landed pick refreshes the Status view of the framed page it sits in', async () => {
-  const clock = manualTimers();
   const calls = [];
   let refreshes = 0;
   const {body} = loadArtifactCommentsScript(PICK_PAGE_PATH, true, {
@@ -1884,11 +1845,9 @@ test('a landed pick refreshes the Status view of the framed page it sits in', as
       refreshSessionStatusPanel: () => { refreshes += 1; },
     },
     fetch: pickFetchStub(calls),
-    setTimeout: clock.setTimeout,
   });
   clickElement(pickButton(forksOf(body)[0], 'keep'));
   clickElement(traySend(body));
-  clock.timers.shift()();
   await flushPromises(5);
   assert.equal(refreshes, 1, 'the Status view refreshes once');
 });
@@ -1914,15 +1873,13 @@ test('per-entry removal and Clear act on a pick as they do on a comment', () => 
   assert.match(trayHeaderOf(body), /^Pending \(0\)/);
 });
 
-test('the tray draws the done icon on a picked option and Undo its own icon, and Rest draws no icon', () => {
+test('the tray draws the done icon on a picked option, and Rest draws no icon', () => {
   const calls = [];
-  const clock = manualTimers();
   const {body, window} = loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
     hash: '#cbsession=viewer',
     bodyChildren: [pickForkOne()],
     serverSessionId: 'owner',
     fetch: pickFetchStub(calls),
-    setTimeout: clock.setTimeout,
   });
   const [fork] = forksOf(body);
   const keep = pickButton(fork, 'keep');
@@ -1931,6 +1888,4 @@ test('the tray draws the done icon on a picked option and Undo its own icon, and
   assert.equal(keep.children[0].innerHTML, window.cbIcon('done', 12), 'a picked option draws the done icon');
   assert.equal(pickButton(fork, 'drop').children[0].innerHTML, '', 'the other option stays bare');
   assert.equal(trayButton(body, 'Rest as recommended').children.length, 1, 'Rest draws no icon');
-  clickElement(traySend(body));
-  assert.equal(trayButton(body, 'Undo').children[0].innerHTML, window.cbIcon('undo', 14), 'Undo draws its icon');
 });

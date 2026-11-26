@@ -3,29 +3,13 @@
 // shape and the thrown messages are one contract: each caller catches errors
 // and surfaces `err.message` in its own feedback.
 // ---------------------------------------------------------------------------
-const COMMENT_KEEPALIVE_BODY_MAX_BYTES = 64 * 1024;
-const COMMENT_KEEPALIVE_SAMPLE_REQUEST_ID = '00000000-0000-4000-8000-000000000000';
-const COMMENT_KEEPALIVE_LIMIT_MESSAGE = 'This message exceeds the 64 KiB page-leave limit. ' +
-  'Keep this page open for the normal send.';
-
 function commentRequestBody(content, requestId) {
   return JSON.stringify({content, uploaded_files: [], request_id: requestId});
 }
 
-function commentKeepaliveLimitMessage(content, requestId = COMMENT_KEEPALIVE_SAMPLE_REQUEST_ID) {
-  const body = commentRequestBody(content, requestId);
-  const bodyBytes = new TextEncoder().encode(body).byteLength;
-  return bodyBytes > COMMENT_KEEPALIVE_BODY_MAX_BYTES ? COMMENT_KEEPALIVE_LIMIT_MESSAGE : null;
-}
-
-// `keepalive` lets the post outlive the document that makes it; only a send flushed at page hide sets it.
-async function postCommentMessage(sessionId, content, {keepalive = false} = {}) {
+async function postCommentMessage(sessionId, content) {
   const requestId = crypto.randomUUID();
   const body = commentRequestBody(content, requestId);
-  if (keepalive) {
-    const limitMessage = commentKeepaliveLimitMessage(content, requestId);
-    if (limitMessage) throw new Error(limitMessage);
-  }
   let retryDelay = 1000;
   const waitBeforeRetry = async () => {
     await new Promise((resolve) => setTimeout(resolve, retryDelay));
@@ -38,16 +22,9 @@ async function postCommentMessage(sessionId, content, {keepalive = false} = {}) 
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         credentials: 'same-origin',
-        keepalive,
         body,
       });
     } catch (error) {
-      if (keepalive) {
-        throw new Error(
-          'Page-leave send failed (' + error.message + '). Keep this page open and press Send to try again.',
-          {cause: error},
-        );
-      }
       await waitBeforeRetry();
       continue;
     }
@@ -79,55 +56,6 @@ function buildClickMessage(header, entries) {
     if (i < entries.length - 1) lines.push('');
   }
   return lines.join('\n');
-}
-
-// The one delayed send of every click (a Status completion, a page pick): the message waits
-// COMMENT_UNDO_MS for Undo, then post runs once. Leaving the page or tearing down the session view
-// flushes the open window at once instead of cancelling it, so a reader who leaves does not lose the
-// send. post receives `{keepalive}`, true only on a leave flush; each caller passes it to its fetch so
-// the request outlives the document. Undo works only while the page stays. The handle's sent promise
-// settles with post's result, or with null when cancel() wins the window; cancel() returns false once
-// post has begun.
-const COMMENT_UNDO_MS = 5000;
-
-function startUndoableSend(post) {
-  let state = 'undo';
-  let resolveSent = null;
-  let rejectSent = null;
-  const sent = new Promise((resolve, reject) => {
-    resolveSent = resolve;
-    rejectSent = reject;
-  });
-  function flushOnLeave() {
-    if (state !== 'undo') return;
-    clearTimeout(timer);
-    run(true);
-  }
-  function removeLeaveListeners() {
-    window.removeEventListener('pagehide', flushOnLeave);
-    document.removeEventListener('charliebot:session-view-teardown', flushOnLeave);
-  }
-  function run(keepalive) {
-    state = 'sending';
-    removeLeaveListeners();
-    (async () => post({keepalive}))().then(resolveSent, rejectSent);
-  }
-  function cancel() {
-    if (state !== 'undo') return false;
-    state = 'cancelled';
-    clearTimeout(timer);
-    removeLeaveListeners();
-    resolveSent(null);
-    return true;
-  }
-  window.addEventListener('pagehide', flushOnLeave);
-  document.addEventListener('charliebot:session-view-teardown', flushOnLeave);
-  const timer = setTimeout(() => run(false), COMMENT_UNDO_MS);
-  return {
-    sent,
-    cancel,
-    get sending() { return state === 'sending'; },
-  };
 }
 
 // One tray toast at a time: showing a new one removes the previous. Each tray

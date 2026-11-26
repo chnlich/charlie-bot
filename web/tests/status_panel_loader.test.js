@@ -86,7 +86,6 @@ test('the helper the group runs first defines the names a Status click calls', (
   // The page runs the group's first file before the module lands; the Done action resolves these names as globals.
   vm.runInContext(readStatic(helperPath.slice('/static/js/'.length)), rig.context, {filename: helperPath});
   assert.equal(typeof rig.context.buildClickMessage, 'function');
-  assert.equal(typeof rig.context.startUndoableSend, 'function');
 });
 
 test('a web session with nothing to count and a hidden panel asks for nothing', () => {

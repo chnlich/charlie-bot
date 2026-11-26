@@ -180,8 +180,9 @@ fn asset_versions(features: &FeatureContext) -> ViewResult<(String, String)> {
   Ok((comment_version, artifact_version))
 }
 
-/// The icon table for the artifact controls covers two groups. Comments use `comment` and `close`.
-/// Picks use `done`, `undo` and `send`.
+/// The icon table for the artifact controls covers three groups. Comments use `comment` and `close`.
+/// Picks use `done` and `send`, and the compact tray's Show list / Hide list control uses `expand-down` and
+/// `expand-up`.
 fn artifact_icon_script(features: &FeatureContext) -> ViewResult<String> {
   let templating = features
     .startup
@@ -189,7 +190,7 @@ fn artifact_icon_script(features: &FeatureContext) -> ViewResult<String> {
     .map_err(|error: StateError| internal_error("RuntimeError", error.to_string()))?;
   let icons = templating.icons().map_err(|error| internal_error("ValueError", error.to_string()))?;
   icons
-    .script(Some(&["comment", "close", "done", "undo", "send"]))
+    .script(Some(&["comment", "close", "done", "send", "expand-down", "expand-up"]))
     .map_err(|error| internal_error("ValueError", error.to_string()))
 }
 

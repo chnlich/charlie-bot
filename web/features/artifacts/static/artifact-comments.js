@@ -100,24 +100,28 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     var refDocTop = 0;
     var cardHeights = null;
     var reflowScheduled = false;
+    var trayModeScheduled = false;
     // Picks on the questions of plan, understanding and waiting pages only. A pick is an entry of `pending`,
     // so the one tray holds picks and comments and one Send sends both.
     var PICK_PAGE_PATTERN = /(^|\/)(plan|understanding|waiting)_[^/]*$/;
     var QUOTE_CLOSERS = {'「': '」', '“': '”', '"': '"'};
-    // The tray stage names each step of a send. Editing changes the pending list. In countdown the undo window is
-    // open. In sending the post is in flight, retried on a network error or 5xx. Entries leave the list when the
-    // post lands.
+    // The tray stage names each step of a send. Editing changes the pending list. In sending the post is in flight,
+    // retried on a network error or 5xx. Entries leave the list when the post lands.
     var trayStage = 'editing';
     // The session the send in flight posts to, fixed at the click, and the outcome of the last send
     // ({text, error}), which the tray shows until the next Send click or Clear.
     var sendTarget = null;
     var trayNotice = null;
-    var sendHandle = null;
     var picks = [];
     var trayPickRow = null;
     var trayPickLabel = null;
     var trayRestButton = null;
-    var trayUndoButton = null;
+    var trayExpandButton = null;
+    var trayExpandIcon = null;
+    var trayExpandText = null;
+    // The bottom-sheet tray's list is open or folded into its one line. The state only matters while entries are
+    // pending; the wide window's side column always shows the full tray.
+    var trayListExpanded = false;
 
     window.__cbcResolveSessionId = resolveSessionId;
     window.__cbcBuildBatchMessage = buildBatchMessage;
@@ -505,6 +509,29 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         '.' + GLOBAL_PREFIX + '-tray-action:disabled{cursor:not-allowed;opacity:.64}' +
         '.' + GLOBAL_PREFIX + '-tray-picks{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:6px 8px;color:#8b949e;font-size:12px}' +
         '.' + GLOBAL_PREFIX + '-tray-picks-label{white-space:nowrap}' +
+        // The bottom sheet's compact tray: one line of pending count, target, Send and the Show list control, opened
+        // on tap. The wide window's side column keeps the full tray.
+        '.' + GLOBAL_PREFIX + '-tray-expand{display:none;flex:none;order:3;border:1px solid #2d3340;border-radius:6px;padding:5px 9px;background:#1c2230;color:#e6edf3;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;cursor:pointer;white-space:nowrap}' +
+        '.' + GLOBAL_PREFIX + '-tray-expand:hover{background:#262d36}' +
+        '.' + GLOBAL_PREFIX + '-dock-bottom .' + GLOBAL_PREFIX + '-tray{flex-direction:row;flex-wrap:wrap;align-items:center;gap:6px 8px;padding:8px 10px}' +
+        '.' + GLOBAL_PREFIX + '-dock-bottom .' + GLOBAL_PREFIX + '-tray-header{flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
+        '.' + GLOBAL_PREFIX + '-dock-bottom .' + GLOBAL_PREFIX + '-tray-picks,.' + GLOBAL_PREFIX + '-dock-bottom .' + GLOBAL_PREFIX + '-tray-list,.' + GLOBAL_PREFIX + '-dock-bottom .' + GLOBAL_PREFIX + '-tray-status{flex:1 1 100%;min-width:0}' +
+        '.' + GLOBAL_PREFIX + '-dock-bottom .' + GLOBAL_PREFIX + '-tray-actions{display:contents}' +
+        '.' + GLOBAL_PREFIX + '-dock-bottom .' + GLOBAL_PREFIX + '-tray-send{flex:none;white-space:nowrap;order:2}' +
+        '.' + GLOBAL_PREFIX + '-dock-bottom .' + GLOBAL_PREFIX + '-tray[data-cbc-mode="collapsed"] .' + GLOBAL_PREFIX + '-tray-picks,.' +
+          GLOBAL_PREFIX + '-dock-bottom .' + GLOBAL_PREFIX + '-tray[data-cbc-mode="collapsed"] .' + GLOBAL_PREFIX + '-tray-list,.' +
+          GLOBAL_PREFIX + '-dock-bottom .' + GLOBAL_PREFIX + '-tray[data-cbc-mode="collapsed"] .' + GLOBAL_PREFIX + '-tray-clear{display:none!important}' +
+        '.' + GLOBAL_PREFIX + '-dock-bottom .' + GLOBAL_PREFIX + '-tray[data-cbc-mode="collapsed"] .' + GLOBAL_PREFIX + '-tray-status{order:4}' +
+        '.' + GLOBAL_PREFIX + '-dock-bottom .' + GLOBAL_PREFIX + '-tray[data-cbc-mode="collapsed"] .' + GLOBAL_PREFIX + '-tray-expand{display:inline-block}' +
+        '.' + GLOBAL_PREFIX + '-dock-bottom .' + GLOBAL_PREFIX + '-tray[data-cbc-mode="expanded"] .' + GLOBAL_PREFIX + '-tray-expand{display:inline-block;order:0}' +
+        '.' + GLOBAL_PREFIX + '-dock-bottom .' + GLOBAL_PREFIX + '-tray[data-cbc-mode="expanded"] .' + GLOBAL_PREFIX + '-tray-actions{display:flex;flex:1 1 100%;justify-content:flex-end;gap:7px}' +
+        '.' + GLOBAL_PREFIX + '-dock-bottom .' + GLOBAL_PREFIX + '-tray[data-cbc-mode="expanded"] .' + GLOBAL_PREFIX + '-tray-send{order:0}' +
+        '.' + GLOBAL_PREFIX + '-dock-bottom .' + GLOBAL_PREFIX + '-tray[data-cbc-mode="empty"] .' + GLOBAL_PREFIX + '-tray-header,.' +
+          GLOBAL_PREFIX + '-dock-bottom .' + GLOBAL_PREFIX + '-tray[data-cbc-mode="empty"] .' + GLOBAL_PREFIX + '-tray-list,.' +
+          GLOBAL_PREFIX + '-dock-bottom .' + GLOBAL_PREFIX + '-tray[data-cbc-mode="empty"] .' + GLOBAL_PREFIX + '-tray-actions{display:none!important}' +
+        '.' + GLOBAL_PREFIX + '-dock-bottom .' + GLOBAL_PREFIX + '-tray[data-cbc-mode="hidden"]{display:none!important}' +
+        // No open question: neither the "No pick on 0 of N" line nor Rest as recommended shows, at every width.
+        '.' + GLOBAL_PREFIX + '-tray[data-cbc-open="0"] .' + GLOBAL_PREFIX + '-tray-picks{display:none!important}' +
         '.' + GLOBAL_PREFIX + '-icon{display:inline-flex;vertical-align:middle;margin-right:5px}' +
         '.' + GLOBAL_PREFIX + '-icon:empty{display:none}' +
         '.' + GLOBAL_PREFIX + '-picks{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 4px}' +
@@ -550,6 +577,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       window.addEventListener('scroll', reposition, true);
       window.addEventListener('resize', reposition);
       window.addEventListener('resize', scheduleReflow);
+      window.addEventListener('resize', scheduleTrayMode);
       document.addEventListener('toggle', scheduleReflow, true);
       document.addEventListener('load', scheduleReflow, true);
     }
@@ -1041,6 +1069,21 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       header.className = GLOBAL_PREFIX + '-tray-header';
       container.appendChild(header);
 
+      // The bottom sheet's Show list / Hide list control: the folded tray shows one line, and this opens the list.
+      var expandBtn = document.createElement('button');
+      expandBtn.type = 'button';
+      expandBtn.className = GLOBAL_PREFIX + '-tray-expand';
+      expandBtn.title = 'Show or hide the pending list';
+      var expandIcon = makeIconSlot();
+      var expandText = document.createElement('span');
+      expandBtn.appendChild(expandIcon);
+      expandBtn.appendChild(expandText);
+      expandBtn.addEventListener('click', function() {
+        trayListExpanded = !trayListExpanded;
+        refreshTray();
+      });
+      container.appendChild(expandBtn);
+
       // The question count of a page with questions: how many still have no pick, and the action that picks
       // each of them as recommended.
       var pickRow = document.createElement('div');
@@ -1063,18 +1106,16 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
 
       var actions = document.createElement('div');
       actions.className = GLOBAL_PREFIX + '-tray-actions';
-      var undoBtn = makeButton('Undo', undoSend, GLOBAL_PREFIX + '-tray-action', iconSlotFor('undo', 14));
       var clearBtn = document.createElement('button');
       clearBtn.type = 'button';
       clearBtn.textContent = 'Clear';
-      clearBtn.className = GLOBAL_PREFIX + '-tray-action';
+      clearBtn.className = GLOBAL_PREFIX + '-tray-action ' + GLOBAL_PREFIX + '-tray-clear';
       clearBtn.addEventListener('click', resetPending);
       var sendBtn = document.createElement('button');
       sendBtn.type = 'button';
       sendBtn.textContent = 'Send';
       sendBtn.className = GLOBAL_PREFIX + '-tray-send';
       sendBtn.addEventListener('click', sendBatch);
-      actions.appendChild(undoBtn);
       actions.appendChild(clearBtn);
       actions.appendChild(sendBtn);
       container.appendChild(actions);
@@ -1085,7 +1126,9 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       trayPickRow = pickRow;
       trayPickLabel = pickLabelNode;
       trayRestButton = restBtn;
-      trayUndoButton = undoBtn;
+      trayExpandButton = expandBtn;
+      trayExpandIcon = expandIcon;
+      trayExpandText = expandText;
       trayList = list;
       traySendBtn = sendBtn;
       trayClearBtn = clearBtn;
@@ -1189,21 +1232,27 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     // last send did. Null when Send is ready and no send has reported.
     function trayStatusOf() {
       if (!resolveTargetSessionId()) return {text: NO_SESSION_MESSAGE, error: true};
-      if (trayStage === 'countdown') {
-        if (trayNotice) return trayNotice;
-        return {
-          text: 'Sends to ' + sessionLabelOf(sendTarget) + ' in ' + COMMENT_UNDO_MS / 1000 +
-            ' seconds unless you press Undo.',
-          error: false,
-        };
-      }
       if (trayStage === 'sending') {
         return {
           text: 'Sending to ' + sessionLabelOf(sendTarget) + '. A lost connection is retried until the server answers.',
           error: false,
         };
       }
-      if (trayNotice) return trayNotice;
+      if (trayNotice) {
+        // A send result names its target by the readable name, read now, so a name that arrives after the send
+        // click still replaces the bare id.
+        if (trayNotice.sent) {
+          var label = sessionLabelOf(trayNotice.sent.target);
+          return trayNotice.sent.dispatchError
+            ? {
+              text: 'Sent ' + trayNotice.sent.count + ' to ' + label + ', but the session did not start a run: ' +
+                trayNotice.sent.dispatchError,
+              error: true,
+            }
+            : {text: 'Sent ' + trayNotice.sent.count + ' to ' + label + '.', error: false};
+        }
+        return trayNotice;
+      }
       if (pending.length === 0) {
         return {text: 'Nothing to send. Pick an option or write a comment, then press Send.', error: false};
       }
@@ -1212,24 +1261,60 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
 
     function refreshTray() {
       if (!tray) return;
-      if (pending.length > 0 && resolveTargetSessionId()) ensureTargetSessionName();
+      // The header names the target by its readable name whenever the tray shows it, also with nothing pending.
+      if ((pending.length > 0 || picks.length > 0) && resolveTargetSessionId()) ensureTargetSessionName();
+      var idle = trayStage === 'editing';
+      var open = unpickedCount();
+      tray.style.display = pending.length > 0 || picks.length > 0 ? 'flex' : 'none';
+      trayPickRow.style.display = picks.length > 0 && open > 0 ? 'flex' : 'none';
+      trayPickLabel.textContent = 'No pick on ' + open + ' of ' + picks.length + ' questions';
+      trayRestButton.disabled = !idle || unpickedRecommendedCount() === 0;
+      trayClearBtn.disabled = !idle;
+      traySendBtn.disabled = !idle || !resolveTargetSessionId() || pending.length === 0;
+      syncTrayMode();
+      renderPicks();
+      scheduleReflow();
+    }
+
+    // The tray's shape and its two text lines, which depend on the window's width and the tray's own state. A resize
+    // re-runs this without rebuilding the pick buttons or the list.
+    function syncTrayMode() {
+      if (!tray) return;
       var targetSuffix = targetSessionSuffix();
       var idle = trayStage === 'editing';
       var status = trayStatusOf();
+      var bottom = !railIsSide();
+      var open = unpickedCount();
+      var expanded = bottom && pending.length > 0 && trayListExpanded;
+      // The bottom sheet folds to one line: the pending count, the target, Send and the Show list control. With no
+      // entry it is the open-question line, a send notice, or (with neither) hidden.
+      var idleStatus = Boolean(status) && status.text.indexOf('Nothing to send') === 0;
+      var mode = '';
+      if (bottom) {
+        if (pending.length > 0) mode = expanded ? 'expanded' : 'collapsed';
+        else if (open > 0 || (status && !idleStatus)) mode = 'empty';
+        else mode = 'hidden';
+      }
+      tray.setAttribute('data-cbc-mode', mode);
+      tray.setAttribute('data-cbc-open', String(open));
       trayHeader.textContent = 'Pending (' + pending.length + ')' + targetSuffix;
-      traySendBtn.textContent = idle ? 'Send ' + pending.length + targetSuffix : 'Sending';
-      tray.style.display = pending.length > 0 || picks.length > 0 ? 'flex' : 'none';
-      trayPickRow.style.display = picks.length > 0 ? 'flex' : 'none';
-      trayPickLabel.textContent = 'No pick on ' + unpickedCount() + ' of ' + picks.length + ' questions';
-      trayRestButton.disabled = !idle || unpickedRecommendedCount() === 0;
-      trayUndoButton.style.display = trayStage === 'countdown' ? 'inline-block' : 'none';
-      trayClearBtn.disabled = !idle;
-      traySendBtn.disabled = !idle || !resolveTargetSessionId() || pending.length === 0;
+      traySendBtn.textContent = idle ? 'Send ' + pending.length + (bottom ? '' : targetSuffix) : 'Sending';
+      trayExpandText.textContent = expanded ? 'Hide list' : 'Show list';
+      setIcon(trayExpandIcon, expanded ? 'expand-up' : 'expand-down', 12);
+      trayExpandButton.setAttribute('aria-expanded', String(expanded));
       trayStatus.textContent = status ? status.text : '';
-      trayStatus.style.display = status ? 'block' : 'none';
+      // The empty bottom sheet's one line is the open-question line; the idle "Nothing to send" would repeat it.
+      trayStatus.style.display = status && !(bottom && mode === 'empty' && idleStatus) ? 'block' : 'none';
       trayStatus.classList.toggle(GLOBAL_PREFIX + '-tray-status-error', Boolean(status && status.error));
-      renderPicks();
-      scheduleReflow();
+    }
+
+    function scheduleTrayMode() {
+      if (trayModeScheduled) return;
+      trayModeScheduled = true;
+      window.requestAnimationFrame(function() {
+        trayModeScheduled = false;
+        syncTrayMode();
+      });
     }
 
     function scheduleReflow() {
@@ -1469,53 +1554,31 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       });
     }
 
-    // A failed send's reason may already end in its period (the 64 KiB notice and a page-leave failure both do), so the
-    // status line adds one only when the reason lacks it.
+    // A failed send's reason may already end in its period, so the status line adds one only when the reason lacks it.
     function endWithPeriod(text) {
       return text.endsWith('.') ? text : text + '.';
     }
 
-    // The one send of the tray: every pending entry, picks and comments, goes as one message to the comment target
-    // after the undo window. The target is the one the click names. Entries that land leave the list; entries added
-    // during the window stay pending. Every outcome sets the tray's status line.
+    // The one send of the tray: every pending entry, picks and comments, goes as one message to the comment target at
+    // once. The target is the one the click names. While the post is in flight Send stays disabled; entries that land
+    // leave the list. Every outcome sets the tray's status line.
     function sendBatch() {
       var target = resolveTargetSessionId();
       if (!target || pending.length === 0 || trayStage !== 'editing') return;
       var batch = batchOrder(pending);
       var message = buildBatchMessage(batch);
       var count = batch.length;
-      var label = sessionLabelOf(target);
       sendTarget = target;
-      var keepaliveLimitMessage = commentKeepaliveLimitMessage(message);
-      trayNotice = keepaliveLimitMessage ? {text: keepaliveLimitMessage, error: false} : null;
-      trayStage = 'countdown';
+      trayNotice = null;
+      trayStage = 'sending';
       refreshTray();
-      sendHandle = startUndoableSend(function(options) {
-        trayStage = 'sending';
-        refreshTray();
-        return postCommentMessage(target, message, options);
-      });
-      sendHandle.sent.then(function(result) {
-        sendHandle = null;
+      postCommentMessage(target, message).then(function(result) {
         trayStage = 'editing';
-        if (result === null) {
-          trayNotice = {text: 'Undone. Nothing was sent; the entries stay pending.', error: false};
-        } else {
-          dropSent(batch);
-          if (result.dispatch_error) {
-            trayNotice = {
-              text: 'Sent ' + count + ' to ' + label + ', but the session did not start a run: ' +
-                result.dispatch_error,
-              error: true,
-            };
-          } else {
-            trayNotice = {text: 'Sent ' + count + ' to ' + label + '.', error: false};
-          }
-          if (batch.some(function(entry) { return entry.kind === ENTRY_KIND.PICK; })) refreshStatusViewAfterPick();
-        }
+        dropSent(batch);
+        trayNotice = {sent: {count: count, target: target, dispatchError: result.dispatch_error || null}};
+        if (batch.some(function(entry) { return entry.kind === ENTRY_KIND.PICK; })) refreshStatusViewAfterPick();
         refreshTray();
       }, function(err) {
-        sendHandle = null;
         trayStage = 'editing';
         console.error('Batch send failed:', err);
         trayNotice = {
@@ -1524,10 +1587,6 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         };
         refreshTray();
       });
-    }
-
-    function undoSend() {
-      if (sendHandle) sendHandle.cancel();
     }
 
     // Takes the sent entries out of the pending list and records each sent pick on its question, which then holds
@@ -1794,12 +1853,6 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     // cbIcon is the icon module's function. It throws on a meaning the table lacks, so no control draws without one.
     function setIcon(slot, meaning, size) {
       slot.innerHTML = meaning ? window.cbIcon(meaning, size) : '';
-    }
-
-    function iconSlotFor(meaning, size) {
-      var slot = makeIconSlot();
-      setIcon(slot, meaning, size);
-      return slot;
     }
 
     // A button with an optional leading icon slot. The label sits in its own span, so the button's text is the label.

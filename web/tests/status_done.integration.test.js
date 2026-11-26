@@ -6,10 +6,9 @@
 //
 // Checks:
 // - the own item's row holds one checkbox, and the child's item holds none;
-// - checking the box and unchecking it inside the undo window sends nothing;
-// - checking it again sends, after the undo window, one click message to the owner in the landed format: the header,
-//   the reference with the list version and the position, and the answer Done. The message carries neither the item's
-//   text nor its context;
+// - checking the box posts at once, with no undo window;
+// - the post is one click message to the owner in the landed format: the header, the reference with the list version
+//   and the position, and the answer Done. The message carries neither the item's text nor its context;
 // - at desktop width the Waiting on you label is drawn in the label column the Now row uses, level with the first
 //   item's line and before it, and the heading does not stretch to the row's height;
 // - at mobile width the label is drawn above the first item, at the row's left edge.
@@ -34,8 +33,6 @@ const SINCE = '2026-11-19T08:00:00Z';
 const OWN_VERSION = 'aaaaaaaaaaaaaaaa';
 const CHILD_VERSION = 'cccccccccccccccc';
 const PAGE_PATH = '/chat';
-// The undo window is five seconds; the wait leaves room for the post.
-const SEND_WAIT_MS = 9000;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -208,25 +205,17 @@ async function withStatusPanel(check, {mobile = false} = {}) {
   }
 }
 
-test('a done checkbox sends one click after its undo window; unchecking inside the window sends nothing', async () => {
+test('a done checkbox posts one click message at once, with no undo window', async () => {
   await withStatusPanel(async (page) => {
     assert.equal(
       await page.evaluate('document.querySelectorAll("[data-child-item] input").length'), 0,
       'a child item has no checkbox');
 
-    // Check, then uncheck inside the window: the click is cancelled.
     await page.evaluate('document.querySelector("[data-done-check]").click()');
-    await sleep(1000);
-    await page.evaluate('document.querySelector("[data-done-check]").click()');
-    await sleep(SEND_WAIT_MS - 1000);
-    assert.equal(await page.evaluate('window.__posts.length'), 0, 'an unchecked click sends nothing');
-
-    // Check again and let the window close: one message goes to the owner.
-    await page.evaluate('document.querySelector("[data-done-check]").click()');
-    await sleep(SEND_WAIT_MS);
+    await sleep(300);
 
     const posts = await page.evaluate('window.__posts');
-    assert.equal(posts.length, 1, 'one checked click sends one message');
+    assert.equal(posts.length, 1, 'one checked click sends one message at once');
     assert.equal(posts[0].url, '/api/chat/' + PARENT + '/message', 'the message goes to the item owner');
     assert.equal(posts[0].body.content, [
       '[Status · Waiting on you]',
@@ -236,6 +225,7 @@ test('a done checkbox sends one click after its undo window; unchecking inside t
     ].join('\n'));
     assert.equal(posts[0].body.content.includes('Own decision'), false, 'the reference quotes no item text');
     assert.equal(posts[0].body.content.includes('Own context'), false, 'the reference quotes no item context');
+    assert.equal(posts[0].body.keepalive, undefined, 'the post is a normal request');
   });
 });
 

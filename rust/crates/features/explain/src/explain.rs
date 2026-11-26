@@ -233,7 +233,18 @@ impl Generation {
     let session_id = self.session_id.clone();
     let copy = blocking(move || HistoryCopy::make(&store, &session_id)).await?;
     let prompt = prompt::user(self.upto, round_text, &copy.path);
-    let launch = LaunchArgs { cgroup_session_id: Some(self.session_id.clone()), ..LaunchArgs::default() };
+    let launch = LaunchArgs {
+      extra_flags: Vec::new(),
+      buffer_limit: None,
+      instructions_content: None,
+      instructions_file: None,
+      resume_session_id: None,
+      log_dir: None,
+      cgroup_session_id: Some(self.session_id.clone()),
+      remote_launch: None,
+      backend_kwargs: Map::new(),
+      manager_turn: false,
+    };
     let built = build_backend(Arc::clone(&self.features.registry), &self.option, &self.cfg, launch)?;
     let base_env = agent_environment::spawn_base_environment(&self.features)?;
     agent_one_shot_text(built, &base_env.values, &prompt, prompt::SYSTEM, Some(timeout)).await

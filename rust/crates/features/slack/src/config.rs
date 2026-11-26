@@ -1,6 +1,8 @@
-//! The `slack:` section: the allow-list for Slack summons and the colleague list.
+//! The `slack:` section: the allow-list for Slack summons and the colleague list. The `slack` section of
+//! `credentials.yaml` has the same name, and its readers are here too.
 
-use charliebot_core::config::{ConfigSection, SectionModel};
+use charliebot_core::config::{ConfigError, ConfigSection, SectionModel};
+use charliebot_core::credentials::{CredentialValue, Credentials};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -59,8 +61,21 @@ impl TryFrom<RawSlackConfig> for SlackConfig {
   }
 }
 
-/// The name of the registered `slack:` config section.
+/// The name of the registered `slack:` config section, and of the `slack` section of `credentials.yaml`.
 pub(crate) const NAME: &str = "slack";
+
+/// The `slack` credential field of the app-level token, which Socket Mode connects with.
+pub(crate) const APP_TOKEN_FIELD: &str = "app_token";
+
+/// The `slack` credential field `field`, or `None` when `credentials.yaml` leaves it unset.
+pub(crate) fn credential_value<'a>(credentials: &'a Credentials, field: &str) -> Option<&'a CredentialValue> {
+  credentials.get(NAME, field)
+}
+
+/// The `slack` credential field `field`, which must be set.
+pub(crate) fn require_credential(credentials: &Credentials, field: &str) -> Result<String, ConfigError> {
+  credentials.require(NAME, field)
+}
 
 impl SectionModel for SlackConfig {
   const KEY: &'static str = NAME;

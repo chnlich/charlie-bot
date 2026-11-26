@@ -634,7 +634,7 @@ impl MessageAggregator {
     if append.is_empty() && thinking_append.is_empty() && tools_from.is_none() {
       return Vec::new();
     }
-    let mut frame = json!({"type": "stream", (event_types::EVENT_INDEX): self.current_index});
+    let mut frame = json!({"type": event_types::STREAM_FRAME, (event_types::EVENT_INDEX): self.current_index});
     if !append.is_empty() {
       self.streamed_text_bytes = self.assistant_buf.len();
       self.streamed_text_utf16 += append.encode_utf16().count();

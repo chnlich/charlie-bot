@@ -269,11 +269,28 @@ fn shown_task<'a>(candidates: &[&'a ScheduledTaskConfig], now: UtcDateTime) -> O
     .copied()
     .filter(|task| task.enabled)
     .min_by_key(|task| {
-      let next =
-        scheduler::next_fire_iso(&task.cron, &task.timezone, now).ok().and_then(|next| UtcDateTime::parse(&next).ok());
+      let next = next_fire_or_report(task, now);
       (next.is_none(), next)
     })
     .or_else(|| candidates.first().copied())
+}
+
+/// The next fire time of a task, or None when its cron cannot be read; each failure is logged.
+fn next_fire_or_report(task: &ScheduledTaskConfig, now: UtcDateTime) -> Option<UtcDateTime> {
+  let next_iso = match scheduler::next_fire_iso(&task.cron, &task.timezone, now) {
+    Ok(next_iso) => next_iso,
+    Err(error) => {
+      tracing::error!(task = %task.name, error = %error, "cron_row_next_fire_failed");
+      return None;
+    }
+  };
+  match UtcDateTime::parse(&next_iso) {
+    Ok(next) => Some(next),
+    Err(error) => {
+      tracing::error!(task = %task.name, error = %error, "cron_row_next_fire_unparsable");
+      None
+    }
+  }
 }
 
 fn row_schedule_fields(
@@ -998,9 +1015,22 @@ fn names_for_binding(tasks: &[ScheduledTaskConfig], session_id: &str) -> Vec<Str
 }
 
 fn bound_configs_for_listing(home: &Path) -> Vec<ScheduledTaskConfig> {
-  let mut paths = match std::fs::read_dir(loader::cron_dir_for_home(home)) {
-    Ok(entries) => entries.filter_map(Result::ok).map(|entry| entry.path()).collect::<Vec<_>>(),
-    Err(_) => return Vec::new(),
+  let cron_dir = loader::cron_dir_for_home(home);
+  let mut paths = match std::fs::read_dir(&cron_dir) {
+    Ok(entries) => entries
+      .filter_map(|entry| match entry {
+        Ok(entry) => Some(entry.path()),
+        Err(error) => {
+          tracing::error!(dir = %cron_dir.display(), error = %error, "cron_listing_dir_entry_unreadable");
+          None
+        }
+      })
+      .collect::<Vec<_>>(),
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+    Err(error) => {
+      tracing::error!(dir = %cron_dir.display(), error = %error, "cron_listing_dir_unreadable");
+      return Vec::new();
+    }
   };
   paths.sort();
   paths
@@ -1008,9 +1038,21 @@ fn bound_configs_for_listing(home: &Path) -> Vec<ScheduledTaskConfig> {
     .filter(|path| path.extension().and_then(|extension| extension.to_str()) == Some("yaml"))
     .filter_map(|path| {
       let name = path.file_stem()?.to_str()?.to_string();
-      let mut body = loader::read_task_file(&path).ok()?;
+      let mut body = match loader::read_task_file(&path) {
+        Ok(body) => body,
+        Err(error) => {
+          tracing::error!(path = %path.display(), error = %error, "cron_listing_task_file_unreadable");
+          return None;
+        }
+      };
       body.insert("name".to_string(), Value::String(name));
-      serde_json::from_value(Value::Object(body)).ok()
+      match serde_json::from_value::<ScheduledTaskConfig>(Value::Object(body)) {
+        Ok(task) => Some(task),
+        Err(error) => {
+          tracing::error!(path = %path.display(), error = %error, "cron_listing_task_decode_failed");
+          None
+        }
+      }
     })
     .collect()
 }

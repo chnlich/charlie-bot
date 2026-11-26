@@ -47,9 +47,9 @@ pub struct EncodedInput {
 pub enum MidturnSignal {
   /// The agent has received the requests named by these keys, each counted once.
   Delivered(Vec<String>),
-  /// The agent's turn has ended. The runtime closes the input under the write lock, and only while no written request
-  /// still awaits its answer.
-  TurnEnded,
+  /// The agent's turn has ended, with the status the codec gives it. The runtime closes the input under the write lock,
+  /// and only while no written request still awaits its answer.
+  TurnEnded { succeeded: bool },
 }
 
 /// What a codec makes of one raw output event: the events it translates to, and its neutral signals.
@@ -64,7 +64,8 @@ pub trait MidturnCodec: Send {
   fn encode_prompt(&mut self, prompt: &str) -> anyhow::Result<EncodedInput>;
 
   /// One pending user input, as one stdin write. The key names the write in the input log.
-  fn encode_input(&mut self, input_id: &str, content: &str) -> anyhow::Result<EncodedInput>;
+  /// `None` when the codec takes no more input in this turn: the input waits for the next turn.
+  fn encode_input(&mut self, input_id: &str, content: &str) -> anyhow::Result<Option<EncodedInput>>;
 
   /// One raw output event, read in order.
   fn observe(&mut self, raw: &Value) -> anyhow::Result<Observed>;
@@ -102,8 +103,8 @@ struct Ledger {
 /// The turn-end bookkeeping: a candidate end the codec signaled, and whether the turn has ended.
 #[derive(Default)]
 struct Turn {
-  candidate: bool,
-  ended: bool,
+  candidate: Option<bool>,
+  status: Option<bool>,
 }
 
 /// The delivery state of one Run's process: the codec, the writer, the ledger and the turn end.
@@ -252,6 +253,10 @@ impl DeliveryState {
       }
       let encoded =
         self.codec.lock().expect("mid-turn codec mutex is not poisoned").encode_input(&input_id, &content)?;
+      let Some(encoded) = encoded else {
+        // The codec takes no more input in this turn, so this input and the rest wait for the next turn.
+        break;
+      };
       self.log_write(&encoded.key, vec![input_id.clone()])?;
       send(&mut writer, &encoded.line).await?;
       written.push(input_id);
@@ -278,7 +283,9 @@ impl DeliveryState {
             }
           }
         }
-        MidturnSignal::TurnEnded => self.turn.lock().expect("mid-turn turn mutex is not poisoned").candidate = true,
+        MidturnSignal::TurnEnded { succeeded } => {
+          self.turn.lock().expect("mid-turn turn mutex is not poisoned").candidate = Some(succeeded);
+        }
       }
     }
     Ok(events)
@@ -287,10 +294,9 @@ impl DeliveryState {
   /// Applies a candidate turn end under the write lock. The input closes only when no written request still awaits its
   /// answer; otherwise the candidate lapses, and the answer that clears the last request signals it again.
   pub async fn settle_turn(&self) -> anyhow::Result<()> {
-    let candidate = std::mem::take(&mut self.turn.lock().expect("mid-turn turn mutex is not poisoned").candidate);
-    if !candidate {
+    let Some(succeeded) = self.turn.lock().expect("mid-turn turn mutex is not poisoned").candidate.take() else {
       return Ok(());
-    }
+    };
     self.wait_initial_written().await;
     let mut writer = self.writer.lock().await;
     if writer.closed || self.released.load(Ordering::Acquire) {
@@ -304,13 +310,14 @@ impl DeliveryState {
     }
     writer.closed = true;
     writer.stdin = None;
-    self.turn.lock().expect("mid-turn turn mutex is not poisoned").ended = true;
+    self.turn.lock().expect("mid-turn turn mutex is not poisoned").status = Some(succeeded);
     Ok(())
   }
 
-  /// Whether the turn has ended: the codec signaled it and no write was pending.
-  pub fn turn_ended(&self) -> bool {
-    self.turn.lock().expect("mid-turn turn mutex is not poisoned").ended
+  /// The status the codec gave the turn's end, once the runtime closed the input for it: `Some(true)` for a turn that
+  /// succeeded, `None` while the turn has not ended.
+  pub fn turn_status(&self) -> Option<bool> {
+    self.turn.lock().expect("mid-turn turn mutex is not poisoned").status
   }
 
   /// Marks the Run's state released once its terminal fact is recorded.
@@ -444,9 +451,9 @@ mod tests {
       Ok(EncodedInput { key: "run".to_string(), line: format!("{prompt}\n").into_bytes() })
     }
 
-    fn encode_input(&mut self, input_id: &str, content: &str) -> anyhow::Result<EncodedInput> {
+    fn encode_input(&mut self, input_id: &str, content: &str) -> anyhow::Result<Option<EncodedInput>> {
       self.unanswered.insert(input_id.to_string());
-      Ok(EncodedInput { key: input_id.to_string(), line: format!("{content}\n").into_bytes() })
+      Ok(Some(EncodedInput { key: input_id.to_string(), line: format!("{content}\n").into_bytes() }))
     }
 
     fn observe(&mut self, raw: &Value) -> anyhow::Result<Observed> {
@@ -457,7 +464,7 @@ mod tests {
       }
       if raw.get("type").and_then(Value::as_str) == Some("result") {
         self.unanswered.remove("run");
-        signals.push(MidturnSignal::TurnEnded);
+        signals.push(MidturnSignal::TurnEnded { succeeded: true });
       }
       Ok(Observed { events: vec![raw.clone()], signals })
     }
@@ -538,7 +545,7 @@ mod tests {
     // The turn-end candidate of the prompt's answer lapses while `m2` awaits its answer.
     state.observe(&json!({"type": "result"})).unwrap();
     state.settle_turn().await.unwrap();
-    assert!(!state.turn_ended());
+    assert!(state.turn_status().is_none());
 
     let events = state.observe(&json!({"delivered": "m2"})).unwrap();
     assert_eq!(events[1]["type"], event_types::INPUT_DELIVERED);
@@ -548,7 +555,7 @@ mod tests {
 
     state.observe(&json!({"type": "result"})).unwrap();
     state.settle_turn().await.unwrap();
-    assert!(state.turn_ended());
+    assert_eq!(state.turn_status(), Some(true));
     assert_eq!(offer(run_id, vec![("m3".into(), "late".into())]).await.unwrap(), Vec::<String>::new());
     release_run(run_id);
   }

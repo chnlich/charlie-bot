@@ -76,14 +76,15 @@ impl MidturnCodec for ClaudeMidturnCodec {
     Ok(EncodedInput { key: uuid.clone(), line: user_line(&uuid, prompt) })
   }
 
-  fn encode_input(&mut self, input_id: &str, content: &str) -> anyhow::Result<EncodedInput> {
+  fn encode_input(&mut self, input_id: &str, content: &str) -> anyhow::Result<Option<EncodedInput>> {
     self.written.insert(input_id.to_string());
-    Ok(EncodedInput { key: input_id.to_string(), line: user_line(input_id, content) })
+    Ok(Some(EncodedInput { key: input_id.to_string(), line: user_line(input_id, content) }))
   }
 
   fn observe(&mut self, raw: &Value) -> anyhow::Result<Observed> {
     if raw.get("type").and_then(Value::as_str) == Some(event_types::RESULT) {
-      return Ok(Observed { events: vec![raw.clone()], signals: vec![MidturnSignal::TurnEnded] });
+      let succeeded = raw.get("is_error") != Some(&Value::Bool(true));
+      return Ok(Observed { events: vec![raw.clone()], signals: vec![MidturnSignal::TurnEnded { succeeded }] });
     }
     if raw.get("type").and_then(Value::as_str) != Some(event_types::USER)
       || raw.get(IS_REPLAY_FIELD) != Some(&Value::Bool(true))

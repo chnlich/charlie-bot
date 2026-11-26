@@ -579,7 +579,10 @@ impl RunProcess for TurnProcess<'_> {
           .collect();
         let built =
           backend_types::build_backend(Arc::clone(&self.features.registry), &self.option, &self.item.cfg, launch_args)?;
-        if let Some(state) = built.backend.midturn_state() {
+        // Only a run with a Run id takes mid-turn offers, so only its process is bound under that id.
+        if built.backend.midturn_run_id().is_some()
+          && let Some(state) = built.backend.midturn_state()
+        {
           charliebot_registry::midturn_delivery::bind_process(state);
         }
         let runner = Arc::new(AgentRunner::new(&built.backend_type, built.backend, built.launch.clone()));

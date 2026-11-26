@@ -835,13 +835,20 @@ pub trait AgentBackend: Send {
   fn midturn_state(&self) -> Option<Arc<crate::midturn_delivery::DeliveryState>> {
     None
   }
+  /// Whether the process reads its input from the named pipe the runner creates in the run directory, rather than from
+  /// an anonymous pipe. Only a backend with live input takes it.
+  fn input_is_fifo(&self) -> bool {
+    false
+  }
   /// The write of the run's first stdin payload, with its stdin left open for mid-turn writes. `exited` reports the
-  /// child's exit. The runner writes `stdin_prompt` and closes stdin when this returns `None`.
+  /// child's exit and `cwd` is the directory the process runs in. The runner writes `stdin_prompt` and closes stdin
+  /// when this returns `None`.
   fn write_stdin_prompt(
     &self,
     _stdin: Box<dyn AsyncWrite + Send + Unpin>,
     _exited: ExitedProbe,
     _prompt: &str,
+    _cwd: &Path,
   ) -> Option<BoxFuture<'static, anyhow::Result<()>>> {
     None
   }

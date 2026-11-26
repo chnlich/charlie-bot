@@ -207,6 +207,7 @@ impl AgentRunner {
     let transport = backend.transport();
     backend.prepare_transport(&log_dir)?;
     let midturn_state = backend.midturn_state();
+    let input_fifo = backend.input_is_fifo();
     if let Some(state) = &midturn_state {
       state.set_run_dir(&log_dir)?;
       state.resume(&log_dir, 0)?;
@@ -274,7 +275,13 @@ impl AgentRunner {
       &spec,
       &raw_path,
       &stderr_path,
-      if stdin_prompt.is_some() { RawStdin::Piped } else { RawStdin::Null },
+      if input_fifo {
+        RawStdin::Fifo(log_dir.join(charliebot_store::run_records::MIDTURN_INPUT_FIFO_NAME))
+      } else if stdin_prompt.is_some() {
+        RawStdin::Piped
+      } else {
+        RawStdin::Null
+      },
       move |child| gated.then(|| SpawnGate::arm(child)),
     )
     .await?;
@@ -282,7 +289,7 @@ impl AgentRunner {
       wait_until_stopped_or_terminate(&mut spawned.child).await?;
     }
     let mut stdin_slot = spawned.child.stdin.take();
-    let midturn = backend.midturn_run_id().is_some();
+    let midturn = midturn_state.is_some();
     // The mid-turn writer runs after the spawn gate opens: a stopped child cannot drain its pipe.
     let (plain_prompt, midturn_prompt) = match stdin_prompt {
       Some(prompt) if midturn => (None, Some(prompt)),
@@ -327,7 +334,7 @@ impl AgentRunner {
         let exit = active.exit.clone();
         Arc::new(move || exit.borrow().is_some())
       };
-      stdin_task = Some(match backend.write_stdin_prompt(Box::new(stdin), exited, &prompt) {
+      stdin_task = Some(match backend.write_stdin_prompt(Box::new(stdin), exited, &prompt, &request.cwd) {
         Some(write) => {
           tokio::spawn(async move { write.await.map_err(|error| std::io::Error::other(error.to_string())) })
         }
@@ -395,11 +402,8 @@ impl AgentRunner {
     };
     // A process the runtime stopped after its codec ended the turn ends as success: the stop is the run's close, not
     // a failure. A process that exited without the turn end keeps its own exit code.
-    if exit_code.is_some_and(|code| code != 0)
-      && midturn_state.as_ref().is_some_and(|state| state.turn_ended())
-      && stopped_after_turn
-    {
-      exit_code = Some(0);
+    if stopped_after_turn && let Some(succeeded) = midturn_state.as_ref().and_then(|state| state.turn_status()) {
+      exit_code = Some(if succeeded { 0 } else { 1 });
     }
     if let Some(code) = exit_code {
       self.record_exit_code(code);

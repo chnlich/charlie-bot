@@ -57,6 +57,8 @@ pub const CURSOR_NAME: &str = "agent.raw.cursor";
 /// The run's input log: one JSON line per write to the agent's input, appended before the write. It is the request
 /// ledger a restarted server rebuilds the mid-turn delivery state from.
 pub const MIDTURN_INPUT_LOG_NAME: &str = "midturn.input.jsonl";
+/// The named pipe in a Run directory that carries the live input of a backend whose input is a pipe file.
+pub const MIDTURN_INPUT_FIFO_NAME: &str = "midturn.stdin.fifo";
 pub const RUN_TASK_SPEC_NAME: &str = "task_spec.md";
 
 /// The run metadata file's field naming the session's native (backend) session id. A reader of the file, such as the

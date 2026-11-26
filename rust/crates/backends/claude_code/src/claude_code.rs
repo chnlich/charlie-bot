@@ -513,6 +513,7 @@ impl AgentBackend for ClaudeCodeBackend {
     stdin: Box<dyn AsyncWrite + Send + Unpin>,
     exited: ExitedProbe,
     prompt: &str,
+    _cwd: &Path,
   ) -> Option<BoxFuture<'static, anyhow::Result<()>>> {
     let state = self.midturn_state.clone()?;
     let prompt = prompt.to_string();
@@ -744,8 +745,9 @@ impl AgentBackend for AnthropicEndpointBackend {
     stdin: Box<dyn AsyncWrite + Send + Unpin>,
     exited: ExitedProbe,
     prompt: &str,
+    cwd: &Path,
   ) -> Option<BoxFuture<'static, anyhow::Result<()>>> {
-    self.backend.write_stdin_prompt(stdin, exited, prompt)
+    self.backend.write_stdin_prompt(stdin, exited, prompt, cwd)
   }
 
   fn on_event<'a>(&'a self, event: &'a Value) -> Option<BoxFuture<'a, anyhow::Result<()>>> {

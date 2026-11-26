@@ -85,12 +85,15 @@ impl SpawnSpec {
 }
 
 /// Stdin shape for a raw-log child.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RawStdin {
   /// Inherit an input pipe from the backend caller.
   Piped,
   /// Connect `/dev/null` to stdin.
   Null,
+  /// Connect the named pipe at this path to stdin. The child opens it read-write, so it reads no end-of-file while the
+  /// server holds its write end or has exited. The server opens the write end (`fifo_stdin`).
+  Fifo(PathBuf),
 }
 
 /// Stdin shape for a process with captured output.
@@ -152,6 +155,7 @@ pub async fn spawn_raw_log<C: Send + 'static>(
   let (child_stdin, parent_stdin) = match stdin {
     RawStdin::Piped => piped_stdin()?,
     RawStdin::Null => (devnull_fd()?, None),
+    RawStdin::Fifo(path) => fifo_stdin(&path)?,
   };
   let child_fds = ChildFds {
     stdin: child_stdin,
@@ -683,6 +687,26 @@ fn captured_io(stdin: ChildStdin) -> io::Result<(ChildFds, ParentIo)> {
     ChildFds { stdin: child_stdin, stdout: child_stdout, stderr: child_stderr },
     ParentIo { stdin: parent_stdin, stdout: Some(parent_stdout), stderr: Some(parent_stderr) },
   ))
+}
+
+/// The child's read-write end and the server's write end of the named pipe at `path`, which is created when absent.
+///
+/// The read-write open never blocks, and the write end opens after it, so the write end finds a reader. The child's
+/// own read-write end keeps the pipe from ever reporting end-of-file, so the child outlives the server's write end.
+fn fifo_stdin(path: &Path) -> io::Result<(OwnedFd, Option<AgentPipeWriter>)> {
+  let c_path = CString::new(path.as_os_str().as_bytes())
+    .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "the input pipe path holds a NUL byte"))?;
+  // SAFETY: `c_path` is a valid NUL-terminated path for the call's duration.
+  if unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) } != 0 {
+    let error = io::Error::last_os_error();
+    if error.kind() != io::ErrorKind::AlreadyExists {
+      return Err(error);
+    }
+  }
+  let child_end = OpenOptions::new().read(true).write(true).open(path)?;
+  let parent_end = OpenOptions::new().write(true).custom_flags(libc::O_NONBLOCK).open(path)?;
+  set_nonblocking(parent_end.as_raw_fd())?;
+  Ok((OwnedFd::from(child_end), Some(AgentPipeWriter::new(OwnedFd::from(parent_end))?)))
 }
 
 fn piped_stdin() -> io::Result<(OwnedFd, Option<AgentPipeWriter>)> {

@@ -366,6 +366,25 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
   if let Err(error) = features.store.check_task_authorization(&request.session_id) {
     return task_http_error(error);
   }
+  // Detach post-auth delegation from the connection future so a client timeout or disconnect cannot abort an
+  // in-flight delegation between child creation and run launch.
+  let features = Arc::clone(&features);
+  let handle = tokio::spawn(async move { run_delegation(features, request, caller_identity, session_meta).await });
+  match handle.await {
+    Ok(response) => response,
+    Err(error) => {
+      tracing::error!(target: "charliebot_tasks", error = %error, "delegate_task_panicked");
+      responses::internal_error("RuntimeError", format!("delegate task failed: {error}"))
+    }
+  }
+}
+
+async fn run_delegation(
+  features: Arc<FeatureContext>,
+  request: DelegateRequest,
+  caller_identity: CallerIdentity,
+  session_meta: SessionMetadata,
+) -> Response {
   if request.bound_task.is_some() {
     return match delegate_bound_round(&features, &request, &caller_identity).await {
       Ok(response) => responses::json(StatusCode::OK, &response),
@@ -495,7 +514,7 @@ enum DelegateError {
   Task(charliebot_store::StoreError),
   Internal(String),
   AdapterMissing,
-  /// A bound delegation the server refuses, with its status and the detail it answers.
+  /// A delegation the server refuses, with its status and the detail it answers.
   Refused(StatusCode, String),
 }
 
@@ -672,27 +691,31 @@ async fn delegate_task_tree(
     session_id: None,
   };
   features.store.runtime_gate(&create_request, &caller)?;
-  let child = features.store.create_task(create_request, caller, Default::default()).await?;
-  if let Some(route) = route {
-    let slot_fields = serde_json::Map::from_iter([("route".to_string(), json!(route))]);
-    let guard = features.store.control_lock().await;
-    features
-      .store
-      .update_task_slot_fields_locked(&guard, &child.id, charliebot_agents::backend_pool::METADATA_OWNER, slot_fields)
-      .await?;
-  }
+  let guard = features.store.control_lock().await;
+  let child = features.store.create_task_locked(&guard, create_request, caller, Default::default()).await?;
   let run_id = control_events::stable_run_id(&child.id, &format!("{request_id}:work"));
   let existing = features.store.read_run_sync(&child.id, &run_id)?;
   if existing.is_none() {
-    if features.store.task_state(&child.id)? != "open" {
-      tracing::info!(target: "charliebot_tasks", parent = %request.session_id, child = %child.id, "delegate_child_closed");
-      return Ok(json!({
-        "session_id": child.id,
-        PARENT_SESSION_ID: request.session_id,
-        "run_id": null,
-        "thread_id": null,
-        "description": request.description,
-      }));
+    let state = features.store.task_state(&child.id)?;
+    if state != "open" {
+      tracing::info!(
+        target: "charliebot_tasks",
+        parent = %request.session_id,
+        child = %child.id,
+        state = %state,
+        "delegate_child_closed"
+      );
+      return Err(DelegateError::Refused(
+        StatusCode::CONFLICT,
+        format!("delegated child {} is {state}; pass a new --request-id to delegate a new worker", child.id),
+      ));
+    }
+    if let Some(route) = route {
+      let slot_fields = serde_json::Map::from_iter([("route".to_string(), json!(route))]);
+      features
+        .store
+        .update_task_slot_fields_locked(&guard, &child.id, charliebot_agents::backend_pool::METADATA_OWNER, slot_fields)
+        .await?;
     }
     let record = charliebot_store::RunRecord {
       id: run_id.clone(),
@@ -723,7 +746,6 @@ async fn delegate_task_tree(
     };
     let task_spec_text = crate::execution::canonical_task_spec_text(Some(task_spec))
       .map_err(|error| DelegateError::Internal(error.to_string()))?;
-    let guard = features.store.control_lock().await;
     // A child that keeps a pool id records the member its work run launches on, under the lock that registers that run.
     if subagent.session_backend != subagent.run_backend {
       let member =
@@ -732,6 +754,7 @@ async fn delegate_task_tree(
     }
     features.store.register_run_locked(&guard, &child.id, record, task_spec_text.as_deref()).await?;
   }
+  drop(guard);
   let adapter = features.startup.require::<TaskExecutionAdapter>().map_err(|_| DelegateError::AdapterMissing)?;
   adapter.launch(&child.id, &run_id)?;
   let mut task_event = json!({

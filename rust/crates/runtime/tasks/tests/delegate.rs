@@ -1074,3 +1074,181 @@ async fn session_message_refuses_an_over_limit_ascii_message() -> anyhow::Result
   assert!(admitted_messages(&stack, &target.id)?.is_empty());
   Ok(())
 }
+
+/// Replaying a closed child that has no work run returns 409 Conflict naming the closed child and `--request-id`,
+/// and launches nothing.
+#[tokio::test]
+#[ignore = "integration"]
+async fn delegate_closed_child_returns_409_and_launches_nothing() -> anyhow::Result<()> {
+  let guard = ProcessGroupGuard::new();
+  let dir = tempfile::tempdir()?;
+  let (_origin, repo) = init_repo_with_origin(dir.path())?;
+  let scripts = Scripts::new(vec![HANG.to_string()]);
+  let stack = stack_with(&scripts, &[BACKEND_ID], &[BACKEND_ID]).await?;
+  let manager = node(&stack, "pm", None, TaskProfile::Manager, BACKEND_ID).await?;
+  user_message(&stack, &manager.id, "Take off. Ship the feature.").await?;
+
+  let closed_child = stack
+    .store()
+    .create_task(
+      CreateTask {
+        request_id: "closed-child-req".to_string(),
+        task_parent_id: Some(manager.id.clone()),
+        profile: TaskProfile::Worker,
+        task: Some(TaskSpec {
+          goal: "## Goal\n\nfix the thing\n".to_string(),
+          repo_path: Some(repo.display().to_string()),
+          base_branch: Some("main".to_string()),
+          task_type: Some(TaskType::Implement),
+          keep_worktree: false,
+          cold_read: None,
+          approver: TaskApprover::User,
+          improve_host: None,
+        }),
+        name: None,
+        backend: Some(BACKEND_ID.to_string()),
+        group: None,
+        session_id: None,
+      },
+      TaskCaller::Operator,
+      Map::new(),
+    )
+    .await?;
+  let lock = stack.store().control_lock().await;
+  let close = control_events::build_control_event(
+    "task_closed",
+    control_events::ACTOR_USER,
+    &closed_child.id,
+    None,
+    None,
+    [("outcome".to_string(), json!("cancelled")), ("summary".to_string(), json!("cancelled before run"))],
+  );
+  stack.store().append_control_fact(&lock, &closed_child.id, close).await?;
+  drop(lock);
+
+  let router = routes::routes(&stack.features);
+  let mut body = delegate_body(&manager.id, &repo, "implement");
+  body["request_id"] = json!("closed-child-req");
+  let (status, response) = post_delegate(&router, body).await?;
+  assert_eq!(status, StatusCode::CONFLICT, "{response}");
+  let detail = text(&response, "detail")?;
+  assert!(detail.contains(&closed_child.id), "detail should name closed child: {detail}");
+  assert!(detail.contains("--request-id"), "detail should mention --request-id: {detail}");
+  assert!(scripts.builds().is_empty());
+  assert!(stack.run_records(&closed_child.id)?.is_empty());
+
+  // Passing a fresh request_id delegates a new worker normally.
+  let mut fresh = delegate_body(&manager.id, &repo, "implement");
+  fresh["request_id"] = json!("fresh-req");
+  let (fresh_status, fresh_response) = post_delegate(&router, fresh).await?;
+  assert_eq!(fresh_status, StatusCode::OK, "{fresh_response}");
+  assert_launched_in_pool(&stack, &guard, &fresh_response, BACKEND_ID).await?;
+  Ok(())
+}
+
+/// Dropping the HTTP client connection while `delegate_task` is mid-route does not cancel the spawned delegation:
+/// child creation, work-run registration, process launch, and `task_delegated` still complete.
+#[tokio::test]
+#[ignore = "integration"]
+async fn delegate_task_completes_when_client_disconnects_mid_route() -> anyhow::Result<()> {
+  use tokio::io::AsyncWriteExt;
+
+  let guard = ProcessGroupGuard::new();
+  let dir = tempfile::tempdir()?;
+  let (_origin, repo) = init_repo_with_origin(dir.path())?;
+  let scripts = Scripts::new(vec![HANG.to_string()]);
+  let stack = stack_with(&scripts, &OPTIONS, &["opus"]).await?;
+  let manager = node(&stack, "pm", None, TaskProfile::Manager, "opus").await?;
+  user_message(&stack, &manager.id, "Take off. Ship the feature.").await?;
+
+  let started = dir.path().join("route_started");
+  let release = dir.path().join("route_release");
+  let router_script = stack.cfg.charliebot_home.join("barrier-router.sh");
+  std::fs::write(
+    &router_script,
+    format!(
+      "set -eu\ncat >/dev/null\ntouch '{started}'\ni=0\nwhile [ ! -f '{release}' ] && [ $i -lt 500 ]; do\n  sleep 0.01\n  i=$((i + 1))\ndone\nprintf '%s' '{{\"routed\":true,\"backends\":[\"kimi-k2.5\"],\"reason\":\"detached route\"}}'\n",
+      started = started.display(),
+      release = release.display(),
+    ),
+  )?;
+  let mut cfg = (*stack.cfg).clone();
+  cfg.backends.routing = Some(charliebot_core::config::RoutingConfig {
+    command: vec!["/bin/sh".to_string(), router_script.display().to_string()],
+  });
+  stack.replace_config(cfg)?;
+
+  let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+  let addr = listener.local_addr()?;
+  let router = routes::routes(&stack.features);
+  let server = tokio::spawn(async move {
+    let _ = axum::serve(listener, router).await;
+  });
+
+  let mut body = delegate_body(&manager.id, &repo, "implement");
+  body["request_id"] = json!("disconnect-mid-route");
+  let payload = serde_json::to_vec(&body)?;
+  let http_request = format!(
+    "POST /api/internal/delegate HTTP/1.1\r\nHost: {addr}\r\nAuthorization: Bearer synthetic-access-key\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+    payload.len()
+  );
+  let mut stream = tokio::net::TcpStream::connect(addr).await?;
+  stream.write_all(http_request.as_bytes()).await?;
+  stream.write_all(&payload).await?;
+  stream.flush().await?;
+
+  settle_until(|| Ok(started.exists())).await?;
+  drop(stream);
+  std::fs::write(&release, b"go")?;
+
+  let child_id = control_events::stable_task_id(Some(&manager.id), "disconnect-mid-route");
+  let run_id = control_events::stable_run_id(&child_id, "disconnect-mid-route:work");
+  track_launch(&stack, &guard, &child_id, &run_id).await?;
+  assert_eq!(session_of(&stack, &child_id).await?.backend, "kimi-k2.5");
+  assert_eq!(run_of(&stack, &child_id, &run_id)?.backend.as_deref(), Some("kimi-k2.5"));
+  settle_until(|| {
+    Ok(stack.run_events(&manager.id)?.iter().any(|event| {
+      event.get("type").and_then(charliebot_store::compact::CompactValue::as_str) == Some(event_types::TASK_DELEGATED)
+        && event.get("thread_id").and_then(charliebot_store::compact::CompactValue::as_str) == Some(run_id.as_str())
+    }))
+  })
+  .await?;
+
+  server.abort();
+  Ok(())
+}
+
+/// Dropping the request future while `delegate_task_tree` awaits `control_lock` still completes child creation,
+/// work-run registration, and launch once the lock is released, without exposing an intermediate child without a run.
+#[tokio::test]
+#[ignore = "integration"]
+async fn delegate_task_completes_when_future_dropped_under_control_lock() -> anyhow::Result<()> {
+  let guard = ProcessGroupGuard::new();
+  let dir = tempfile::tempdir()?;
+  let (_origin, repo) = init_repo_with_origin(dir.path())?;
+  let scripts = Scripts::new(vec![HANG.to_string()]);
+  let stack = stack_with(&scripts, &[BACKEND_ID], &[BACKEND_ID]).await?;
+  let manager = node(&stack, "pm", None, TaskProfile::Manager, BACKEND_ID).await?;
+  user_message(&stack, &manager.id, "Take off. Ship the feature.").await?;
+  let router = routes::routes(&stack.features);
+
+  let mut body = delegate_body(&manager.id, &repo, "implement");
+  body["request_id"] = json!("drop-under-lock");
+  let lock = stack.store().control_lock().await;
+  let timed_out = tokio::time::timeout(std::time::Duration::from_millis(50), post_delegate(&router, body)).await;
+  assert!(timed_out.is_err(), "request must block on control_lock until dropped");
+  assert!(stack.store().child_ids(&manager.id)?.is_empty(), "no child exists before delegate acquires control_lock");
+  drop(lock);
+
+  let child_id = control_events::stable_task_id(Some(&manager.id), "drop-under-lock");
+  let run_id = control_events::stable_run_id(&child_id, "drop-under-lock:work");
+  track_launch(&stack, &guard, &child_id, &run_id).await?;
+  settle_until(|| {
+    Ok(stack.run_events(&manager.id)?.iter().any(|event| {
+      event.get("type").and_then(charliebot_store::compact::CompactValue::as_str) == Some(event_types::TASK_DELEGATED)
+        && event.get("thread_id").and_then(charliebot_store::compact::CompactValue::as_str) == Some(run_id.as_str())
+    }))
+  })
+  .await?;
+  Ok(())
+}

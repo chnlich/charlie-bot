@@ -273,14 +273,22 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   print_spawned(&result)
 }
 
-/// Report a started worker: its session and run ids, after the note that the completion arrives later.
+fn required_non_empty_id<'a>(result: &'a Value, field: &str) -> Result<&'a str, CliExit> {
+  result
+    .get(field)
+    .and_then(Value::as_str)
+    .filter(|id| !id.is_empty())
+    .ok_or_else(|| CliExit::error(format!("the delegate response carries no {field}")))
+}
+
+/// Report a started worker: its session and run ids, after validating both are non-empty strings.
 fn print_spawned(result: &Value) -> Result<(), CliExit> {
+  let session_id = required_non_empty_id(result, "session_id")?;
+  let run_id = required_non_empty_id(result, "run_id")?;
   eprintln!("Worker spawned in the background; the completion summary arrives as an async wake-up.");
-  let session_id = result.get("session_id").ok_or_else(|| CliExit::error("the delegate response lacks session_id"))?;
-  let run_id = result.get("run_id").ok_or_else(|| CliExit::error("the delegate response lacks run_id"))?;
   let mut output = Map::new();
-  output.insert("session_id".to_string(), session_id.clone());
-  output.insert("run_id".to_string(), run_id.clone());
+  output.insert("session_id".to_string(), json!(session_id));
+  output.insert("run_id".to_string(), json!(run_id));
   json_out::print_result(&Value::Object(output));
   Ok(())
 }
@@ -720,5 +728,20 @@ mod tests {
     validate_task_spec_markdown(&spec(&clone.join("src/code.rs")), StoreTaskType::Implement.as_str()).unwrap();
     git(&clone, &["remote", "remove", "origin"]);
     delegate_sources::check_source_files(&spec(&clone.join("src/code.rs")), &repo).unwrap();
+  }
+
+  #[test]
+  fn print_spawned_rejects_null_missing_or_empty_ids() {
+    for bad in [
+      json!({"session_id": "w1", "run_id": null}),
+      json!({"session_id": "w1"}),
+      json!({"session_id": "w1", "run_id": ""}),
+      json!({"session_id": null, "run_id": "r1"}),
+      json!({"run_id": "r1"}),
+      json!({"session_id": "", "run_id": "r1"}),
+    ] {
+      let error = print_spawned(&bad).unwrap_err();
+      assert_eq!(error.code, 1, "{bad}");
+    }
   }
 }

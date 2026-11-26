@@ -63,9 +63,14 @@ pub fn find_local_task_child(
   // The authoritative Run is this operation's own work Run: the same stable
   // `(child, "<request id>:work")` binding the server launched, not "whatever run directory
   // sorts first". A review Run of the same child is a different operation.
+  // Delegated tasks (`task_type.is_some()`) require that work Run's metadata on disk; without it
+  // the child has not started a Run and readback returns `None` (`outcome_unknown`).
   let run_id = control_events::stable_run_id(&child_id, &format!("{resolved_request_id}:work"));
   let run_metadata_path = layout::runs_dir(&session_dir).join(&run_id).join(RUN_METADATA_NAME);
   let run_id = run_metadata_path.is_file().then_some(run_id);
+  if task_type.is_some() && run_id.is_none() {
+    return None;
+  }
 
   Some(json!({
     "session_id": child_id,
@@ -99,6 +104,15 @@ mod tests {
     home
   }
 
+  fn write_work_run_metadata(home: &TempDir) -> String {
+    let session_dir = home.path().join("sessions").join(child_id());
+    let run_id = control_events::stable_run_id(&child_id(), &format!("{REQUEST_ID}:work"));
+    let run_dir = layout::runs_dir(&session_dir).join(&run_id);
+    std::fs::create_dir_all(&run_dir).expect("the work run directory");
+    std::fs::write(run_dir.join(RUN_METADATA_NAME), b"{}").expect("the work run metadata");
+    run_id
+  }
+
   fn worker_metadata(task: Value) -> Value {
     json!({
       "id": child_id(),
@@ -114,16 +128,18 @@ mod tests {
   }
 
   #[test]
-  fn a_matching_child_is_the_readback_value() {
+  fn a_matching_typed_child_requires_its_work_run_metadata() {
     let home = home_with_child(worker_metadata(json!({ "goal": GOAL, "task_type": "implement" })));
 
-    let child = find(&home, Some("implement")).expect("the matching child is the readback value");
+    assert_eq!(find(&home, Some("implement")), None, "missing work run metadata must not claim success");
+
+    let run_id = write_work_run_metadata(&home);
+    let child = find(&home, Some("implement")).expect("the matching child with its work run is the readback value");
 
     assert_eq!(child["session_id"], json!(child_id()));
     assert_eq!(child["parent_session_id"], json!(SESSION_ID));
-    // No work Run on disk: the child's existence alone proves the admission.
-    assert_eq!(child["run_id"], Value::Null);
-    assert_eq!(child["thread_id"], Value::Null);
+    assert_eq!(child["run_id"], json!(run_id));
+    assert_eq!(child["thread_id"], json!(run_id));
   }
 
   #[test]

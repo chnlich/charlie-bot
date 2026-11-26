@@ -1022,6 +1022,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
     owner: "infra/core",
     hint: "Use `charliebot_core::cgroup::SESSION_CGROUP_SWEEP_REMOVED_EVENT`.",
   },
+  OwnerRow {
+    name: "chrome_crashpad_handler",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::cgroup::CRASHPAD_HANDLER_EXE`.",
+  },
   OwnerRow { name: "extra_body", owner: "infra/core", hint: "Use `charliebot_core::config::EXTRA_BODY_KEY`." },
   OwnerRow {
     name: "user_text_checks",

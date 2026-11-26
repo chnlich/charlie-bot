@@ -68,6 +68,13 @@ In a scattered-ownership finding, name the responsibility, each module that carr
 
 One finding per round keeps the review focused.
 
+A finding that gives a shared name one owner — a file or directory name, a field or key name, a process or executable
+name, or any other literal that the owner rule of `rust/crates/app/structure/tests/structure.rs` can match — also
+registers the name with that rule in the same pull request. The structure test then fails a later change that spells
+the name outside its owner. The rule covers the event names, the `CHARLIEBOT_` environment variable names and the
+`/api/` route paths without a table, so those need no row; rust/README.md states which kinds the rule reads from code
+and which it reads from its tables.
+
 ## Evidence
 
 Count the dependency edges or the duplicate spellings before and after the change.
@@ -75,6 +82,9 @@ For a user-setting finding, count its stores and edit entries (write sites) befo
 For a configuration-in-code finding, count the code sites that write the value before and after the change, and name
 the key that supplies it after.
 For a scattered-ownership finding, count the sites that carry the responsibility before and after the change.
+For a finding that gives a name one owner, the count is the spellings of the name before and after the change, and the
+Evidence also states that the owner rule passes with the name's new row and that the row's name appears in the pull
+request's diff.
 Write the counts in the pull request's `## Evidence` section.
 Let CI run the structure tests and the full suite, because a green run proves that the layout still holds.
 The count shows the reviewer that the coupling fell.

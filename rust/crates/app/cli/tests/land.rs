@@ -539,6 +539,37 @@ fn a_web_page_change_naming_a_session_the_live_server_does_not_know_is_refused_b
 
 #[test]
 #[ignore = "integration"]
+fn a_commit_message_view_with_an_empty_session_id_is_refused_before_the_push() {
+  let venue = Venue::with_feature_message(false, "feature.txt", "Open the tray", "View: /?session=");
+
+  let output = venue.land_output();
+
+  assert_ne!(output.status.code(), Some(0));
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  assert!(stderr.contains("must name a view on the live server"), "stderr: {stderr}");
+  assert!(stderr.contains("is not a session id"), "stderr: {stderr}");
+  assert!(!venue.origin_has_task_branch());
+  assert!(venue.gh_calls().is_empty(), "gh calls:\n{}", venue.gh_calls());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_commit_message_view_naming_a_session_the_live_server_does_not_know_is_refused_before_the_push() {
+  let venue = Venue::with_feature_message(false, "feature.txt", "Open the tray", "View: /?session=unknown");
+  venue.live_server_knows(&["tray"]);
+
+  let output = venue.land_output();
+
+  assert_ne!(output.status.code(), Some(0));
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  assert!(stderr.contains("must name a view on the live server"), "stderr: {stderr}");
+  assert!(stderr.contains("does not know session unknown"), "stderr: {stderr}");
+  assert!(!venue.origin_has_task_branch());
+  assert!(venue.gh_calls().is_empty(), "gh calls:\n{}", venue.gh_calls());
+}
+
+#[test]
+#[ignore = "integration"]
 fn a_web_page_change_naming_a_file_the_evidence_directory_lacks_is_refused_before_the_push() {
   let venue = Venue::new(false);
   let shots = web_change(&venue);

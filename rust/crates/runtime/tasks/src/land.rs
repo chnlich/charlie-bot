@@ -742,6 +742,12 @@ pub async fn land(
   let base_ref = format!("origin/{published}");
   fetch_base(&ctx.worktree, published).await?;
   let changed = changed_paths(&ctx.worktree, &base_ref).await?;
+  // The release switch captures each View line that a pushed commit carries, whatever the diff changes, so a session
+  // view the live server cannot resolve is refused here.
+  let commits = commits_ahead(&ctx.worktree, published).await?;
+  let commit_views: Vec<String> =
+    commits.iter().flat_map(|commit| web_screenshots::view_lines_of_message(&commit.body)).collect();
+  web_screenshots::check_landing_views(&commit_views)?;
   let mut views: Vec<String> = Vec::new();
   if web_screenshots::changes_web_page(&changed) {
     let body = report_body(&ctx.worktree, published, options).await?;

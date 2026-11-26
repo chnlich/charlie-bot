@@ -31,7 +31,7 @@
 //! full URL, path and query, that opens the changed state. The body names the demo and each screenshot by file name
 //! only, and `charliebot land --evidence-dir` names the local directory that holds those files: a name that carries a
 //! directory is refused, and a name the directory lacks is refused by name. A landing carries each View line into the
-//! landed commit as a trailer, which `scripts/switch-server.sh` reads back to capture the live page after the switch.
+//! landed commit as a trailer, which `scripts/live-capture.sh` reads back to capture the live page after the switch.
 //!
 //! A view resolves on the live server when `check_view_resolves` passes it: a `/?session=<id>` view when the server
 //! knows the session, any other view on a 2xx answer. The landing refuses a session view the server does not know.
@@ -218,6 +218,26 @@ fn check_session_views(views: &[String], status_of: &StatusOf) -> anyhow::Result
     check_view_resolves(view, status_of)?;
   }
   Ok(())
+}
+
+/// The `View:` values of a commit message: each value after the `View:` prefix, trimmed, with blank values left out.
+/// The capture stage reads the same lines from each commit (`scripts/live-capture.sh`), so a landing checks the views
+/// the switch will capture.
+pub fn view_lines_of_message(message: &str) -> Vec<String> {
+  message
+    .lines()
+    .filter_map(|line| line.strip_prefix(VIEW_PREFIX))
+    .map(|rest| rest.trim().to_string())
+    .filter(|value| !value.is_empty())
+    .collect()
+}
+
+/// Refuses each `/?session=<id>` View line that the live server does not resolve, for the View lines of the commits a
+/// landing pushes. The release switch captures each of those lines after the release, so a line that the server cannot
+/// resolve fails its capture then. The lookups run on a thread of their own, as `check_pr_body` runs them.
+pub fn check_landing_views(views: &[String]) -> anyhow::Result<()> {
+  std::thread::scope(|scope| scope.spawn(|| check_session_views(views, &live_status)).join())
+    .map_err(|_| anyhow::anyhow!("the live server check of the landing's View lines panicked"))?
 }
 
 /// Refuses PNG paths that do not cover each window size `count_per_size` times. A path that cannot be read
@@ -556,6 +576,33 @@ mod tests {
       let refusal = check_view_resolves(view, &probe_refused).unwrap_err().to_string();
       assert!(refusal.contains("is not a session id"), "{refusal}");
     }
+  }
+
+  #[test]
+  fn a_commit_message_view_with_an_empty_session_id_is_refused_at_landing() {
+    let views = view_lines_of_message("Keep the session tab bar off the running badge\n\nView: /?session=\n");
+    let refusal = check_session_views(&views, &unknown_session_server).unwrap_err().to_string();
+    assert!(refusal.contains("is not a session id"), "{refusal}");
+  }
+
+  #[test]
+  fn a_commit_message_view_naming_an_unknown_session_is_refused_at_landing() {
+    let views = view_lines_of_message("Open the missing session\n\nView: /?session=5f1c0d2e-7a3b\n");
+    let refusal = check_session_views(&views, &unknown_session_server).unwrap_err().to_string();
+    assert!(refusal.contains("does not know session 5f1c0d2e-7a3b"), "{refusal}");
+  }
+
+  #[test]
+  fn a_commit_message_view_naming_a_known_session_and_a_page_pass_at_landing() {
+    let views = view_lines_of_message("Show the plans\n\nView: /?session=abc\nView: /plans\n");
+    check_session_views(&views, &answers(200)).expect("a known session and a served page pass");
+  }
+
+  #[test]
+  fn the_view_lines_of_a_commit_message_are_its_trimmed_values_without_blank_ones() {
+    let message =
+      "Show the plans\n\nView: /plans\nView:   \nnot a View: /x\n  View: /indented\nView: /?session=abc  \n";
+    assert_eq!(view_lines_of_message(message), vec!["/plans".to_string(), "/?session=abc".to_string()]);
   }
 
   #[test]

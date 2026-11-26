@@ -5,8 +5,8 @@
 //! after the change, and the review record it names must show a read of each screenshot the PR body names. The
 //! pass prints a `web page change: <n> path(s)` line, which is how a caller tells a web page change from any
 //! other. `sizes` prints each window size, one `WIDTHxHEIGHT` per line, which is how
-//! `scripts/switch-server.sh` reads the set for its live capture without a second copy of it. `resolve` asks the
-//! live server whether it resolves one View line's view, which the switch checks before it captures that view.
+//! `scripts/live-capture.sh` reads the set for its live capture without a second copy of it. `resolve` asks the live
+//! server whether it resolves one View line's view, which the capture stage checks before it captures that view.
 //!
 //! Exit codes: 0 passed, 1 a missing or mismatched screenshot or a view the live server does not resolve, 2 a usage
 //! error.

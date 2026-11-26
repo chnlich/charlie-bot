@@ -1444,7 +1444,7 @@ mod tests {
   ///
   ///   CHARLIEBOT_LIVE_RENEW_LOGIN=<alias> cargo test --ignored a_live_cli_survives_a_renewal_of_its_login
   #[test]
-  #[ignore = "live: renews one real login's token, once, on the host that holds the login files"]
+  #[ignore = "integration"]
   fn a_live_cli_survives_a_renewal_of_its_login() {
     let (alias, dir, hosts) = live_login();
     let before = token_of(&dir);

@@ -99,7 +99,7 @@ where
 
 fn store_dir() -> Result<PathBuf, CliExit> {
   let home_dir = home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
-  Ok(home_dir.join("taste"))
+  Ok(store::taste_dir(&home_dir))
 }
 
 fn add(args: &AddArgs) -> Result<(), CliExit> {

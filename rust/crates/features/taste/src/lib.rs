@@ -90,7 +90,7 @@ mod tests {
     assert!(collected[0].text.contains(PICK_ANSWER));
     assert!(collected[0].previous_web_reply.as_deref().is_some_and(|reply| reply.contains("Say take off to deploy.")));
 
-    let taste_dir = store::taste_dir(&cfg);
+    let taste_dir = store::taste_dir(&cfg.charliebot_home);
     let extracted_row = json!({
       "type": "row",
       "decided_at": "2026-11-22T10:05:00+00:00",

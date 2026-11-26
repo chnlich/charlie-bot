@@ -9,6 +9,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow};
+use charliebot_core::cgroup::CRASHPAD_HANDLER_EXE;
 use charliebot_core::proc_identity::{read_stat_text, stat_fields_after_command};
 use charliebot_core::str_methods;
 use charliebot_core::text_repr;
@@ -29,7 +30,6 @@ const HEADLESS_LAUNCH_TIMEOUT: Duration = Duration::from_secs(60);
 const HEADLESS_TEARDOWN_WAIT: Duration = Duration::from_secs(5);
 /// The user-data directory prefix of every renderer browser, here and in the startup orphan sweep.
 const RENDERER_TEMP_PREFIX: &str = "headless-render-";
-const CRASHPAD_HANDLER_EXE: &str = "chrome_crashpad_handler";
 
 static RENDERER: OnceLock<Mutex<Option<WarmRenderer>>> = OnceLock::new();
 

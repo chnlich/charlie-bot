@@ -272,6 +272,9 @@ async function showGroupSelector(sessionId, currentGroup) {
          with this dialog's own markup, so it needs no rebuilt Tailwind sheet. */
       #new-group-input { border-color: #94a3b8 }
       #new-group-input:focus { border-color: #c084fc }
+      /* The field may shrink below its default size of 20 columns, about 200 px. At that width the row with the Add
+         button is 259 px in the dialog's 246 px content box, and Add crosses the right padding. */
+      #new-group-input { min-width: 0 }
     </style>
     <div class="${MODAL_DIALOG_CLASS}"
          onclick="event.stopPropagation()">

@@ -25,9 +25,6 @@ use serde_json::Value;
 use crate::common::{USAGE, exact, failed, metadata_read_failure, read_config};
 use crate::scan;
 
-/// The status the backend's rate-limit record carries when a quota end rejects the run's request.
-const RATE_LIMIT_REJECTED: &str = "rejected";
-
 /// How long the outcome read waits for a manager turn's finish callback to persist its fact.
 const MANAGER_TURN_OUTCOME_WAIT: Duration = Duration::from_secs(10);
 
@@ -184,13 +181,17 @@ fn quota_rejected(session: &Path, run_id: &str) -> Result<bool, CliExit> {
     }
     match chat_events::decode_line(line) {
       Ok(event) if event.get("type").and_then(Value::as_str) == Some(event_types::RATE_LIMIT_EVENT) => {
-        last_status = event.pointer("/rate_limit_info/status").and_then(Value::as_str).map(str::to_string);
+        last_status = event
+          .get(event_types::RATE_LIMIT_INFO)
+          .and_then(|info| info.get(event_types::RATE_LIMIT_STATUS))
+          .and_then(Value::as_str)
+          .map(str::to_string);
       }
       Ok(_) => {}
       Err(_) => eprintln!("skipped line {} of {}: not JSON", index + 1, events.display()),
     }
   }
-  Ok(last_status.as_deref() == Some(RATE_LIMIT_REJECTED))
+  Ok(last_status.as_deref() == Some(event_types::RATE_LIMIT_STATUS_REJECTED))
 }
 
 /// The one run of the session that names `run_id` as its retry and has started. Two or more such runs name no

@@ -1833,23 +1833,26 @@ pub async fn backfill_followed_threads(
 ) -> Result<usize, ThreadReplyError> {
   let platform = adapter.platform();
   let config = features.config.get().map_err(ThreadReplyError::failure)?;
-  let active = blocking(features, |store| store.list_sessions_readonly(SessionStatus::Active)).await?;
+  let (active, archived) = blocking(features, |store| {
+    Ok((store.list_sessions_readonly(SessionStatus::Active)?, store.list_sessions_readonly(SessionStatus::Archived)?))
+  })
+  .await?;
   let mut armed = 0;
-  for meta in &active {
+  for meta in active.iter().chain(archived.iter()) {
     let Some(origin) = origin_of(meta, platform) else {
       continue;
     };
     let log_fields = adapter.log_fields(&adapter.address_of(origin));
     let outcome: Result<Option<PendingTrigger>, ThreadReplyError> = async {
+      let unread = unread_messages(adapter.as_ref(), origin, &config, watermark_of(meta, platform).as_deref()).await?;
+      let Some(first) = unread.first() else {
+        return Ok(None);
+      };
       if archived_for_follow(features, meta).await? {
         let event = format!("{}_follow_skipped_archived", platform.name);
         tracing::info!(%event, session = %meta.id, thread = %log_fields);
         return Ok(None);
       }
-      let unread = unread_messages(adapter.as_ref(), origin, &config, watermark_of(meta, platform).as_deref()).await?;
-      let Some(first) = unread.first() else {
-        return Ok(None);
-      };
       if !charliebot_registry::colleague_gate::admits_wake(features, &meta.id, &follow_wake_label(platform, &first.id))
         .await
       {

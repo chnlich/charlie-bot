@@ -97,8 +97,8 @@ The home has the production number of sessions, so the pages show representative
 The home binds scheduled tasks to some of its manager sessions, so a served round shows cron-bound session pages and
 their Task & context dialogs.
 Its sessions are task-tree nodes with a boot marker, so a serve trial's start logs no node failure.
-Each default cron task that the trial seeds adds the session it binds, so a served round's task tree holds the home's
-sessions and those. The sidebar lists only some roots of that tree.
+Each default cron task that the trial seeds is bound to one of the home's sessions before the trial's server starts, so
+a served round's task tree holds exactly the home's sessions. The sidebar lists only some roots of that tree.
 Each side's server passes `mock-home check` before that side takes any screenshot or measurement. Exit 1 means the
 server reads data outside the shared mock home, and it stops the round before any measurement.
 
@@ -174,8 +174,9 @@ which writes start work, and each names what enforces it:
 
 The kit does not keep a terminal socket from opening. A terminal connection starts a tmux session and a login shell in
 the trial's own tmux server. The trial stops that server at teardown and fails the side when a process of its tree
-remains. A seeded cron task is disabled before the trial's server starts and read back as disabled after it. The
-scheduler still binds a session to each such task, and the mock-home check counts those sessions.
+remains. A seeded cron task is disabled and bound to a session of the home before the trial's server starts, and read
+back as disabled after it. The scheduler binds nothing, so the mock-home check requires the served session list to equal
+the manifest's.
 
 A WebSocket is not answered with a stub, because a stub that stops the socket's reads freezes the page under test.
 

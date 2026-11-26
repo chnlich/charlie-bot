@@ -44,9 +44,10 @@
 # The two Claude stand-in options are the step backends of the default memory-curator,
 # and `release-helper stand-in-options` copies each record from the commit's configs/config.example.yaml. The trial
 # fires no scheduled task: before its server starts, `release-helper disable-cron-tasks` seeds the commit's default cron
-# tasks and sets `enabled: false` on every cron task file of the trial home, copied seed tasks included. Once the server
-# is ready, the trial reads its task list back and fails the side unless every task reads disabled. The scheduler still
-# binds a session to each task that has none, on its first tick, enabled or not, so those sessions join the trial home.
+# tasks and sets `enabled: false` on every cron task file of the trial home, copied seed tasks included. With a seed
+# home, the trial then binds each seeded default to the seed's first bound session, so the scheduler binds no task at
+# its first tick and the trial home gains no session. Once the server is ready, the trial reads its task list back and
+# fails the side unless every task reads disabled.
 # CHARLIEBOT_TRIAL_CGROUP_ROOT replaces /sys/fs/cgroup, the root the agents slice path is built on, so the tests point
 # it at a sandbox.
 #
@@ -930,6 +931,40 @@ copy_seed_sessions() {
   fi
 }
 
+# bind_seeded_cron_tasks NAMES: binds each cron task of the trial home that holds no session to the seed's first bound
+# manager session, the one its first fixture task binds. The seed copy binds every task it carries, so a file with no
+# session is a default that disable-cron-tasks seeded from the commit's list. Bound before the server starts, it gives
+# the scheduler no session to create.
+bind_seeded_cron_tasks() {
+  local name file bound_session=
+  local cron_dir="$TRIAL_CB_HOME/config.d/cron.d"
+  while IFS= read -r name; do
+    [[ -n $name ]] || continue
+    file="$cron_dir/$name.yaml"
+    if [[ ! -f $file ]]; then
+      printf 'FAIL serve CronBound: the trial home holds no cron task file %s\n' "$file"
+      return 1
+    fi
+    if grep -q '^session_id:' "$file"; then
+      continue
+    fi
+    if [[ -z $bound_session ]]; then
+      bound_session=$(jq -r '.cron_tasks[0].session_id // empty' "$SEED_HOME/manifest.json") || {
+        printf 'FAIL serve CronBound: cannot read the seed manifest %s\n' "$SEED_HOME/manifest.json"
+        return 1
+      }
+      if [[ -z $bound_session ]]; then
+        printf 'FAIL serve CronBound: the seed binds no session for the default task %s\n' "$name"
+        return 1
+      fi
+    fi
+    printf 'session_id: %s\n' "$bound_session" >>"$file" || {
+      printf 'FAIL serve CronBound: cannot bind %s to %s\n' "$file" "$bound_session"
+      return 1
+    }
+  done <<<"$1"
+}
+
 # startup_failed CAUSE: the FAIL line of a serve startup, then the cause, which names the port and any holder.
 startup_failed() {
   printf 'FAIL serve Startup: the server did not become ready on 127.0.0.1:%s\n' "$CHOSEN_PORT"
@@ -1474,6 +1509,9 @@ run_serve_mode() {
     return 1
   fi
   printf 'SERVE PASS CronDisabled: %s\n' "$(tr '\n' ' ' <<<"$disabled_tasks")"
+  if [[ -n $SEED_HOME ]] && ! bind_seeded_cron_tasks "$disabled_tasks"; then
+    return 1
+  fi
   # start_server prints the FAIL and CAUSE lines; a side that did not start runs no command.
   start_server || return 1
   if (( IN_CALLER_SCOPE == 1 )); then

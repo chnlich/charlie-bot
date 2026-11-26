@@ -1,9 +1,9 @@
 //! Reads a served session home back against its manifest.
 //!
-//! The task-tree route lists every session, roots and children alike. The listed sessions must hold the manifest's
-//! sessions and the sessions that the default scheduled tasks bind (see `session_count_mismatches`). The newest chat
-//! message is read from the events route of the largest manager session and of two that the manifest seed picks. Each
-//! scheduled task of the manifest must be listed by the task route, unbroken and bound to the manifest's session.
+//! The task-tree route lists every session, roots and children alike. The listed sessions must be the manifest's
+//! sessions (see `session_count_mismatches`). The newest chat message is read from the events route of the largest
+//! manager session and of two that the manifest seed picks. Each scheduled task of the manifest must be listed by the
+//! task route, unbroken and bound to the manifest's session.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -63,43 +63,26 @@ pub fn check(output: &Path, base_url: &str) -> Result<CheckOutcome> {
   Ok(CheckOutcome::Matches)
 }
 
-/// The mismatches between a served session list and the manifest. The scheduler binds each task that has no session on
-/// its first tick, enabled or not, so every default task adds the session it binds to the list. A listed session outside
-/// the manifest is accepted only when a task outside the manifest binds it. Each manifest session must be listed, and the
-/// list must hold the manifest's count plus those bound sessions.
-fn session_count_mismatches(manifest: &Manifest, listed_ids: &[String], tasks: &[Value]) -> Vec<String> {
+/// The mismatches between a served session list and the manifest. The trial binds each default task to a session of the
+/// home before its server starts, so the scheduler creates no session and the list holds exactly the manifest's
+/// sessions. Each manifest session that the list lacks and each listed session that the manifest lacks is named, and
+/// the count must match.
+fn session_count_mismatches(manifest: &Manifest, listed_ids: &[String]) -> Vec<String> {
   let manifest_ids: HashSet<&str> = manifest.sessions.iter().map(|session| session.id.as_str()).collect();
   let listed: HashSet<&str> = listed_ids.iter().map(String::as_str).collect();
-  let fixture_names: HashSet<&str> = manifest.cron_tasks.iter().map(|task| task.name.as_str()).collect();
-  let default_bound: HashSet<&str> = tasks
-    .iter()
-    .filter(|row| row["name"].as_str().is_some_and(|name| !fixture_names.contains(name)))
-    .filter_map(|row| row["session_id"].as_str())
-    .collect();
   let mut failures = Vec::new();
   for session in &manifest.sessions {
     if !listed.contains(session.id.as_str()) {
       failures.push(format!("session {}: in the manifest, but the server lists no such session", session.id));
     }
   }
-  let mut auto_bound = 0;
   for id in listed_ids {
-    if manifest_ids.contains(id.as_str()) {
-      continue;
-    }
-    if default_bound.contains(id.as_str()) {
-      auto_bound += 1;
-    } else {
-      failures
-        .push(format!("session {id}: listed by the server, but neither in the manifest nor bound by a default task"));
+    if !manifest_ids.contains(id.as_str()) {
+      failures.push(format!("session {id}: listed by the server, but not in the manifest"));
     }
   }
-  if listed_ids.len() != manifest.session_count + auto_bound {
-    failures.push(format!(
-      "session count: manifest {}, server {}, of which {auto_bound} bound by default tasks",
-      manifest.session_count,
-      listed_ids.len()
-    ));
+  if listed_ids.len() != manifest.session_count {
+    failures.push(format!("session count: manifest {}, server {}", manifest.session_count, listed_ids.len()));
   }
   failures
 }
@@ -182,7 +165,7 @@ async fn read_back(
   let listed_ids = listed_session_ids(&client, base, headers).await?;
   let tasks = get_json(&client, &format!("{base}{TASKS_PATH}"), headers).await?;
   let listed_tasks = tasks.as_array().context("the scheduled task list is not a JSON array")?;
-  failures.extend(session_count_mismatches(manifest, &listed_ids, listed_tasks));
+  failures.extend(session_count_mismatches(manifest, &listed_ids));
 
   for session in checked {
     let expected = session.last_message.as_deref().expect("a checked session holds its newest message");
@@ -257,6 +240,7 @@ mod tests {
 
   use super::*;
   use crate::manifest::{ManifestCronTask, ManifestSession};
+  use crate::{Language, Shape};
 
   /// A manifest of two sessions, `a` and `b`, that binds the fixture task `fixture` to `a`.
   fn manifest() -> Manifest {
@@ -278,45 +262,39 @@ mod tests {
 
   #[test]
   fn a_listing_of_the_manifest_sessions_matches() {
-    let tasks = [json!({"name": "fixture", "session_id": "a"})];
-    assert!(session_count_mismatches(&manifest(), &ids(&["a", "b"]), &tasks).is_empty());
+    assert!(session_count_mismatches(&manifest(), &ids(&["a", "b"])).is_empty());
   }
 
   #[test]
-  fn a_session_a_default_task_binds_counts_beside_the_manifest_sessions() {
-    // The seeded default task is disabled, and the scheduler still bound its session on its first tick.
-    let tasks = [json!({"name": "fixture", "session_id": "a"}), json!({"name": "storage-cool", "session_id": "c"})];
-    assert!(session_count_mismatches(&manifest(), &ids(&["a", "b", "c"]), &tasks).is_empty());
-  }
-
-  #[test]
-  fn a_default_task_without_a_session_yet_adds_nothing() {
-    let tasks = [json!({"name": "storage-cool", "session_id": null})];
-    assert!(session_count_mismatches(&manifest(), &ids(&["a", "b"]), &tasks).is_empty());
-  }
-
-  #[test]
-  fn an_extra_session_that_no_default_task_binds_is_named() {
-    let tasks = [json!({"name": "fixture", "session_id": "a"})];
-    let failures = session_count_mismatches(&manifest(), &ids(&["a", "b", "x"]), &tasks);
+  fn an_extra_session_is_named_and_counted() {
+    let failures = session_count_mismatches(&manifest(), &ids(&["a", "b", "x"]));
     assert_eq!(failures.len(), 2, "{failures:?}");
     assert!(failures[0].contains("session x"), "{failures:?}");
     assert!(failures[1].contains("session count: manifest 2, server 3"), "{failures:?}");
   }
 
   #[test]
-  fn a_session_only_a_fixture_task_binds_is_not_an_auto_bound_session() {
-    let tasks = [json!({"name": "fixture", "session_id": "a"}), json!({"name": "fixture", "session_id": "x"})];
-    let failures = session_count_mismatches(&manifest(), &ids(&["a", "b", "x"]), &tasks);
+  fn a_manifest_session_the_server_does_not_list_is_named() {
+    let failures = session_count_mismatches(&manifest(), &ids(&["a"]));
+    assert_eq!(failures.len(), 2, "{failures:?}");
+    assert!(failures[0].contains("session b"), "{failures:?}");
+  }
+
+  #[test]
+  fn an_extra_session_and_a_missing_session_are_both_named() {
+    let failures = session_count_mismatches(&manifest(), &ids(&["a", "x"]));
+    assert!(failures.iter().any(|failure| failure.contains("session b")), "{failures:?}");
     assert!(failures.iter().any(|failure| failure.contains("session x")), "{failures:?}");
   }
 
   #[test]
-  fn a_manifest_session_the_server_does_not_list_is_named() {
-    let tasks = [json!({"name": "fixture", "session_id": "a"})];
-    let failures = session_count_mismatches(&manifest(), &ids(&["a"]), &tasks);
-    assert_eq!(failures.len(), 2, "{failures:?}");
-    assert!(failures[0].contains("session b"), "{failures:?}");
+  fn the_generated_home_lists_exactly_its_manifest_sessions() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let home = dir.path().join("home");
+    crate::generate::generate(&home, 1, 1, Shape::Default, Language::Mixed).expect("the default home");
+    let manifest = Manifest::read(&home).expect("the manifest");
+    let listed: Vec<String> = manifest.sessions.iter().map(|session| session.id.clone()).collect();
+    assert!(session_count_mismatches(&manifest, &listed).is_empty());
   }
 
   #[test]

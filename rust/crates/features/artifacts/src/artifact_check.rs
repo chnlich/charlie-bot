@@ -2706,7 +2706,7 @@ mod tests {
       "Ship the fix.",
       "<ul><li>「keep」: keep the file.</li><li>「delete」: delete the file.</li></ul><p class=\"trade\">Tradeoff.</p>",
     );
-    let outcomes = run_only("plan", &page, &[FORK_OPEN_SHAPE]);
+    let outcomes = run_only(Genre::Plan, &page, &[FORK_OPEN_SHAPE]);
     assert_eq!(outcomes.len(), 1);
     assert!(!outcomes[0].passed);
     assert!(outcomes[0].detail.contains("is missing p.rec"), "{}", outcomes[0].detail);

@@ -25,6 +25,7 @@ use std::time::{Instant, UNIX_EPOCH};
 use anyhow::{Context, anyhow, bail};
 use charliebot_core::backend_types;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
+use charliebot_core::cron_files::{is_task_file, read_task_file};
 use charliebot_core::event_types::{RATE_LIMIT_RESETS_AT, RATE_LIMIT_STATUS, RATE_LIMIT_STATUS_REJECTED};
 use charliebot_core::model_id;
 use charliebot_core::paths;
@@ -868,13 +869,10 @@ fn process_login(cfg: &CharlieBotConfig, pid: u32) -> anyhow::Result<Option<clau
 /// The improve hosts whose launch directories a hold read covers: the `improve_host` that each cron task file under
 /// `cron_dir` names, in file-name order and once each. Only a cron task starts a keyed round, and the cron loader
 /// requires each such host to be a `host_auth.browser_logins` host; the other login hosts start no round. A missing
-/// directory names none. A file that cannot be read or parsed is an error, so the caller holds every login.
+/// directory names none. The files are read by the scheduler loader's reader and file rule, so one rule decides which
+/// files count. A file that cannot be read or parsed, or whose `improve_host` is not a string, is an error, so the
+/// caller holds every login.
 pub fn improve_hosts(cron_dir: &Path) -> anyhow::Result<Vec<String>> {
-  #[derive(serde::Deserialize)]
-  struct CronTaskHost {
-    #[serde(default)]
-    improve_host: Option<String>,
-  }
   let entries = match fs::read_dir(cron_dir) {
     Ok(entries) => entries,
     Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -883,20 +881,22 @@ pub fn improve_hosts(cron_dir: &Path) -> anyhow::Result<Vec<String>> {
   let mut files = Vec::new();
   for entry in entries {
     let path = entry.with_context(|| format!("listing {}", cron_dir.display()))?.path();
-    let Some(name) = path.file_name().and_then(|name| name.to_str()) else { continue };
-    if path.is_file() && name.ends_with(".yaml") && !name.starts_with('.') {
+    if is_task_file(&path) {
       files.push(path);
     }
   }
   files.sort();
   let mut hosts: Vec<String> = Vec::new();
   for path in files {
-    let text = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-    let task: CronTaskHost = serde_yaml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
-    if let Some(host) = task.improve_host
-      && !hosts.contains(&host)
-    {
-      hosts.push(host);
+    let task = read_task_file(&path).with_context(|| format!("parsing {}", path.display()))?;
+    match task.get("improve_host") {
+      None | Some(Value::Null) => {}
+      Some(Value::String(host)) => {
+        if !hosts.contains(host) {
+          hosts.push(host.clone());
+        }
+      }
+      Some(_) => bail!("improve_host in {} is not a host name", path.display()),
     }
   }
   Ok(hosts)

@@ -22,3 +22,4 @@ serde_json.workspace = true
 [dev-dependencies]
 charliebot-packages.workspace = true
 tempfile.workspace = true
+zstd.workspace = true

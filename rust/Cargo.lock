@@ -1486,6 +1486,7 @@ dependencies = [
  "regex",
  "serde_json",
  "tempfile",
+ "zstd",
 ]
 
 [[package]]

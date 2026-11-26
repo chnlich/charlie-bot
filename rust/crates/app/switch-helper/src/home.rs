@@ -18,7 +18,7 @@ use charliebot_core::run_kind::RunKind;
 use charliebot_core::text_repr;
 use charliebot_store::chat_events::{self, LineRule, LogReadError};
 use charliebot_store::layout;
-use charliebot_store::run_logs::RUN_EVENTS_NAME;
+use charliebot_store::run_logs::{self, RUN_EVENTS_NAME};
 use charliebot_store::run_records::{RUN_METADATA_NAME, read_run_metadata};
 use serde_json::Value;
 
@@ -167,24 +167,27 @@ fn own_failure(args: &[OsString]) -> Result<(), CliExit> {
 }
 
 /// Whether the run's last rate-limit record rejects it. The backend writes its rate-limit records into the run's event
-/// log, so a run with no such record was not rejected.
+/// log, which the run-log compaction stores as `events.jsonl.zst` once the run is a day old, so the read resolves
+/// either file. A run with no such record was not rejected.
 fn quota_rejected(session: &Path, run_id: &str) -> Result<bool, CliExit> {
   let events = layout::runs_dir(session).join(run_id).join(RUN_EVENTS_NAME);
-  if !events.is_file() {
-    return Ok(false);
-  }
+  let bytes = match run_logs::read_bytes(&events) {
+    Ok(Some(bytes)) => bytes,
+    Ok(None) => return Ok(false),
+    Err(error) => return Err(failed(format!("read {}: {error}", events.display()))),
+  };
+  let needle = event_types::RATE_LIMIT_EVENT.as_bytes();
   let mut last_status = None;
-  for line in chat_events::read_lines(&events, LineRule::Universal).map_err(failed)? {
-    let line = line.map_err(failed)?;
-    if !line.text.contains(event_types::RATE_LIMIT_EVENT) {
+  for (index, line) in bytes.split(|byte| *byte == b'\n').enumerate() {
+    if !line.windows(needle.len()).any(|window| window == needle) {
       continue;
     }
-    match chat_events::decode_line(line.text.as_bytes()) {
+    match chat_events::decode_line(line) {
       Ok(event) if event.get("type").and_then(Value::as_str) == Some(event_types::RATE_LIMIT_EVENT) => {
         last_status = event.pointer("/rate_limit_info/status").and_then(Value::as_str).map(str::to_string);
       }
       Ok(_) => {}
-      Err(_) => eprintln!("skipped line {} of {}: not JSON", line.number, events.display()),
+      Err(_) => eprintln!("skipped line {} of {}: not JSON", index + 1, events.display()),
     }
   }
   Ok(last_status.as_deref() == Some(RATE_LIMIT_REJECTED))
@@ -317,6 +320,25 @@ mod tests {
     null.read(r#"{"type": "run_finished", "run_id": "r", "outcome": null}"#, 1, path, "r");
     assert!(null.recorded);
     assert_eq!(null.text(), "");
+  }
+
+  #[test]
+  fn the_last_rate_limit_record_decides_a_quota_end_in_a_compacted_log() {
+    let home = tempfile::tempdir().expect("a temp dir");
+    let session = home.path().join("sessions").join("session");
+    let run = layout::runs_dir(&session).join("run");
+    fs::create_dir_all(&run).expect("the run directory");
+    let rejected = "{\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"status\":\"allowed\"}}\n\
+                    {\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"status\":\"rejected\"}}\n";
+    let compressed = zstd::stream::encode_all(rejected.as_bytes(), 3).expect("compress the log");
+    fs::write(run.join("events.jsonl.zst"), compressed).expect("the compacted log");
+    assert!(quota_rejected(&session, "run").expect("the read"), "the compacted log holds the rejection");
+
+    let allowed = "{\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"status\":\"rejected\"}}\n\
+                   {\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"status\":\"allowed\"}}\n";
+    let compressed = zstd::stream::encode_all(allowed.as_bytes(), 3).expect("compress the log");
+    fs::write(run.join("events.jsonl.zst"), compressed).expect("the compacted log");
+    assert!(!quota_rejected(&session, "run").expect("the read"), "the last record allows the run");
   }
 
   #[test]

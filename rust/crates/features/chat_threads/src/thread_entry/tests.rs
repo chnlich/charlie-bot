@@ -1017,7 +1017,7 @@ fn an_attachment_only_summon_stores_the_summon_line_and_is_checked() {
 /// The nudge that a failed round leaves for an earlier summon: it copies the summon's block and names it in `nudge_of`.
 fn nudge_received(id: &str, summon_id: &str) -> Value {
   json!({
-    "id": id, "type": event_types::AGENT_MESSAGE, "content": nudge_text(&FAKECHAT),
+    "id": id, "type": event_types::AGENT_MESSAGE, "content": failed_turn_guidance(&FAKECHAT),
     "timestamp": "2026-01-01T00:00:01Z", "received_at": "2026-01-01T00:00:01Z",
     "fakechat": {
       "channel_id": "c1", "thread_ts": "t1", "mention_id": "m1", (event_types::NUDGE_OF): summon_id,

@@ -1054,6 +1054,51 @@ async fn persist_request_event(
   Ok(event)
 }
 
+/// One notice a thread path posts and records: the text the thread receives, the content the session log records for
+/// it, and the platform block field under which the log names the summon the notice answers.
+struct ThreadNotice<'a> {
+  text: &'a str,
+  content: String,
+  field_key: String,
+}
+
+/// Posts one notice into the thread at `block` and records it on `session_id`: the keyed post, then one
+/// `assistant_error` event whose content is `content` under `field_key`, then the summon's ack cleared. `request_id`
+/// names both writes, so a replay finds the event it already wrote. Returns whether the platform accepted the post; a
+/// refused post records nothing.
+#[allow(clippy::too_many_arguments)] // Each value the notice writes is named at its call site, so the list stays long.
+async fn post_notice(
+  adapter: &Arc<dyn ThreadAdapter>,
+  features: &Arc<FeatureContext>,
+  session_id: &str,
+  block: &Value,
+  summon_id: &str,
+  request_id: &str,
+  created_after: &str,
+  notice: ThreadNotice<'_>,
+) -> Result<bool, ThreadReplyError> {
+  if !post_with_retry(adapter.as_ref(), block, notice.text, session_id, &format!("{request_id}#1"), created_after, None)
+    .await?
+  {
+    return Ok(false);
+  }
+  let mut fields = Map::new();
+  fields.insert(notice.field_key, json!({event_types::INPUT_EVENT_ID: summon_id}));
+  persist_request_event(features, session_id, request_id, event_types::ASSISTANT_ERROR, &notice.content, fields)
+    .await?;
+  ack_clear(adapter, block, session_id);
+  Ok(true)
+}
+
+/// The content the session log records after a thread was told that a mention got no reply from its round or the
+/// nudge round.
+fn no_reply_record(platform: &ThreadPlatform) -> String {
+  format!(
+    "This {} mention got no reply from its round or the nudge round; the thread was told so.",
+    platform.display_name
+  )
+}
+
 /// Advance the session's read watermark over `message_ids` and return the readback (`ack_messages`). Refusals: 404
 /// unknown session, 409 no platform thread, 422 an empty set, 422 an unknown or ineligible id, 422 an eligible unread
 /// id at or below the ceiling that the set skips. A refusal persists nothing.
@@ -1136,8 +1181,9 @@ pub fn nudged<E: ThreadEventData>(platform: &ThreadPlatform, events: &[E], summo
   })
 }
 
-/// The summon text written after a failed thread turn has no reply.
-fn nudge_text(platform: &ThreadPlatform) -> String {
+/// The guidance a thread turn that ended without a reply leaves behind: the nudge it hands its master, and the reason
+/// the `thread-reply` check blocks the round.
+fn failed_turn_guidance(platform: &ThreadPlatform) -> String {
   format!(
     "{} thread: the round answering this mention ended without posting a reply. Decide now:\n\
      when the thread should hear something, post a reply; when there is nothing to say, end this\n\
@@ -1186,7 +1232,7 @@ pub async fn audit_failed_turn(
     if nudged(platform, &chat_events, &summon_id) {
       return Ok(false);
     }
-    let text = nudge_text(platform);
+    let text = failed_turn_guidance(platform);
     let mut block = Map::new();
     for key in platform.block_keys {
       if let Some(value) = target.get(*key) {
@@ -1229,27 +1275,11 @@ pub async fn audit_failed_turn(
   let created_after =
     summon_event.get("timestamp").and_then(Value::as_str).context("a summon event has a timestamp")?;
   let request_id = format!("{}-notice:{summon_id}", platform.name);
-  if !post_with_retry(
-    adapter.as_ref(),
-    &target,
-    NO_REPLY_NOTICE,
-    session_id,
-    &format!("{request_id}#1"),
-    created_after,
-    None,
-  )
-  .await?
-  {
+  let notice =
+    ThreadNotice { text: NO_REPLY_NOTICE, content: no_reply_record(platform), field_key: platform.notice_key() };
+  if !post_notice(adapter, features, session_id, &target, &summon_id, &request_id, created_after, notice).await? {
     return Ok(false);
   }
-  let content = format!(
-    "This {} mention got no reply from its round or the nudge round; the thread was told so.",
-    platform.display_name
-  );
-  let mut fields = Map::new();
-  fields.insert(platform.notice_key(), json!({event_types::INPUT_EVENT_ID: summon_id}));
-  persist_request_event(features, session_id, &request_id, event_types::ASSISTANT_ERROR, &content, fields).await?;
-  ack_clear(adapter, &target, session_id);
   Ok(true)
 }
 /// Whether a turn of `meta`'s session is a thread turn of `platform`: the session is bound to the platform's thread.
@@ -1274,16 +1304,6 @@ pub fn summon_carries_mention(platform: &ThreadPlatform, summon: &Value) -> bool
 
 /// The entry that checks each summon of the turn got a thread reply, on every thread platform.
 pub const THREAD_REPLY_ENTRY: &str = "thread-reply";
-
-/// The reason the `thread-reply` check blocks a summon round that posted no reply.
-fn reply_reason(platform: &ThreadPlatform) -> String {
-  format!(
-    "{} thread: the round answering this mention ended without posting a reply. Decide now:\n\
-     when the thread should hear something, post a reply; when there is nothing to say, end this\n\
-     round and the thread gets a one-line notice pointing to this session.",
-    platform.display_name
-  )
-}
 
 /// The turn's newest summon of `platform` and its receipt, when the turn received one. A summon names the turn only
 /// through the platform's block on the input event.
@@ -1320,7 +1340,7 @@ pub fn check_thread_reply(platform: &ThreadPlatform, input: &TurnInput) -> anyho
   if input.turn.iter().any(blocked_thread_check) {
     return Ok(CheckResult::Notice(NO_REPLY_NOTICE.to_string()));
   }
-  Ok(CheckResult::Block(reply_reason(platform)))
+  Ok(CheckResult::Block(failed_turn_guidance(platform)))
 }
 
 /// Whether a `turn_hooks` record of the turn holds the `thread-reply` block.
@@ -1354,19 +1374,10 @@ pub async fn show_turn_notice(
   let summon = event_by_id(turn, &summon_id).expect("the newest summon is in the turn");
   let created_after = summon.get("timestamp").and_then(Value::as_str).expect("a summon event has a timestamp");
   let request_id = format!("{}-notice:{summon_id}", platform.name);
-  if !post_with_retry(adapter.as_ref(), &block, message, session_id, &format!("{request_id}#1"), created_after, None)
-    .await?
-  {
+  let notice = ThreadNotice { text: message, content: no_reply_record(platform), field_key: platform.notice_key() };
+  if !post_notice(adapter, features, session_id, &block, &summon_id, &request_id, created_after, notice).await? {
     return Err(ThreadReplyError::failure(format!("{} refused the no-reply notice", platform.display_name)));
   }
-  let content = format!(
-    "This {} mention got no reply from its round or the nudge round; the thread was told so.",
-    platform.display_name
-  );
-  let mut fields = Map::new();
-  fields.insert(platform.notice_key(), json!({event_types::INPUT_EVENT_ID: summon_id}));
-  persist_request_event(features, session_id, &request_id, event_types::ASSISTANT_ERROR, &content, fields).await?;
-  ack_clear(adapter, &block, session_id);
   let event = format!("{}_reply_notice", platform.name);
   let thread = adapter.log_fields(&block);
   tracing::info!(%event, session = session_id, thread = %thread, summon_id = %summon_id);
@@ -1403,28 +1414,15 @@ pub async fn backfill_lost_summons(
         let request_id = format!("{}-lost:{summon_id}", platform.name);
         let created_after =
           event.get("timestamp").and_then(Value::as_str).expect("a lost summon event has a timestamp");
-        if !post_with_retry(
-          adapter.as_ref(),
-          block,
-          LOST_SUMMON_NOTICE,
-          &meta.id,
-          &format!("{request_id}#1"),
-          created_after,
-          None,
-        )
-        .await?
-        {
-          continue;
-        }
-        let mut fields = Map::new();
-        fields.insert(platform.backfill_key(), json!({event_types::INPUT_EVENT_ID: summon_id}));
         let content = format!(
           "This {} summon was still queued when the server restarted, and no round answered it; the thread has the \
            details.",
           platform.display_name
         );
-        persist_request_event(features, &meta.id, &request_id, event_types::ASSISTANT_ERROR, &content, fields).await?;
-        ack_clear(adapter, block, &meta.id);
+        let notice = ThreadNotice { text: LOST_SUMMON_NOTICE, content, field_key: platform.backfill_key() };
+        if !post_notice(adapter, features, &meta.id, block, &summon_id, &request_id, created_after, notice).await? {
+          continue;
+        }
         reported += 1;
         let log_event = format!("{}_backfill_lost_summon", platform.name);
         let thread = adapter.log_fields(block);

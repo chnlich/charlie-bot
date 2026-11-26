@@ -282,16 +282,30 @@ impl std::error::Error for ConfigError {}
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerConfig {
+  /// The address the server listens on: an IPv4 address, an IPv6 address, or a host name that resolves to an IPv4
+  /// address. The default `127.0.0.1` accepts connections from this host only. Another address accepts connections from
+  /// the network that address belongs to. A value that cannot be bound stops the server at start with `bind_failed`.
   #[serde(default = "default_host")]
   pub host: String,
+  /// The TCP port the server listens on. The chat page is at `http://<host>:<port>`, and the CLI calls the server on
+  /// this port. A port that is already in use stops the server at start with `bind_failed`.
   #[serde(default = "default_port")]
   pub port: u16,
+  /// The longest line, in MiB, that a raw streaming backend may write to its stdout. A longer line is skipped, so its
+  /// event does not reach the chat page, and the debug log names it `backend_line_over_limit`. Captured final answers
+  /// have no limit.
   #[serde(default = "default_subprocess_buffer_limit_mb")]
   pub subprocess_buffer_limit_mb: i64,
+  /// The memory limit, in MiB, of each session's cgroup. At the limit, the kernel reclaims the session's memory, then
+  /// kills its processes when reclaim fails. 0 turns session cgroups off, so no session limit or weight applies.
   #[serde(default = "default_session_memory_max_mb")]
   pub session_memory_max_mb: i64,
+  /// The swap limit, in MiB, of each session's cgroup, written as `memory.swap.max`. 0 keeps a session's memory out of
+  /// swap. Session cgroups exist only while `session_memory_max_mb` is above 0.
   #[serde(default)]
   pub session_swap_max_mb: i64,
+  /// The most processes and threads that each session's cgroup may hold, written as `pids.max`. At the limit, a session
+  /// cannot start another process or thread. 0 removes the limit.
   #[serde(default = "default_session_tasks_max")]
   pub session_tasks_max: i64,
   /// Session cgroups carry a cpu weight; false stops the cpu controller and weight writes.
@@ -311,6 +325,9 @@ pub struct ServerConfig {
   /// its stores and unregisters itself on the browser's next visit.
   #[serde(default = "default_switch_on")]
   pub enable_offline_shell: bool,
+  /// The free space, in GiB, that the charliebot home and the worktree directory must keep before a worker run starts.
+  /// A run that finds less is withheld, and its reason names the free space, the limit and the path that is short. 0
+  /// turns the check off.
   #[serde(default = "default_min_free_disk_gib")]
   pub min_free_disk_gib: i64,
   /// The address a person reaches this server at, e.g. `https://<host>.<tailnet>:18498`. It has no default: a guessed
@@ -400,10 +417,18 @@ fn default_min_free_disk_gib() -> i64 {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PathsConfig {
+  /// The directories that the diff page and the code page use. The diff page lists the git repositories one level below
+  /// each directory and refuses a repository outside them. The code page opens folders under these directories and
+  /// under the worktree directory.
   #[serde(default = "default_workspace_dirs")]
   pub workspace_dirs: Vec<String>,
+  /// The directory where each task's git worktree is created. The code page opens folders under it, and worker runs
+  /// check the free space of its filesystem against `min_free_disk_gib`.
   #[serde(default = "default_worktree_dir")]
   pub worktree_dir: String,
+  /// The directory of scratch folders that the disk sweep reads. When a cron task runs the `disk_sweep` handler, it
+  /// deletes each folder directly under this directory whose newest file is older than `SCRATCH_DAYS`, unless a keep
+  /// rule holds that folder.
   #[serde(default = "default_scratch_dir")]
   pub scratch_dir: String,
 }
@@ -421,9 +446,17 @@ fn default_scratch_dir() -> String {
 /// One `backends.options[]` entry: the fields every backend type shares, plus its type's own fields.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BackendOption {
+  /// The name that a `backends.calls` target, a pool member and a session's backend use for this entry. Options and
+  /// pools share one id space, so a `backends.calls` target may name either.
   pub id: String,
+  /// The name that the web pickers and the rows show for this entry. Changing it changes only that name. Calls and
+  /// pools still name the entry by its id.
   pub label: String,
+  /// The model that this entry's runs use. When it is empty, a run that needs a default model is refused with
+  /// `<subject> '<id>' has no default model`.
   pub model: String,
+  /// The name of the prompt overlay that this entry's runs compose their prompt with. `none` composes the prompt with
+  /// no overlay.
   pub prompt_overlay: Option<String>,
   /// How the model's account is paid for: `billing: subscription | payg`. A priority pool's member needs it; every pool
   /// that names this option reads it here.
@@ -481,6 +514,9 @@ pub fn parse_backend_record(record: &Value, backend_types: &[&str]) -> Result<Ba
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RoutingConfig {
+  /// The argv of the command that chooses the backend for implement, quick-edit, script-run and verify tasks. It reads
+  /// a JSON request on stdin and prints its JSON answer on stdout. Unset, a request to choose a backend fails with
+  /// `backends.routing is not configured`.
   pub command: Vec<String>,
 }
 
@@ -534,14 +570,20 @@ impl PoolBilling {
 /// billing is the option's ([`BackendOption::billing`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PoolMember {
+  /// The `backends.options` id that this member runs. A session that ran through the pool shows this id as the member
+  /// it ran on.
   pub backend: String,
 }
 
 /// One `backends.pools[]` entry: a named set of members and the rule that picks one of them for a call.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PoolConfig {
+  /// The name that a `backends.calls` target and a session's backend use for this pool. Options and pools share one id
+  /// space.
   pub id: String,
+  /// The name that the web pickers show for this pool.
   pub label: String,
+  /// How the pool picks a member for each call: `priority` or `rotate`. [`PoolRule`] says what each one does.
   pub rule: PoolRule,
   /// The members in config order. A rotate pool may name one option twice; the repeat takes a larger share of calls.
   pub members: Vec<PoolMember>,
@@ -566,15 +608,31 @@ impl PoolConfig {
 /// One internal call class that `backends.calls` configures.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CallClass {
+  /// The model or pool that runs implement, quick-edit and script-run tasks. `session` runs each one on the backend of
+  /// the session that starts it.
   Worker,
+  /// The model or pool that runs an improve round when the round names no backend. Unset, or `session`, the round runs
+  /// on its session's backend.
   Improve,
+  /// The model or pool that runs verify tasks. `session` runs each one on the backend of the session that starts it.
   Verify,
+  /// The model or pool that runs the reviewer of a worker's output.
   Review,
+  /// The model or pool that runs cold-read tasks. `session` runs each one on the backend of the session that starts it.
   ColdRead,
+  /// The model or pool that runs the probe call. Unset, the probe call fails with
+  /// `no probe backend resolvable: backends.calls.probe is unset`.
   Probe,
+  /// The model or pool that names a manager session after its round finishes. Unset, the session keeps the name it was
+  /// created with, and the log records `autonamer_skipped`.
   Autoname,
+  /// The model or pool that the failure-triage judge runs on. Unset, failure triage refuses to run and names
+  /// `backends.calls.triage`.
   Triage,
+  /// The backend that a chat-thread session takes when the router does not route it. Unset, `new_session` applies, and
+  /// when that is unset too, the session is not created.
   Thread,
+  /// The backend that a chat-thread session takes when `thread` is unset and the router does not route it.
   NewSession,
   /// The improve round's review of its pull request.
   ImproveReview,
@@ -774,8 +832,12 @@ impl BackendsConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct HomeService {
+  /// The title of this service's card on the `/home` page.
   pub name: String,
+  /// The text under the title of this service's card on the `/home` page.
   pub description: String,
+  /// The address that the card links to. Each `/home` load checks that a TCP connection to its host and port succeeds
+  /// within 300 milliseconds, and the card shows `up` or `down` from that check.
   pub url: String,
 }
 
@@ -783,6 +845,7 @@ pub struct HomeService {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct UiConfig {
+  /// The service cards on the `/home` page, in config order. An empty list shows no service card.
   #[serde(default)]
   pub home_services: Vec<HomeService>,
 }
@@ -791,6 +854,7 @@ pub struct UiConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TelegramConfig {
+  /// The Telegram chat that cron alerts post to. Unset, an alert fails with `telegram.chat_id is not configured`.
   #[serde(default)]
   pub chat_id: Option<String>,
 }
@@ -856,10 +920,14 @@ pub const HOST_AUTH_SECTION_KEY: &str = "host_auth";
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct HostAuthConfig {
+  /// The logins that the `/host-auth` page starts with one click each, in config order.
   #[serde(default)]
   pub browser_logins: Vec<BrowserLoginConfig>,
+  /// When true, the server sends a Slack DM to `slack_dm_user` as a host's login starts to wait for approval. The
+  /// config refuses to load while this is true and `slack_dm_user` is unset.
   #[serde(default)]
   pub enable_slack_dm: bool,
+  /// The Slack user that receives the approval DMs. Required when `enable_slack_dm` is true.
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub slack_dm_user: Option<String>,
 }
@@ -869,6 +937,8 @@ pub struct HostAuthConfig {
 pub struct CharlieBotConfig {
   /// The profile home the file was read from (chosen by `CHARLIEBOT_HOME`, never by the file).
   pub charliebot_home: PathBuf,
+  /// The headless Chrome binary that the artifact checks run. Empty, the page-height check reports
+  /// `not measured: headless_chrome_bin is not configured`.
   pub headless_chrome_bin: String,
   pub server: ServerConfig,
   pub paths: PathsConfig,

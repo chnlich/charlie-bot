@@ -1364,6 +1364,14 @@ fn test_trial_disables_every_cron_task_of_its_home_before_its_server_starts() {
   for task in ["memory-curator", "storage-cool", "proactive-agent", "mock-yearly-review"] {
     assert!(names.iter().any(|name| name == task), "{task} is a cron task of the trial home: {names:?}");
   }
+  // Each default the trial seeded binds the seed's first bound session, so the scheduler binds it to no new session.
+  let manifest: serde_json::Value =
+    serde_json::from_slice(&fs::read(seed.join("manifest.json")).expect("the manifest")).expect("the manifest JSON");
+  let bound = manifest["cron_tasks"][0]["session_id"].as_str().expect("a bound session");
+  for task in ["memory-curator", "storage-cool", "proactive-agent"] {
+    let text = fs::read_to_string(copied.join(format!("{task}.yaml"))).expect("a default task file");
+    assert!(text.lines().any(|line| line == format!("session_id: {bound}")), "{task} binds the seed session: {text}");
+  }
   // The server logs each default it seeds at its start. None was seeded, so the trial's files predated the start.
   let trial_evidence = fs::read_dir(world.sandbox.dir("evidence"))
     .expect("the evidence directory")

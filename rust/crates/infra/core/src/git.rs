@@ -128,6 +128,34 @@ pub fn ancestry_args<'a>(ancestor: &'a str, descendant: &'a str) -> [&'a str; 4]
   ["merge-base", "--is-ancestor", ancestor, descendant]
 }
 
+/// The arguments that add a worktree at `path` on a new branch `branch` started at `start`:
+/// `git worktree add -b <branch> <path> <start>`.
+pub fn worktree_add_new_branch_args<'a>(branch: &'a str, path: &'a str, start: &'a str) -> [&'a str; 6] {
+  ["worktree", "add", "-b", branch, path, start]
+}
+
+/// The arguments that add a worktree at `path` on the existing branch `branch`: `git worktree add <path> <branch>`.
+pub fn worktree_add_existing_branch_args<'a>(path: &'a str, branch: &'a str) -> [&'a str; 4] {
+  ["worktree", "add", path, branch]
+}
+
+/// The arguments that remove the worktree at `path`: `git worktree remove <path>`. Without `--force`, git refuses a
+/// worktree with modified tracked files or untracked files, and it makes that check at the moment of the removal.
+pub fn worktree_remove_args(path: &str) -> [&str; 3] {
+  ["worktree", "remove", path]
+}
+
+/// The arguments that remove the worktree at `path` even when it holds local changes: `git worktree remove --force
+/// <path>`.
+pub fn worktree_remove_forced_args(path: &str) -> [&str; 4] {
+  ["worktree", "remove", "--force", path]
+}
+
+/// The arguments that drop the records of worktrees whose directories are gone: `git worktree prune`.
+pub fn worktree_prune_args() -> [&'static str; 2] {
+  ["worktree", "prune"]
+}
+
 #[cfg(test)]
 mod tests {
   use std::process::Command;
@@ -147,6 +175,12 @@ mod tests {
   #[test]
   fn the_ancestry_args_carry_the_is_ancestor_flag() {
     assert_eq!(ancestry_args("origin/main", "HEAD"), ["merge-base", "--is-ancestor", "origin/main", "HEAD"]);
+  }
+
+  #[test]
+  fn the_worktree_remove_args_add_force_only_in_the_forced_form() {
+    assert_eq!(worktree_remove_args("/w/a"), ["worktree", "remove", "/w/a"]);
+    assert_eq!(worktree_remove_forced_args("/w/a"), ["worktree", "remove", "--force", "/w/a"]);
   }
 
   /// A repository with one empty commit, made by the git CLI that the server runs.

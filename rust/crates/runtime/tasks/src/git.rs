@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use charliebot_core::git::{ancestry_args, object_exists_args};
+use charliebot_core::git::{
+  ancestry_args, object_exists_args, worktree_add_new_branch_args, worktree_prune_args, worktree_remove_forced_args,
+};
 use charliebot_core::paths;
 use charliebot_core::text_repr;
 use charliebot_registry::worktree_removal::WorktreeRemoval;
@@ -709,7 +711,7 @@ pub async fn git_create_worktree(
       let _permit = add_lock.lock().await;
       git_proc_bytes(
         repo_path,
-        &["worktree", "add", "-b", branch_name, &wt_path.display().to_string(), &start_point],
+        &worktree_add_new_branch_args(branch_name, &wt_path.display().to_string(), &start_point),
         subprocess_git_write_timeout(),
       )
       .await
@@ -965,7 +967,7 @@ pub async fn git_worktree_remove(
   }
   let proc = match git_proc_bytes(
     Path::new(repo_path),
-    &["worktree", "remove", "--force", &wt_path.display().to_string()],
+    &worktree_remove_forced_args(&wt_path.display().to_string()),
     SUBPROCESS_GIT_READ_TIMEOUT_ASYNC,
   )
   .await
@@ -1071,7 +1073,7 @@ pub fn remove_worktree_hook(request: WorktreeRemoval<'_>) -> BoxFuture<'_, Optio
 
 /// Prune stale worktree refs.
 pub async fn git_worktree_prune(repo_path: &str, thread_id: &str) {
-  match git_proc_bytes(Path::new(repo_path), &["worktree", "prune"], SUBPROCESS_GIT_READ_TIMEOUT_ASYNC).await {
+  match git_proc_bytes(Path::new(repo_path), &worktree_prune_args(), SUBPROCESS_GIT_READ_TIMEOUT_ASYNC).await {
     Ok(_) => {}
     Err(GitProcError::TimedOut) => {
       tracing::warn!(target: "charliebot_tasks", thread_id, "worktree_prune_timeout");

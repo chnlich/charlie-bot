@@ -1,5 +1,6 @@
 <!-- The chat page's script tail: the engine renders and strips it once per template version. -->
-  <script>{{ icon_script() }}{% include 'js/icons.js' %}</script>
+  {# The icon meanings the page's scripts draw with cbIcon(), from their sources. A script that draws another meaning adds its key here: cbIcon throws on a key the table lacks. #}
+  <script>{{ icon_script(['add', 'archive', 'attachment', 'clone', 'delegated', 'disclosure', 'disclosure-open', 'done', 'dot', 'failed', 'leads-to', 'loading', 'notification', 'offline-panel', 'plan', 'rate-down', 'rate-up', 'retry', 'ring', 'settings', 'star', 'starred', 'subtasks-running', 'unarchive', 'voice', 'waiting', 'waiting-on-you', 'worker']) }}{% include 'js/icons.js' %}</script>
   <script>{% include 'js/platform.js' %}</script>
   <script>{% include 'js/math-scanner.js' %}</script>
   <script>{% include 'js/markdown-renderer.js' %}</script>

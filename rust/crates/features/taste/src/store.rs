@@ -13,7 +13,6 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
-use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::fsutil::{self, ExclusiveLock};
 use serde_json::{Map, Value, json};
 use time::OffsetDateTime;
@@ -33,9 +32,9 @@ Follow a row whose situation matches, and name its id beside the recommendation 
 When the situation differs, state the difference.\n\
 The approval boundary of each step stays as Action Boundaries in `prompts/master.md` set it.";
 
-/// The taste store's directory (`<home>/taste`).
-pub fn taste_dir(cfg: &CharlieBotConfig) -> PathBuf {
-  cfg.charliebot_home.join("taste")
+/// The taste store's directory under the profile home (`<home>/taste`).
+pub fn taste_dir(home: &Path) -> PathBuf {
+  home.join("taste")
 }
 
 /// One invalid field of a record, naming the field as the record schema spells it.

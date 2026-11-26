@@ -27,7 +27,7 @@ impl TurnContribution for TasteTurn {
     cfg: &CharlieBotConfig,
     _repo: &RepoRoot,
   ) -> Result<Vec<RuleSegment>> {
-    let text = store::load_store(&taste_dir(cfg))?.index_text();
+    let text = store::load_store(&taste_dir(&cfg.charliebot_home))?.index_text();
     if text.is_empty() {
       return Ok(Vec::new());
     }

@@ -375,7 +375,7 @@ impl RenewalTrigger {
 }
 
 /// A renewal's answer.
-#[derive(Debug, PartialEq)]
+#[derive(PartialEq)]
 pub enum Renewal {
   /// The login holds a usable access token: renewed now, or renewed by another writer while this call waited.
   Usable(String),
@@ -384,6 +384,19 @@ pub enum Renewal {
   Skipped { reason: &'static str, holder: Option<String> },
   /// The renewal was attempted and failed. The text names the failure for a refusal and carries no credential.
   Failed { detail: String },
+}
+
+impl std::fmt::Debug for Renewal {
+  /// The access token is left out: a renewal's answer reaches logs and panic messages.
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      Self::Usable(_) => f.write_str("Usable(<access token>)"),
+      Self::Skipped { reason, holder } => {
+        f.debug_struct("Skipped").field("reason", reason).field("holder", holder).finish()
+      }
+      Self::Failed { detail } => f.debug_struct("Failed").field("detail", detail).finish(),
+    }
+  }
 }
 
 /// The OAuth tokens and their life in a login's credentials file, as a renewal reads them.
@@ -1515,7 +1528,8 @@ mod tests {
     let after = token_of(&dir);
 
     assert!(matches!(renewal, Renewal::Usable(_)), "the renewal was {answer}");
-    assert_ne!(after, before, "the renewal left the access token unchanged; renewal was {answer}");
+    // Not assert_ne!: its failure message would print both access tokens.
+    assert!(after != before, "the renewal left the access token unchanged; renewal was {answer}");
     assert!(status.success(), "the CLI ended with {status} after the renewal; renewal was {answer}; stderr: {stderr}");
     assert!(!stdout.trim().is_empty(), "the CLI gave no answer; renewal was {answer}; stderr: {stderr}");
   }

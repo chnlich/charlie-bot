@@ -1191,18 +1191,24 @@ mod tests {
     let root = tempfile::tempdir().unwrap();
     let login = root.path().join("login");
     fs::create_dir(&login).unwrap();
+    let second = PathBuf::from(format!("{}.lock", login.display()));
     let locks = RefreshLocks::acquire(&login, Duration::ZERO).unwrap().expect("the locks are free");
     assert!(login.join(REFRESH_LOCK).is_dir());
-    assert!(PathBuf::from(format!("{}.lock", login.display())).is_dir());
-    // The second lock is held: another writer is told to give up at once, as the CLI's ELOCKED does.
+    assert!(second.is_dir());
+    // The first lock is held: another writer that cannot take it at once gives up, as the CLI's ELOCKED does.
     assert!(RefreshLocks::acquire(&login, Duration::ZERO).unwrap().is_none());
     drop(locks);
     assert!(!login.join(REFRESH_LOCK).exists());
-    assert!(!PathBuf::from(format!("{}.lock", login.display())).exists());
+    assert!(!second.exists());
+
+    // A live second lock with the first lock free: the writer gives up and leaves no first lock behind.
+    fs::create_dir(&second).unwrap();
+    assert!(RefreshLocks::acquire(&login, Duration::ZERO).unwrap().is_none());
+    assert!(!login.join(REFRESH_LOCK).exists(), "a failed second take left the first lock behind");
+    fs::remove_dir(&second).unwrap();
 
     // A lock untouched past LOCK_STALE may be taken over, the first one and the second one alike.
     let old = SystemTime::now() - LOCK_STALE - Duration::from_secs(1);
-    let second = PathBuf::from(format!("{}.lock", login.display()));
     fs::create_dir(login.join(REFRESH_LOCK)).unwrap();
     fs::File::open(login.join(REFRESH_LOCK)).unwrap().set_modified(old).unwrap();
     let taken = RefreshLocks::acquire(&login, Duration::ZERO).unwrap();

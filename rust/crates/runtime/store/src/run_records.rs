@@ -50,6 +50,9 @@ pub const RUN_METADATA_NAME: &str = METADATA_FILE_NAME;
 pub use crate::run_logs::{RAW_LOG_NAME, RUN_EVENTS_NAME};
 pub const STDOUT_LOG_NAME: &str = "stdout.log";
 pub const STDERR_LOG_NAME: &str = "agent.stderr.log";
+/// The stderr tee name that the Python-era backend writers used. No Rust writer uses it; the cold sweep still removes
+/// it from the runs those writers left.
+pub const LEGACY_STDERR_LOG_NAME: &str = "stderr.log";
 pub const CURSOR_NAME: &str = "agent.raw.cursor";
 pub const RUN_TASK_SPEC_NAME: &str = "task_spec.md";
 

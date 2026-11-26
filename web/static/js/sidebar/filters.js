@@ -164,7 +164,7 @@ function switchSidebarFilter(filter) {
 }
 
 // One view's listing from its list route: `rows` and `stored`, which says a stored copy answered it. Rows the page
-// recorded an unread fact for after this request began keep that fact: fix E's gate (status.js replyIsCurrent)
+// recorded an unread fact for after this request began keep that fact: the reply gate (status.js replyIsCurrent)
 // refuses the older answer. `networkOnly` asks the worker for the network answer (last-state.js).
 function fetchFilterListing(filter, {networkOnly, signal}) {
   const registeredFilter = getSidebarFilter(filter);

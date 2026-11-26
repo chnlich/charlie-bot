@@ -380,6 +380,49 @@ fn a_login_a_live_launch_holds_is_not_renewed() {
   assert_eq!(fixture.credentials_text(), STALE);
 }
 
+/// Asks `renew_login` for one renewal of the fixture's login, the call the 401 path makes.
+fn renew_directly(fixture: &Fixture) -> Renewal {
+  let http = fixture.http();
+  block_on(renew_login(
+    &QuotaState::default(),
+    &http,
+    "work",
+    &fixture.login_dir,
+    &fixture.cron_dir(),
+    "tok-stored",
+    &RenewalTrigger::Usage401,
+  ))
+  .expect("the renewal call runs")
+}
+
+#[ignore = "integration"]
+#[test]
+fn a_cron_file_that_does_not_parse_holds_every_login() {
+  let fixture = Fixture::new(STALE, vec![], vec![(200, RENEWAL)]);
+  fs::create_dir_all(fixture.cron_dir()).unwrap();
+  fs::write(fixture.cron_dir().join("improve-ux.yaml"), "improve_host: [unclosed\n").unwrap();
+
+  let renewal = renew_directly(&fixture);
+
+  assert_eq!(renewal, Renewal::Skipped { reason: "unreadable", holder: Some("unreadable:cron_tasks".to_string()) });
+  assert!(fixture.requests("/token").is_empty(), "a login held by an unparsable cron file was renewed");
+  assert_eq!(fixture.credentials_text(), STALE);
+}
+
+#[ignore = "integration"]
+#[test]
+fn an_unreadable_cron_directory_holds_every_login() {
+  let fixture = Fixture::new(STALE, vec![], vec![(200, RENEWAL)]);
+  // A regular file where the directory belongs fails the read with ENOTDIR, which is not a missing directory.
+  fs::write(fixture.cron_dir(), "not a directory\n").unwrap();
+
+  let renewal = renew_directly(&fixture);
+
+  assert_eq!(renewal, Renewal::Skipped { reason: "unreadable", holder: Some("unreadable:cron_tasks".to_string()) });
+  assert!(fixture.requests("/token").is_empty(), "a login held by an unreadable cron directory was renewed");
+  assert_eq!(fixture.credentials_text(), STALE);
+}
+
 #[ignore = "integration"]
 #[test]
 fn a_renewal_uses_the_token_another_writer_left_in_the_file() {

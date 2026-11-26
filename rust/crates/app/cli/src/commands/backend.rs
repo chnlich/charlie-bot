@@ -146,7 +146,7 @@ fn check_command(args: CheckArgs) -> Result<(), CliExit> {
 fn git_toplevel() -> Result<Option<PathBuf>, CliExit> {
   let cwd =
     std::env::current_dir().map_err(|error| CliExit::error(format!("cannot read the working directory: {error}")))?;
-  let output = charliebot_core::git::output(&cwd, &["rev-parse", "--show-toplevel"])
+  let output = charliebot_core::git::output(&cwd, &["rev-parse", "--show-toplevel"], &[])
     .map_err(|error| CliExit::error(format!("cannot run git: {error}")))?;
   if !output.status.success() {
     return Ok(None);

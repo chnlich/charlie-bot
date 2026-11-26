@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::Output;
 
 use charliebot_cli_common::exit::CliExit;
 
@@ -11,13 +11,8 @@ struct Repository {
   origin: Option<String>,
 }
 
-fn git(dir: &Path, args: &[&str]) -> Result<std::process::Output, CliExit> {
-  Command::new("git")
-    .arg("-C")
-    .arg(dir)
-    .args(args)
-    .env("LC_ALL", "C")
-    .output()
+fn git(dir: &Path, args: &[&str]) -> Result<Output, CliExit> {
+  charliebot_core::git::output(dir, args, &[("LC_ALL", "C")])
     .map_err(|error| CliExit::error(format!("run git in {}: {error}", dir.display())))
 }
 

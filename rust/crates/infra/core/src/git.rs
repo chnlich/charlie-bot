@@ -49,11 +49,11 @@ pub fn run(repo_root: &Path, args: &[&str], timeout: Duration) -> Option<String>
   if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
 }
 
-/// The exit status and both captured streams of `git <args>` run in `repo_root`, with no timeout. A spawn failure is
-/// the error. A nonzero exit is not: the caller reads the status and words its own failure. The directory goes in with
-/// `-C`, so a missing directory reaches the caller as a failed status that git reports.
-pub fn output(repo_root: &Path, args: &[&str]) -> std::io::Result<std::process::Output> {
-  Command::new("git").arg("-C").arg(repo_root).args(args).output()
+/// The exit status and both captured streams of `git <args>` run in `repo_root`, with `env` set and no timeout. A spawn
+/// failure is the error. A nonzero exit is not: the caller reads the status and words its own failure. The directory
+/// goes in with `-C`, so a missing directory reaches the caller as a failed status that git reports.
+pub fn output(repo_root: &Path, args: &[&str], env: &[(&str, &str)]) -> std::io::Result<std::process::Output> {
+  Command::new("git").arg("-C").arg(repo_root).args(args).envs(env.iter().copied()).output()
 }
 
 /// The output of `git <args>` run in `repo_root`, with `stdin` piped in when it is `Some` and `env` set on the child.

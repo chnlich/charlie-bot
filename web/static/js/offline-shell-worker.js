@@ -582,7 +582,7 @@ async function storeOnDemandFiles(urls) {
     const headers = earlier ? {'If-None-Match': earlier.response.headers.get('ETag')} : {};
     const response = await installFetch(url, {credentials: 'same-origin', cache: 'no-store', headers});
     if (response.status === 304 && earlier) {
-      await files.put(url, earlier.response);
+      await files.put(url, revalidatedCopy(earlier.response, response));
       revalidated += 1;
     } else if (response.ok) {
       if (response.headers.get('ETag')) {
@@ -595,6 +595,14 @@ async function storeOnDemandFiles(urls) {
     if (earlier) await files.delete(earlier.url);
   }
   return {stored, revalidated};
+}
+
+// The copy a 304 keeps under the new URL: the stored body with the 304's headers. The 304 is the release's answer for
+// the file, so its X-Asset-Version names the release that serves the copy; the stored headers keep the content type.
+function revalidatedCopy(stored, notModified) {
+  const headers = new Headers(stored.headers);
+  for (const [name, value] of notModified.headers) headers.set(name, value);
+  return new Response(stored.body, {status: stored.status, headers});
 }
 
 // The copy the cache holds for a path under any version: its URL and response, or null.

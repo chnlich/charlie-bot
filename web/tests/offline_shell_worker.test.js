@@ -1013,6 +1013,31 @@ test('a kept file whose bytes a release leaves unchanged is revalidated with its
   assert.equal(await files.match(earlier), undefined, 'the earlier version goes once its replacement is stored');
 });
 
+test('a revalidated copy answers the release that revalidated it: its asset-version header is the new one', async () => {
+  // The server stamps every /static answer with its asset version, 304s included. A copy stored under the new URL
+  // carries the header of the 304, or the feature loader (utils.js checkPageScriptRelease) reloads the page on each
+  // load: the stored copy would name the earlier release while the page runs the new one.
+  const h = harness();
+  const earlier = ORIGIN + '/static/js/chat/status-panel.js?v=1';
+  const current = '/static/js/chat/status-panel.js?v=2';
+  const files = await h.caches.api.open('last-state-files');
+  await files.put(earlier, new Response('status()', {
+    status: 200,
+    headers: {ETag: '"same"', 'Content-Type': 'text/javascript', 'X-Asset-Version': 'v1'},
+  }));
+  h.state.network = async () => new Response(null, {
+    status: 304,
+    headers: {ETag: '"same"', 'X-Asset-Version': 'v2'},
+  });
+  const channel = messageChannel();
+  await Promise.all(h.fire('message', {data: {type: 'store-files', files: [current]}, ports: [channel.port2]}).waits);
+  assert.deepEqual(JSON.parse(JSON.stringify(channel.replies)), [{stored: 0, revalidated: 1}]);
+  const stored = await files.match(ORIGIN + current);
+  assert.equal(stored.headers.get('X-Asset-Version'), 'v2', 'the stored copy names the release that revalidated it');
+  assert.equal(stored.headers.get('Content-Type'), 'text/javascript', 'the copy keeps its content type');
+  assert.equal(await stored.text(), 'status()', 'the stored body answers the new version');
+});
+
 test('a kept file whose bytes changed is fetched whole and stored, and its earlier copy goes', async () => {
   const h = harness();
   const earlier = ORIGIN + '/static/js/chat/status-panel.js?v=1';

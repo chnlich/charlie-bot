@@ -129,9 +129,12 @@ where
   F: FnMut(BackendOption) -> Fut,
   Fut: Future<Output = anyhow::Result<String>>,
 {
-  for option in
-    backend_pool::one_shot_members(cfg, Arc::clone(&pool), "autoname", cfg.backends.calls.get(CallClass::Autoname))
-  {
+  for option in backend_pool::one_shot_members(
+    cfg,
+    Arc::clone(&pool),
+    CallClass::Autoname.key(),
+    cfg.backends.calls.get(CallClass::Autoname),
+  ) {
     let option = option?;
     let backend_id = option.id.clone();
     match generate(option).await {

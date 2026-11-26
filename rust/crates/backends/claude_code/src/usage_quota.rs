@@ -1469,6 +1469,36 @@ mod tests {
     data["claudeAiOauth"]["accessToken"].as_str().expect("the login file names an access token").to_string()
   }
 
+  /// The idle check names a Claude CLI that uses a login, skips the process it is told to skip, and ignores a process
+  /// that only inherits the login's config directory. A silent miss would let a live run renew a login a CLI uses.
+  #[test]
+  #[ignore = "integration"]
+  fn the_idle_check_counts_only_a_claude_cli_using_the_login() {
+    let root = tempfile::tempdir().unwrap();
+    let busy = root.path().join("busy");
+    let idle = root.path().join("idle");
+    fs::create_dir(&busy).unwrap();
+    fs::create_dir(&idle).unwrap();
+    let fake_cli = root.path().join("claude");
+    std::os::unix::fs::symlink("/bin/sleep", &fake_cli).unwrap();
+    let env = crate::login_dirs::CLAUDE_CONFIG_DIR_ENV;
+    let mut cli = std::process::Command::new(&fake_cli).arg("30").env(env, &busy).spawn().unwrap();
+    let mut inherited = std::process::Command::new("/bin/sleep").arg("30").env(env, &idle).spawn().unwrap();
+
+    let named = claude_cli_using(&busy, None);
+    let skipped = claude_cli_using(&busy, Some(cli.id()));
+    let inherits_only = claude_cli_using(&idle, None);
+    cli.kill().unwrap();
+    inherited.kill().unwrap();
+    cli.wait().unwrap();
+    inherited.wait().unwrap();
+
+    let named = named.expect("a Claude CLI that uses the login is named");
+    assert!(named.starts_with(&format!("pid {} (", cli.id())), "the named process was {named}");
+    assert_eq!(skipped, None, "the process the check skips was still named");
+    assert_eq!(inherits_only, None, "a process that only inherits the config directory was counted");
+  }
+
   /// The live test of a renewal: one real login that is short and idle is renewed while the test's own Claude CLI
   /// process uses it, and the CLI's next request must still authenticate. Run it on the host that holds the login
   /// files, before step 1's switch:

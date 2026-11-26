@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use anyhow::Context;
 use charliebot_core::config::{CONFIG_D_DIR_NAME, CRON_D_DIR_NAME, CharlieBotConfig};
 use charliebot_core::cron_files::is_task_file;
 use charliebot_core::paths;
@@ -215,7 +216,7 @@ fn reload_snapshot(
   let mut snapshot = CronSnapshot::default();
   let mut prompt_paths = Vec::new();
   for path in paths {
-    if !is_task_file(&path) {
+    if !is_task_file(&path).with_context(|| format!("classifying {}", path.display()))? {
       continue;
     }
     let name = path.file_stem().and_then(|name| name.to_str()).unwrap_or_default().to_string();
@@ -299,7 +300,7 @@ fn snapshot_fingerprint(directory: &Path, prompt_paths: &[PathBuf]) -> anyhow::R
     Ok(entries) => {
       for entry in entries {
         let path = entry?.path();
-        if !is_task_file(&path) {
+        if !is_task_file(&path).with_context(|| format!("classifying {}", path.display()))? {
           continue;
         }
         let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();

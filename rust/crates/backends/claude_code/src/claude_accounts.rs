@@ -881,7 +881,7 @@ pub fn improve_hosts(cron_dir: &Path) -> anyhow::Result<Vec<String>> {
   let mut files = Vec::new();
   for entry in entries {
     let path = entry.with_context(|| format!("listing {}", cron_dir.display()))?.path();
-    if is_task_file(&path) {
+    if is_task_file(&path).with_context(|| format!("classifying {}", path.display()))? {
       files.push(path);
     }
   }
@@ -970,14 +970,30 @@ impl HoldCheck {
   /// ① This host's processes: a launch and its children carry `IMPROVE_REMOTE_HOST`, which the runner sets for every
   /// round on another host, beside the round's `CLAUDE_CONFIG_DIR`.
   fn local_process_hold(&self, config_dir: &Path) -> Result<Option<String>, &'static str> {
+    use std::os::unix::fs::MetadataExt;
+
+    let uid = fs::metadata("/proc/self").map_err(|_| "proc")?.uid();
     for entry in fs::read_dir(&self.proc_root).map_err(|_| "proc")? {
       let entry = entry.map_err(|_| "proc")?;
       let name = entry.file_name();
       let Some(pid) = name.to_str().filter(|name| name.bytes().all(|byte| byte.is_ascii_digit())) else {
         continue;
       };
+      let proc_dir = entry.path();
+      let metadata = match fs::metadata(&proc_dir) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+        Err(_) => return Err("proc"),
+      };
       // A process of another user cannot be a round this server started, and its environment is unreadable.
-      let Ok(data) = fs::read(entry.path().join("environ")) else { continue };
+      if metadata.uid() != uid {
+        continue;
+      }
+      let data = match fs::read(proc_dir.join("environ")) {
+        Ok(data) => data,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+        Err(_) => return Err("proc"),
+      };
       let mut remote = false;
       let mut config_dir_value = None;
       for item in data.split(|byte| *byte == 0) {
@@ -1003,8 +1019,11 @@ impl HoldCheck {
       let name = entry.file_name();
       let Some(name) = name.to_str().filter(|name| name.starts_with("improve-launch.")) else { continue };
       let answer = entry.path().join("review").join("option.json");
-      if !answer.exists() {
-        continue;
+      match fs::metadata(&answer) {
+        Ok(metadata) if metadata.is_file() => {}
+        Ok(_) => return Err("payload"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+        Err(_) => return Err("payload"),
       }
       let text = fs::read_to_string(&answer).map_err(|_| "payload")?;
       let record: Value = serde_json::from_str(&text).map_err(|_| "payload")?;
@@ -1038,19 +1057,33 @@ impl HoldCheck {
 /// names, an `H` line for that launch's round state, and an `N` line for a launch directory that names no login (its
 /// `logins` file is missing or empty).
 const IMPROVE_LAUNCH_LIST: &str = r#"
+improve=$HOME/improve
+if [ ! -e "$improve" ]; then exit 0; fi
+[ -d "$improve" ] && [ -r "$improve" ] && [ -x "$improve" ] || exit 1
 root=$HOME/improve/launch
-[ -d "$root" ] || exit 0
+if [ ! -e "$root" ]; then exit 0; fi
+[ -d "$root" ] && [ -r "$root" ] && [ -x "$root" ] || exit 1
 for d in "$root"/*/; do
   [ -d "$d" ] || continue
+  [ -r "$d" ] && [ -x "$d" ] || exit 1
   id=${d%/}
   id=${id##*/}
-  state=$(bash "$d/remote-runner.sh" --round-state "$id" 2>/dev/null) || state=unknown
+  state=$(bash "$d/remote-runner.sh" --round-state "$id" 2>/dev/null) || exit 1
+  if [ -e "$d/logins" ] || [ -L "$d/logins" ]; then
+    [ -f "$d/logins" ] || exit 1
+  fi
   if [ -s "$d/logins" ]; then
+    has_login=0
     while IFS=$'\t' read -r dir expires; do
       [ -n "$dir" ] || continue
+      has_login=1
       printf 'L\t%s\t%s\t%s\n' "$id" "$dir" "$expires"
-    done <"$d/logins"
-    printf 'H\t%s\t%s\n' "$id" "$state"
+    done <"$d/logins" || exit 1
+    if [ "$has_login" -eq 1 ]; then
+      printf 'H\t%s\t%s\n' "$id" "$state"
+    else
+      printf 'N\t%s\t%s\n' "$id" "$state"
+    fi
   else
     printf 'N\t%s\t%s\n' "$id" "$state"
   fi
@@ -1795,6 +1828,7 @@ pub fn retire_transcript_copies(cfg: &CharlieBotConfig, session_id: &str, keep: 
 
 #[cfg(test)]
 mod tests {
+  use std::os::unix::fs::PermissionsExt;
   use std::time::Duration as StdDuration;
 
   use charliebot_registry::Registry;
@@ -2732,6 +2766,79 @@ mod tests {
   }
 
   #[test]
+  fn an_unreadable_cron_task_entry_is_an_error() {
+    let root = tempfile::tempdir().unwrap();
+    let cron = root.path().join("cron.d");
+    fs::create_dir(&cron).unwrap();
+    fs::write(cron.join("improve-ux.yaml"), "improve_host: host3\n").unwrap();
+    fs::set_permissions(&cron, fs::Permissions::from_mode(0o444)).unwrap();
+
+    let result = improve_hosts(&cron);
+
+    fs::set_permissions(&cron, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(result.is_err(), "an unreadable cron file entry was silently ignored");
+  }
+
+  #[test]
+  fn a_payload_path_that_cannot_be_read_holds_every_login() {
+    let root = tempfile::tempdir().unwrap();
+    let proc_root = root.path().join("proc");
+    let payload_root = root.path().join("tmp");
+    fs::create_dir(&proc_root).unwrap();
+    fs::create_dir(&payload_root).unwrap();
+    let review = payload_root.join("improve-launch.bad/review");
+    fs::create_dir_all(review.parent().unwrap()).unwrap();
+    fs::write(&review, "not a directory").unwrap();
+    let check = hold_check(proc_root, payload_root, Vec::new(), answering_hosts(""), timestamp("2026-11-26T12:00:00Z"));
+
+    assert_eq!(check.hold(Path::new("/logins/ext-2")), Hold::Unreadable("payload".to_string()));
+  }
+
+  fn run_improve_launch_list(home: &Path) -> std::process::Output {
+    Command::new("bash").arg("-c").arg(IMPROVE_LAUNCH_LIST).env("HOME", home).output().unwrap()
+  }
+
+  #[test]
+  fn an_unreadable_improve_launch_root_fails_the_host_read() {
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir(root.path().join("improve")).unwrap();
+    fs::write(root.path().join("improve/launch"), "not a directory").unwrap();
+
+    let output = run_improve_launch_list(root.path());
+
+    assert!(!output.status.success(), "a non-directory launch root was read as an empty host");
+  }
+
+  #[test]
+  fn an_unreadable_launch_logins_file_fails_the_host_read() {
+    let root = tempfile::tempdir().unwrap();
+    let launch = root.path().join("improve/launch/20261126T110000Z-1-2");
+    fs::create_dir_all(&launch).unwrap();
+    fs::write(launch.join("remote-runner.sh"), "printf 'running\\n'\n").unwrap();
+    fs::create_dir(launch.join("logins")).unwrap();
+
+    let output = run_improve_launch_list(root.path());
+
+    assert!(!output.status.success(), "an unreadable logins source was read as a launch with no logins");
+  }
+
+  #[test]
+  fn a_launch_with_no_login_records_holds_every_login() {
+    let root = tempfile::tempdir().unwrap();
+    let launch_id = "20261126T110000Z-1-2";
+    let launch = root.path().join(format!("improve/launch/{launch_id}"));
+    fs::create_dir_all(&launch).unwrap();
+    fs::write(launch.join("remote-runner.sh"), "printf 'running\\n'\n").unwrap();
+    fs::write(launch.join("logins"), "\n").unwrap();
+
+    let output = run_improve_launch_list(root.path());
+
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(text, format!("N\t{launch_id}\trunning\n"));
+  }
+
+  #[test]
   fn a_launch_stamp_reads_as_its_utc_start() {
     assert_eq!(launch_started_at("20261126T090000Z-1-2"), Some(timestamp("2026-11-26T09:00:00Z")));
   }
@@ -2751,6 +2858,18 @@ mod tests {
 
     assert_eq!(check.hold(Path::new("/logins/ext-2")), Hold::Held("process 4243".to_string()));
     assert_eq!(check.hold(Path::new("/logins/ext-3")), Hold::Free);
+  }
+
+  #[test]
+  fn an_unreadable_local_process_environment_holds_every_login() {
+    let root = tempfile::tempdir().unwrap();
+    let proc_root = root.path().join("proc");
+    fs::create_dir_all(proc_root.join("4242/environ")).unwrap();
+    let payload_root = root.path().join("tmp");
+    fs::create_dir(&payload_root).unwrap();
+    let check = hold_check(proc_root, payload_root, Vec::new(), answering_hosts(""), timestamp("2026-11-26T12:00:00Z"));
+
+    assert_eq!(check.hold(Path::new("/logins/ext-2")), Hold::Unreadable("proc".to_string()));
   }
 
   #[test]

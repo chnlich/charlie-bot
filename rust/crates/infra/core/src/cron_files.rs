@@ -1,15 +1,23 @@
 //! The cron task files under `cron.d`: which directory entries count as one, and how one file decodes into the mapping
 //! its readers take. The scheduler loader and the improve hold read both use these, so one rule decides both.
 
+use std::io;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
 /// Whether a `cron.d` directory entry is a cron task file: a regular file whose name ends in `.yaml` and does not start
-/// with a dot.
-pub fn is_task_file(path: &Path) -> bool {
+/// with a dot. Metadata errors other than a vanished entry are returned so readers can fail closed.
+pub fn is_task_file(path: &Path) -> io::Result<bool> {
   let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
-  path.is_file() && file_name.ends_with(".yaml") && !file_name.starts_with('.')
+  if !file_name.ends_with(".yaml") || file_name.starts_with('.') {
+    return Ok(false);
+  }
+  match path.metadata() {
+    Ok(metadata) => Ok(metadata.is_file()),
+    Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+    Err(error) => Err(error),
+  }
 }
 
 /// One cron task file, decoded as the JSON object its readers and writers take.

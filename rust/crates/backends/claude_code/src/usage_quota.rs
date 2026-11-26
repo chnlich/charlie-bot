@@ -363,13 +363,6 @@ impl RenewalTrigger {
       Self::KeyedRound { .. } => "keyed_round",
     }
   }
-
-  fn run_id(&self) -> &str {
-    match self {
-      Self::Usage401 => "",
-      Self::KeyedRound { run_id } => run_id,
-    }
-  }
 }
 
 /// A renewal's answer.
@@ -493,15 +486,26 @@ pub async fn renew_login(
   };
   let status = response.status();
   if status.is_client_error() || status.is_server_error() {
-    let body = response.text().await.unwrap_or_default();
-    tracing::warn!(
-      target: "charliebot_agents",
-      account = label,
-      trigger = trigger.label(),
-      status_code = status.as_u16(),
-      body = %body.chars().take(200).collect::<String>(),
-      "ext_usage_token_refresh_failed"
-    );
+    let body = response.text().await.unwrap_or_default().chars().take(200).collect::<String>();
+    match trigger {
+      RenewalTrigger::Usage401 => tracing::warn!(
+        target: "charliebot_agents",
+        account = label,
+        trigger = trigger.label(),
+        status_code = status.as_u16(),
+        body = %body,
+        "ext_usage_token_refresh_failed"
+      ),
+      RenewalTrigger::KeyedRound { run_id } => tracing::warn!(
+        target: "charliebot_agents",
+        account = label,
+        trigger = trigger.label(),
+        run_id,
+        status_code = status.as_u16(),
+        body = %body,
+        "ext_usage_token_refresh_failed"
+      ),
+    }
     return Ok(Renewal::Failed { detail: format!("refused ({})", status.as_u16()) });
   }
   let Ok(token) = response.json::<Value>().await else {
@@ -531,13 +535,23 @@ pub async fn renew_login(
   })
   .await
   .context("the credentials write task failed")??;
-  tracing::info!(
-    target: "charliebot_agents",
-    account = label,
-    trigger = trigger.label(),
-    path = %path.display(),
-    "ext_usage_token_refreshed"
-  );
+  match trigger {
+    RenewalTrigger::Usage401 => tracing::info!(
+      target: "charliebot_agents",
+      account = label,
+      trigger = trigger.label(),
+      path = %path.display(),
+      "ext_usage_token_refreshed"
+    ),
+    RenewalTrigger::KeyedRound { run_id } => tracing::info!(
+      target: "charliebot_agents",
+      account = label,
+      trigger = trigger.label(),
+      run_id,
+      path = %path.display(),
+      "ext_usage_token_refreshed"
+    ),
+  }
   Ok(Renewal::Usable(new_access))
 }
 
@@ -546,7 +560,6 @@ fn skipped(label: &str, trigger: &RenewalTrigger, reason: &'static str, holder: 
     target: "charliebot_agents",
     account = label,
     trigger = trigger.label(),
-    run_id = trigger.run_id(),
     reason = reason,
     holder = holder.as_deref().unwrap_or(""),
     "claude_login_renewal_skipped"
@@ -555,15 +568,25 @@ fn skipped(label: &str, trigger: &RenewalTrigger, reason: &'static str, holder: 
 }
 
 fn failed(label: &str, trigger: &RenewalTrigger, path: &Path, detail: &str) -> Renewal {
-  tracing::warn!(
-    target: "charliebot_agents",
-    account = label,
-    trigger = trigger.label(),
-    run_id = trigger.run_id(),
-    path = %path.display(),
-    reason = detail,
-    "ext_usage_token_refresh_failed"
-  );
+  match trigger {
+    RenewalTrigger::Usage401 => tracing::warn!(
+      target: "charliebot_agents",
+      account = label,
+      trigger = trigger.label(),
+      path = %path.display(),
+      reason = detail,
+      "ext_usage_token_refresh_failed"
+    ),
+    RenewalTrigger::KeyedRound { run_id } => tracing::warn!(
+      target: "charliebot_agents",
+      account = label,
+      trigger = trigger.label(),
+      run_id,
+      path = %path.display(),
+      reason = detail,
+      "ext_usage_token_refresh_failed"
+    ),
+  }
   Renewal::Failed { detail: detail.to_string() }
 }
 
@@ -1453,45 +1476,66 @@ mod tests {
   /// A Claude CLI process that uses `config_dir`'s login, other than the process `except`, described by its PID and
   /// executable. Only a Claude CLI uses the token: a process that merely inherited `CLAUDE_CONFIG_DIR`, such as a
   /// shell, `sleep` or `kubectl`, does not.
-  fn claude_cli_using(config_dir: &Path, except: Option<u32>) -> Option<String> {
-    let entries = fs::read_dir("/proc").ok()?;
-    let prefix = format!("{}=", crate::login_dirs::CLAUDE_CONFIG_DIR_ENV);
-    for entry in entries.flatten() {
+  fn claude_cli_using(proc_root: &Path, config_dir: &Path, except: Option<u32>) -> anyhow::Result<Option<String>> {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::MetadataExt;
+
+    let entries = fs::read_dir(proc_root).with_context(|| format!("reading {}", proc_root.display()))?;
+    let mut expected = format!("{}=", crate::login_dirs::CLAUDE_CONFIG_DIR_ENV).into_bytes();
+    expected.extend_from_slice(config_dir.as_os_str().as_bytes());
+    let uid = fs::metadata("/proc/self").with_context(|| "reading /proc/self")?.uid();
+    for entry in entries {
+      let entry = entry.with_context(|| format!("listing {}", proc_root.display()))?;
       let name = entry.file_name();
       let Some(pid) = name.to_str().filter(|name| name.bytes().all(|byte| byte.is_ascii_digit())) else { continue };
       let Ok(pid_number) = pid.parse::<u32>() else { continue };
       if except == Some(pid_number) {
         continue;
       }
-      let Ok(data) = fs::read(entry.path().join("environ")) else { continue };
-      let carries = data.split(|byte| *byte == 0).any(|item| {
-        std::str::from_utf8(item)
-          .ok()
-          .and_then(|text| text.strip_prefix(&prefix))
-          .is_some_and(|value| Path::new(value) == config_dir)
-      });
-      if carries && is_claude_cli(&entry.path()) {
-        let exe = fs::read_link(entry.path().join("exe"))
+      let proc_dir = entry.path();
+      let metadata = match fs::metadata(&proc_dir) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+        Err(error) => return Err(error).with_context(|| format!("reading {}", proc_dir.display())),
+      };
+      if metadata.uid() != uid {
+        continue;
+      }
+      let data = match fs::read(proc_dir.join("environ")) {
+        Ok(data) => data,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+        Err(error) => return Err(error).with_context(|| format!("reading {}/environ", proc_dir.display())),
+      };
+      let carries = data.split(|byte| *byte == 0).any(|item| item == expected.as_slice());
+      if carries && is_claude_cli(&proc_dir)? {
+        let exe = fs::read_link(proc_dir.join("exe"))
           .map_or_else(|_| "<executable unreadable>".to_string(), |path| path.display().to_string());
-        return Some(format!("pid {pid_number} ({exe})"));
+        return Ok(Some(format!("pid {pid_number} ({exe})")));
       }
     }
-    None
+    Ok(None)
   }
 
   /// Whether the process at `proc_dir` is a Claude CLI: its argv[0] is `claude`, or its executable sits in a
   /// `claude/versions` directory, where the native CLI's files are named for their version.
-  fn is_claude_cli(proc_dir: &Path) -> bool {
+  fn is_claude_cli(proc_dir: &Path) -> anyhow::Result<bool> {
     use std::os::unix::ffi::OsStrExt;
-    let argv0_is_claude = fs::read(proc_dir.join("cmdline")).ok().is_some_and(|data| {
-      data.split(|byte| *byte == 0).next().is_some_and(|first| {
-        Path::new(std::ffi::OsStr::from_bytes(first)).file_name().is_some_and(|name| name == "claude")
-      })
+    let cmdline = match fs::read(proc_dir.join("cmdline")) {
+      Ok(data) => data,
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+      Err(error) => return Err(error).with_context(|| format!("reading {}/cmdline", proc_dir.display())),
+    };
+    let argv0_is_claude = cmdline.split(|byte| *byte == 0).next().is_some_and(|first| {
+      Path::new(std::ffi::OsStr::from_bytes(first)).file_name().is_some_and(|name| name == "claude")
     });
-    let in_versions = fs::read_link(proc_dir.join("exe"))
-      .ok()
-      .is_some_and(|exe| exe.parent().is_some_and(|dir| dir.ends_with("claude/versions")));
-    argv0_is_claude || in_versions
+    if argv0_is_claude {
+      return Ok(true);
+    }
+    match fs::read_link(proc_dir.join("exe")) {
+      Ok(exe) => Ok(exe.parent().is_some_and(|dir| dir.ends_with("claude/versions"))),
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+      Err(error) => Err(error).with_context(|| format!("reading {}/exe", proc_dir.display())),
+    }
   }
 
   fn token_of(dir: &Path) -> String {
@@ -1516,9 +1560,9 @@ mod tests {
     let mut cli = std::process::Command::new(&fake_cli).arg("30").env(env, &busy).spawn().unwrap();
     let mut inherited = std::process::Command::new("/bin/sleep").arg("30").env(env, &idle).spawn().unwrap();
 
-    let named = claude_cli_using(&busy, None);
-    let skipped = claude_cli_using(&busy, Some(cli.id()));
-    let inherits_only = claude_cli_using(&idle, None);
+    let named = claude_cli_using(Path::new("/proc"), &busy, None).unwrap();
+    let skipped = claude_cli_using(Path::new("/proc"), &busy, Some(cli.id())).unwrap();
+    let inherits_only = claude_cli_using(Path::new("/proc"), &idle, None).unwrap();
     cli.kill().unwrap();
     inherited.kill().unwrap();
     cli.wait().unwrap();
@@ -1528,6 +1572,16 @@ mod tests {
     assert!(named.starts_with(&format!("pid {} (", cli.id())), "the named process was {named}");
     assert_eq!(skipped, None, "the process the check skips was still named");
     assert_eq!(inherits_only, None, "a process that only inherits the config directory was counted");
+  }
+
+  #[test]
+  #[ignore = "integration"]
+  fn the_idle_check_fails_closed_when_proc_cannot_be_read() {
+    let root = tempfile::tempdir().unwrap();
+    let proc_root = root.path().join("proc");
+    fs::write(&proc_root, "not a process directory").unwrap();
+
+    assert!(claude_cli_using(&proc_root, Path::new("/logins/ext-2"), None).is_err());
   }
 
   /// The live test of a renewal: one real login that is short and idle is renewed while the test's own Claude CLI
@@ -1548,7 +1602,9 @@ mod tests {
       remaining < claude_accounts::RENEWABLE_TOKEN_MAX_SECONDS * 1000,
       "the login {alias} lives {remaining} ms, so it is not under the renewal's cap"
     );
-    if let Some(user) = claude_cli_using(&dir, None) {
+    if let Some(user) =
+      claude_cli_using(Path::new("/proc"), &dir, None).expect("the local Claude process list is readable")
+    {
       panic!("a Claude CLI already uses the login {alias}: {user}; the test needs an idle login");
     }
     let check = claude_accounts::HoldCheck::new(hosts.clone(), claude_accounts::now_or(None));
@@ -1576,12 +1632,19 @@ mod tests {
     // The second idle check, right before the renewal: a run that started after the selection stops the test here,
     // before any renewal. The test's own CLI is the one process it allows to use the login.
     let mut stops = Vec::new();
-    if let Some(user) = claude_cli_using(&dir, Some(child.id())) {
-      stops.push(format!("a Claude CLI other than the test's own uses the login: {user}"));
-    }
     let hold = claude_accounts::HoldCheck::new(hosts.clone(), claude_accounts::now_or(None)).hold(&dir);
     if hold != claude_accounts::Hold::Free {
       stops.push(format!("the hold check reads {hold:?}"));
+    }
+    match claude_cli_using(Path::new("/proc"), &dir, Some(child.id())) {
+      Ok(Some(user)) => stops.push(format!("a Claude CLI other than the test's own uses the login: {user}")),
+      Ok(None) => {}
+      Err(error) => stops.push(format!("the local Claude process list is unreadable: {error:#}")),
+    }
+    match child.try_wait() {
+      Ok(None) => {}
+      Ok(Some(status)) => stops.push(format!("the test's Claude CLI ended before renewal: {status}")),
+      Err(error) => stops.push(format!("the test's Claude CLI status is unreadable: {error}")),
     }
     if !stops.is_empty() {
       let _ = child.kill();

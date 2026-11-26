@@ -1013,7 +1013,7 @@ test('a kept file whose bytes a release leaves unchanged is revalidated with its
   assert.equal(await files.match(earlier), undefined, 'the earlier version goes once its replacement is stored');
 });
 
-test('a revalidated copy answers the release that revalidated it: its asset-version header is the new one', async () => {
+test('a revalidated copy names the release that revalidated it in its asset-version header', async () => {
   // The server stamps every /static answer with its asset version, 304s included. A copy stored under the new URL
   // carries the header of the 304, or the feature loader (utils.js checkPageScriptRelease) reloads the page on each
   // load: the stored copy would name the earlier release while the page runs the new one.

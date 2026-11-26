@@ -233,15 +233,29 @@ fn test_model_side_error_distinguishes_usage_quota_from_host_failures() {
     ("spawn failed: resource_exhausted", false),
     ("git failed: resource_exhausted", false),
   ];
-  for (error, model_side) in cases {
-    let mut command = harness::command("bash", &sandbox.env());
-    command
-      .args(["-c", r#"source "$1" rust "$2" && model_side_error "$3""#, "bash"])
-      .arg(&script)
-      .arg("a".repeat(40))
-      .arg(error);
-    let run = harness::run(&mut command);
-    assert_eq!(run.code == 0, model_side, "{error}: {}", run.describe());
+  let mut command = harness::command("bash", &sandbox.env());
+  command
+    .args([
+      "-c",
+      r#"source "$1" rust "$2" || exit
+shift 2
+for error; do
+  model_side_error "$error"
+  printf '%s\n' "$?"
+done"#,
+      "bash",
+    ])
+    .arg(&script)
+    .arg("a".repeat(40));
+  for &(error, _) in &cases {
+    command.arg(error);
+  }
+  let run = harness::run(&mut command);
+  assert_eq!(run.code, 0, "{}", run.describe());
+  let statuses: Vec<&str> = run.stdout.lines().collect();
+  assert_eq!(statuses.len(), cases.len(), "{}", run.describe());
+  for ((error, model_side), status) in cases.iter().zip(statuses) {
+    assert_eq!(status.parse::<i32>().unwrap() == 0, *model_side, "{error}: {}", run.describe());
   }
 }
 

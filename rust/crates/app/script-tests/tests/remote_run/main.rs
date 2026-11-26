@@ -310,8 +310,8 @@ fn run_with_fake_build_home(sandbox: &Sandbox, project: &Path) -> harness::Run {
   run_runner(&env, project, &["echo", "remote"])
 }
 
-/// The 08:15Z install case: the build host holds a tree named like the sync root, recorded to a
-/// local directory an earlier run's temp directory removed. The run sweeps the tree, then syncs.
+/// A build host holds a tree named like the sync root, and its owner record names a local directory that no longer
+/// exists. The run sweeps that tree, then syncs.
 #[test]
 #[ignore = "integration"]
 fn a_same_name_tree_whose_recorded_directory_is_gone_is_removed_and_the_run_succeeds() {

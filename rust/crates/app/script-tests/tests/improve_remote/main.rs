@@ -1804,9 +1804,9 @@ fn an_approval_prompt_exits_3_inside_five_seconds() {
   );
 }
 
-/// A host that does not answer names the ssh error and sends the line manager to no approval page. The incident behind
-/// this check: host3's preflight printed a /host-auth instruction while no approval was pending, and two rounds' line
-/// managers checked a login instead of the host.
+/// A host that does not answer names the ssh error and sends the line manager to no approval page. An approval page
+/// for a host that cannot answer sends the line manager to check a login instead of the host, so the preflight must
+/// not print one.
 #[test]
 #[ignore = "integration"]
 fn an_unreachable_host_names_the_ssh_error_and_no_approval_page() {

@@ -29,9 +29,9 @@ use charliebot_store::metadata::{
 };
 use charliebot_store::run_identity::SESSION_METADATA_NAME;
 use charliebot_store::run_records::{
-  CURSOR_NAME, DATA_DIR_NAME, MASTER_RUNS_DIR_NAME, OBSERVATION_EVENTS_REF, OBSERVATION_RAW_LOG_REF,
-  OBSERVATION_RESULT_REF, RAW_LOG_NAME, RUN_METADATA_NAME, RUNS_DIR_NAME, STDERR_LOG_NAME, STDOUT_LOG_NAME,
-  THREADS_DIR_NAME,
+  CURSOR_NAME, DATA_DIR_NAME, LEGACY_STDERR_LOG_NAME, MASTER_RUNS_DIR_NAME, OBSERVATION_EVENTS_REF,
+  OBSERVATION_RAW_LOG_REF, OBSERVATION_RESULT_REF, RAW_LOG_NAME, RUN_METADATA_NAME, RUNS_DIR_NAME, STDERR_LOG_NAME,
+  STDOUT_LOG_NAME, THREADS_DIR_NAME,
 };
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
@@ -43,8 +43,9 @@ use crate::capture::capture_into_default_ledger;
 const MIN_IDLE_DAYS: i64 = 14;
 /// How long an unreferenced backend record must sit idle before the sweep takes it.
 const ORPHAN_IDLE_DAYS: i64 = 2;
-/// The three agent-pipe names and the two tee names the backend writers use.
-const RAW_TRANSPORT_NAMES: [&str; 5] = [RAW_LOG_NAME, STDERR_LOG_NAME, CURSOR_NAME, STDOUT_LOG_NAME, "stderr.log"];
+/// The three agent-pipe names, the stdout tee and the legacy stderr tee.
+const RAW_TRANSPORT_NAMES: [&str; 5] =
+  [RAW_LOG_NAME, STDERR_LOG_NAME, CURSOR_NAME, STDOUT_LOG_NAME, LEGACY_STDERR_LOG_NAME];
 /// The run-record keys that name transport evidence a migrated run keeps readable.
 const RUN_EVIDENCE_KEYS: [&str; 3] = [OBSERVATION_RAW_LOG_REF, OBSERVATION_EVENTS_REF, OBSERVATION_RESULT_REF];
 

@@ -554,7 +554,6 @@ pub struct OpenWaitingRow {
   pub context: Option<String>,
   pub link: Option<String>,
   pub since: UtcDateTime,
-  pub is_derived: bool,
 }
 
 /// The reader of the derived Waiting on you items, the whole home's list (`derived_waiting_items`).

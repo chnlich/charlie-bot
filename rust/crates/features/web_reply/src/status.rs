@@ -821,7 +821,6 @@ async fn derived_items(
         context: row.context,
         link: row.link,
         since: row.since,
-        is_derived: true,
       })
       .collect(),
   )
@@ -931,7 +930,6 @@ pub struct OpenWaitingItem {
   pub context: Option<String>,
   pub link: Option<String>,
   pub since: UtcDateTime,
-  pub is_derived: bool,
 }
 
 /// The task-tree reads run off the runtime's worker threads, never on the async worker.
@@ -2730,7 +2728,6 @@ mod tests {
       context: Some("Synthetic login check".to_string()),
       link: Some("/host-auth".to_string()),
       since: UtcDateTime::parse("2026-11-01T21:43:00-07:00").expect("the fixture time parses"),
-      is_derived: true,
     }
   }
 

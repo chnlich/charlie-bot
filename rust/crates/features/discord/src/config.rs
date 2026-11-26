@@ -1,10 +1,15 @@
-//! The `discord:` config section: the account map of the summon entrypoint.
+//! The `discord:` config section: the account map of the summon entrypoint. The `discord` section of
+//! `credentials.yaml` has the same name, and its readers are here too.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use charliebot_core::config::{ConfigSection, SectionValue};
+use charliebot_core::config::{ConfigError, ConfigSection, SectionValue};
+use charliebot_core::credentials::{BOT_TOKEN_FIELD, CredentialValue, Credentials};
 use serde::{Deserialize, Serialize};
+
+/// The name of the `discord:` config section, and of the `discord` section of `credentials.yaml`.
+pub(crate) const NAME: &str = "discord";
 
 /// The `discord:` section. `allowed_users` maps a Discord user id to the person that account belongs to.
 /// An empty map admits nobody.
@@ -16,7 +21,17 @@ pub struct DiscordConfig {
 }
 
 pub fn section() -> ConfigSection {
-  ConfigSection { key: "discord", legacy_keys: &[], parse: parse_section, dump: dump_section }
+  ConfigSection { key: NAME, legacy_keys: &[], parse: parse_section, dump: dump_section }
+}
+
+/// The bot token in the `discord` section of `credentials.yaml`, or `None` when the file leaves it unset.
+pub(crate) fn bot_token(credentials: &Credentials) -> Option<&CredentialValue> {
+  credentials.get(NAME, BOT_TOKEN_FIELD)
+}
+
+/// The bot token in the `discord` section of `credentials.yaml`, which must be set.
+pub(crate) fn require_bot_token(credentials: &Credentials) -> Result<String, ConfigError> {
+  credentials.require(NAME, BOT_TOKEN_FIELD)
 }
 
 /// The section's value as its model dumps it, which `charliebot config get discord` prints.

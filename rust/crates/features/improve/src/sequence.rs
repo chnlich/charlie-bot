@@ -1050,7 +1050,7 @@ pub async fn reconcile_interrupted_sequences(
   // Only a session directory with a loops directory holds a loop. The stats that find those directories read nothing
   // the repairs below write, so they run in parallel before the repairs.
   let Some(holds_loops) = parallel_walk::map_until(&session_dirs, &|| stop.is_cancelled(), |session_dir| {
-    session_dir.is_dir() && session_dir.join("loops").is_dir()
+    session_dir.is_dir() && command::loops_dir_of(session_dir).is_dir()
   }) else {
     return Ok(repaired);
   };
@@ -1062,7 +1062,7 @@ pub async fn reconcile_interrupted_sequences(
       continue;
     }
     let session_id = session_dir.file_name().and_then(|name| name.to_str()).unwrap_or_default().to_string();
-    let loops_dir = session_dir.join("loops");
+    let loops_dir = command::loops_dir_of(&session_dir);
     let mut loop_ids = Vec::new();
     for entry in std::fs::read_dir(&loops_dir)? {
       if stop.is_cancelled() {

@@ -94,7 +94,13 @@ pub fn loops_dir(cfg: &CharlieBotConfig, session_id: &str) -> PathBuf {
 
 /// The loops directory of one session under a profile home, for a reader that has no loaded config.
 pub fn loops_dir_in(home: &Path, session_id: &str) -> PathBuf {
-  charliebot_core::config::sessions_dir_in(home).join(session_id).join("loops")
+  loops_dir_of(&charliebot_core::config::sessions_dir_in(home).join(session_id))
+}
+
+/// The loops directory under one session directory. Readers that walk session directories call this instead of
+/// joining the `loops` name themselves.
+pub fn loops_dir_of(session_dir: &Path) -> PathBuf {
+  session_dir.join("loops")
 }
 
 /// The active-lock path of one session.

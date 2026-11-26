@@ -73,10 +73,12 @@ impl SessionCgroupConfig {
   }
 }
 
+/// The `/proc/<pid>/exe` name of Chrome's crashpad handler, the helper a browser starts to write crash dumps.
+pub const CRASHPAD_HANDLER_EXE: &str = "chrome_crashpad_handler";
 /// The `/proc/<pid>/exe` file names of the browser processes a session sweep ends. `exe` rather than `comm`, which
 /// truncates to 15 characters.
 const BROWSER_EXE_NAMES: [&str; 6] =
-  ["chrome", "chromium", "chromium-browser", "chrome-headless-shell", "headless_shell", "chrome_crashpad_handler"];
+  ["chrome", "chromium", "chromium-browser", "chrome-headless-shell", "headless_shell", CRASHPAD_HANDLER_EXE];
 /// How long a session browser sweep waits for the killed browsers to leave `cgroup.procs`.
 const SESSION_BROWSER_EXIT_WAIT: Duration = Duration::from_secs(5);
 

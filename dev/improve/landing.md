@@ -236,7 +236,8 @@ A path whose only changes are landed commits is not listed. Every listed path pr
 - an open pull request's file, with its head branch.
 
 A claim on a path absent from origin/main does not block a topic; the list marks it `absent-on-origin-main`.
-The round names each such claim it passes, with its branch, in its report (Step 9) and its pull request body.
+The round names each such claim it passes, with its branch, in its report (Step 9).
+The pull request body carries no such claim.
 
 List the closed pull requests of this direction and read each `improve-abandoned:` comment:
 

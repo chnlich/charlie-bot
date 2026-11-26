@@ -1406,7 +1406,8 @@ mod tests {
     (alias, dir, hosts)
   }
 
-  /// The process that carries `config_dir` as `CLAUDE_CONFIG_DIR`, when one runs.
+  /// The Claude CLI process that uses `config_dir`'s login, when one runs. Only a Claude CLI uses the token: a process
+  /// that merely inherited `CLAUDE_CONFIG_DIR`, such as a shell, `sleep` or `kubectl`, does not.
   fn process_using(config_dir: &Path) -> Option<u32> {
     let entries = fs::read_dir("/proc").ok()?;
     let prefix = format!("{}=", crate::login_dirs::CLAUDE_CONFIG_DIR_ENV);
@@ -1414,16 +1415,32 @@ mod tests {
       let name = entry.file_name();
       let Some(pid) = name.to_str().filter(|name| name.bytes().all(|byte| byte.is_ascii_digit())) else { continue };
       let Ok(data) = fs::read(entry.path().join("environ")) else { continue };
-      for item in data.split(|byte| *byte == 0) {
-        let Ok(text) = std::str::from_utf8(item) else { continue };
-        if let Some(value) = text.strip_prefix(&prefix)
-          && Path::new(value) == config_dir
-        {
-          return pid.parse().ok();
-        }
+      let carries = data.split(|byte| *byte == 0).any(|item| {
+        std::str::from_utf8(item)
+          .ok()
+          .and_then(|text| text.strip_prefix(&prefix))
+          .is_some_and(|value| Path::new(value) == config_dir)
+      });
+      if carries && is_claude_cli(&entry.path()) {
+        return pid.parse().ok();
       }
     }
     None
+  }
+
+  /// Whether the process at `proc_dir` is a Claude CLI: its argv[0] is `claude`, or its executable sits in a
+  /// `claude/versions` directory, where the native CLI's files are named for their version.
+  fn is_claude_cli(proc_dir: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let argv0_is_claude = fs::read(proc_dir.join("cmdline")).ok().is_some_and(|data| {
+      data.split(|byte| *byte == 0).next().is_some_and(|first| {
+        Path::new(std::ffi::OsStr::from_bytes(first)).file_name().is_some_and(|name| name == "claude")
+      })
+    });
+    let in_versions = fs::read_link(proc_dir.join("exe"))
+      .ok()
+      .is_some_and(|exe| exe.parent().is_some_and(|dir| dir.ends_with("claude/versions")));
+    argv0_is_claude || in_versions
   }
 
   fn token_of(dir: &Path) -> String {
@@ -1449,7 +1466,7 @@ mod tests {
       remaining < claude_accounts::RENEWABLE_TOKEN_MAX_SECONDS * 1000,
       "the login {alias} lives {remaining} ms, so it is not under the renewal's cap"
     );
-    assert_eq!(process_using(&dir), None, "a process already uses the login {alias}; the test needs an idle login");
+    assert_eq!(process_using(&dir), None, "a Claude CLI already uses the login {alias}; the test needs an idle login");
     let check = claude_accounts::HoldCheck::new(hosts.clone(), claude_accounts::now_or(None));
     assert_eq!(check.hold(&dir), claude_accounts::Hold::Free, "a live round holds the login {alias}");
 

@@ -12,7 +12,9 @@ use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use axum::routing::get;
 use charliebot_cli_common::fields::LIMIT;
-use charliebot_compat::compression::accepts_gzip;
+use charliebot_compat::compression::{
+  CompressedEncoding, ResponseEncoding, accepted_weight, gzip_memoized_body, zstd_dynamic_body,
+};
 use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_compat::routing::{get_only, post_only, refuse_other_methods};
 use charliebot_compat::{responses, validation};
@@ -39,15 +41,22 @@ static MOVE_LISTING_MEMO: LazyLock<CompactListingMemo> = LazyLock::new(CompactLi
 const STATUS_BODY_MEMO_LIMIT: usize = 4;
 
 type StatusBodyCache = Mutex<LruCache<StatusKey, Arc<StatusBody>>>;
-type GzipBodyCache = Mutex<LruCache<Vec<u8>, Vec<u8>>>;
 
-fn gzip_body_memo(limit: usize) -> GzipBodyCache {
-  Mutex::new(LruCache::new(NonZeroUsize::new(limit).expect("the gzip memo limit is nonzero")))
+#[derive(Default)]
+struct CompressedVariants {
+  gzip: Option<Bytes>,
+  zstd: Option<Bytes>,
+}
+
+type CompressedBodyCache = Mutex<LruCache<Vec<u8>, CompressedVariants>>;
+
+fn compressed_body_memo(limit: usize) -> CompressedBodyCache {
+  Mutex::new(LruCache::new(NonZeroUsize::new(limit).expect("the compressed memo limit is nonzero")))
 }
 
 static STATUS_BODY_MEMO: OnceLock<StatusBodyCache> = OnceLock::new();
-static SEARCH_GZIP_MEMO: LazyLock<GzipBodyCache> = LazyLock::new(|| gzip_body_memo(2));
-static TREE_GZIP_MEMO: LazyLock<GzipBodyCache> = LazyLock::new(|| gzip_body_memo(4));
+static SEARCH_COMPRESSED_MEMO: LazyLock<CompressedBodyCache> = LazyLock::new(|| compressed_body_memo(2));
+static TREE_COMPRESSED_MEMO: LazyLock<CompressedBodyCache> = LazyLock::new(|| compressed_body_memo(4));
 
 /// The body length below which the transport middleware leaves a response uncompressed (`GZipMiddleware`).
 const TRANSPORT_GZIP_MINIMUM_SIZE: usize = 1000;
@@ -217,8 +226,9 @@ impl IdSet {
 ///
 /// A repeat request shares both allocations instead of copying the body. The response hands the ETag layer the same
 /// `Bytes` every time, so its tag memo answers the repeat without hashing the body again. The memo keeps the body,
-/// so its compressed form is paid once per version and takes the smaller of the level-9 and level-8 forms a kept
-/// body uses.
+/// so its compressed form is paid once per version and takes the smaller of the level-9 and level-8 forms. On the
+/// 14,451-row status body, `gzip_memoized_body` is 308,869 bytes against 322,108 bytes for zstd level 9 (+4.3%) while
+/// zstd level 19 takes over 2 seconds per churn miss, so status responses keep gzip when a client accepts it.
 struct StatusBody {
   plain: Bytes,
   gzip: OnceLock<Bytes>,
@@ -229,10 +239,10 @@ impl StatusBody {
     Self { plain, gzip: OnceLock::new() }
   }
 
-  /// The bytes a request that names `wants_gzip` sends.
+  /// The bytes a request that accepts gzip sends, or plain bytes otherwise.
   fn bytes(&self, wants_gzip: bool) -> Bytes {
     if wants_gzip {
-      self.gzip.get_or_init(|| Bytes::from(charliebot_compat::compression::gzip_memoized_body(&self.plain))).clone()
+      self.gzip.get_or_init(|| Bytes::from(gzip_memoized_body(&self.plain))).clone()
     } else {
       self.plain.clone()
     }
@@ -255,10 +265,10 @@ fn store_status_body(key: StatusKey, body: Arc<StatusBody>) {
   memo.put(key, body);
 }
 
-/// The response for one status body, compressed when the request accepts gzip.
+/// The response for one status body, gzip-compressed when the request accepts gzip.
 fn status_response(request: &Request<Body>, body: &StatusBody) -> Response {
-  let wants_gzip = accepts_gzip(request.headers());
-  json_bytes_response(body.bytes(wants_gzip), wants_gzip)
+  let wants_gzip = accepted_weight(request.headers(), "gzip").is_some();
+  json_bytes_response(body.bytes(wants_gzip), wants_gzip.then_some(CompressedEncoding::Gzip))
 }
 
 /// The route patterns `routes` mounts, the merged writes, fork and detail routers included. The trailing-slash redirect
@@ -874,42 +884,19 @@ async fn session_tree(State(features): State<Arc<FeatureContext>>, request: Requ
   }
 }
 
-/// A task-tree page sent with the compressed body a repeat request already deflated.
+/// A task-tree page sent with the compressed body a repeat request already encoded.
 ///
-/// A page holds its bytes across requests while the tree and its rows hold, and deflating it again on every repeat
-/// costs about two thirds of this route's latency. The memo answers a repeat with the bytes it already compressed.
-///
-/// The memo keeps the body, so its compressed form is paid once per page version. That form is the smaller of the
-/// level-9 and level-8 forms a kept body uses, the form the transport's own body memo sends. On the 7,160-session
-/// mock home that is 5,627 bytes of the page's 30,950, against the 7,401 bytes the per-response level-1 form spends.
+/// A page holds its bytes across requests while the tree and its rows hold, and compressing it again on every repeat
+/// costs most of this route's latency. The memo answers a repeat with the bytes it already compressed.
 ///
 /// The middleware leaves a response that names its own `Content-Encoding` untouched, so this sender writes the
-/// headers the middleware would write. They are `Vary: Accept-Encoding` with the compressed body, and the plain
-/// response for a body below the middleware's minimum size.
+/// headers the middleware would write: `Vary: Accept-Encoding` with the compressed body, and the plain response for a
+/// body below the middleware's minimum size.
 fn tree_page_response(request: &Request<Body>, body: Vec<u8>) -> Response {
-  let wants_gzip = accepts_gzip(request.headers());
-  if !wants_gzip || body.len() < TRANSPORT_GZIP_MINIMUM_SIZE {
+  if body.len() < TRANSPORT_GZIP_MINIMUM_SIZE {
     return responses::fast_json_rendered(StatusCode::OK, body);
   }
-  let compressed = {
-    let mut cache = TREE_GZIP_MEMO.lock().expect("tree gzip memo mutex is not poisoned");
-    match cache.get(&body).cloned() {
-      Some(compressed) => compressed,
-      None => {
-        let compressed = charliebot_compat::compression::gzip_memoized_body(&body);
-        cache.put(body, compressed.clone());
-        compressed
-      }
-    }
-  };
-  Response::builder()
-    .status(StatusCode::OK)
-    .header(header::CONTENT_TYPE, APPLICATION_JSON)
-    .header(header::CONTENT_LENGTH, compressed.len())
-    .header(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"))
-    .header(header::VARY, HeaderValue::from_static(ACCEPT_ENCODING))
-    .body(Body::from(compressed))
-    .expect("a compressed JSON response builds")
+  compressed_response(request, body, &TREE_COMPRESSED_MEMO)
 }
 
 async fn session_search(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
@@ -931,7 +918,7 @@ async fn session_search(State(features): State<Arc<FeatureContext>>, request: Re
     if let Err(error) = sidebar::count_memoized_read(&features.store, &features.registry, &rows) {
       return store_error(error);
     }
-    return gzip_response(&request, (*body).clone(), &SEARCH_GZIP_MEMO);
+    return compressed_response(&request, (*body).clone(), &SEARCH_COMPRESSED_MEMO);
   }
   let (answer, derived, sequence_fields) = match blocking_store(move || {
     let answer = search::search_sessions(&store, &q)?;
@@ -955,7 +942,7 @@ async fn session_search(State(features): State<Arc<FeatureContext>>, request: Re
   if let Some(source) = &answer.source
     && let Some(body) = source.body(generation)
   {
-    return gzip_response(&request, (*body).clone(), &SEARCH_GZIP_MEMO);
+    return compressed_response(&request, (*body).clone(), &SEARCH_COMPRESSED_MEMO);
   }
   let body = match listing::search_columns_text(&features.store, &answer.rows, &derived, &sequence_fields) {
     Ok(text) => text.into_bytes(),
@@ -964,7 +951,7 @@ async fn session_search(State(features): State<Arc<FeatureContext>>, request: Re
   if let Some(source) = &answer.source {
     source.remember_body(generation, Arc::new(body.clone()));
   }
-  gzip_response(&request, body, &SEARCH_GZIP_MEMO)
+  compressed_response(&request, body, &SEARCH_COMPRESSED_MEMO)
 }
 
 fn apply_derived_fields(
@@ -1037,37 +1024,48 @@ fn parse_session_ids(ids: &str) -> Vec<String> {
   api::parse_session_ids(ids)
 }
 
-/// One search answer: the body, compressed for a client that accepts gzip, from the memo that keeps its form.
-///
-/// The memo keeps the body, so its compressed form is paid once per version and takes the smaller of the level-9 and
-/// level-8 forms a kept body uses. On the 7,160-session mock home a search for `permission` is 16,063 bytes of its
-/// 256,488-byte answer, against the 22,512 bytes the per-response level-1 form spends.
-fn gzip_response(request: &Request<Body>, body: Vec<u8>, memo: &'static GzipBodyCache) -> Response {
-  if !accepts_gzip(request.headers()) {
-    return json_bytes_response(Bytes::from(body), false);
-  }
+/// One compressed response from a per-route body memo, encoding the body once per version and coding.
+fn compressed_response(request: &Request<Body>, body: Vec<u8>, memo: &'static CompressedBodyCache) -> Response {
+  let Some(coding) = ResponseEncoding::for_request(request.headers()).compressed() else {
+    return json_bytes_response(Bytes::from(body), None);
+  };
   let compressed = {
-    let mut cache = memo.lock().expect("gzip body memo mutex is not poisoned");
-    match cache.get(&body).cloned() {
-      Some(compressed) => compressed,
-      None => {
-        let compressed = charliebot_compat::compression::gzip_memoized_body(&body);
-        cache.put(body, compressed.clone());
-        compressed
+    let mut cache = memo.lock().expect("compressed body memo mutex is not poisoned");
+    if let Some(variants) = cache.get_mut(&body) {
+      let slot = match coding {
+        CompressedEncoding::Gzip => &mut variants.gzip,
+        CompressedEncoding::Zstd => &mut variants.zstd,
+      };
+      slot.get_or_insert_with(|| Bytes::from(compress_dynamic(&body, coding))).clone()
+    } else {
+      let encoded = Bytes::from(compress_dynamic(&body, coding));
+      let mut variants = CompressedVariants::default();
+      match coding {
+        CompressedEncoding::Gzip => variants.gzip = Some(encoded.clone()),
+        CompressedEncoding::Zstd => variants.zstd = Some(encoded.clone()),
       }
+      cache.put(body, variants);
+      encoded
     }
   };
-  json_bytes_response(Bytes::from(compressed), true)
+  json_bytes_response(compressed, Some(coding))
 }
 
-fn json_bytes_response(body: Bytes, gzip: bool) -> Response {
+fn compress_dynamic(plain: &[u8], coding: CompressedEncoding) -> Vec<u8> {
+  match coding {
+    CompressedEncoding::Gzip => gzip_memoized_body(plain),
+    CompressedEncoding::Zstd => zstd_dynamic_body(plain),
+  }
+}
+
+fn json_bytes_response(body: Bytes, encoding: Option<CompressedEncoding>) -> Response {
   let mut builder = Response::builder()
     .status(StatusCode::OK)
     .header(header::CONTENT_TYPE, APPLICATION_JSON)
     .header(header::CONTENT_LENGTH, body.len());
-  if gzip {
+  if let Some(coding) = encoding {
     builder = builder
-      .header(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"))
+      .header(header::CONTENT_ENCODING, HeaderValue::from_static(coding.content_encoding()))
       .header(header::VARY, HeaderValue::from_static(ACCEPT_ENCODING));
   }
   builder.body(Body::from(body)).expect("a JSON response builds")
@@ -1484,6 +1482,14 @@ mod tests {
       charliebot_compat::compression::gzip_memoized_body(&quiet),
       "the memo keeps the compressed form, so the answer takes the smaller kept-body level"
     );
+    let zstd = Request::builder()
+      .uri("/api/sessions/search?q=walrus")
+      .header(header::ACCEPT_ENCODING, "gzip, zstd")
+      .body(Body::empty())
+      .unwrap();
+    let zstd_response = session_search(State(Arc::clone(&features)), zstd).await;
+    assert_eq!(zstd_response.headers().get(header::CONTENT_ENCODING).unwrap(), "zstd");
+    assert_eq!(to_bytes(zstd_response.into_body(), usize::MAX).await.unwrap().as_ref(), zstd_dynamic_body(&quiet),);
     let quiet: Value = serde_json::from_slice(&quiet).unwrap();
     assert_eq!(quiet["thinking_since"][0], Value::Null);
 
@@ -1608,6 +1614,13 @@ mod tests {
     let repeat = answer("gzip").await;
     let repeat = to_bytes(repeat.into_body(), usize::MAX).await.unwrap();
     assert_eq!(repeat, compressed, "a repeat page answers with the compressed body the memo already holds");
+
+    let zstd = answer("gzip, zstd").await;
+    assert_eq!(zstd.headers().get(header::CONTENT_ENCODING).unwrap(), "zstd");
+    assert_eq!(zstd.headers().get(header::VARY).unwrap(), "Accept-Encoding");
+    let zstd_compressed = to_bytes(zstd.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(zstd_compressed.as_ref(), zstd_dynamic_body(&identity));
+    assert_eq!(to_bytes(answer("zstd").await.into_body(), usize::MAX).await.unwrap(), zstd_compressed);
   }
 
   #[tokio::test]

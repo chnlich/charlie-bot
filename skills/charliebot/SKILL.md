@@ -34,8 +34,8 @@ Source code: the server and the `charliebot` CLI are `rust/crates/`.
    holds it. Before any push, a diff that changes a web page (a file that a CharlieBot page serves, or a page template
    directly under `prompts/`) is refused unless its PR body names the approved demo on a `Demo:` line, a `View:` line
    with the full URL that opens the changed state, and a screenshot at each CSS window size `charliebot land --help`
-   lists by absolute path. Each `View:` line is written into the landed commit as a trailer, which the release switch
-   reads back to capture the live page and to check that the capture shows the change.
+   lists, each by file name in the `--evidence-dir` directory. Each `View:` line is written into the landed commit as a
+   trailer, which the release switch reads back to capture the live page and to check that the capture shows the change.
 5. On landing → master agent gets summary
 
 ### Merge-back failover

@@ -16,6 +16,7 @@ mod loader;
 mod rounds;
 #[cfg(test)]
 mod rounds_tests;
+mod schedule;
 mod scheduler;
 pub mod seed;
 mod sequence_controller;

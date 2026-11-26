@@ -34,7 +34,7 @@ use crate::firing::{firing_ref, parse_firing_ref};
 use crate::steps::{
   StepMember, distinct_backend_conflict, distinct_exclusion, option_model, select_step_member, step_backend_id,
 };
-use crate::{loader, rounds, scheduler};
+use crate::{loader, rounds, schedule};
 
 /// A set of task configs bound to the same manager node.
 pub struct CronBinding {
@@ -277,7 +277,7 @@ fn shown_task<'a>(candidates: &[&'a ScheduledTaskConfig], now: UtcDateTime) -> O
 
 /// The next fire time of a task, or None when its cron cannot be read; each failure is logged.
 fn next_fire_or_report(task: &ScheduledTaskConfig, now: UtcDateTime) -> Option<UtcDateTime> {
-  let next_iso = match scheduler::next_fire_iso(&task.cron, &task.timezone, now) {
+  let next_iso = match schedule::next_fire_iso(&task.cron, &task.timezone, now) {
     Ok(next_iso) => next_iso,
     Err(error) => {
       tracing::error!(task = %task.name, error = %error, "cron_row_next_fire_failed");
@@ -335,7 +335,7 @@ fn row_schedule_fields(
     fields.insert(SCHEDULE_TIMEZONE.to_string(), Value::String(task.timezone.clone()));
     fields.insert(SCHEDULE_ENABLED.to_string(), Value::Bool(task.enabled));
     fields.insert(SCHEDULE_ALLOW_FAILURE.to_string(), Value::Bool(task.allow_failure));
-    match scheduler::next_fire_iso(&task.cron, &task.timezone, now) {
+    match schedule::next_fire_iso(&task.cron, &task.timezone, now) {
       Ok(next) => {
         earliest_next_fire = Some(earliest_next_fire.map_or_else(
           || UtcDateTime::parse(&next).expect("the cron next-fire value is an ISO datetime"),

@@ -4,7 +4,7 @@ use charliebot_compat::request_body::{BodyModel, Field, FieldType};
 use charliebot_core::config::{CharlieBotConfig, HOST_AUTH_SECTION_KEY, HostAuthConfig};
 use serde::{Deserialize, Serialize};
 
-use crate::scheduler;
+use crate::schedule;
 
 /// The default time zone of a scheduled task and of a create request: `charliebot_core::pacific::ZONE`, the house zone.
 pub const DEFAULT_TIMEZONE: &str = charliebot_core::pacific::ZONE;
@@ -181,7 +181,7 @@ pub fn validate_task(task: &ScheduledTaskConfig) -> Result<(), String> {
       }
     }
   }
-  scheduler::validate_schedule(&task.cron, &task.timezone)?;
+  schedule::validate_schedule(&task.cron, &task.timezone)?;
   Ok(())
 }
 

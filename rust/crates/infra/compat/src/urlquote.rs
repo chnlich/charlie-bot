@@ -1,8 +1,9 @@
 //! Percent quoting as a safe set over the `percent-encoding` crate. Each caller names its safe bytes. The crate
 //! does the byte loop and writes uppercase `%XX`. [`quote_plus`] and [`encode_pairs`] are the one form/query encoder
-//! the CLI's calls and the server's routes share.
+//! the CLI's calls and the server's routes share. [`query_value`] reads one key's last value from a query string,
+//! for the voice and artifact views.
 
-use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 
 /// The bytes that plain percent quoting encodes: every ASCII byte except the alphanumerics, `_.-~` and
 /// `safe`. The crate also encodes every non-ASCII byte.
@@ -28,6 +29,23 @@ pub fn quote_plus(text: &str) -> String {
 /// The wire form of an ordered mapping: `quote_plus` over each key and value, `&`-joined in the mapping's order.
 pub fn encode_pairs(params: &[(String, String)]) -> String {
   params.iter().map(|(key, value)| format!("{}={}", quote_plus(key), quote_plus(value))).collect::<Vec<_>>().join("&")
+}
+
+/// The last value of one query key, decoded, or `None` when the query has no such key. A pair without `=` has an
+/// empty value.
+pub fn query_value(query: &str, key: &str) -> Option<String> {
+  query
+    .split('&')
+    .filter_map(|pair| {
+      let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
+      (decode_component(name) == key).then(|| decode_component(value))
+    })
+    .next_back()
+}
+
+/// One query component decoded: `+` reads as a space, then the `%XX` escapes decode, and invalid UTF-8 is replaced.
+fn decode_component(text: &str) -> String {
+  percent_decode_str(&text.replace('+', " ")).decode_utf8_lossy().into_owned()
 }
 
 #[cfg(test)]

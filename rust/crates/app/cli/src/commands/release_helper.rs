@@ -76,6 +76,7 @@ const VERBS: &[(&str, &str)] = &[
   ("seed-run", "SESSIONS_DIR SESSION PID PID_START BACKEND RUN_ID"),
   ("self-test", ""),
   ("session-id", "RESPONSE_PATH"),
+  ("session-ids", "SESSIONS_DIR"),
   ("session-weights", "CONFIG_PATH"),
   ("stand-in-options", "CRON_DEFAULTS CONFIG_EXAMPLE"),
   ("sweep-check", "SERVER_LOG SESSIONS_DIR"),
@@ -143,6 +144,7 @@ fn dispatch(name: &str, args: &[String]) -> Result<i32, String> {
     "seed-run" => seed_run(args),
     "self-test" => self_test(args),
     "session-id" => session_id(args),
+    "session-ids" => session_ids(args),
     "session-weights" => session_weights(args),
     "stand-in-options" => stand_in_options(args),
     "sweep-check" => sweep_check(args),
@@ -520,6 +522,26 @@ fn child_workers(args: &[String]) -> Result<i32, String> {
 fn directory_entries(directory: &str) -> Result<Vec<PathBuf>, String> {
   let entries = fs::read_dir(directory).map_err(|error| format!("{directory}: {error}"))?;
   entries.map(|entry| entry.map(|entry| entry.path()).map_err(|error| error.to_string())).collect()
+}
+
+fn session_ids(args: &[String]) -> Result<i32, String> {
+  let [sessions] = arguments::<1>(args, "session-ids")?;
+  let mut directories = directory_entries(sessions)?;
+  directories.sort();
+  for directory in directories {
+    let metadata_path = layout::metadata_path(&directory);
+    if !directory.is_dir() || !metadata_path.is_file() {
+      continue;
+    }
+    let metadata =
+      metadata::read_metadata_value(&metadata_path).map_err(|error| format!("{}: {error}", metadata_path.display()))?;
+    if let Some(Value::String(id)) = metadata.get("id")
+      && !id.is_empty()
+    {
+      println!("{id}");
+    }
+  }
+  Ok(0)
 }
 
 fn content_text(value: &Value, parts: &mut Vec<String>) {

@@ -13,13 +13,11 @@
 # ends fails the trial with a MemoryCap line that names the cap, the peak and the scope. A trial whose server still runs
 # at the end of its wait prints the scope's memory peak as SERVE PASS MemoryPeak. After the command ends the trial waits
 # until every run of the trial home has ended, stops the server, asserts that no process of the trial tree remains,
-# cleans up and runs sweep-check on the server log. The leftover check waits only for the processes that carry the
-# trial's environment, and each remaining one is named by pid, command line and parent chain: a launcher that merely
-# names a trial path in its command line is not a process of the trial. After a scoped server exits, the trial waits
-# up to SERVE_EXIT_WAIT_SECONDS for its scope to reach a terminal state before classifying the exit. For a scoped
-# serve, a runs-read error first waits up to the same bound for the server to exit. If either wait cannot establish the
-# state, the trial does not report a memory cap. In --in-caller-scope mode, memory-cap classification stays disabled and
-# a runs-read error is reported as before. A server that does not exit on SIGTERM within SERVER_STOP_WAIT_MS fails the
+# cleans up and runs sweep-check on the server log. After a scoped server exits, the trial waits up to
+# SERVE_EXIT_WAIT_SECONDS for its scope to reach a terminal state before classifying the exit. For a scoped serve, a
+# runs-read error first waits up to the same bound for the server to exit. If either wait cannot establish the state,
+# the trial does not report a memory cap. In --in-caller-scope mode, memory-cap classification stays disabled and a
+# runs-read error is reported as before. A server that does not exit on SIGTERM within SERVER_STOP_WAIT_MS fails the
 # side; its CAUSE line names its pid, binary and scope.
 #
 # A side is ready only when the port's listener is this trial's server (or a process it started) and that server
@@ -99,9 +97,6 @@ readonly SERVE_READY_POLLS=2400
 readonly SERVER_STOP_WAIT_MS=20000
 # Each wait for the server or its scope to settle uses this bound.
 readonly SERVE_EXIT_WAIT_SECONDS=10
-# The leftover check waits this long for the trial's own processes to exit before it fails the side, and it ends the
-# moment the last one is gone.
-readonly SERVE_CHILD_WAIT_SECONDS=10
 # The scheduled task list route of the server, which charliebot_cron names TASKS_PATH.
 readonly CRON_TASKS_PATH=/api/cron/tasks
 
@@ -554,52 +549,6 @@ capture_evidence() {
 
 process_state() {
   ps -p "$1" -o stat= 2>/dev/null | tr -d '[:space:]'
-}
-
-# trial_process_pids prints, one per line, every live process that carries the trial's own environment: its HOME is the
-# trial home or its TMPDIR is the trial temp root. The trial exports both to every process it starts, so its server, its
-# command and their descendants match, while a process that only names a trial path in its command line does not: an
-# improve round's tool shell names the tree path in the launch command, and it is not the trial's process.
-#
-# The scan runs under a replaced environment so it cannot list itself, and the shell that calls it ($$ and $BASHPID)
-# is skipped. Every helper the wait loop starts under this check runs with the same replaced environment.
-trial_process_pids() {
-  local entry pid
-  HOME=/nonexistent TMPDIR=/nonexistent \
-    grep -lZzFx -e "HOME=$TRIAL_HOME" -e "TMPDIR=$TMP_ROOT" /proc/[0-9]*/environ \
-    >"$HTTP_ROOT/trial-process-environ" 2>/dev/null || true
-  while IFS= read -r -d '' entry; do
-    pid=${entry#/proc/}
-    pid=${pid%/environ}
-    [[ $pid =~ ^[0-9]+$ ]] || continue
-    (( pid == $$ || pid == BASHPID )) && continue
-    printf '%s\n' "$pid"
-  done <"$HTTP_ROOT/trial-process-environ"
-}
-
-# process_parent_chain PID prints the process's parent chain as `pid:comm <- pid:comm ...`, ending at init.
-process_parent_chain() {
-  local pid=$1 ppid comm chain= depth=0
-  ppid=$(sed -n 's/^PPid:[[:space:]]*//p' "/proc/$pid/status" 2>/dev/null)
-  while [[ $ppid =~ ^[1-9][0-9]*$ ]] && (( depth < 16 )); do
-    comm=$(cat "/proc/$ppid/comm" 2>/dev/null || printf '?')
-    chain+=${chain:+ <- }"$ppid:$comm"
-    ppid=$(sed -n 's/^PPid:[[:space:]]*//p' "/proc/$ppid/status" 2>/dev/null)
-    depth=$((depth + 1))
-  done
-  printf '%s' "${chain:-none}"
-}
-
-# describe_trial_process PID prints one CAUSE line for a process the leftover check found: its pid, its parent, its
-# command line and its parent chain.
-describe_trial_process() {
-  local pid=$1 ppid comm cmdline
-  ppid=$(sed -n 's/^PPid:[[:space:]]*//p' "/proc/$pid/status" 2>/dev/null)
-  comm=$(cat "/proc/$pid/comm" 2>/dev/null || printf '?')
-  cmdline=$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)
-  cmdline=${cmdline%" "}
-  printf 'CAUSE serve: pid %s ppid %s comm %s cmdline "%s" ancestors %s\n' \
-    "$pid" "${ppid:-none}" "$comm" "$cmdline" "$(process_parent_chain "$pid")"
 }
 
 # stop_failed CAUSE: the FAIL line of a serve stop, then the cause, which names the server's pid, its binary and its
@@ -1413,41 +1362,9 @@ read_session_runs() {
   done
 }
 
-# serve_home_live_run_sessions prints the id of every trial-home session that holds a run record without an ended_at:
-# the only sessions that can hold a queued or running run. A run record without ended_at is unsettled, and a session
-# whose runs all carry ended_at has no live run, so the wait never reads it. One search of the run records finds the
-# candidates; the wait then asks the server about those sessions alone. A search that fails (grep's status 2) is a
-# read failure, so the caller names it rather than passing the wait.
-serve_home_live_run_sessions() {
-  local status record session_dir session_id
-  local -A seen=()
-  local -a ids=()
-  grep -rlZ --include=metadata.json '"ended_at": null' "$SESSIONS_DIR" \
-    >"$HTTP_ROOT/serve-run-records" 2>/dev/null
-  status=$?
-  if (( status > 1 )); then
-    return 1
-  fi
-  while IFS= read -r -d '' record; do
-    case $record in
-      */data/runs/*) ;;
-      *) continue ;;
-    esac
-    session_dir=${record%/data/runs/*}
-    session_id=${session_dir##*/}
-    [[ -n $session_id && -z ${seen[$session_id]:-} ]] || continue
-    seen[$session_id]=1
-    ids+=("$session_id")
-  done <"$HTTP_ROOT/serve-run-records"
-  if (( ${#ids[@]} > 0 )); then
-    printf '%s\n' "${ids[@]}"
-  fi
-}
-
-# serve_home_has_active_run reads the runs of the trial-home sessions that hold an unsettled run record. A stopped,
-# withheld or input-blocked run consumes no server process, so the active set is queued and running only. Every page of
-# a session's runs is read, because the newest run is on the last page. It returns 1 when a page cannot be read, and
-# read_session_runs names why.
+# serve_home_has_active_run reads the runs of every trial-home session. A stopped, withheld or input-blocked run
+# consumes no server process, so the active set is queued and running only. Every page of a session's runs is read,
+# because the newest run is on the last page. It returns 1 when a page cannot be read, and read_session_runs names why.
 serve_home_has_active_run() {
   local trial_session_id trial_session_ids cursor page_output
   local -a page=()
@@ -1455,8 +1372,8 @@ serve_home_has_active_run() {
   if [[ ! -d $SESSIONS_DIR ]]; then
     return 0
   fi
-  if ! trial_session_ids=$(serve_home_live_run_sessions); then
-    RUN_CAUSE="the run records of the trial home cannot be searched: $SESSIONS_DIR"
+  if ! trial_session_ids=$("$TRIAL_CLI" release-helper session-ids "$SESSIONS_DIR"); then
+    RUN_CAUSE="the sessions of the trial home cannot be listed: $SESSIONS_DIR"
     return 1
   fi
   while IFS= read -r trial_session_id; do
@@ -1577,7 +1494,6 @@ run_serve_mode() {
   # cleanup failure.
   local cmd_rc=0 sweep_failed=0 cleanup_failed=0
   local wait_started server_pid server_state server_status state stray_pids disabled_tasks
-  local stray_pid child_wait_started child_wait_now stray_list
   SERVE_UNIT="charliebot-release-trial-serve-$(date -u +%Y%m%dT%H%M%SZ)-$$"
   SERVER_PID_FILE="$TREE/server.pid"
   if [[ -n $SEED_HOME ]]; then
@@ -1698,34 +1614,17 @@ run_serve_mode() {
   if (( IN_CALLER_SCOPE == 0 && SERVE_UNIT_STARTED == 1 )) && ! stop_serve_scope "$SERVE_UNIT"; then
     cleanup_failed=1
   fi
-  # The leftover check waits for the trial's own processes to exit and ends as soon as the last one is gone. It waits
-  # only on those processes, matched by the environment the trial exported to them, so a launcher that merely names a
-  # trial path in its command line never fails the side.
-  child_wait_started=$(date +%s%3N)
-  while :; do
-    stray_pids=$(trial_process_pids)
-    [[ -n $stray_pids ]] || break
-    child_wait_now=$(HOME=/nonexistent TMPDIR=/nonexistent date +%s%3N)
-    if (( child_wait_now - child_wait_started >= SERVE_CHILD_WAIT_SECONDS * 1000 )); then
-      break
-    fi
-    HOME=/nonexistent TMPDIR=/nonexistent sleep 0.1
-  done
   for server_pid in "${SERVER_PIDS[@]}"; do
     state=$(process_state "$server_pid")
     if [[ -n $state && $state != *Z* ]]; then
       cleanup_failed=1
       printf 'FAIL serve ChildProcess: the server process %s remains\n' "$server_pid"
-      describe_trial_process "$server_pid"
     fi
   done
+  stray_pids=$({ pgrep -f "$TREE"; pgrep -f "$TMP_ROOT"; } || true)
   if [[ -n $stray_pids ]]; then
     cleanup_failed=1
-    stray_list=$(tr '\n' ' ' <<<"$stray_pids")
-    printf 'FAIL serve ChildProcess: processes of the trial tree or temp root remain: %s\n' "${stray_list% }"
-    for stray_pid in $stray_pids; do
-      describe_trial_process "$stray_pid"
-    done
+    printf 'FAIL serve ChildProcess: processes of the trial tree or temp root remain: %s\n' "$stray_pids"
   else
     printf 'SERVE PASS ChildProcess: no process of the trial tree remains\n'
   fi

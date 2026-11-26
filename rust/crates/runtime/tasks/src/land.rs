@@ -1112,6 +1112,11 @@ enum PushRejection {
 /// descendant of its tip.
 const NON_FAST_FORWARD_MARKERS: [&str; 3] = ["non-fast-forward", "fetch first", "stale info"];
 
+/// The two fragments receive-pack prints when the ref moved between the push's advertisement and
+/// its update transaction — the lease check of a lost push race. Both must appear, so a hook or a
+/// local lock failure that echoes only `cannot lock ref` stays a plain refusal.
+const LEASE_CHECK_MARKERS: [&str; 2] = ["cannot lock ref", "but expected"];
+
 /// stderr fragments of timed-out remote operations, including an SSH connection timeout.
 const TIMEOUT_MARKERS: [&str; 2] = ["timed out", "timeout"];
 
@@ -1139,7 +1144,9 @@ fn push_rejection_kind(stderr: &str) -> PushRejection {
   let lowered = stderr.to_lowercase();
   if lowered.contains("gh013") || lowered.contains("repository rule") || lowered.contains("rule violations") {
     PushRejection::RepositoryRules
-  } else if NON_FAST_FORWARD_MARKERS.iter().any(|marker| lowered.contains(marker)) {
+  } else if NON_FAST_FORWARD_MARKERS.iter().any(|marker| lowered.contains(marker))
+    || LEASE_CHECK_MARKERS.iter().all(|marker| lowered.contains(marker))
+  {
     PushRejection::NonFastForward
   } else if TIMEOUT_MARKERS.iter().any(|marker| lowered.contains(marker)) {
     PushRejection::Timeout
@@ -2298,10 +2305,34 @@ mod tests {
       ),
       PushRejection::NonFastForward
     );
+    // A lease check that found the ref already moved names the same possible base move.
+    assert_eq!(
+      push_rejection_kind(
+        "remote: error: cannot lock ref 'refs/heads/main': is at 1111111 but expected 2222222\n\
+         To https://github.com/owner/repo.git\n ! [remote rejected] abc123 -> main (cannot lock ref)\n\
+         error: failed to push some refs"
+      ),
+      PushRejection::NonFastForward
+    );
     // A hook refusal, an SSH reset, a timeout and an auth error each carry their own class.
     let hook = "pre-push: push to dev is restricted; use merge_to_dev.sh <branch>\n\
                 error: failed to push some refs to 'gitee.com:owner/repo.git'";
     assert_eq!(push_rejection_kind(hook), PushRejection::Refused);
+    assert_eq!(
+      push_rejection_kind(
+        "remote: push to main is restricted; use merge_to_dev.sh <branch>\nTo ../origin.git\n\
+         ! [remote rejected] abc123 -> main (pre-receive hook declined)\n\
+         error: failed to push some refs to '../origin.git'"
+      ),
+      PushRejection::Refused
+    );
+    // A ref-lock failure without the lease wording is a local or hook lock conflict, not a move.
+    assert_eq!(
+      push_rejection_kind(
+        "remote: error: cannot lock ref 'refs/heads/main': Unable to create 'refs/heads/main.lock': File exists"
+      ),
+      PushRejection::Refused
+    );
     assert_eq!(
       push_rejection_kind(
         "kex_exchange_identification: read: Connection reset by peer\nfatal: Could not read from remote repository."
@@ -2755,6 +2786,54 @@ mod synthetic_repo_tests {
 
   async fn fetch_main(repo: &Path) {
     assert!(git::git_stdout(repo, &["fetch", "origin", "main"], GIT_WRITE_TIMEOUT, "git fetch").await.0);
+  }
+
+  /// A lease-check rejection becomes `BaseMoved` only when the remote base verifiably advanced, and a
+  /// hook refusal never turns into one even after the base moved.
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_lease_check_rejection_is_a_base_move_only_when_the_remote_tip_moved() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    let repo = synthetic_repo(root.path(), "feature");
+    commit(&repo, "notes.txt", "feature work\n");
+    let sha = head(&repo);
+    let push_base_sha = git::git_rev_parse(&repo, "origin/main").await.expect("origin/main resolves");
+    let lease_stderr = "remote: error: cannot lock ref 'refs/heads/main': is at 1111111 but expected 2222222\n\
+                        To ../origin.git\n ! [remote rejected] abc123 -> main (cannot lock ref)\n\
+                        error: failed to push some refs";
+
+    // The base still holds the pushed base: the same lease-check stderr stays terminal.
+    let unmoved = match judge_push_rejection(&repo, "main", &push_base_sha, &sha, lease_stderr).await {
+      Ok(_) => panic!("an unmoved base keeps the rejection terminal"),
+      Err(error) => format!("{error:#}"),
+    };
+    assert!(unmoved.contains("was rejected as non-fast-forward"), "{unmoved}");
+
+    // The base really moved: the rejection starts another round at the new tip.
+    let main_work = root.path().join("main-work");
+    let clone =
+      Command::new("git").args(["clone", "-q"]).arg(root.path().join("origin.git")).arg(&main_work).output().unwrap();
+    assert!(clone.status.success(), "git clone failed: {}", String::from_utf8_lossy(&clone.stderr));
+    commit(&main_work, "main.txt", "main work\n");
+    assert!(
+      Command::new("git").arg("-C").arg(&main_work).args(["push", "-q", "origin", "main"]).status().unwrap().success()
+    );
+    let moved_tip = head(&main_work);
+    match judge_push_rejection(&repo, "main", &push_base_sha, &sha, lease_stderr).await {
+      Ok(PushOutcome::BaseMoved(tip)) => assert_eq!(tip, moved_tip),
+      Ok(PushOutcome::PrMergeRequired) => panic!("a lease check is not a repository-rules answer"),
+      Err(error) => panic!("the moved base starts another round: {error:#}"),
+    }
+
+    // A hook refusal keeps its own class even now that the base moved.
+    let hook_stderr = "remote: push to main is restricted; use merge_to_dev.sh <branch>\n\
+                       ! [remote rejected] abc123 -> main (pre-receive hook declined)\n\
+                       error: failed to push some refs";
+    let hook = match judge_push_rejection(&repo, "main", &push_base_sha, &sha, hook_stderr).await {
+      Ok(_) => panic!("a hook refusal is terminal"),
+      Err(error) => format!("{error:#}"),
+    };
+    assert!(hook.contains("was refused"), "{hook}");
   }
 
   #[tokio::test]

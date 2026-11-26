@@ -269,6 +269,7 @@ Step 9 names the kit revision.
 
 The skills are the `skills/` tree of that same revision, and `$IMPROVE_SKILLS_DIR` holds them.
 Every skill file the round reads comes from `$IMPROVE_SKILLS_DIR`, whatever text names it and whatever path that text gives.
+A codex round's discovery lists skills from `$IMPROVE_SKILLS_DIR` only: the runner links its codex home to that directory and turns off the host's skill roots, and the round's start refuses a round whose codex would list another path.
 Any other copy of a skill, in a host's skill directory, a checkout or the clone, may differ from this revision.
 A pull request does not merge while the round's event log or its review record reads a skill file from any other copy, and pr-merge names each such path.
 

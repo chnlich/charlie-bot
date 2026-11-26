@@ -525,7 +525,9 @@ fi
 # The skill roots that a round's instructions file and prompt name map to $IMPROVE_SKILLS_DIR, the skills of the round's
 # kit, which the runner exports. These are a host's `~/.claude/skills` and `~/.agents/skills`, its
 # `$CHARLIEBOT_HOME/skills`, and a relative `skills/` at the start of a word. Git's `<ref>:skills/...` names a commit's
-# tree, so its text stays. It reads standard input and writes standard output, so a file and a stream both pass through.
+# tree, so its text stays. This maps text only: a codex round's discovery of skills, which codex does on its own from
+# the host's roots, is confined by the runner's codex-skill-roots.sh. It reads standard input and writes standard
+# output, so a file and a stream both pass through.
 map_skill_roots() {
   sed -E \
     -e 's#~/\.(claude|agents)/skills#$IMPROVE_SKILLS_DIR#g' \
@@ -581,6 +583,8 @@ cp -- "$member_kinds_file" "$payload/member_kinds.txt"
 cp -- "$SCRIPT_DIR/inflight-files.sh" "$payload/inflight-files.sh"
 # The runner sources the clone's sync and check from this copy.
 cp -- "$SCRIPT_DIR/clone-check.sh" "$payload/clone-check.sh"
+# The runner sources a codex round's skill roots from this copy: its codex home lists only the round's skills.
+cp -- "$SCRIPT_DIR/codex-skill-roots.sh" "$payload/codex-skill-roots.sh"
 # The runner clones its own checkout from this origin, so the round tools are built from the
 # runtime clone's repository and not from the direction clone's configuration.
 runtime_origin=$(git -C "$SCRIPT_DIR/../.." remote get-url origin 2>/dev/null) || runtime_origin=

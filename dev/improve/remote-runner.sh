@@ -33,18 +33,21 @@
 # The skills are the skills/ tree of that same commit, archived beside the kit as IMPROVE_SKILLS_DIR, so the rule text a
 # round reads matches its kit. The launch names the skills revision, and the start refuses a launch whose skills
 # revision differs from the commit, as it does for the kit. The agent's stream-json is also written to the launch's
-# round-events.ndjson. The round's start stamp, IMPROVE_ROUND_START, names its evidence directory, and the runner keeps
-# there the round's facts that a merge outside the round reads: the in-flight list, the event log at the round's end and
-# the kit revision (keep_round_facts).
+# round-events.ndjson, which github-post.sh pr-merge reads for skill reads. The round's start stamp, IMPROVE_ROUND_START,
+# names its evidence directory, and the runner keeps there the round's facts that a merge outside the round reads: the
+# in-flight list, the event log at the round's end and the kit revision (keep_round_facts). A codex round's discovery
+# lists skills from the same directory only: codex-skill-roots.sh links its codex home to it and turns off the host's
+# skill roots, and the round's start refuses a round whose codex would still list another skill path.
 #
 # Exit codes: the agent's exit code; 1 a local failure, such as a missing input file or a refused
 # scope, or a round whose review still runs in the scope after its agent exited (stderr names the
 # review); 4 the direction's clone is missing, is not this protocol's clone, or holds uncommitted work
 # that blocks its checkout of origin/main; 5 the previous round of this direction still runs; 7 a round
 # dependency is missing (a login, the review's login, the round's home, the write boundary, the browser or a member
-# or review CLI) or the kit, the skills and the charliebot name different revisions, and stderr names it. A member or
-# review CLI exits 7 when the vendor install or the installed `--version` check fails, and stderr names the local
-# version and the version the host runs. Nothing starts on 4, 5 and 7.
+# or review CLI), the kit, the skills and the charliebot name different revisions, or a codex round's discovery would
+# list a skill outside the round's skills directory, and stderr names it. A member or review CLI exits 7 when the
+# vendor install or the installed `--version` check fails, and stderr names the local version and the version the host
+# runs. Nothing starts on 4, 5 and 7.
 #
 # The round reads its direction from this invocation, so the scope name, the boundary and TMPDIR
 # name one direction only. Two rounds of one direction never run together: the scope name refuses
@@ -872,6 +875,7 @@ write_review_login() {
     printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$value" >"$login"
   elif value=$(member_record_value REVIEW_CODEX_AUTH); then
     write_codex_home "$REVIEW_CODEX_HOME" "$value"
+    prepare_codex_skill_roots "$REVIEW_CODEX_HOME"
     printf 'CODEX_HOME=%s\n' "$REVIEW_CODEX_HOME" >"$login"
   else
     fail 7 "the launch holds no review login: $MEMBER_CREDENTIAL"
@@ -922,6 +926,7 @@ prepare_codex_home() {
   local auth
   auth=$(member_record_value IMPROVE_CODEX_AUTH) || fail 1 "the launch holds no Codex login: $MEMBER_CREDENTIAL"
   write_codex_home "$CODEX_HOME_TARGET" "$auth"
+  prepare_codex_skill_roots "$CODEX_HOME_TARGET"
 }
 
 # The process ids of this scope that run the round's review: a process whose command line runs `charliebot backend run`,
@@ -1076,6 +1081,7 @@ fi
 
 if [[ $mode == in_scope ]]; then
   rewrite_command
+  source "$LAUNCH_DIR/codex-skill-roots.sh"
   run_in_scope
 fi
 

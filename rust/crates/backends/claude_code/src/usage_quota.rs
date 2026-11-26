@@ -1419,14 +1419,19 @@ mod tests {
     (alias, dir, hosts)
   }
 
-  /// The Claude CLI process that uses `config_dir`'s login, when one runs. Only a Claude CLI uses the token: a process
-  /// that merely inherited `CLAUDE_CONFIG_DIR`, such as a shell, `sleep` or `kubectl`, does not.
-  fn process_using(config_dir: &Path) -> Option<u32> {
+  /// A Claude CLI process that uses `config_dir`'s login, other than the process `except`, described by its PID and
+  /// executable. Only a Claude CLI uses the token: a process that merely inherited `CLAUDE_CONFIG_DIR`, such as a
+  /// shell, `sleep` or `kubectl`, does not.
+  fn claude_cli_using(config_dir: &Path, except: Option<u32>) -> Option<String> {
     let entries = fs::read_dir("/proc").ok()?;
     let prefix = format!("{}=", crate::login_dirs::CLAUDE_CONFIG_DIR_ENV);
     for entry in entries.flatten() {
       let name = entry.file_name();
       let Some(pid) = name.to_str().filter(|name| name.bytes().all(|byte| byte.is_ascii_digit())) else { continue };
+      let Ok(pid_number) = pid.parse::<u32>() else { continue };
+      if except == Some(pid_number) {
+        continue;
+      }
       let Ok(data) = fs::read(entry.path().join("environ")) else { continue };
       let carries = data.split(|byte| *byte == 0).any(|item| {
         std::str::from_utf8(item)
@@ -1435,7 +1440,9 @@ mod tests {
           .is_some_and(|value| Path::new(value) == config_dir)
       });
       if carries && is_claude_cli(&entry.path()) {
-        return pid.parse().ok();
+        let exe = fs::read_link(entry.path().join("exe"))
+          .map_or_else(|_| "<executable unreadable>".to_string(), |path| path.display().to_string());
+        return Some(format!("pid {pid_number} ({exe})"));
       }
     }
     None
@@ -1479,7 +1486,9 @@ mod tests {
       remaining < claude_accounts::RENEWABLE_TOKEN_MAX_SECONDS * 1000,
       "the login {alias} lives {remaining} ms, so it is not under the renewal's cap"
     );
-    assert_eq!(process_using(&dir), None, "a Claude CLI already uses the login {alias}; the test needs an idle login");
+    if let Some(user) = claude_cli_using(&dir, None) {
+      panic!("a Claude CLI already uses the login {alias}: {user}; the test needs an idle login");
+    }
     let check = claude_accounts::HoldCheck::new(hosts.clone(), claude_accounts::now_or(None));
     assert_eq!(check.hold(&dir), claude_accounts::Hold::Free, "a live round holds the login {alias}");
 
@@ -1501,6 +1510,25 @@ mod tests {
       .expect("the claude CLI starts");
     // The CLI reads its login at start and runs the tool call for a minute; the renewal lands in its middle.
     std::thread::sleep(Duration::from_secs(20));
+
+    // The second idle check, right before the renewal: a run that started after the selection stops the test here,
+    // before any renewal. The test's own CLI is the one process it allows to use the login.
+    let mut stops = Vec::new();
+    if let Some(user) = claude_cli_using(&dir, Some(child.id())) {
+      stops.push(format!("a Claude CLI other than the test's own uses the login: {user}"));
+    }
+    let hold = claude_accounts::HoldCheck::new(hosts.clone(), claude_accounts::now_or(None)).hold(&dir);
+    if hold != claude_accounts::Hold::Free {
+      stops.push(format!("the hold check reads {hold:?}"));
+    }
+    if !stops.is_empty() {
+      let _ = child.kill();
+      let _ = child.wait();
+      panic!(
+        "the second idle check failed before the renewal of {alias}: {}; the login was not renewed",
+        stops.join("; ")
+      );
+    }
 
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
     let quota = QuotaState::default();

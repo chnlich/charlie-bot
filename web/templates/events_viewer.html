@@ -165,7 +165,6 @@
     <h1 class="text-sm font-semibold text-slate-200 truncate flex-1">
       <span class="text-slate-400 mr-1">Events:</span>{{ session_id }}
     </h1>
-    {% set defer_concurrency_badge_poll = true %}
     {% include 'partials/concurrency_badge.html' %}
   </header>
   <div class="events-unavailable">
@@ -202,7 +201,6 @@
         <span class="events-download-label">Download JSONL</span>
       </a>
       <span id="event-count" class="text-xs text-slate-400"></span>
-      {% set defer_concurrency_badge_poll = true %}
       {% include 'partials/concurrency_badge.html' %}
     </header>
 

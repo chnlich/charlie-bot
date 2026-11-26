@@ -56,7 +56,10 @@ pub fn agent_environment(
     .into_string()
     .map_err(|_| anyhow::anyhow!("the agent PATH is not valid Unicode"))?;
   values.insert("PATH".to_string(), rewritten_path);
-  values.insert(gh_wrapper::WRAPPER_PATH_VAR.to_string(), gh_wrapper_dir.join("gh").to_string_lossy().into_owned());
+  values.insert(
+    gh_wrapper::WRAPPER_PATH_VAR.to_string(),
+    gh_wrapper::script_path(gh_wrapper_dir).to_string_lossy().into_owned(),
+  );
   // Chrome asks systemd over the session bus to move itself into its own scope. With the bus disabled it cannot, so a
   // browser stays in the cgroup of the process that started it. An agent's browser stays in the session cgroup, and
   // the server's renderer stays in the server's cgroup. On systemd 255, `systemctl --user` honors

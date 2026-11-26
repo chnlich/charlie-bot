@@ -1,6 +1,7 @@
 //! Percent quoting as a safe set over the `percent-encoding` crate. Each caller names its safe bytes. The crate
 //! does the byte loop and writes uppercase `%XX`. [`quote_plus`] and [`encode_pairs`] are the one form/query encoder
-//! the CLI's calls and the server's routes share, and [`query_value`] is the one reader of a query's values.
+//! the CLI's calls and the server's routes share. [`query_value`] reads one key's last value from a query string,
+//! for the voice and artifact views.
 
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 

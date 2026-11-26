@@ -1118,10 +1118,26 @@ impl RunSink {
 }
 
 fn append_run_event(file: &mut File, path: &Path, event: &Value) -> anyhow::Result<()> {
+  append_run_event_with_context(file, path, event, "appending to events log")
+}
+
+pub(crate) fn append_run_event_to_path(path: &Path, event: &Value) -> anyhow::Result<()> {
+  let mut file =
+    OpenOptions::new().create(true).append(true).open(path).with_context(|| format!("opening {}", path.display()))?;
+  append_run_event_with_context(&mut file, path, event, "writing")?;
+  file.flush().with_context(|| format!("flushing {}", path.display()))
+}
+
+fn append_run_event_with_context(
+  file: &mut File,
+  path: &Path,
+  event: &Value,
+  write_context: &str,
+) -> anyhow::Result<()> {
   if run_logs::is_thinking_tokens_event(event) {
     return Ok(());
   }
-  file.write_all(&event_line(event)).with_context(|| format!("appending to events log {}", path.display()))
+  file.write_all(&event_line(event)).with_context(|| format!("{write_context} {}", path.display()))
 }
 
 /// Processes one event of a run's process. The watch folds the event, a quota or rate-limit rejection ends the run,

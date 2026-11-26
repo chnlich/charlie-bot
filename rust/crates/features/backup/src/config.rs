@@ -11,13 +11,23 @@ use serde::{Deserialize, Serialize};
 /// The name of the registered `backup:` config section.
 pub const NAME: &str = "backup";
 
-/// The `backup:` section. A missing key fails a handler run with its reason.
-/// The server loads the section and starts without either, so a release can land before the cutover writes them.
+/// The `backup:` section. The server loads it and starts without either key set.
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct BackupConfig {
+  /// Set this to the restic repository that snapshots go to, in the form restic's `--repo` takes: a local path or a
+  /// restic transport such as `s3:` or `sftp:`. `~` and `$CHARLIEBOT_HOME` expand.
+  /// Unset or blank, a run stops before restic starts with an error that names `backup.repository`. A scheduled run
+  /// also sends the host owner a DM with that error.
+  /// A repository that restic cannot open fails the run with restic's error text, and no snapshot is written.
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub repository: Option<String>,
+  /// Set this to the file that holds the restic repository password, in the form restic's `--password-file` takes.
+  /// `~` and `$CHARLIEBOT_HOME` expand.
+  /// Unset or blank, a run stops before restic starts with an error that names `backup.password_file`. A scheduled run
+  /// also sends the host owner a DM with that error.
+  /// Before each backup or restore run, the file must be readable. When it is not, the run stops with an error that
+  /// names the path.
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub password_file: Option<String>,
 }

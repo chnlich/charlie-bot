@@ -50,7 +50,7 @@ const WARM_REPORT_TIMEOUT_MS = 300000;
 const REPLY_TIMEOUT_MS = 300000;
 // Keeps the page's warm report and its on-demand file store report on the window, before the page's own scripts run,
 // so the bench reads them after the load.
-const WARM_REPORT_INIT =
+export const WARM_REPORT_INIT =
   "document.addEventListener('charliebot:offline-shell-warm', (event) => { window.__warmReport = event.detail; });\n" +
   "document.addEventListener('charliebot:offline-shell-files-stored', (event) => { " +
   "window.__filesStored = event.detail; });";
@@ -313,8 +313,8 @@ async function buildWarm(ctx, caseName) {
     await tabs.waitIdle(SETTLE_MS);
     // The main side has no offline-shell events, so only the after side waits for the worker's report and the page's
     // on-demand file store.
-    report = ctx.side === 'after' ? await reportOnWindow(tab, '__warmReport') : null;
-    filesStored = ctx.side === 'after' ? await reportOnWindow(tab, '__filesStored') : null;
+    report = ctx.side === 'after' ? await reportOnWindow(tab, '__warmReport', WARM_REPORT_TIMEOUT_MS) : null;
+    filesStored = ctx.side === 'after' ? await reportOnWindow(tab, '__filesStored', WARM_REPORT_TIMEOUT_MS) : null;
     const now = Date.now();
     const record = { first_open_ms: now, sessions: { [session.id]: now } };
     await tab.evaluate(`localStorage.setItem('charliebot_opened_pages', ${JSON.stringify(JSON.stringify(record))})`);
@@ -334,15 +334,15 @@ async function buildWarm(ctx, caseName) {
   return { dir, report, filesStored };
 }
 
-// The value the page reports on the window as `name`, or null when it reports none within WARM_REPORT_TIMEOUT_MS.
-async function reportOnWindow(tab, name) {
-  const deadline = Date.now() + WARM_REPORT_TIMEOUT_MS;
+// The value the page reports on the window as `name`, or null when it reports none within `timeoutMs`.
+export async function reportOnWindow(tab, name, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
   for (;;) {
     const value = await tab.evaluate(`window.${name} ?? null`);
     if (value !== null || Date.now() >= deadline) {
       return value;
     }
-    await sleep(1000);
+    await sleep(Math.min(1000, Math.max(1, deadline - Date.now())));
   }
 }
 

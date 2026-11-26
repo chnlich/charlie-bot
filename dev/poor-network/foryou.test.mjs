@@ -4,7 +4,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { cellsDue, seedForYouTargets, seedSparseTarget, triggerOlderPageUntilFailure } from './foryou.mjs';
+import {
+  cellsDue, measureOpenCell, openDocumentPath, seedForYouTargets, seedSparseTarget, triggerOlderPageUntilFailure,
+} from './foryou.mjs';
+import { PAGE_REPORT_BINDING, Tab } from './tabs.mjs';
 
 // An api whose session log ends with the marker turn and `above` (the painted rows that turn leaves, one notice by
 // default), followed by the trigger tail's rows (none painted). The bootstrap's first screen carries `firstScreen`
@@ -155,4 +158,186 @@ test('the failed-page cell keeps asking the page to scroll until its hook record
 
   assert.equal(await triggerOlderPageUntilFailure(tab, 2000), 123);
   assert.equal(scrolls, 2);
+});
+
+// A scripted `tabs` driver backed by a real `Tab` for `measureOpenCell`: `warmPolls` and `filesPolls` return one
+// value per poll of `window.__warmReport` and `window.__filesStored` (repeating their last entry once exhausted).
+function openCellHarness({
+  warmPolls,
+  filesPolls = [{ stored: 8, revalidated: 0 }],
+  documentBytes = 0,
+  workerRequests = [],
+  reportTarget = true,
+}) {
+  const events = [];
+  let tab = null;
+  let warmIndex = 0;
+  let filesIndex = 0;
+  let initScriptSeen = null;
+  const targetId = 'target-id';
+  const openId = 'open-id';
+  const ctx = { sessions: { open: { id: openId } } };
+  const target = { id: targetId, marker: 'pn-foryou marker test large' };
+  const tabs = {
+    events,
+    get initScript() {
+      return initScriptSeen;
+    },
+    async open(name, initScript) {
+      initScriptSeen = initScript;
+      const page = {
+        async send(method, params) {
+          events.push(['send', method, params]);
+          return {};
+        },
+        async evaluate(expression) {
+          if (expression.includes("document.readyState === 'complete'")) return true;
+          if (expression === 'window.__warmReport ?? null') {
+            const value = warmPolls[Math.min(warmIndex, warmPolls.length - 1)];
+            warmIndex++;
+            events.push(['poll-warm', value]);
+            return value;
+          }
+          if (expression === 'window.__filesStored ?? null') {
+            const value = filesPolls[Math.min(filesIndex, filesPolls.length - 1)];
+            filesIndex++;
+            events.push(['poll-files', value]);
+            return value;
+          }
+          throw new Error(`unexpected evaluate expression: ${expression}`);
+        },
+      };
+      tab = new Tab(name, page);
+      return tab;
+    },
+    async navigate(targetTab, urlPath) {
+      events.push(['navigate', urlPath]);
+      if (urlPath === `/?session=${targetId}`) {
+        const docUrl = `https://front.test/?session=${targetId}`;
+        targetTab.handle({
+          method: 'Network.requestWillBeSent',
+          params: { requestId: 'doc', request: { url: docUrl } },
+        });
+        targetTab.handle({
+          method: 'Network.loadingFinished',
+          params: { requestId: 'doc', encodedDataLength: documentBytes },
+        });
+        if (reportTarget) {
+          targetTab.handle({
+            method: 'Runtime.bindingCalled',
+            params: {
+              name: PAGE_REPORT_BINDING,
+              payload: JSON.stringify({ kind: 'foryou', at: Date.now() + 5, href: docUrl }),
+            },
+          });
+        }
+      }
+    },
+    workerTrace() {
+      return workerRequests;
+    },
+  };
+  return { tabs, ctx, target };
+}
+
+test('the open cell navigates to the target only after the warm and on-demand-files reports arrive', async () => {
+  const { tabs, ctx, target } = openCellHarness({
+    warmPolls: [null, null, { stored: true }],
+    filesPolls: [null, { stored: 8, revalidated: 0 }],
+    documentBytes: 0,
+    workerRequests: [],
+  });
+
+  const rep = await measureOpenCell(tabs, ctx, target, 'fy-open-large-1', 5000);
+  assert.match(tabs.initScript, /charliebot:offline-shell-warm/);
+  assert.match(tabs.initScript, /charliebot:offline-shell-files-stored/);
+
+  const navigations = tabs.events.filter(([kind]) => kind === 'navigate').map(([, path]) => path);
+  assert.deepEqual(navigations, ['/?session=open-id', '/?session=target-id']);
+
+  const targetNavAt = tabs.events.findIndex(([kind, path]) => kind === 'navigate' && path === '/?session=target-id');
+  const warmStoredAt = tabs.events.findIndex(([kind, val]) => kind === 'poll-warm' && val?.stored === true);
+  const filesStoredAt = tabs.events.findIndex(([kind, val]) => kind === 'poll-files' && val?.stored === 8);
+  assert.ok(warmStoredAt > 0 && filesStoredAt > warmStoredAt && targetNavAt > filesStoredAt);
+
+  assert.equal(rep.failed, undefined);
+  assert.equal(rep.capped, false);
+  assert.equal(rep.documentBytes, 0);
+  assert.equal(rep.pages, 0);
+  assert.equal(rep.path, 'stored-shell');
+});
+
+test('the open cell records warm not reported and skips the target navigation when the deadline passes', async () => {
+  const { tabs, ctx, target } = openCellHarness({ warmPolls: [null] });
+  const rep = await measureOpenCell(tabs, ctx, target, 'fy-open-large-1', 50);
+
+  const navigations = tabs.events.filter(([kind]) => kind === 'navigate').map(([, path]) => path);
+  assert.deepEqual(navigations, ['/?session=open-id']);
+  assert.deepEqual(rep, { failed: true, reason: 'warm not reported' });
+});
+
+test('the open cell records a reported warm error without waiting for on-demand files or navigating', async () => {
+  const { tabs, ctx, target } = openCellHarness({
+    warmPolls: [{ error: 'Error: the offline shell has no registration', update: null }],
+    filesPolls: [null],
+  });
+  const rep = await measureOpenCell(tabs, ctx, target, 'fy-open-typical-1', 5000);
+
+  const navigations = tabs.events.filter(([kind]) => kind === 'navigate').map(([, path]) => path);
+  assert.deepEqual(navigations, ['/?session=open-id']);
+  assert.equal(tabs.events.some(([kind]) => kind === 'poll-files'), false);
+  assert.equal(rep.failed, true);
+  assert.match(rep.reason, /the offline shell has no registration/);
+});
+
+test('each open rep records whether it came from the stored shell or the network', async () => {
+  const stored = openCellHarness({
+    warmPolls: [{ stored: true }],
+    documentBytes: 0,
+    workerRequests: [
+      { url: 'https://front.test/?session=target-id', startMs: 0, status: 204 },
+      { url: 'https://front.test/api/sessions/target-id/bootstrap', startMs: 20, status: 200 },
+    ],
+  });
+  const storedRep = await measureOpenCell(stored.tabs, stored.ctx, stored.target, 'fy-open-large-1', 5000);
+  assert.equal(storedRep.path, 'stored-shell');
+
+  const workerNetwork = openCellHarness({
+    warmPolls: [{ stored: true }],
+    documentBytes: 0,
+    workerRequests: [{ url: 'https://front.test/?session=target-id', startMs: 15, status: 200 }],
+  });
+  const workerNetworkRep = await measureOpenCell(
+    workerNetwork.tabs,
+    workerNetwork.ctx,
+    workerNetwork.target,
+    'fy-open-large-2',
+    5000,
+  );
+  assert.equal(workerNetworkRep.path, 'network');
+
+  const tabNetwork = openCellHarness({
+    warmPolls: [{ stored: true }],
+    documentBytes: 97000,
+    workerRequests: [],
+  });
+  const tabNetworkRep = await measureOpenCell(
+    tabNetwork.tabs,
+    tabNetwork.ctx,
+    tabNetwork.target,
+    'fy-open-typical-1',
+    5000,
+  );
+  assert.equal(tabNetworkRep.path, 'network');
+
+  // A pre-navigation worker request (startMs < 0) does not mark the later navigation as a network fetch.
+  assert.equal(
+    openDocumentPath({
+      documentBytes: 0,
+      workerRequests: [{ url: 'https://front.test/?session=target-id', startMs: -500, status: 200 }],
+      documentPattern: /\?session=target-id$/,
+      report: { at: 100 },
+    }),
+    'stored-shell',
+  );
 });

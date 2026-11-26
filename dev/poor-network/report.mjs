@@ -281,9 +281,12 @@ export function percentile(values, fraction) {
 }
 
 export function summarize(allReps, metric) {
-  // A repetition that did not run the metric's cell has no value for it (its cell is null, plan 5 v4 section 4.2 counts
-  // each cell's own repetitions), so it is left out of the metric's values.
-  const reps = allReps.filter((rep) => metric.value(rep) !== undefined);
+  // A repetition that did not run the metric's cell or whose cell failed without a readout has no value for it (plan 5
+  // v4 section 4.2 counts each cell's own repetitions), so it is left out of the metric's values.
+  const reps = allReps.filter((rep) => {
+    const value = metric.value(rep);
+    return value !== undefined && value !== null;
+  });
   const values = reps.map(metric.value);
   const median = percentile(values, 0.5);
   return {
@@ -319,8 +322,13 @@ export function deriveSide(side) {
   side.metrics = {};
   for (const metric of METRICS) {
     const reps = side.reps[repsOfMetric(metric)] ?? [];
-    // A metric whose cell no repetition ran (a null cell, or an after-only cell on the before side) has no row.
-    if (reps.some((rep) => metric.value(rep) !== undefined) && side.status === 'measured') {
+    // A metric whose cell no repetition ran or measured (a null/failed cell, or an after-only cell on the before side)
+    // has no row.
+    const hasValue = (rep) => {
+      const value = metric.value(rep);
+      return value !== undefined && value !== null;
+    };
+    if (reps.some(hasValue) && side.status === 'measured') {
       side.metrics[metric.id] = summarize(reps, metric);
     }
   }

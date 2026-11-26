@@ -20,7 +20,7 @@ import { VIEW } from './profile.mjs';
 import { paintsInForYou } from './newest-row.mjs';
 import { PAGE_REPORT_BINDING, pollFor, sleep } from './tabs.mjs';
 
-import { deliverReplyOnline } from './open.mjs';
+import { WARM_REPORT_INIT, deliverReplyOnline, reportOnWindow, warmFailure } from './open.mjs';
 import { floorMs, withBackground, withLink } from './scenarios.mjs';
 import { StepCapped } from './segments.mjs';
 
@@ -44,9 +44,12 @@ const SIZING_MAX_TURNS = 30;
 // retry's own request is in its count.
 const SWITCH_SETTLE_MS = 5000;
 const FAILED_PAGE_SETTLE_MS = 10000;
-// The first-open cell's wait after the first page goes quiet, so the second navigation starts from a page that no
-// longer loads.
-const OPEN_SETTLE_MS = 10000;
+// The first-open cell's deadline after `ready()` for the first page's offline-shell warm and on-demand file store to
+// report. On the 100 kbit/s link, catch-up reaches `charliebot:page-current` ~14-16 s after navigation (~10-12 s after
+// `ready()`), the worker script and quiet timer take ~2-3 s, the ~97 KB shell takes ~9 s, and the on-demand files
+// follow (~5 s), about 25-30 s in all. 60,000 ms leaves ~2x margin for link spikes while staying well under
+// `STEP_CAP_MS` (600,000 ms), so a missing report records cell failure instead of tripping the step cap.
+const OPEN_WARM_TIMEOUT_MS = 60000;
 // The wait for the injected failure to reach the page, and for the page's own first-row phase after the marker.
 const FAIL_OBSERVE_TIMEOUT_MS = 30000;
 const PHASE_OBSERVE_TIMEOUT_MS = 10000;
@@ -347,27 +350,62 @@ async function failedPageCell(ctx, tab, target, name) {
   };
 }
 
-// The first-open cell: a fresh browser opens another chat page, goes quiet, then opens the target — a page load the
-// plan's Trade-off 3 sets no time target for. The readouts are the navigation-to-first-row time, the document's
-// bytes, and the target's older-page requests before the first row.
-async function openCell(ctx, target, name) {
+// Whether the target document came from the stored shell ('stored-shell') or from the network ('network'), or null
+// when the navigation never painted a row and no network fetch ran. A service-worker navigation leaves
+// `documentBytes` zero on the tab even when the worker fell back to `fetch(request)` on the network, so the worker's
+// own trace from `navigatedAt` (ignoring any navigation preload 204) is checked alongside `documentBytes`.
+export function openDocumentPath({ documentBytes, workerRequests, documentPattern, report }) {
+  if (documentBytes > 0) {
+    return 'network';
+  }
+  if (workerRequests.some((req) => req.startMs >= 0 && documentPattern.test(req.url) && req.status !== 204)) {
+    return 'network';
+  }
+  return report === null ? null : 'stored-shell';
+}
+
+// The first-open cell: a fresh browser opens another chat page, waits for the page's offline-shell warm and
+// on-demand file store to report, then opens the target — a page load the plan's Trade-off 3 sets no time target for.
+// When the warm never reports within `warmTimeoutMs` or reports a failure, the cell records failure without
+// navigating. The readouts are the navigation-to-first-row time, the document's bytes, the target's older-page
+// requests before the first row, and whether the document came from the stored shell or the network.
+export async function measureOpenCell(tabs, ctx, target, name, warmTimeoutMs) {
   const documentPattern = new RegExp(`\\?session=${target.id}$`);
-  return withLink(ctx, name, [], async ({ tabs }) => {
-    const measured = await tabs.open(name, forYouInitScript(target.marker));
-    await measured.page.send('Runtime.addBinding', { name: PAGE_REPORT_BINDING });
-    await tabs.navigate(measured, `/?session=${ctx.sessions.open.id}`);
-    await measured.ready();
-    await sleep(OPEN_SETTLE_MS);
-    const navigatedAt = Date.now();
-    await tabs.navigate(measured, `/?session=${target.id}`);
-    const report = await firstForYouReport(measured, documentPattern);
+  const measured = await tabs.open(name, `${WARM_REPORT_INIT}\n${forYouInitScript(target.marker)}`);
+  await measured.page.send('Runtime.addBinding', { name: PAGE_REPORT_BINDING });
+  await tabs.navigate(measured, `/?session=${ctx.sessions.open.id}`);
+  await measured.ready();
+  const warmReport = await reportOnWindow(measured, '__warmReport', warmTimeoutMs);
+  if (warmReport === null) {
+    return { failed: true, reason: 'warm not reported' };
+  }
+  if (warmReport.stored !== true) {
     return {
-      firstRowMs: report === null ? SHOW_TIMEOUT_MS : report.at - navigatedAt,
-      capped: report === null,
-      documentBytes: measured.bytesOf(documentPattern, navigatedAt, Infinity),
-      pages: report === null ? null : olderPageRequests(measured, target.id, navigatedAt, report.at),
+      failed: true,
+      reason: warmFailure({ side: 'after', caseName: name, report: warmReport, filesStored: null }),
     };
-  });
+  }
+  const filesStored = await reportOnWindow(measured, '__filesStored', warmTimeoutMs);
+  const failure = warmFailure({ side: 'after', caseName: name, report: warmReport, filesStored });
+  if (failure !== null) {
+    return { failed: true, reason: failure };
+  }
+  const navigatedAt = Date.now();
+  await tabs.navigate(measured, `/?session=${target.id}`);
+  const report = await firstForYouReport(measured, documentPattern);
+  const documentBytes = measured.bytesOf(documentPattern, navigatedAt, Infinity);
+  const workerRequests = tabs.workerTrace(navigatedAt);
+  return {
+    firstRowMs: report === null ? SHOW_TIMEOUT_MS : report.at - navigatedAt,
+    capped: report === null,
+    documentBytes,
+    pages: report === null ? null : olderPageRequests(measured, target.id, navigatedAt, report.at),
+    path: openDocumentPath({ documentBytes, workerRequests, documentPattern, report }),
+  };
+}
+
+async function openCell(ctx, target, name) {
+  return withLink(ctx, name, [], ({ tabs }) => measureOpenCell(tabs, ctx, target, name, OPEN_WARM_TIMEOUT_MS));
 }
 
 // The newest report of a document whose address matches `documentPattern` and whose marker has shown, or null past

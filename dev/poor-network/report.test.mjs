@@ -140,6 +140,19 @@ test('a repetition without a For-you switch-large cell is left out of its values
   assert.deepEqual(summarize(reps, metric).values, [900, 1100]);
 });
 
+test('a failed For-you open rep or a null metric readout is left out of the summary', () => {
+  const timeMetric = METRICS.find((row) => row.id === 'foryou.open.large');
+  const pagesMetric = METRICS.find((row) => row.id === 'foryou.open.large.pages');
+  const reps = [
+    { open: { large: { failed: true, reason: 'warm not reported' } } },
+    { open: { large: { firstRowMs: 180000, capped: true, pages: null } } },
+    { open: { large: { firstRowMs: 1050, capped: false, pages: 0 } } },
+  ];
+  assert.deepEqual(summarize(reps, timeMetric).values, [180000, 1050]);
+  assert.deepEqual(summarize(reps, pagesMetric).values, [0]);
+  assert.equal(summarize(reps, pagesMetric).median, 0);
+});
+
 test('the restart gate reads the catch-up wait, and the probe row is reported without a target', () => {
   // The gate is plan 6 v4 section 4.2's wait from the return to catch-up. A probe row that paints in time must not
   // pass a gate whose catch-up misses it.

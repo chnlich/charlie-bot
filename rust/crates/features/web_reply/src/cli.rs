@@ -139,8 +139,10 @@ fn reply(args: &ReplyArgs, lazy_host: &LazyHost) -> Result<(), CliExit> {
       code_findings
     } else {
       let host = lazy_host.get().map_err(anyhow_exit)?;
-      let (system_prompt, questions) =
-        cold_read::row(cold_read::REPLY).expect("the reply row is registered").prompt_pair(&host.repo_root).map_err(anyhow_exit)?;
+      let (system_prompt, questions) = cold_read::row(cold_read::REPLY)
+        .expect("the reply row is registered")
+        .prompt_pair(&host.repo_root)
+        .map_err(anyhow_exit)?;
       let probe_prompt = cold_read::text_probe_input(&text, &questions);
       let probe = block_on(cold_read::run_probe(host, &probe_prompt, &system_prompt))?.map_err(anyhow_exit)?;
       let Some(backend) = probe.backend_id else {
@@ -241,8 +243,10 @@ fn status_set(args: &StatusSetArgs, lazy_host: &LazyHost) -> Result<(), CliExit>
   }
   let mut now_findings = Vec::new();
   if let Some(now) = now_to_check {
-    let (system_prompt, questions) =
-      cold_read::row(cold_read::NOW).expect("the Now row is registered").prompt_pair(&host.repo_root).map_err(anyhow_exit)?;
+    let (system_prompt, questions) = cold_read::row(cold_read::NOW)
+      .expect("the Now row is registered")
+      .prompt_pair(&host.repo_root)
+      .map_err(anyhow_exit)?;
     let probe_prompt = cold_read::text_probe_input(&now, &questions);
     let probe = block_on(cold_read::run_probe(host, &probe_prompt, &system_prompt))?.map_err(anyhow_exit)?;
     if probe.backend_id.is_none() {
@@ -259,8 +263,10 @@ fn status_set(args: &StatusSetArgs, lazy_host: &LazyHost) -> Result<(), CliExit>
   }
 
   if !unread.is_empty() {
-    let (system_prompt, questions) =
-      cold_read::row(cold_read::ASK).expect("the ask row is registered").prompt_pair(&host.repo_root).map_err(anyhow_exit)?;
+    let (system_prompt, questions) = cold_read::row(cold_read::ASK)
+      .expect("the ask row is registered")
+      .prompt_pair(&host.repo_root)
+      .map_err(anyhow_exit)?;
     for item in unread {
       let link = item.get("link").and_then(Value::as_str);
       let linked_page = match file_urls::host_file(link).map_err(CliExit::error)? {
@@ -300,8 +306,7 @@ fn status_set(args: &StatusSetArgs, lazy_host: &LazyHost) -> Result<(), CliExit>
       .expect("the settle row is registered")
       .prompt_pair(&host.repo_root)
       .map_err(anyhow_exit)?;
-    let probe_prompt =
-      cold_read::settle_probe_input(&Value::Array(settle.clone()), &turn_text, &questions);
+    let probe_prompt = cold_read::settle_probe_input(&Value::Array(settle.clone()), &turn_text, &questions);
     let probe = block_on(cold_read::run_probe(host, &probe_prompt, &system_prompt))?.map_err(anyhow_exit)?;
     let Some(backend) = probe.backend_id else {
       for (backend, error) in &probe.attempts {

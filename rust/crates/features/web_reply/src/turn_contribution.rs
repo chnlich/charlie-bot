@@ -331,8 +331,10 @@ mod tests {
   #[test]
   fn every_cold_read_check_renders_its_name_under_the_one_role() {
     for (event, name) in [
-      (json!({"type": COLD_READ_CHECK, "name": "settle", "content": "Cold read of the kept Waiting on you items"}),
-        "settle"),
+      (
+        json!({"type": COLD_READ_CHECK, "name": "settle", "content": "Cold read of the kept Waiting on you items"}),
+        "settle",
+      ),
       (json!({"type": WEB_REPLY_CHECK, "content": "web reply check"}), "reply"),
       (json!({"type": WEB_ASK_CHECK, "content": "Cold read of a Waiting on you item"}), "ask"),
     ] {

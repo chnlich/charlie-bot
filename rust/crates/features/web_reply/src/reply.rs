@@ -9,9 +9,7 @@ use anyhow::Context;
 use axum::http::StatusCode;
 use charliebot_compat::file_urls;
 use charliebot_core::event_types::EventFields;
-use charliebot_core::event_types::{
-  AGENT_MESSAGE, INPUT_EVENT_ID, NUDGE_OF, USER, WEB_REPLY, WEB_REPLY_NOTICE,
-};
+use charliebot_core::event_types::{AGENT_MESSAGE, INPUT_EVENT_ID, NUDGE_OF, USER, WEB_REPLY, WEB_REPLY_NOTICE};
 use charliebot_core::paths;
 use charliebot_core::regex_classes::compile_automata_regex;
 use charliebot_core::reply::{OVER_BUDGET_FIELD, is_over_budget};

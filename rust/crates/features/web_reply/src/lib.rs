@@ -4,9 +4,9 @@
 //! status field of each session.
 
 mod api;
-mod cold_read_record;
 pub mod audit;
 pub mod cli;
+mod cold_read_record;
 mod entry;
 mod json_input;
 pub mod metadata;

@@ -415,11 +415,7 @@ fn settle_digests(turn: &[Value], since: Option<UtcDateTime>) -> HashSet<String>
 /// may store it again. An item whose digest cannot be read is left to the page-link refusal that names it.
 fn kept_items(items: &[WaitingItem], stored: &[WaitingItem]) -> Vec<WaitingItem> {
   let stored_digests: HashSet<String> = stored.iter().filter_map(|item| item_sha256(item).ok()).collect();
-  items
-    .iter()
-    .filter(|item| item_sha256(item).is_ok_and(|digest| stored_digests.contains(&digest)))
-    .cloned()
-    .collect()
+  items.iter().filter(|item| item_sha256(item).is_ok_and(|digest| stored_digests.contains(&digest))).cloned().collect()
 }
 
 /// The kept items that still need a `settle` cold read: the incoming items the stored status keeps, whose digest has
@@ -774,10 +770,8 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
     for item in kept_items(items, &stored_waiting) {
       let Ok(digest) = item_sha256(&item) else { continue };
       if !recorded.contains(&digest) {
-        refusal_details.push(format!(
-          "Waiting on you item {:?} was kept, so it needs a cold read of this turn's record",
-          item.text
-        ));
+        refusal_details
+          .push(format!("Waiting on you item {:?} was kept, so it needs a cold read of this turn's record", item.text));
         refused = true;
       }
     }
@@ -1156,7 +1150,8 @@ mod tests {
 
   /// The ask cold-read records of the session's log.
   fn ask_checks(home: &Home, session_id: &str) -> Vec<Value> {
-    home.events(session_id)
+    home
+      .events(session_id)
       .into_iter()
       .filter(|event| event["type"] == COLD_READ_CHECK && event["name"] == cold_read::ASK)
       .collect()
@@ -1164,7 +1159,8 @@ mod tests {
 
   /// The settle cold-read records of the session's log.
   fn settle_checks(home: &Home, session_id: &str) -> Vec<Value> {
-    home.events(session_id)
+    home
+      .events(session_id)
       .into_iter()
       .filter(|event| event["type"] == COLD_READ_CHECK && event["name"] == cold_read::SETTLE)
       .collect()
@@ -3043,19 +3039,20 @@ mod tests {
   /// A `settle` record for `item` at `timestamp`, as the cold-read route writes it.
   async fn append_settle_record(home: &Home, session_id: &str, item: &Value, timestamp: &str) {
     let digest = item_sha256(&parse_item(item).expect("the item validates")).expect("the item digests");
-    home.append(
-      session_id,
-      json!({
-        "type": COLD_READ_CHECK,
-        "name": cold_read::SETTLE,
-        "content": "Cold read of the kept Waiting on you items",
-        ITEM_SHA256: digest,
-        "backend": "synthetic-haiku",
-        "answer": "The record leaves the item open.",
-        "timestamp": timestamp,
-      }),
-    )
-    .await;
+    home
+      .append(
+        session_id,
+        json!({
+          "type": COLD_READ_CHECK,
+          "name": cold_read::SETTLE,
+          "content": "Cold read of the kept Waiting on you items",
+          ITEM_SHA256: digest,
+          "backend": "synthetic-haiku",
+          "answer": "The record leaves the item open.",
+          "timestamp": timestamp,
+        }),
+      )
+      .await;
   }
 
   /// Stores the one waiting item under test with its ask record, then answers the status the session stores.
@@ -3116,7 +3113,8 @@ mod tests {
     let item = waiting_item("Decide the layout");
     store_one_item(&home, &sid, &item).await;
     home.launch_run(&sid, "run-1", &["u1"], "2026-01-01T00:00:10Z");
-    home.append(&sid, json!({"type": "user", "id": "u1", "content": "What now?", "timestamp": "2026-01-01T00:00:09Z"}))
+    home
+      .append(&sid, json!({"type": "user", "id": "u1", "content": "What now?", "timestamp": "2026-01-01T00:00:09Z"}))
       .await;
     append_settle_record(&home, &sid, &item, "2026-01-01T00:00:05Z").await;
 
@@ -3155,8 +3153,7 @@ mod tests {
   /// The session-api router's answer to one GET request.
   async fn session_api_get(home: &Home, uri: &str) -> Value {
     use tower::ServiceExt as _;
-    let request =
-      axum::http::Request::builder().uri(uri).body(axum::body::Body::empty()).expect("the request builds");
+    let request = axum::http::Request::builder().uri(uri).body(axum::body::Body::empty()).expect("the request builds");
     let response = charliebot_session_api::routes(&home.features)
       .oneshot(request)
       .await
@@ -3194,8 +3191,7 @@ mod tests {
     assert!(unread["settle"].is_array(), "{unread}");
     assert!(unread["turn_text"].as_str().is_some_and(|text| text.contains(secret)), "{unread}");
 
-    let (status, internal) =
-      home.send(Method::GET, &format!("/api/internal/web/status?session_id={sid}"), None).await;
+    let (status, internal) = home.send(Method::GET, &format!("/api/internal/web/status?session_id={sid}"), None).await;
     assert_eq!(status, StatusCode::OK);
     let bodies = vec![
       internal,

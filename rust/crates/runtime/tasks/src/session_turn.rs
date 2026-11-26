@@ -201,11 +201,7 @@ fn blocks(event: &Value) -> &[Value] {
 fn text_of(content: &Value) -> String {
   match content {
     Value::String(text) => text.clone(),
-    Value::Array(items) => items
-      .iter()
-      .filter_map(|item| item["text"].as_str())
-      .collect::<Vec<_>>()
-      .join(""),
+    Value::Array(items) => items.iter().filter_map(|item| item["text"].as_str()).collect::<Vec<_>>().join(""),
     other => text_repr::json_dumps(other, &PYTHON_JSON),
   }
 }
@@ -339,10 +335,7 @@ mod tests {
     let events = turn(vec![json!({"type": "web_status", "id": "s1", "web_status": {"goal": "Ship", "now": null},
       "web_status_changed": ["goal"]})]);
     let text = turn_text(&events);
-    assert!(
-      text.contains(r#"web_status {"goal": "Ship", "now": null} changed ["goal"]"#),
-      "{text}"
-    );
+    assert!(text.contains(r#"web_status {"goal": "Ship", "now": null} changed ["goal"]"#), "{text}");
   }
 
   #[test]

@@ -192,7 +192,15 @@ impl ColdReadCheck {
       Some(_) => unreachable!("a validated findings is a list"),
     };
     let answer = optional_string(&mut fields, "answer");
-    Ok(Self { session_id: text_field(&fields, "session_id"), name, backend: text_field(&fields, "backend"), text, item, findings, answer })
+    Ok(Self {
+      session_id: text_field(&fields, "session_id"),
+      name,
+      backend: text_field(&fields, "backend"),
+      text,
+      item,
+      findings,
+      answer,
+    })
   }
 }
 

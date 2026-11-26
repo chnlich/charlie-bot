@@ -16,8 +16,8 @@ use std::time::Duration;
 use anyhow::Context;
 use charliebot_core::RepoRoot;
 use charliebot_core::event_types::{
-  AGENT_MESSAGE, CHILD_REPORT, CHILD_SESSION_ID, INPUT_EVENT_ID, TURN_HOOKS, TURN_HOOKS_ID,
-  WEB_REPLY_NOTICE, WEB_STATUS,
+  AGENT_MESSAGE, CHILD_REPORT, CHILD_SESSION_ID, INPUT_EVENT_ID, TURN_HOOKS, TURN_HOOKS_ID, WEB_REPLY_NOTICE,
+  WEB_STATUS,
 };
 use charliebot_core::text_repr::field_text;
 use charliebot_registry::FeatureContext;

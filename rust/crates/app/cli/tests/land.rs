@@ -56,24 +56,28 @@ fn commit_with_message(dir: &Path, file: &str, subject: &str, body: &str) -> Str
 }
 
 /// Writes a file that carries a PNG signature and an IHDR chunk of `width` and `height`, which is all the
-/// screenshot gate reads.
+/// screenshot gate reads, and returns its file name, which the PR body names it by.
 fn write_screenshot(dir: &Path, name: &str, width: u32, height: u32) -> String {
   let mut bytes = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
   bytes.extend_from_slice(&13u32.to_be_bytes());
   bytes.extend_from_slice(b"IHDR");
   bytes.extend_from_slice(&width.to_be_bytes());
   bytes.extend_from_slice(&height.to_be_bytes());
-  let path = dir.join(name);
-  fs::write(&path, bytes).expect("the screenshot is written");
-  path.display().to_string()
+  fs::write(dir.join(name), bytes).expect("the screenshot is written");
+  name.to_string()
 }
 
-/// Writes one PNG per window size and returns their absolute paths, in the order the set lists them.
+/// Writes one PNG per window size and returns their file names, in the order the set lists them.
 fn write_window_screenshots(dir: &Path) -> Vec<String> {
   charliebot_tasks::web_screenshots::WINDOW_SIZES
     .iter()
     .map(|(width, height)| write_screenshot(dir, &format!("shot-{width}x{height}.png"), *width, *height))
     .collect()
+}
+
+/// The `--evidence-dir` argument that names the directory `shots`.
+fn evidence_arg(shots: &Path) -> String {
+  shots.display().to_string()
 }
 
 /// A served-page change on the task branch, committed with an empty message, so a test supplies the PR body.
@@ -431,11 +435,10 @@ fn ungated_landing_accepts_but_does_not_use_explicit_pr_text() {
   assert!(!venue.gh_calls().contains("pr create"));
 }
 
-/// The demo file a passing body names.
-fn demo_file(venue: &Venue) -> String {
-  let demo = venue.home.join("demo.html");
-  fs::write(&demo, "<html>the approved tray demo</html>").expect("the demo is written");
-  demo.display().to_string()
+/// Writes the demo file a passing body names into the evidence directory `shots`, and returns its file name.
+fn demo_file(shots: &Path) -> String {
+  fs::write(shots.join("demo.html"), "<html>the approved tray demo</html>").expect("the demo is written");
+  "demo.html".to_string()
 }
 
 #[test]
@@ -445,7 +448,7 @@ fn a_web_page_change_without_a_demo_line_is_refused() {
   let shots = web_change(&venue);
   let body = format!("View: /?session=tray\n{}", write_window_screenshots(&shots).join(" "));
 
-  let output = venue.land_output_with_args(&["--body", &body]);
+  let output = venue.land_output_with_args(&["--body", &body, "--evidence-dir", &evidence_arg(&shots)]);
 
   assert_ne!(output.status.code(), Some(0));
   let stderr = String::from_utf8_lossy(&output.stderr);
@@ -460,10 +463,10 @@ fn a_web_page_change_without_a_demo_line_is_refused() {
 fn a_web_page_change_without_a_view_line_is_refused() {
   let venue = Venue::new(false);
   let shots = web_change(&venue);
-  let demo = demo_file(&venue);
+  let demo = demo_file(&shots);
   let body = format!("Demo: {demo}\n{}", write_window_screenshots(&shots).join(" "));
 
-  let output = venue.land_output_with_args(&["--body", &body]);
+  let output = venue.land_output_with_args(&["--body", &body, "--evidence-dir", &evidence_arg(&shots)]);
 
   assert_ne!(output.status.code(), Some(0));
   let stderr = String::from_utf8_lossy(&output.stderr);
@@ -477,7 +480,7 @@ fn a_web_page_change_without_a_view_line_is_refused() {
 fn a_web_page_change_with_a_screenshot_of_the_wrong_height_is_refused() {
   let venue = Venue::new(false);
   let shots = web_change(&venue);
-  let demo = demo_file(&venue);
+  let demo = demo_file(&shots);
   let mut named = write_window_screenshots(&shots);
   // A 1440x1600 review screenshot and a 125%-scaled 1920 px wide capture are both outside the set.
   named.remove(0);
@@ -485,7 +488,7 @@ fn a_web_page_change_with_a_screenshot_of_the_wrong_height_is_refused() {
   named.push(write_screenshot(&shots, "scaled-1920x1125.png", 1920, 1125));
   let body = format!("Demo: {demo}\nView: /?session=tray\n{}", named.join(" "));
 
-  let output = venue.land_output_with_args(&["--body", &body]);
+  let output = venue.land_output_with_args(&["--body", &body, "--evidence-dir", &evidence_arg(&shots)]);
 
   assert_ne!(output.status.code(), Some(0));
   let stderr = String::from_utf8_lossy(&output.stderr);
@@ -500,11 +503,11 @@ fn a_web_page_change_with_a_screenshot_of_the_wrong_height_is_refused() {
 fn a_web_page_change_lands_with_demo_view_and_each_window_size_and_carries_the_view_trailer() {
   let venue = Venue::new(false);
   let shots = web_change(&venue);
-  let demo = demo_file(&venue);
+  let demo = demo_file(&shots);
   venue.live_server_knows(&["tray"]);
   let body = format!("Demo: {demo}\nView: /?session=tray\n{}", write_window_screenshots(&shots).join(" "));
 
-  let (code, record) = venue.land_with_args(&["--body", &body]);
+  let (code, record) = venue.land_with_args(&["--body", &body, "--evidence-dir", &evidence_arg(&shots)]);
 
   assert_eq!(code, 0, "record: {record}");
   assert_eq!(record["state"], "landed-no-ci");
@@ -520,16 +523,52 @@ fn a_web_page_change_lands_with_demo_view_and_each_window_size_and_carries_the_v
 fn a_web_page_change_naming_a_session_the_live_server_does_not_know_is_refused_before_the_merge() {
   let venue = Venue::new(false);
   let shots = web_change(&venue);
-  let demo = demo_file(&venue);
+  let demo = demo_file(&shots);
   venue.live_server_knows(&["tray"]);
   let body = format!("Demo: {demo}\nView: /?session=unknown\n{}", write_window_screenshots(&shots).join(" "));
 
-  let output = venue.land_output_with_args(&["--body", &body]);
+  let output = venue.land_output_with_args(&["--body", &body, "--evidence-dir", &evidence_arg(&shots)]);
 
   assert_ne!(output.status.code(), Some(0));
   let stderr = String::from_utf8_lossy(&output.stderr);
   assert!(stderr.contains("must name a view on the live server"), "stderr: {stderr}");
   assert!(stderr.contains("does not know session unknown"), "stderr: {stderr}");
+  assert!(!venue.origin_has_task_branch());
+  assert!(venue.gh_calls().is_empty(), "gh calls:\n{}", venue.gh_calls());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_web_page_change_naming_a_file_the_evidence_directory_lacks_is_refused_before_the_push() {
+  let venue = Venue::new(false);
+  let shots = web_change(&venue);
+  let demo = demo_file(&shots);
+  let mut named = write_window_screenshots(&shots);
+  named.push("missing-review.png".to_string());
+  let body = format!("Demo: {demo}\nView: /?session=tray\n{}", named.join(" "));
+
+  let output = venue.land_output_with_args(&["--body", &body, "--evidence-dir", &evidence_arg(&shots)]);
+
+  assert_ne!(output.status.code(), Some(0));
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  assert!(stderr.contains("missing-review.png"), "stderr: {stderr}");
+  assert!(!venue.origin_has_task_branch());
+  assert!(venue.gh_calls().is_empty(), "gh calls:\n{}", venue.gh_calls());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_web_page_change_without_an_evidence_directory_is_refused_before_the_push() {
+  let venue = Venue::new(false);
+  let shots = web_change(&venue);
+  let demo = demo_file(&shots);
+  let body = format!("Demo: {demo}\nView: /?session=tray\n{}", write_window_screenshots(&shots).join(" "));
+
+  let output = venue.land_output_with_args(&["--body", &body]);
+
+  assert_ne!(output.status.code(), Some(0));
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  assert!(stderr.contains("--evidence-dir"), "stderr: {stderr}");
   assert!(!venue.origin_has_task_branch());
   assert!(venue.gh_calls().is_empty(), "gh calls:\n{}", venue.gh_calls());
 }

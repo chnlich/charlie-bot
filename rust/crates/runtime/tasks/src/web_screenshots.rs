@@ -27,10 +27,11 @@
 //! by its file name (`check_review_reads`). The record is the `events.ndjson` that `charliebot backend run` writes in
 //! the review's working directory; a read counts when its `Read` call's result was not an error.
 //!
-//! A landing's PR body also names the approved demo (`Demo: <absolute path>`, whose file must exist) and a
-//! `View: <URL>` line naming the full URL, path and query, that opens the changed state. A landing carries each View
-//! line into the landed commit as a trailer, which `scripts/switch-server.sh` reads back to capture the live page
-//! after the switch.
+//! A landing's PR body also names the approved demo's file (`Demo: <file name>`) and a `View: <URL>` line naming the
+//! full URL, path and query, that opens the changed state. The body names the demo and each screenshot by file name
+//! only, and `charliebot land --evidence-dir` names the local directory that holds those files: a name that carries a
+//! directory is refused, and a name the directory lacks is refused by name. A landing carries each View line into the
+//! landed commit as a trailer, which `scripts/switch-server.sh` reads back to capture the live page after the switch.
 //!
 //! A view resolves on the live server when `check_view_resolves` passes it: a `/?session=<id>` view when the server
 //! knows the session, any other view on a 2xx answer. The landing refuses a session view the server does not know.
@@ -92,45 +93,50 @@ pub fn window_sizes_text() -> String {
 }
 
 /// What a web page change's PR body promises: the approved demo's file, and the view paths to capture after
-/// the release switch (`check_pr_body`).
+/// the release switch (`check_pr_body`). The demo's path is in the evidence directory.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BodyContract {
   pub demo: PathBuf,
   pub views: Vec<String>,
 }
 
-/// Refuses a web page change's PR body unless it names `Demo: <absolute path>` whose file exists,
-/// a `View: <URL>` line naming the full URL, path and query, that opens the changed state, and a PNG at each window
-/// size by absolute path, and unless each `/?session=<id>` view it
-/// names is a session the live server knows. The caller decides that the change alters a web page. A named file
-/// that cannot be read or is not a PNG also refuses (`check_pr_body`).
-pub fn check_pr_body(pr_body: Option<&str>) -> anyhow::Result<BodyContract> {
+/// What a web page change's PR body must name, as `charliebot land --help` and each refusal state it: the demo's
+/// file, a View line, and a screenshot at each window size, each named by its file name (`body_requirement`).
+pub fn body_requirement() -> String {
+  format!(
+    "name the approved demo's file on a `Demo: <file name>` line, a `View: <URL>` line naming the full URL, path and \
+     query, that opens the changed state, and a screenshot at each CSS window size ({}) at device pixel ratio 1, each \
+     named by its file name in the `--evidence-dir` directory",
+    window_sizes_text()
+  )
+}
+
+/// Refuses a web page change's PR body unless it names its demo's file, a `View: <URL>` line, and a screenshot at
+/// each window size, each by file name in `evidence_dir`, and unless each `/?session=<id>` view it names is a session
+/// the live server knows. The caller decides that the change alters a web page. A named file that the directory
+/// lacks, cannot be read or is not a PNG also refuses (`check_pr_body`).
+pub fn check_pr_body(pr_body: Option<&str>, evidence_dir: Option<&Path>) -> anyhow::Result<BodyContract> {
   // The live lookups block on a runtime of their own, which cannot start on the thread that drives `land`, so they
   // run on a thread of their own.
-  std::thread::scope(|scope| scope.spawn(|| check_pr_body_with(pr_body, &live_status)).join())
+  std::thread::scope(|scope| scope.spawn(|| check_pr_body_with(pr_body, evidence_dir, &live_status)).join())
     .map_err(|_| anyhow::anyhow!("the live server check of the PR body panicked"))?
 }
 
 /// `check_pr_body` with the server's answers read from `status_of`.
-fn check_pr_body_with(pr_body: Option<&str>, status_of: &StatusOf) -> anyhow::Result<BodyContract> {
+fn check_pr_body_with(
+  pr_body: Option<&str>,
+  evidence_dir: Option<&Path>,
+  status_of: &StatusOf,
+) -> anyhow::Result<BodyContract> {
   let body = pr_body.unwrap_or_default();
-  let required = format!(
-    "the diff changes a web page, so the PR body must name the approved demo on a `Demo: <absolute path>` line, a \
-     `View: <URL>` line naming the full URL, path and query, that opens the changed state, and a screenshot at each \
-     CSS window size ({}) by absolute \
-     path at device pixel ratio 1",
-    window_sizes_text()
-  );
+  let required = format!("the diff changes a web page, so the PR body must {}", body_requirement());
   let demo = line_value(body, DEMO_PREFIX)
     .filter(|value| !value.is_empty())
     .ok_or_else(|| anyhow::anyhow!("{required}; the body has no Demo line"))?;
-  if !demo.starts_with('/') {
-    bail!("{required}; the body's Demo line names {demo}, which is not an absolute path");
-  }
-  let demo = PathBuf::from(demo);
-  if !demo.is_file() {
-    bail!("{required}; the body's Demo line names {}, which is not a file", demo.display());
-  }
+  let dir = evidence_dir.ok_or_else(|| {
+    anyhow::anyhow!("{required}; `charliebot land` needs --evidence-dir naming the directory that holds those files")
+  })?;
+  let demo = evidence_file(dir, demo).with_context(|| format!("{required}; the body's Demo line"))?;
   let views = line_values(body, VIEW_PREFIX);
   if views.is_empty() {
     bail!("{required}; the body has no View line");
@@ -140,10 +146,27 @@ fn check_pr_body_with(pr_body: Option<&str>, status_of: &StatusOf) -> anyhow::Re
       bail!("{required}; the body's View line names {view}, which is not a URL path starting with `/`");
     }
   }
-  let named: Vec<PathBuf> = named_png_paths(body).into_iter().map(PathBuf::from).collect();
+  let named = landing_screenshot_tokens(body)
+    .into_iter()
+    .map(|name| evidence_file(dir, name).with_context(|| format!("{required}; a screenshot the body names")))
+    .collect::<anyhow::Result<Vec<PathBuf>>>()?;
   check_screenshot_files(&named, LANDING_SHOTS_PER_SIZE)?;
   check_session_views(&views, status_of)?;
   Ok(BodyContract { demo, views })
+}
+
+/// The path in the evidence directory `dir` of a file that a PR body names by its file name (`evidence_file`). A name
+/// with a directory part is refused, so a body that follows this form holds no path, and a name that the directory
+/// does not hold is refused by name.
+fn evidence_file(dir: &Path, name: &str) -> anyhow::Result<PathBuf> {
+  if name.contains('/') {
+    bail!("{name} is not a file name");
+  }
+  let path = dir.join(name);
+  if !path.is_file() {
+    bail!("{name} is not a file of the evidence directory {}", dir.display());
+  }
+  Ok(path)
 }
 
 /// The HTTP status the server answers for one GET of a path.
@@ -204,7 +227,7 @@ pub fn check_screenshot_files(paths: &[PathBuf], count_per_size: usize) -> anyho
   for path in paths {
     sizes.push((path.clone(), png_size(path)?));
   }
-  check_size_coverage(&sizes, count_per_size, "the PR body's screenshot paths")
+  check_size_coverage(&sizes, count_per_size, "the PR body's screenshots")
 }
 
 /// Refuses a directory that does not hold `count_per_size` PNG files of each window size
@@ -330,31 +353,25 @@ fn line_values(body: &str, prefix: &str) -> Vec<String> {
     .collect()
 }
 
-/// The absolute `.png` paths a PR body names, in the order the body names them. The `Demo:` line is left
-/// out: the demo shows the page before the change, so it is not a screenshot of the changed state
-/// (`named_png_paths`).
-fn named_png_paths(body: &str) -> Vec<&str> {
-  body
-    .lines()
-    .filter(|line| !line.trim_start().starts_with(DEMO_PREFIX))
-    .flat_map(str::split_whitespace)
-    .map(|token| token.trim_matches(PATH_WRAPPERS))
-    .filter(|token| token.starts_with('/') && token.ends_with(".png"))
-    .collect()
-}
-
-/// The screenshot file names that a PR body names: each token that ends in `.png`, by its file name, sorted and without
-/// repeats. A round's body names each screenshot by its file name, where a landing names the absolute path
-/// (`named_png_paths`).
-pub fn named_screenshots(pr_body: &str) -> Vec<String> {
-  pr_body
+/// The tokens of `text` that end in `.png`, as the text writes them (`png_tokens`).
+fn png_tokens(text: &str) -> impl Iterator<Item = &str> {
+  text
     .split(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/')))
     .map(|token| token.trim_end_matches('.'))
     .filter(|token| token.ends_with(".png"))
-    .map(|token| file_name(token).to_string())
-    .collect::<BTreeSet<String>>()
-    .into_iter()
-    .collect()
+}
+
+/// The screenshot tokens a landing's PR body names, as written, sorted and without repeats. The `Demo:` line is left
+/// out: the demo shows the page before the change, so it is not a screenshot of the changed state
+/// (`landing_screenshot_tokens`).
+fn landing_screenshot_tokens(body: &str) -> BTreeSet<&str> {
+  body.lines().filter(|line| !line.trim_start().starts_with(DEMO_PREFIX)).flat_map(png_tokens).collect()
+}
+
+/// The screenshot file names that a PR body names: each token that ends in `.png`, by its file name, sorted and without
+/// repeats. An improve round's body names each screenshot by its file name (`named_screenshots`).
+pub fn named_screenshots(pr_body: &str) -> Vec<String> {
+  png_tokens(pr_body).map(|token| file_name(token).to_string()).collect::<BTreeSet<String>>().into_iter().collect()
 }
 
 /// The part of a path after its last `/`, or the whole text when it holds no `/` (`file_name`).
@@ -408,39 +425,38 @@ mod tests {
     paths
   }
 
+  /// The file names of the PNGs in `paths`, separated by spaces, as a PR body names them.
+  fn names_of(paths: &[PathBuf]) -> String {
+    paths.iter().map(|path| path.file_name().expect("a PNG has a name").to_string_lossy()).collect::<Vec<_>>().join(" ")
+  }
+
   #[test]
   fn a_body_without_a_demo_line_is_refused() {
     let dir = tempfile::tempdir().expect("temporary directory is available");
     let shots = write_window_shots(dir.path(), 0, 1);
-    let named: Vec<String> = shots.iter().map(|path| path.display().to_string()).collect();
-    let body = format!("View: /?session=abc\n{}", named.join(" "));
-    let refusal = check_pr_body(Some(&body)).unwrap_err().to_string();
+    let body = format!("View: /?session=abc\n{}", names_of(&shots));
+    let refusal = check_pr_body_with(Some(&body), Some(dir.path()), &answers(200)).unwrap_err().to_string();
     assert!(refusal.contains("Demo"), "{refusal}");
     assert!(refusal.contains("1536x900"), "{refusal}");
   }
 
   #[test]
-  fn a_body_whose_demo_is_missing_is_refused() {
+  fn a_body_whose_demo_is_missing_from_the_evidence_directory_is_refused_by_name() {
     let dir = tempfile::tempdir().expect("temporary directory is available");
     let shots = write_window_shots(dir.path(), 0, 1);
-    let named: Vec<String> = shots.iter().map(|path| path.display().to_string()).collect();
-    let body = format!("Demo: /absent/demo.html\nView: /status\n{}", named.join(" "));
-    let refusal = check_pr_body(Some(&body)).unwrap_err().to_string();
-    assert!(refusal.contains("/absent/demo.html"), "{refusal}");
+    let body = format!("Demo: absent.html\nView: /status\n{}", names_of(&shots));
+    let refusal = format!("{:#}", check_pr_body_with(Some(&body), Some(dir.path()), &answers(200)).unwrap_err());
+    assert!(refusal.contains("absent.html"), "{refusal}");
   }
 
   #[test]
   fn a_body_without_a_view_line_is_refused() {
     let dir = tempfile::tempdir().expect("temporary directory is available");
-    let demo = write_png(dir.path(), "demo.png", 10, 10);
+    write_png(dir.path(), "demo.png", 10, 10);
     let shots = write_window_shots(dir.path(), 0, 1);
-    let named: Vec<String> = shots.iter().map(|path| path.display().to_string()).collect();
-    let body = format!("Demo: {}\n{}", demo.display(), named.join(" "));
-    let refusal = check_pr_body(Some(&body)).unwrap_err().to_string();
-    assert!(
-      refusal.contains("a `View: <URL>` line naming the full URL, path and query, that opens the changed state"),
-      "{refusal}"
-    );
+    let body = format!("Demo: demo.png\n{}", names_of(&shots));
+    let refusal = check_pr_body_with(Some(&body), Some(dir.path()), &answers(200)).unwrap_err().to_string();
+    assert!(refusal.contains("View"), "{refusal}");
   }
 
   /// A server that answers every GET with `status`.
@@ -454,29 +470,58 @@ mod tests {
     Ok(if path.starts_with("/api/sessions/") { 404 } else { 200 })
   }
 
-  /// A PR body with a demo, one PNG at each window size, and `view_lines` as its View lines.
+  /// A PR body with a demo file and one PNG at each window size, all in `dir` and named by file name, and
+  /// `view_lines` as its View lines.
   fn body_with_views(dir: &Path, view_lines: &str) -> String {
-    let demo = write_png(dir, "demo.png", 10, 10);
+    write_png(dir, "demo.png", 10, 10);
     let shots = write_window_shots(dir, 0, 1);
-    let named: Vec<String> = shots.iter().map(|path| path.display().to_string()).collect();
-    format!("Demo: {}\n{view_lines}\nShots: `{}`", demo.display(), named.join("` `"))
+    format!("Demo: demo.png\n{view_lines}\nShots: `{}`", names_of(&shots).replace(' ', "` `"))
   }
 
   #[test]
   fn a_body_naming_one_screenshot_at_each_window_size_passes() {
     let dir = tempfile::tempdir().expect("temporary directory is available");
     let body = body_with_views(dir.path(), "View: /?session=abc");
-    let contract = check_pr_body_with(Some(&body), &answers(200)).expect("each window size is named");
+    let contract = check_pr_body_with(Some(&body), Some(dir.path()), &answers(200)).expect("each window size is named");
     assert_eq!(contract.demo, dir.path().join("demo.png"));
     assert_eq!(contract.views, vec!["/?session=abc".to_string()]);
-    assert!(check_pr_body(None).is_err());
+    assert!(check_pr_body(None, None).is_err());
+  }
+
+  #[test]
+  fn a_body_naming_a_file_the_evidence_directory_lacks_is_refused_by_name() {
+    let dir = tempfile::tempdir().expect("temporary directory is available");
+    let body = format!("{}\nAlso `not-saved-1536x900.png`", body_with_views(dir.path(), "View: /plans"));
+    let refusal = format!("{:#}", check_pr_body_with(Some(&body), Some(dir.path()), &answers(200)).unwrap_err());
+    assert!(refusal.contains("not-saved-1536x900.png"), "{refusal}");
+  }
+
+  #[test]
+  fn a_page_change_without_an_evidence_directory_is_refused() {
+    let dir = tempfile::tempdir().expect("temporary directory is available");
+    let body = body_with_views(dir.path(), "View: /plans");
+    let refusal = check_pr_body_with(Some(&body), None, &answers(200)).unwrap_err().to_string();
+    assert!(refusal.contains("--evidence-dir"), "{refusal}");
+  }
+
+  #[test]
+  fn a_body_that_names_a_path_instead_of_a_file_name_is_refused() {
+    let dir = tempfile::tempdir().expect("temporary directory is available");
+    write_png(dir.path(), "demo.png", 10, 10);
+    write_window_shots(dir.path(), 0, 1);
+    let demo_path = format!("Demo: {}/demo.png\nView: /plans\n", dir.path().display());
+    let refusal = format!("{:#}", check_pr_body_with(Some(&demo_path), Some(dir.path()), &answers(200)).unwrap_err());
+    assert!(refusal.contains("is not a file name"), "{refusal}");
+    let shot_path = format!("Demo: demo.png\nView: /plans\n{}/shot-0.png", dir.path().display());
+    let refusal = format!("{:#}", check_pr_body_with(Some(&shot_path), Some(dir.path()), &answers(200)).unwrap_err());
+    assert!(refusal.contains("is not a file name"), "{refusal}");
   }
 
   #[test]
   fn a_body_naming_an_unknown_session_is_refused_with_the_reason() {
     let dir = tempfile::tempdir().expect("temporary directory is available");
     let body = body_with_views(dir.path(), "View: /?session=5f1c0d2e-7a3b");
-    let refusal = check_pr_body_with(Some(&body), &unknown_session_server).unwrap_err().to_string();
+    let refusal = check_pr_body_with(Some(&body), Some(dir.path()), &unknown_session_server).unwrap_err().to_string();
     assert!(refusal.contains("must name a view on the live server"), "{refusal}");
     assert!(refusal.contains("does not know session 5f1c0d2e-7a3b"), "{refusal}");
   }
@@ -486,7 +531,7 @@ mod tests {
     let dir = tempfile::tempdir().expect("temporary directory is available");
     let body = body_with_views(dir.path(), "View: /plans");
     let probe_refused = |path: &str| -> anyhow::Result<u16> { bail!("the path view was probed at {path}") };
-    check_pr_body_with(Some(&body), &probe_refused).expect("only session ids are checked at landing");
+    check_pr_body_with(Some(&body), Some(dir.path()), &probe_refused).expect("only session ids are checked at landing");
   }
 
   #[test]
@@ -523,9 +568,9 @@ mod tests {
   #[test]
   fn a_body_naming_no_screenshot_is_refused_by_size() {
     let dir = tempfile::tempdir().expect("temporary directory is available");
-    let demo = write_png(dir.path(), "demo.png", 10, 10);
-    let body = format!("Demo: {}\nView: /", demo.display());
-    let refusal = check_pr_body(Some(&body)).unwrap_err().to_string();
+    write_png(dir.path(), "demo.png", 10, 10);
+    let body = "Demo: demo.png\nView: /".to_string();
+    let refusal = check_pr_body_with(Some(&body), Some(dir.path()), &answers(200)).unwrap_err().to_string();
     assert!(refusal.contains("1536x900"), "{refusal}");
     assert!(refusal.contains("390x844"), "{refusal}");
   }

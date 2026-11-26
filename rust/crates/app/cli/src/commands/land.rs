@@ -8,7 +8,7 @@
 //! (`landed` and `landed-no-ci` exit 0).
 
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::{self, CliExit};
@@ -22,12 +22,9 @@ const ABOUT: &str = "Land an implement task: rebase, push the task branch, keep 
      branch only after CI passed on the head sha, and leave no PR of the task branch open";
 
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
-  let window_sizes = charliebot_tasks::web_screenshots::window_sizes_text();
   let body_requirement = format!(
-    "A diff that changes a web page needs it to name the approved demo on a `Demo: <absolute path>` line, a \
-     `View: <URL>` line naming the full URL, path and query, that opens the changed state, and a screenshot at each \
-     CSS window size \
-     ({window_sizes}) by absolute path"
+    "A diff that changes a web page needs the PR body to {}",
+    charliebot_tasks::web_screenshots::body_requirement()
   );
   let body_help = format!("PR body; required with --title when the branch holds several commits. {body_requirement}");
   let body_file_help =
@@ -45,7 +42,13 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
           .help("PR title on a gated landing; required with a body when the branch holds several commits"),
       )
       .arg(Arg::new("body").long("body").value_name("BODY").conflicts_with("body-file").help(body_help))
-      .arg(Arg::new("body-file").long("body-file").value_name("PATH").conflicts_with("body").help(body_file_help)),
+      .arg(Arg::new("body-file").long("body-file").value_name("PATH").conflicts_with("body").help(body_file_help))
+      .arg(
+        Arg::new("evidence-dir")
+          .long("evidence-dir")
+          .value_name("DIR")
+          .help("Local directory that holds the demo and the screenshots the PR body names by file name"),
+      ),
   );
   let matches = match command
     .clone()
@@ -57,6 +60,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   let mut options = charliebot_tasks::land::LandOptions {
     title: matches.get_one::<String>("title").cloned(),
     body: matches.get_one::<String>("body").cloned(),
+    evidence_dir: matches.get_one::<String>("evidence-dir").map(PathBuf::from),
   };
   options.validate().map_err(|error| CliExit::error(format!("{error:#}")))?;
   if let Some(path) = matches.get_one::<String>("body-file") {

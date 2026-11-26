@@ -278,6 +278,22 @@ fn a_pr_create_checks_title_and_body() {
   assert!(gh_log_lines(&gh_log)[0].contains("pr create"), "{}", gh_log_lines(&gh_log)[0]);
 }
 
+/// A web page change's body names its demo by file name, so an absolute path in the body is a leak the scanner refuses
+/// before the PR exists.
+#[test]
+#[ignore = "integration"]
+fn a_pr_create_refuses_an_absolute_path_in_the_body() {
+  let sandbox = Sandbox::new();
+  let (env, gh_log, _home) = post(&sandbox);
+  let clone = push_repo(&sandbox, &env);
+  let body = body_file(&sandbox, "body.md", &format!("{CLEAN_BODY}Demo: {HOME_PATH_TEXT}\n"));
+  let run = pr_create(&env, &clone, &body);
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(run.stderr.contains("Built-in pattern matches"), "{}", run.stderr);
+  assert!(run.stderr.contains("hit in body"), "{}", run.stderr);
+  assert!(gh_log_lines(&gh_log).is_empty(), "no refused body created a pull request");
+}
+
 #[test]
 #[ignore = "integration"]
 fn a_pr_create_refuses_an_existing_claimed_path_and_allows_own_and_absent_claims() {

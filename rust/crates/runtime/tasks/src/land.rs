@@ -88,18 +88,26 @@ pub const STATE_CI_TIMEOUT: &str = "ci-timeout";
 pub const STATE_PR_MERGE_REQUIRED: &str = "pr-merge-required";
 
 /// PR text supplied to `charliebot land`. On a gated path an omitted value derives from the task branch's single
-/// commit; a branch of several commits needs both values.
+/// commit; a branch of several commits needs both values. `evidence_dir` holds the demo and the screenshots that a
+/// web page change's body names by file name.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LandOptions {
   pub title: Option<String>,
   pub body: Option<String>,
+  pub evidence_dir: Option<PathBuf>,
 }
 
 impl LandOptions {
-  /// Explicit titles must contain non-whitespace text before any landing work starts.
+  /// Explicit titles must contain non-whitespace text, and an explicit evidence directory must exist, before any
+  /// landing work starts.
   pub fn validate(&self) -> anyhow::Result<()> {
     if self.title.as_deref().is_some_and(|title| title.trim().is_empty()) {
       anyhow::bail!("--title must not be empty");
+    }
+    if let Some(dir) = &self.evidence_dir
+      && !dir.is_dir()
+    {
+      anyhow::bail!("--evidence-dir {} is not a directory", dir.display());
     }
     Ok(())
   }
@@ -735,7 +743,7 @@ pub async fn land(
   let mut views: Vec<String> = Vec::new();
   if web_screenshots::changes_web_page(&changed) {
     let body = report_body(&ctx.worktree, published, options).await?;
-    views = web_screenshots::check_pr_body(body.as_deref())?.views;
+    views = web_screenshots::check_pr_body(body.as_deref(), options.evidence_dir.as_deref())?.views;
   }
 
   let gated = matches!(gate_applicability(&ctx.repo_path, published).await?, GateApplicability::Applies);
@@ -1925,11 +1933,12 @@ mod tests {
     assert!(refusal.contains("2 commits"), "{refusal}");
     assert!(refusal.contains("--title"), "{refusal}");
     assert!(refusal.contains(&pr_text_genre_path()), "{refusal}");
-    let title_only = LandOptions { title: Some("Routing".to_string()), body: None };
+    let title_only = LandOptions { title: Some("Routing".to_string()), body: None, evidence_dir: None };
     assert!(resolve_pr_text(&commits, &title_only).is_err());
-    let body_only = LandOptions { title: None, body: Some("Why.".to_string()) };
+    let body_only = LandOptions { title: None, body: Some("Why.".to_string()), evidence_dir: None };
     assert!(resolve_pr_text(&commits, &body_only).is_err());
-    let explicit = LandOptions { title: Some("Routing".to_string()), body: Some("Why.".to_string()) };
+    let explicit =
+      LandOptions { title: Some("Routing".to_string()), body: Some("Why.".to_string()), evidence_dir: None };
     assert_eq!(
       resolve_pr_text(&commits, &explicit).expect("explicit text resolves"),
       ResolvedPrText { title: "Routing".to_string(), body: "Why.".to_string() }
@@ -1938,16 +1947,29 @@ mod tests {
 
   #[test]
   fn explicit_pr_text_replaces_commit_derived_values() {
-    let options = LandOptions { title: Some("Resolved title".to_string()), body: Some("Resolved body".to_string()) };
+    let options = LandOptions {
+      title: Some("Resolved title".to_string()),
+      body: Some("Resolved body".to_string()),
+      evidence_dir: None,
+    };
     let text = resolve_pr_text(&[], &options).expect("explicit values need no commit range");
     assert_eq!(text, ResolvedPrText { title: "Resolved title".to_string(), body: "Resolved body".to_string() });
   }
 
   #[test]
   fn an_empty_explicit_title_fails_validation() {
-    let options = LandOptions { title: Some(" \t\n".to_string()), body: None };
+    let options = LandOptions { title: Some(" \t\n".to_string()), body: None, evidence_dir: None };
     assert!(options.validate().is_err());
     assert!(resolve_pr_text(&[], &options).is_err());
+  }
+
+  #[test]
+  fn an_evidence_directory_that_is_not_a_directory_fails_validation() {
+    let dir = tempfile::tempdir().expect("temporary directory is available");
+    let missing = LandOptions { evidence_dir: Some(dir.path().join("absent")), ..LandOptions::default() };
+    assert!(missing.validate().is_err());
+    let present = LandOptions { evidence_dir: Some(dir.path().to_path_buf()), ..LandOptions::default() };
+    present.validate().expect("an existing directory passes");
   }
 
   #[test]

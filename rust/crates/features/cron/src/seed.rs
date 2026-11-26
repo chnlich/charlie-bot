@@ -57,7 +57,7 @@ pub fn seed_default_cron_tasks(
 
   let cron_d_dir = loader::cron_dir(cfg);
   if !dry_run {
-    std::fs::create_dir_all(&cron_d_dir).map_err(|error| format!("{}: {error}", cron_d_dir.display()))?;
+    loader::ensure_cron_dir(cfg).map_err(|error| format!("{}: {error}", cron_d_dir.display()))?;
   }
 
   let mut report = Vec::new();

@@ -33,7 +33,9 @@
 # The skills are the skills/ tree of that same commit, archived beside the kit as IMPROVE_SKILLS_DIR, so the rule text a
 # round reads matches its kit. The launch names the skills revision, and the start refuses a launch whose skills
 # revision differs from the commit, as it does for the kit. The agent's stream-json is also written to the launch's
-# round-events.ndjson, which github-post.sh pr-merge reads for skill reads.
+# round-events.ndjson. The round's start stamp, IMPROVE_ROUND_START, names its evidence directory, and the runner keeps
+# there the round's facts that a merge outside the round reads: the in-flight list, the event log at the round's end and
+# the kit revision (keep_round_facts).
 #
 # Exit codes: the agent's exit code; 1 a local failure, such as a missing input file or a refused
 # scope, or a round whose review still runs in the scope after its agent exited (stderr names the
@@ -1027,7 +1029,17 @@ finish_round_record() {  # <exit status>
   mv -f -- "$RESULT_DIR/status.partial" "$RESULT_DIR/status"
 }
 
+# round_evidence_dir: the round's evidence directory, which its start stamp names. The launch sets the stamp before
+# its scope starts, so the scope and the launch's end name the same directory.
+round_evidence_dir() {
+  printf '%s\n' "$ROUND_ROOT/evidence/$IMPROVE_ROUND_START"
+}
+
 run_in_scope() {
+  # The round's evidence directory is new for each round, so an earlier round's facts are never overwritten. It is made
+  # before the marker, so a refused directory leaves no marker and the launch keeps no facts.
+  [[ ! -e $(round_evidence_dir) ]] || fail 1 "the round's evidence directory already exists: $(round_evidence_dir)"
+  mkdir -- "$(round_evidence_dir)"
   # The marker tells the heartbeat that this launch owns the scope: a refusal leaves no marker,
   # so a heartbeat that closes cannot stop the previous round's scope.
   : >"$LAUNCH_DIR/started"
@@ -1191,6 +1203,16 @@ end_round_scope() {
   fi
 }
 
+# keep_round_facts: copy the round's facts from the launch directory into the round's evidence directory, which outlives
+# the launch directory. A merge outside the round reads these copies: the in-flight list as the round read it, the event
+# log as it stands at the round's end, and the kit revision, which names the round's skills.
+keep_round_facts() {
+  local fact
+  for fact in inflight-files.txt round-events.ndjson kit-revision; do
+    cp -- "$LAUNCH_DIR/$fact" "$(round_evidence_dir)/$fact" || return 1
+  done
+}
+
 # Whether this launch owns the round's Codex auth.json files, the member's and the review's. It turns on right before this
 # launch's scope starts, and off again when systemd-run refuses the scope as already loaded: a refused launch never owns
 # the live round's files.
@@ -1202,6 +1224,11 @@ cleanup_launch_dir() {
   if [[ -n $SCOPE_PID ]]; then
     kill "$SCOPE_PID" 2>/dev/null || true
     wait "$SCOPE_PID" 2>/dev/null || true
+  fi
+  # The scope has ended, so the event log is the round's final one. A failed copy is named here, and a merge outside the
+  # round then refuses the fact that is missing.
+  if [[ -e $LAUNCH_DIR/started ]]; then
+    keep_round_facts || printf '%s could not keep the round facts in %s\n' "$STDERR_PREFIX" "$(round_evidence_dir)" >&2
   fi
   [[ $LAUNCH_DIR == "$HOME_DIR"/improve/launch/* ]] && rm -rf -- "$LAUNCH_DIR"
   if (( OWNS_CODEX_AUTH )); then
@@ -1310,6 +1337,9 @@ elif systemctl --user is-active --quiet "improve-$direction.scope"; then
 fi
 sweep_launch_files
 ensure_mock_home "$commit"
+# The round's start stamp names its evidence directory, and the agent reads it as IMPROVE_ROUND_START.
+IMPROVE_ROUND_START=$(date -u +%Y%m%dT%H%MZ)
+export IMPROVE_ROUND_START
 # The scope bounds the round's memory: the round and every process it starts, the trial server
 # included, die inside it instead of pushing another owner's build into swap. The scope's stderr
 # is held in a file, so a refused scope can be named, and it is printed once the scope ends.

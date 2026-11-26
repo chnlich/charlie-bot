@@ -24,8 +24,10 @@
 # It also refuses a merge unless the newest verdict comment names the pull request's head sha and reports no
 # issues. pr-comment --verdict-head writes that comment: its first line names the head the review read, and the
 # call refuses any head that is not the pull request's full head sha as GitHub reads it now, before it posts.
-# pr-merge also refuses a merge whose round event log ($IMPROVE_LAUNCH_DIR/round-events.ndjson) or review record
-# reads a skill file outside $IMPROVE_SKILLS_DIR; dev/improve/skill-reads.sh names each such path.
+# pr-merge also refuses a merge whose round event log or review record reads a skill file outside the round's skills
+# directory; dev/improve/skill-reads.sh names each such path. Inside a round (IMPROVE_LAUNCH_DIR is set) the round's
+# facts are the live launch directory and IMPROVE_SKILLS_DIR. A merge outside a round takes them from the evidence
+# directory that --evidence-dir names, where the round kept its copies (see merge_facts).
 # After the merge, pr-merge reads the pull request back from GitHub and prints its number, reviewed head, merge commit
 # and state; a readback that does not show the merge at the reviewed head exits 4.
 #
@@ -44,7 +46,8 @@
 # line (dev/improve/code-style-rules.sh). Other directions' pr-create takes no such check.
 #
 # pr-create and pr-merge also refuse a diff that changes a path another branch claims in the round's in-flight list,
-# $IMPROVE_LAUNCH_DIR/inflight-files.txt, the list Step 3 reads. A claim that the list marks absent-on-origin-main does
+# inflight-files.txt, the list Step 3 reads: the launch directory's inside a round, the evidence directory's outside
+# one. A claim that the list marks absent-on-origin-main does
 # not refuse. The pull request's own head branch claims nothing for itself. A refusal names each claimed path with its
 # claimant and sends nothing.
 #
@@ -136,19 +139,14 @@ require_readable() {  # require_readable <path> <what>
   fi
 }
 
-# check_inflight_claims <changed paths file> <head branch>: return 1 after naming each path that the diff changes and
-# another branch claims on a path origin/main has. A claim the list marks absent-on-origin-main does not refuse. The
-# claims come from the round's in-flight list, the file the runner writes at launch and Step 3 reads, so the check and
-# the round's own avoidance share one source. The head branch never refuses itself.
+# check_inflight_claims <changed paths file> <head branch> <in-flight list>: return 1 after naming each path that the
+# diff changes and another branch claims on a path origin/main has. A claim the list marks absent-on-origin-main does not
+# refuse. The list is the round's in-flight list, the file the runner writes at launch and Step 3 reads, so the check
+# and the round's own avoidance share one source. The head branch never refuses itself.
 check_inflight_claims() {
-  local changed=$1 head=$2
+  local changed=$1 head=$2 list=$3
   local -A changed_paths=()
   local path claimed branch absent found=0
-  [[ -n ${IMPROVE_LAUNCH_DIR:-} ]] || {
-    printf 'Cannot check the claims of the pull request: IMPROVE_LAUNCH_DIR is unset; nothing was sent or merged.\n' >&2
-    exit 2
-  }
-  local list="$IMPROVE_LAUNCH_DIR/inflight-files.txt"
   require_readable "$list" "in-flight list"
   while IFS= read -r path; do
     [[ -n $path ]] || continue
@@ -224,6 +222,51 @@ check_verdict_head() {
     printf 'nothing was sent.\n' >&2
     exit 2
   fi
+}
+
+# merge_facts: set facts_dir and skills_dir, the round facts that pr-merge's claim check and skill check read. Inside a
+# round they are the live launch directory and IMPROVE_SKILLS_DIR. Outside a round they are the copies that the round
+# kept in the evidence directory that --evidence-dir names: the in-flight list, the event log and the kit revision. The
+# kit revision names the skills directory of this host's runner. Each missing fact, or a missing skills directory, stops
+# the merge and names it. This runs before any call to GitHub, so nothing is sent.
+merge_facts() {
+  local fact revision
+  if [[ -n ${IMPROVE_LAUNCH_DIR-} ]]; then
+    [[ -n ${IMPROVE_SKILLS_DIR-} ]] || {
+      printf 'Refused pr-merge: IMPROVE_LAUNCH_DIR and IMPROVE_SKILLS_DIR name the round; nothing was merged.\n' >&2
+      exit 2
+    }
+    facts_dir=$IMPROVE_LAUNCH_DIR
+    skills_dir=$IMPROVE_SKILLS_DIR
+    return 0
+  fi
+  [[ -n $evidence_dir ]] || {
+    printf 'Refused pr-merge outside a round: --evidence-dir must name the round evidence directory; ' >&2
+    printf 'nothing was merged.\n' >&2
+    exit 2
+  }
+  for fact in inflight-files.txt round-events.ndjson kit-revision; do
+    [[ -r "$evidence_dir/$fact" ]] || {
+      printf 'Refused pr-merge outside a round: the evidence directory lacks %s; nothing was merged.\n' \
+        "$evidence_dir/$fact" >&2
+      exit 2
+    }
+  done
+  revision=$(<"$evidence_dir/kit-revision")
+  [[ $revision =~ ^[0-9a-f]{40}$ ]] || {
+    printf 'Refused pr-merge: %s does not hold a full kit revision; nothing was merged.\n' \
+      "$evidence_dir/kit-revision" >&2
+    exit 2
+  }
+  # The runner keeps each kit revision's skills at ~/improve/runner/bin/<revision>/skills
+  # (dev/improve/remote-runner.sh).
+  skills_dir="$HOME/improve/runner/bin/$revision/skills"
+  [[ -d $skills_dir ]] || {
+    printf 'Refused pr-merge: this host has no skills directory for kit revision %s: %s; nothing was merged.\n' \
+      "$revision" "$skills_dir" >&2
+    exit 2
+  }
+  facts_dir=$evidence_dir
 }
 
 [[ $# -ge 1 ]] || { usage; exit 2; }
@@ -306,7 +349,12 @@ case "$subcommand" in
       printf 'Cannot read the changed paths of %s for the claim check; nothing was sent.\n' "$pr_head" >&2
       exit 2
     }
-    check_inflight_claims "$tmp_dir/changed" "$pr_head" || {
+    [[ -n ${IMPROVE_LAUNCH_DIR:-} ]] || {
+      printf 'Cannot check the claims of the pull request: IMPROVE_LAUNCH_DIR is unset; nothing was sent or merged.\n' \
+        >&2
+      exit 2
+    }
+    check_inflight_claims "$tmp_dir/changed" "$pr_head" "$IMPROVE_LAUNCH_DIR/inflight-files.txt" || {
       printf 'PR changes a path that live work claims; nothing was sent.\n' >&2
       exit 2
     }
@@ -465,6 +513,7 @@ case "$subcommand" in
       esac
     done
     [[ -n "$pr_selector" ]] || { usage; exit 2; }
+    merge_facts
     repo_args=()
     [[ -z "$pr_repo" ]] || repo_args=(--repo "$pr_repo")
     # A draft waits for its measurements, so this check stays ahead of every read and merge of the pull request.
@@ -530,7 +579,7 @@ case "$subcommand" in
       printf 'Cannot read the head branch of PR %s; nothing was merged.\n' "$pr_selector" >&2
       exit 2
     }
-    check_inflight_claims "$tmp_dir/changed" "$pr_head" || {
+    check_inflight_claims "$tmp_dir/changed" "$pr_head" "$facts_dir/inflight-files.txt" || {
       printf 'PR %s changes a path that live work claims; nothing was merged.\n' "$pr_selector" >&2
       exit 2
     }
@@ -554,14 +603,10 @@ case "$subcommand" in
     fi
     # A round reads each skill file from its skills directory. The round's event log and the review record must hold no
     # skill read from any other copy; the check names each path it refuses.
-    [[ -n ${IMPROVE_LAUNCH_DIR-} && -n ${IMPROVE_SKILLS_DIR-} ]] || {
-      printf 'Refused pr-merge: IMPROVE_LAUNCH_DIR and IMPROVE_SKILLS_DIR name the round; nothing was merged.\n' >&2
-      exit 2
-    }
-    skill_logs=("$IMPROVE_LAUNCH_DIR/round-events.ndjson")
+    skill_logs=("$facts_dir/round-events.ndjson")
     [[ -z "$review_record" ]] || skill_logs+=("$review_record")
     skill_status=0
-    "$repo_root/dev/improve/skill-reads.sh" "$IMPROVE_SKILLS_DIR" "${skill_logs[@]}" || skill_status=$?
+    "$repo_root/dev/improve/skill-reads.sh" "$skills_dir" "${skill_logs[@]}" || skill_status=$?
     if [[ "$skill_status" -ne 0 ]]; then
       printf 'PR %s: the skill check of the round refused its event logs (status %s, named above);' \
         "$pr_selector" "$skill_status" >&2

@@ -47,6 +47,21 @@ fn wait_until(limit: Duration, mut condition: impl FnMut() -> bool) -> bool {
   condition()
 }
 
+/// Removes the evidence directory of the newest round that `world` launched for DIRECTION. Two launches in one UTC minute
+/// name one evidence directory, which the runner refuses to reuse, so a test that launches again calls this between the
+/// launches, as a round started in a later minute would find no directory of its stamp.
+fn remove_newest_round_evidence(world: &World) {
+  let root = world.remote_home.join("improve").join(DIRECTION).join("evidence");
+  // A round's directory is named by its start stamp, which begins with the date; other entries are not rounds.
+  let newest = fs::read_dir(&root)
+    .expect("the round's evidence root")
+    .map(|entry| entry.expect("an evidence entry").path())
+    .filter(|path| path.is_dir() && path.file_name().is_some_and(|name| name.to_string_lossy().starts_with("2")))
+    .max()
+    .expect("the first round left an evidence directory");
+  fs::remove_dir_all(&newest).expect("the first round's evidence directory");
+}
+
 /// The launcher resolves the endpoint member of `backends.calls.probe` on its host and ships the answer with the
 /// launch. A host that runs no server has no other way to resolve it, so the round's environment names that answer, and
 /// the round's agent reads the answer the launcher shipped.
@@ -360,6 +375,26 @@ fn the_round_environment_names_its_state_sources_and_its_round_home() {
   );
 }
 
+/// A merge outside the round reads the round's facts from its evidence directory, on the improve host and in the copy
+/// the launcher brings back. The directory is the one the round's start stamp names.
+#[test]
+#[ignore = "integration"]
+fn the_round_keeps_its_facts_in_the_evidence_directory_its_start_stamp_names() {
+  let world = World::new();
+  let run = world.run(&world.env());
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(world.claude_ran(), "the round did not start:\n{}", run.describe());
+  let stamp = world.claude_environment().get("IMPROVE_ROUND_START").cloned().expect("the round's start stamp");
+  let remote = world.remote_home.join("improve").join(DIRECTION).join("evidence").join(&stamp);
+  for evidence in [remote, world.local_evidence().join(&stamp)] {
+    for fact in ["inflight-files.txt", "round-events.ndjson"] {
+      assert!(evidence.join(fact).is_file(), "{} lacks {fact}:\n{}", evidence.display(), run.describe());
+    }
+    let revision = fs::read_to_string(evidence.join("kit-revision")).expect("the round's kit revision");
+    assert_eq!(revision.trim(), world.commit, "{} names another kit revision", evidence.display());
+  }
+}
+
 /// The round's tools and the repository's browser tests start the browser that the start check ran: the round
 /// environment names that browser in each input that reads a Chrome binary, so no test or tool resolves one of its own
 /// inside a round.
@@ -638,7 +673,8 @@ fn run_in_scope_for(
   }
   fs::write(launch.join("args"), "").expect("the launch arguments file");
   fs::create_dir_all(format!("/tmp/improve-{direction}-tmp")).expect("the round's TMPDIR");
-  fs::create_dir_all(world.remote_home.join("improve").join(direction)).expect("the round root");
+  fs::create_dir_all(world.remote_home.join("improve").join(direction).join("evidence"))
+    .expect("the round's evidence root");
   let bin = world.remote_home.join("improve/runner/bin");
   fs::create_dir_all(&bin).expect("the runner bin directory");
   harness::write_executable(&bin.join("improve-sandbox"), format!("#!/usr/bin/env bash\n{SCOPE_ENV_STUB}"));
@@ -648,6 +684,8 @@ fn run_in_scope_for(
   env.insert("FAKE_SCOPE_ENV".to_string(), world.sandbox.root().join("scope-env.txt").display().to_string());
   env.insert("FAKE_SCOPE_AUTH".to_string(), world.sandbox.root().join("scope-auth.json").display().to_string());
   env.insert("CHARLIEBOT_HOME".to_string(), world.remote_home.join("improve/home").display().to_string());
+  // The start stamp names the round's evidence directory, so each start in one world names its own by its launch id.
+  env.insert("IMPROVE_ROUND_START".to_string(), launch_id.to_string());
   for (name, value) in extra {
     env.insert((*name).to_string(), value.clone());
   }
@@ -1121,6 +1159,7 @@ fn a_second_evidence_copy_leaves_complete_evidence_alone() {
   // time. The wait keeps the two times in different seconds even on a coarse filesystem.
   std::thread::sleep(Duration::from_secs(1));
   let before = status_change_time(&copied);
+  remove_newest_round_evidence(&world);
 
   let second = world.run(&world.env());
 
@@ -1541,6 +1580,7 @@ fn a_prepared_launch_keeps_its_member_credential_until_its_wrapper_starts() {
   let member_credential = first_launch.join("member-credential");
   let second = world.run(&world.env());
   let survived_sweep = member_credential.is_file();
+  remove_newest_round_evidence(&world);
   fs::write(&release, "continue\n").expect("release the first launch");
   let first_result = first.wait_with_output().expect("the first launch finished");
 
@@ -3837,6 +3877,7 @@ fn a_cached_member_cli_is_reused_without_a_download() {
   // first install of both CLIs.
   let fetched = world.curl_calls();
   assert_eq!(fetched.len(), 4, "the first round fetched {fetched:?}");
+  remove_newest_round_evidence(&world);
   let second = harness::run(&mut world.launcher_command_for(&env, &arguments));
   assert_eq!(second.code, 0, "{}", second.describe());
   assert_eq!(world.curl_calls(), fetched, "the second round fetched again");

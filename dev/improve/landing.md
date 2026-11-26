@@ -251,7 +251,7 @@ The write boundary allows writes in that clone, in the evidence directory and in
 The scratch directories are `/tmp/improve-<direction>/` and the session TMPDIR, `/tmp/improve-<direction>-tmp/`.
 Two rounds of one direction never run together: the runner's scope name, `improve-<direction>.scope`, refuses the second round.
 
-Record the round start in UTC with `date -u +%Y%m%dT%H%MZ`; Step 5 names the evidence directory with it.
+The round start is the UTC stamp in `$IMPROVE_ROUND_START`, which the runner sets as the round's agent starts; Step 5 names the evidence directory with it.
 
 The runner makes the round's `TMPDIR` as a new directory under the session TMPDIR, so the round's tool output has its own directory.
 A round deletes a path only when the round created that path with `mktemp -d` during the same round.
@@ -530,7 +530,11 @@ The merge names the evidence directory of the round whose newest verdict names t
 That round is this round, or, for an adopted pull request or a merge after the round ends, the round that the newest verdict comment's `Round start:` line names.
 That directory is `~/improve/<direction>/evidence/<Round start>/` on the host that runs the merge.
 
-- The merge names that directory with `--evidence-dir`.
+The round keeps three facts in that directory: `inflight-files.txt`, the in-flight list the round read; `round-events.ndjson`, the round's event log as it stands at the round's end; and `kit-revision`, the round's kit revision, which names its skills.
+A merge outside a round checks its claims against the in-flight list and its round skill reads against the event log and kit revision.
+That merge runs on a host that holds the skills of the round's kit revision at `~/improve/runner/bin/<kit revision>/skills`.
+
+- The merge names that directory with `--evidence-dir`. A merge outside a round needs it.
 - A pull request whose body names a screenshot file also passes `--review-record <that directory>/review-events.ndjson`.
   The check reads the record for a web page change, and it refuses a web page change whose body names no screenshot.
 - A pull request whose body names no screenshot file merges without `--review-record`.
@@ -540,6 +544,7 @@ That directory is `~/improve/<direction>/evidence/<Round start>/` on the host th
 On success, pr-merge prints the PR number, the reviewed head, the merge commit and the state that GitHub reports after the merge. Exit 4 means the merge was sent and GitHub does not show it merged at the reviewed head.
 
 When the newest verdict comment has no `Round start:` line, or that directory is missing, or the body names a screenshot file and the record is missing, the merge needs a new review.
+A merge outside a round also needs a new review when that directory lacks one of the three facts; pr-merge names the missing file and sends nothing.
 The round reviews the head again (Step 6) before the merge, and the merge then names this round's directory.
 When a merge outside a round needs that new review, it leaves the pull request open, and Step 2 of the next round adopts it.
 

@@ -175,6 +175,12 @@ fn write_inflight_list(env: &Env, claims: &[(&str, &str)]) {
   write_inflight_list_lines(env, &lines);
 }
 
+/// Writes `claims` as the in-flight list that a round keeps in its evidence directory: `path<TAB>branch` per claim.
+fn write_claims_into(dir: &Path, claims: &[(&str, &str)]) {
+  let list: String = claims.iter().map(|(path, branch)| format!("{path}\t{branch}\n")).collect();
+  std::fs::write(dir.join("inflight-files.txt"), list).unwrap();
+}
+
 #[test]
 #[ignore = "integration"]
 fn a_pr_comment_refuses_a_home_path() {
@@ -1155,6 +1161,10 @@ fn verdict_comment(sha: &str, review: &str) -> String {
 /// The skills directory that the round's runner exports as `IMPROVE_SKILLS_DIR`.
 const ROUND_SKILLS: &str = "/synthetic/improve/runner/bin/0123456789abcdef/skills";
 
+/// The kit revision that a round keeps in its evidence directory. A merge outside the round takes its skills directory
+/// from this revision under the merge host's home, `$HOME/improve/runner/bin/<revision>/skills`.
+const KIT_REVISION: &str = "77a7047c30d3702bf0db26f34846c07031eadabb";
+
 /// One `Read` call of `path`, as a round's or a review's event log holds it.
 fn read_call(path: &str) -> String {
   serde_json::json!({"type": "assistant", "message": {"content": [
@@ -1257,6 +1267,33 @@ impl MergeWorld {
     world.set_comments(&[verdict_comment(HEAD_SHA, CLEAN_REVIEW)]);
     world.set_readback("MERGED", HEAD_SHA);
     world
+  }
+
+  /// A pull request merged outside a round: the environment names no round, and the round's facts sit in the evidence
+  /// directory, as the runner keeps them at the round's end. This host holds the skills of the round's kit revision.
+  fn outside_round(changed: &str, pr_body: &str) -> MergeWorld {
+    let mut world = MergeWorld::new(changed, pr_body);
+    world.env.remove("IMPROVE_LAUNCH_DIR");
+    world.env.remove("IMPROVE_SKILLS_DIR");
+    std::fs::write(world.evidence.join("inflight-files.txt"), "").unwrap();
+    std::fs::write(world.evidence.join("kit-revision"), format!("{KIT_REVISION}\n")).unwrap();
+    world.round_events = world.evidence.join("round-events.ndjson");
+    std::fs::write(&world.round_events, "").unwrap();
+    std::fs::create_dir_all(world.skills_dir()).unwrap();
+    world
+  }
+
+  /// The skills directory this host holds for the round's kit revision: `$HOME/improve/runner/bin/<revision>/skills`.
+  fn skills_dir(&self) -> PathBuf {
+    self.sandbox.root().join("improve/runner/bin").join(KIT_REVISION).join("skills")
+  }
+
+  /// `pr-merge` outside a round: `--evidence-dir` names this world's evidence directory, and `args` follow it.
+  fn merge_from_evidence(&self, args: &[&str]) -> Run {
+    let evidence = self.evidence.display().to_string();
+    let mut all = vec!["--evidence-dir", evidence.as_str()];
+    all.extend_from_slice(args);
+    self.merge(&all)
   }
 
   /// Writes the pull request as GitHub reads it after the merge: its state, its head and its merge commit.
@@ -1711,6 +1748,93 @@ fn a_pr_merge_refuses_a_round_whose_event_log_is_missing() {
 
   assert_eq!(run.code, 2, "{}", run.describe());
   assert!(world.merge_calls().is_empty(), "nothing may merge without the round's event log:\n{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_outside_a_round_passes_a_clean_change_on_its_evidence_directory_alone() {
+  let world = MergeWorld::outside_round("rust/crates/x/src/lib.rs\n", "## Evidence\nno screenshot needed.\n");
+  let kit_rule = format!("{}/writing-style/genres/code.md", world.skills_dir().display());
+  world.round(&[read_call(&kit_rule)]);
+
+  let run = world.merge_from_evidence(&["5046"]);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert_eq!(world.merge_calls(), ["pr merge --squash 5046"], "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_outside_a_round_refuses_a_claimed_path_from_the_evidence_copy() {
+  let world = MergeWorld::outside_round("rust/crates/x/src/lib.rs\n", "## Evidence\nno screenshot needed.\n");
+  write_claims_into(&world.evidence, &[("rust/crates/x/src/lib.rs", OTHER_CLAIMANT)]);
+
+  let run = world.merge_from_evidence(&["5046"]);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(
+    run.stderr.lines().any(|line| line.contains("rust/crates/x/src/lib.rs") && line.contains(OTHER_CLAIMANT)),
+    "{}",
+    run.stderr
+  );
+  assert!(world.merge_calls().is_empty(), "nothing may merge: {}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_outside_a_round_refuses_a_stale_skill_read_in_the_evidence_copy() {
+  let world = MergeWorld::outside_round("rust/crates/x/src/lib.rs\n", "## Evidence\nno screenshot needed.\n");
+  let stale = "/synthetic/checkout/skills/improve-worker/SKILL.md";
+  world.round(&[read_call(stale)]);
+
+  let run = world.merge_from_evidence(&["5046"]);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  let skills = world.skills_dir().display().to_string();
+  assert!(run.stderr.contains(&format!("skill read outside {skills}: {stale}")), "{}", run.describe());
+  assert!(world.merge_calls().is_empty(), "nothing may merge:\n{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_outside_a_round_stops_naming_each_fact_its_evidence_directory_lacks() {
+  for fact in ["inflight-files.txt", "round-events.ndjson", "kit-revision"] {
+    let world = MergeWorld::outside_round("rust/crates/x/src/lib.rs\n", "## Evidence\nno screenshot needed.\n");
+    let missing = world.evidence.join(fact);
+    std::fs::remove_file(&missing).unwrap();
+
+    let run = world.merge_from_evidence(&["5046"]);
+
+    assert_eq!(run.code, 2, "{fact}: {}", run.describe());
+    assert!(run.stderr.contains(&missing.display().to_string()), "{fact}: {}", run.describe());
+    assert!(world.merge_calls().is_empty(), "{fact}: nothing may merge:\n{}", run.describe());
+  }
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_outside_a_round_names_the_skills_directory_this_host_lacks() {
+  let world = MergeWorld::outside_round("rust/crates/x/src/lib.rs\n", "## Evidence\nno screenshot needed.\n");
+  let skills = world.skills_dir();
+  std::fs::remove_dir_all(&skills).unwrap();
+
+  let run = world.merge_from_evidence(&["5046"]);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains(&skills.display().to_string()), "{}", run.describe());
+  assert!(world.merge_calls().is_empty(), "nothing may merge:\n{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_outside_a_round_needs_an_evidence_directory() {
+  let world = MergeWorld::outside_round("rust/crates/x/src/lib.rs\n", "## Evidence\nno screenshot needed.\n");
+
+  let run = world.merge(&["5046"]);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("--evidence-dir"), "{}", run.describe());
+  assert!(world.merge_calls().is_empty(), "nothing may merge:\n{}", run.describe());
 }
 
 #[test]

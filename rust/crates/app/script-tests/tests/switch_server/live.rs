@@ -250,6 +250,8 @@ fn charliebot(second_port: u16) -> Respond {
     }
     let page = format!(
       "<!doctype html><title>CharlieBot</title>\
+       <div id=\"auth-overlay\" style=\"display:none\"><input id=\"auth-key-input\" type=\"password\"></div>\
+       <div id=\"sidebar\"></div><div id=\"messages\"></div>\
        <script src=\"http://127.0.0.1:{second_port}/asset.js\"></script>\
        <script>fetch('http://127.0.0.1:{second_port}/api', {{ headers: {{ \
        Authorization: 'Bearer ' + localStorage.getItem('charliebot_access_key') }} }});</script>"
@@ -279,6 +281,11 @@ fn run_live_shot(sandbox: &Sandbox, base: &str, view: &str, out: &Path) -> Run {
 /// A stand-in origin that answers every request with the login page, as the server does to a key it does not accept.
 fn login_page_only() -> Respond {
   Arc::new(|_target, _head| (401, "text/html", LOGIN_PAGE.to_string()))
+}
+
+/// An unrelated page that answers 200. A successful response alone does not make a page the CharlieBot app.
+fn unrelated_page() -> Respond {
+  Arc::new(|_target, _head| (200, "text/html", "<!doctype html><title>Other page</title>".to_string()))
 }
 
 /// The app's page as the stand-in serves it. Its access-key prompt opens when the page's localStorage holds no key, as
@@ -399,6 +406,22 @@ fn test_a_capture_of_the_access_key_login_page_fails_and_writes_no_picture() {
   assert_eq!(run.code, 1, "{}", run.describe());
   assert!(run.stderr.contains("the page is the access-key login page, not the app"), "{}", run.describe());
   assert!(!out.exists(), "a login page is never written as a picture: {}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_a_capture_of_an_unrelated_200_page_fails_and_writes_no_picture() {
+  let sandbox = Sandbox::new();
+  let listener = TcpListener::bind("127.0.0.1:0").expect("a port");
+  let port = listener.local_addr().expect("the port").port();
+  let _seen = stand_in_origin(listener, unrelated_page());
+  let out = sandbox.dir("shots").join("view.png");
+
+  let run = run_live_shot(&sandbox, &format!("http://127.0.0.1:{port}"), VIEW, &out);
+
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(run.stderr.contains("the page is not the CharlieBot app"), "{}", run.describe());
+  assert!(!out.exists(), "a page outside the app is never written as a picture: {}", run.describe());
 }
 
 /// The capture stage against a server that shows the login page: the commit's capture fails at its size with a line

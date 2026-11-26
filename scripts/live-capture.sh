@@ -68,10 +68,11 @@ commit_view_lines() {
 
 # commits_with_views OLD NEW: the full sha of each commit in OLD..NEW that carries a View trailer, oldest first.
 commits_with_views() {
-  local shas sha
+  local shas sha views
   shas="$(git -C "$REPO_ROOT" rev-list --reverse "$1..$2")" || return 1
   for sha in $shas; do
-    if [ -n "$(commit_view_lines "$sha")" ]; then
+    views="$(commit_view_lines "$sha")" || return 1
+    if [ -n "$views" ]; then
       printf '%s\n' "$sha"
     fi
   done
@@ -287,7 +288,8 @@ PROMPT="$(git -C "$REPO_ROOT" show "$NEW_SHA:prompts/live_view_check.md")" \
   || die "cannot read $NEW_SHA:prompts/live_view_check.md"
 
 for sha in "${COMMITS[@]}"; do
-  capture_commit "$(git -C "$REPO_ROOT" rev-parse --short "$sha")" "$(commit_view_lines "$sha")"
+  view_lines="$(commit_view_lines "$sha")" || die "cannot read View trailers from $sha"
+  capture_commit "$(git -C "$REPO_ROOT" rev-parse --short "$sha")" "$view_lines"
 done
 for sha in "${COMMITS[@]}"; do
   short="$(git -C "$REPO_ROOT" rev-parse --short "$sha")"

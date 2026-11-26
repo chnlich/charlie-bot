@@ -18,9 +18,9 @@
 // size must equal it; a capture that came out at another size fails here instead of passing a screenshot the release's
 // check would refuse.
 //
-// A capture is a picture of the app only when the rendered page shows so: the view must answer 200, and the page must
-// show neither the access-key login page nor the app's own access-key prompt. Any other page fails the capture, and no
-// PNG is written.
+// A capture is a picture of the app only when the rendered page shows so: the view must answer 200, the app shell must
+// be present, and the page must show neither the access-key login page nor the app's own access-key prompt. Any other
+// page fails the capture, and no PNG is written.
 //
 // Chrome resolves from LIVE_SHOT_CHROME, then the newest Playwright Chromium under ~/.cache/ms-playwright,
 // then `chromium`, `chromium-browser` and `google-chrome`.
@@ -120,6 +120,21 @@ class Cdp {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+async function drainPausedRequests(pending) {
+  let timeout;
+  try {
+    const drained = await Promise.race([
+      Promise.all(pending).then(() => true),
+      new Promise((resolve) => {
+        timeout = setTimeout(() => resolve(false), 5000);
+      }),
+    ]);
+    if (!drained) throw new Error('a paused request did not continue before the page closed');
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function launch(binary) {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'live-shot-'));
   const child = spawn(binary, [
@@ -183,6 +198,8 @@ async function renderedPageFacts(page) {
   return evaluate(page, `(() => {
     const prompt = document.getElementById('auth-overlay');
     return {
+      appShell: document.getElementById('auth-overlay') !== null &&
+        document.getElementById('sidebar') !== null && document.getElementById('messages') !== null,
       loginForm: document.querySelector('input#k[type="password"]') !== null,
       accessPrompt: prompt !== null && getComputedStyle(prompt).display !== 'none',
     };
@@ -194,6 +211,7 @@ async function renderedPageFacts(page) {
 function refuseNonAppPage(status, facts) {
   if (facts.loginForm) throw new Error('the page is the access-key login page, not the app');
   if (status !== 200) throw new Error(`the view answered ${status ?? 'with no status'}, not 200`);
+  if (!facts.appShell) throw new Error('the page is not the CharlieBot app');
   if (facts.accessPrompt) throw new Error("the app's access-key prompt covers the page, so the key was not accepted");
 }
 
@@ -204,14 +222,17 @@ async function capture(browser, url) {
   const origin = new URL(baseUrl).origin;
   const loaded = new Set();
   const statuses = new Map();
+  const pendingInterceptions = new Set();
   let capturing = true;
   let interceptFailure = null;
   browser.cdp.on('Fetch.requestPaused', (message) => {
     if (message.sessionId !== sessionId || !capturing) return;
-    answerPausedRequest(page, message.params, origin).catch((error) => {
+    const pending = answerPausedRequest(page, message.params, origin).catch((error) => {
       interceptFailure ??= error;
       console.error(`live-shot: a paused request was not answered: ${error.message}`);
     });
+    pendingInterceptions.add(pending);
+    pending.finally(() => pendingInterceptions.delete(pending));
   });
   browser.cdp.on('Page.lifecycleEvent', (message) => {
     if (message.sessionId === sessionId && message.params.name === 'load') loaded.add(message.params.loaderId);
@@ -244,11 +265,12 @@ async function capture(browser, url) {
     await sleep(1000);
     refuseNonAppPage(statuses.get(loaderId), await renderedPageFacts(page));
     const { data } = await page.send('Page.captureScreenshot', { format: 'png' });
-    if (interceptFailure) throw interceptFailure;
     return Buffer.from(data, 'base64');
   } finally {
     capturing = false;
+    await drainPausedRequests(pendingInterceptions);
     await browser.cdp.send('Target.closeTarget', { targetId });
+    if (interceptFailure) throw interceptFailure;
   }
 }
 

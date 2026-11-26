@@ -53,10 +53,10 @@
 # The checks that need a model run after the readback, on the new server and the production home, so the release path
 # ends at server_ready: the probe turn and the delegation check. Each wait is bounded from the measured times (see
 # PROBE_WAIT_S and DELEGATION_WAIT_S below). A check that fails because the model service or the gateway failed —
-# their error text names a 5xx, a rate limit or an overloaded service — is a model-side failure: it is retried once,
-# and a second such failure keeps the new release serving and exits 6, which leaves the decision to the release's
-# operator. A check that fails any other way is a server-side failure, and the switch switches back. A check that hangs
-# fails the same way, on its wait's bound.
+# their error text names a 5xx, a rate limit, exhausted usage quota or an overloaded service — is a model-side failure.
+# It is retried once, and a second such failure keeps the new release serving and exits 6, which leaves the decision to
+# the release's operator. A check that fails any other way is a server-side failure, and the switch switches back. A
+# check that hangs fails the same way, on its wait's bound.
 #
 # After the checks pass and before it reports SWITCH COMPLETE, the forward switch captures the live page of each
 # `View:` trailer a commit in OLD_SHA..TARGET_SHA carries. It reads the window sizes from the target release's own
@@ -788,8 +788,8 @@ run_error() {
 # model_side_error TEXT: TEXT, a run's error message, names a failure of the model service rather than of the server.
 # The measured false alarms since 2026-10-30 were the gateway's 5xx and the model service's errors (a BadGatewayError
 # and Error code: 520, findings.md §2a), and the class the release decision keeps without a switch back is a gateway
-# 5xx, a rate limit or a model-call error. A spawn failure, a cgroup failure and a git timeout name none of these, so
-# they read as the server's.
+# 5xx, a rate limit, exhausted usage quota or resources, or a model-call error. A spawn failure, a cgroup failure,
+# a disk quota failure and a git timeout read as the server's.
 model_side_error() {
   local text
   text="$(tr '[:upper:]' '[:lower:]' <<<"$1")"
@@ -798,6 +798,13 @@ model_side_error() {
       *ratelimiterror* | *"rate limit"* | *"too many requests"* | *"error code: 429"* | *"error code: 5"* | \
       *"service unavailable"* | *overloaded*)
       return 0
+      ;;
+  esac
+  case "$text" in
+    *disk* | *edquot* | *cgroup* | *spawn*) ;;
+    *resource_exhausted* | *"usage quota"*exhausted* | *"usage quota"*exceeded* | \
+      *"usage-quota"*exhausted* | *"usage-quota"*exceeded*)
+      [[ "$text" =~ (^|[^[:alnum:]_])git([^[:alnum:]_]|$) ]] || return 0
       ;;
   esac
   return 1

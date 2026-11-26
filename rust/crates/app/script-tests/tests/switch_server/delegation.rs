@@ -7,7 +7,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use charliebot_shell_harness::Run;
+use charliebot_shell_harness::{self as harness, Run, Sandbox};
 use serde_json::{Value, json};
 
 use super::world::{World, fake_charliebot, replace_charliebot, write_behavior};
@@ -208,6 +208,43 @@ const GATEWAY_ERROR: &str = "litellm.BadGatewayError: Bad Gateway while calling 
 const SPAWN_ERROR: &str =
   "master_cc_crashed: session cgroup slice charliebot-agents.slice cannot enable cpu for its children";
 
+/// One usage-quota refusal, as the model service's own error message names it: the model side's class.
+const USAGE_QUOTA_ERROR: &str = concat!(
+  "Error: Agent error: Your weekly usage quota has been exhausted. ",
+  "Visit https://app.devin.ai/settings/usage to purchase on-demand usage or turn on auto-reload.: ",
+  "{ \"cognition.ai/errorKind\": \"resource_exhausted\", \"cognition.ai/retryable\": true }"
+);
+
+#[test]
+fn test_model_side_error_distinguishes_usage_quota_from_host_failures() {
+  let sandbox = Sandbox::new();
+  let script = harness::repo_root().join("scripts/switch-server.sh");
+  let cases = [
+    (USAGE_QUOTA_ERROR, true),
+    ("errorKind: RESOURCE_EXHAUSTED", true),
+    ("Your weekly USAGE QUOTA has been EXHAUSTED", true),
+    ("Usage quota exceeded", true),
+    ("usage-quota exhausted", true),
+    ("Digital service usage quota exceeded", true),
+    ("Disk quota exceeded", false),
+    ("Disk usage quota exceeded", false),
+    ("EDQUOT: usage quota exceeded", false),
+    ("cgroup resource_exhausted", false),
+    ("spawn failed: resource_exhausted", false),
+    ("git failed: resource_exhausted", false),
+  ];
+  for (error, model_side) in cases {
+    let mut command = harness::command("bash", &sandbox.env());
+    command
+      .args(["-c", r#"source "$1" rust "$2" && model_side_error "$3""#, "bash"])
+      .arg(&script)
+      .arg("a".repeat(40))
+      .arg(error);
+    let run = harness::run(&mut command);
+    assert_eq!(run.code == 0, model_side, "{error}: {}", run.describe());
+  }
+}
+
 #[test]
 #[ignore = "integration"]
 fn test_switch_keeps_the_new_release_and_exits_6_when_the_model_fails_the_delegation_twice() {
@@ -239,6 +276,26 @@ fn test_switch_keeps_the_new_release_and_exits_6_when_the_model_fails_the_delega
 
 #[test]
 #[ignore = "integration"]
+fn test_switch_retries_the_delegation_once_when_the_model_service_reports_usage_quota_exhaustion() {
+  // The model service's usage-quota refusal is its own failure, not the server's. The check is retried once, and the
+  // same refusal on the retry keeps the new release serving with the exit status of its own.
+  let mut world = World::new();
+  let run = switch_to_new_release(
+    &mut world,
+    &[("task_state", json!("failed")), ("worktree", json!("missing")), ("task_error", json!(USAGE_QUOTA_ERROR))],
+  );
+
+  assert_eq!(run.code, 6, "{}", world.report(&run));
+  let report = world.report(&run);
+  assert!(report.contains("delegation_check: model-side error on attempt 1"), "{report}");
+  assert!(report.contains("SWITCH KEPT, MODEL CHECK FAILED: delegation_check failed on both attempts"), "{report}");
+  assert_eq!(release_calls(&world, &world.new_sha).iter().filter(|call| **call == DELEGATE).count(), 2, "{report}");
+  assert!(world.serves_release(&world.new_sha), "{report}");
+  assert_eq!(task_left_behind(&world), Vec::<String>::new(), "{report}");
+}
+
+#[test]
+#[ignore = "integration"]
 fn test_switch_switches_back_when_the_delegation_run_fails_before_its_model_call() {
   // The same shape of failure with the agent's own error text: the server's class, so the switch switches back.
   let mut world = World::new();
@@ -250,6 +307,25 @@ fn test_switch_switches_back_when_the_delegation_run_fails_before_its_model_call
   assert_eq!(run.code, 2, "{}", world.report(&run));
   let report = world.report(&run);
   assert!(report.contains("switch back: the delegation check failed"), "{report}");
+  assert!(report.contains(&format!("switched back: rust {} serves port {}", world.old_sha, world.port)), "{report}");
+  world.assert_untouched();
+  assert_eq!(release_calls(&world, &world.new_sha).iter().filter(|call| **call == DELEGATE).count(), 1, "{report}");
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_switch_switches_back_when_a_disk_quota_error_fails_the_delegation_run() {
+  // A filesystem quota failure belongs to the host, so the check is not retried and the switch switches back.
+  let mut world = World::new();
+  let run = switch_to_new_release(
+    &mut world,
+    &[("task_state", json!("failed")), ("worktree", json!("missing")), ("task_error", json!("Disk quota exceeded"))],
+  );
+
+  assert_eq!(run.code, 2, "{}", world.report(&run));
+  let report = world.report(&run);
+  assert!(report.contains("switch back: the delegation check failed"), "{report}");
+  assert!(!report.contains("delegation_check: model-side error on attempt 1"), "{report}");
   assert!(report.contains(&format!("switched back: rust {} serves port {}", world.old_sha, world.port)), "{report}");
   world.assert_untouched();
   assert_eq!(release_calls(&world, &world.new_sha).iter().filter(|call| **call == DELEGATE).count(), 1, "{report}");

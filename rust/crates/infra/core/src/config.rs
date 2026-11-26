@@ -418,8 +418,8 @@ fn default_min_free_disk_gib() -> i64 {
 #[serde(deny_unknown_fields)]
 pub struct PathsConfig {
   /// The directories that the diff page and the code page use. The diff page lists the git repositories one level below
-  /// each directory and refuses a repository outside them. The code page opens folders under these directories and
-  /// under the worktree directory.
+  /// each directory, and it refuses a repository outside these directories and the registered package repositories.
+  /// The code page opens folders under these directories and under the worktree directory.
   #[serde(default = "default_workspace_dirs")]
   pub workspace_dirs: Vec<String>,
   /// The directory where each task's git worktree is created. The code page opens folders under it, and worker runs
@@ -514,9 +514,9 @@ pub fn parse_backend_record(record: &Value, backend_types: &[&str]) -> Result<Ba
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RoutingConfig {
-  /// The argv of the command that chooses the backend for implement, quick-edit, script-run and verify tasks. It reads
-  /// a JSON request on stdin and prints its JSON answer on stdout. Unset, a request to choose a backend fails with
-  /// `backends.routing is not configured`.
+  /// The argv of the command that chooses the backend for implement, quick-edit, script-run and verify tasks that name
+  /// none, and for chat-thread sessions. It reads a JSON request on stdin and prints its JSON answer on stdout. Unset,
+  /// no router runs: those tasks take the pool path, and a chat thread takes `thread`, else `new_session`.
   pub command: Vec<String>,
 }
 
@@ -629,10 +629,9 @@ pub enum CallClass {
   /// The model or pool that the failure-triage judge runs on. Unset, failure triage refuses to run and names
   /// `backends.calls.triage`.
   Triage,
-  /// The backend that a chat-thread session takes when the router does not route it. Unset, `new_session` applies, and
-  /// when that is unset too, the session is not created.
+  /// The backend that a chat-thread session takes when the router does not route it. Unset, `new_session` applies.
   Thread,
-  /// The backend that a chat-thread session takes when `thread` is unset and the router does not route it.
+  /// The backend that a new session takes when it names none. The server refuses to start without this key.
   NewSession,
   /// The improve round's review of its pull request.
   ImproveReview,

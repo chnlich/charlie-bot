@@ -344,7 +344,7 @@ impl Reader {
         }
         '$' if self.peek() == Some('{') => {
           placeholder(&mut word);
-          self.read_parameter_expansion()?;
+          self.read_parameter_expansion(false)?;
         }
         '<' | '>' => self.redirect(character, &mut word, &mut words),
         '#' if word.is_none() => self.skip_comment(),
@@ -378,13 +378,14 @@ impl Reader {
     self.read_list(Some(')'))
   }
 
-  /// Reads `${...}` starting with the `{` that `peek()` saw after `$`.
+  /// Reads `${...}` starting with the `{` that `peek()` saw after `$`. `quoted` is whether bash reads the expansion's
+  /// `'` as text: inside double quotes, in arithmetic, or in an unquoted heredoc body.
   ///
   /// Bash finds the expansion's closing `}` by skipping an escape's next character, a quoted region, and the
   /// `${...}`, `$(...)` and backtick substitutions that the expansion nests. A `(` or `)` elsewhere in the expansion,
-  /// as in `${stat##*) }` or `${var%(*}`, is a pattern character, not a group bracket. A quote hides a `}` inside it
-  /// even when the expansion itself is inside a double-quoted string.
-  fn read_parameter_expansion(&mut self) -> Result<(), String> {
+  /// as in `${stat##*) }` or `${var%(*}`, is a pattern character, not a group bracket. Unquoted, a `'` hides everything
+  /// up to the next `'`, substitutions included. Quoted, the run hides only `}` and `"`; its substitutions still run.
+  fn read_parameter_expansion(&mut self, quoted: bool) -> Result<(), String> {
     self.bump();
     loop {
       let Some(character) = self.bump() else {
@@ -394,13 +395,29 @@ impl Reader {
         '\\' => {
           self.bump();
         }
+        '\'' if quoted => self.read_quoted_run()?,
         '\'' => self.read_single_quoted(&mut None)?,
         '"' => self.read_double_quoted(&mut None)?,
         '$' if self.peek() == Some('(') => self.read_dollar_paren()?,
-        '$' if self.peek() == Some('{') => self.read_parameter_expansion()?,
+        '$' if self.peek() == Some('{') => self.read_parameter_expansion(quoted)?,
         '`' => self.read_list(Some('`'))?,
         '}' => return Ok(()),
         _ => {}
+      }
+    }
+  }
+
+  /// Reads a single-quoted run inside an expansion that bash reads as quoted. The run ends at the next `'`, so a `}` or
+  /// `"` in it is text, but its `$(...)`, `${...}` and backtick substitutions still run.
+  fn read_quoted_run(&mut self) -> Result<(), String> {
+    loop {
+      match self.bump() {
+        None => return Err("a single quote is never closed".to_string()),
+        Some('\'') => return Ok(()),
+        Some('$') if self.peek() == Some('(') => self.read_dollar_paren()?,
+        Some('$') if self.peek() == Some('{') => self.read_parameter_expansion(true)?,
+        Some('`') => self.read_list(Some('`'))?,
+        Some(_) => {}
       }
     }
   }
@@ -427,7 +444,7 @@ impl Reader {
         }
         ';' | '\n' if depth == 0 => return Ok(false),
         '$' if self.peek() == Some('(') => self.read_dollar_paren()?,
-        '$' if self.peek() == Some('{') => self.read_parameter_expansion()?,
+        '$' if self.peek() == Some('{') => self.read_parameter_expansion(true)?,
         '`' => self.read_list(Some('`'))?,
         '\'' if !self.skip_single_quoted() => return Ok(false),
         '"' if !self.read_arith_double_quoted()? => return Ok(false),
@@ -458,7 +475,7 @@ impl Reader {
           self.bump();
         }
         Some('$') if self.peek() == Some('(') => self.read_dollar_paren()?,
-        Some('$') if self.peek() == Some('{') => self.read_parameter_expansion()?,
+        Some('$') if self.peek() == Some('{') => self.read_parameter_expansion(true)?,
         Some('`') => self.read_list(Some('`'))?,
         Some(_) => {}
       }
@@ -613,7 +630,7 @@ impl Reader {
           self.bump();
         }
         '$' if self.peek() == Some('(') => self.read_dollar_paren()?,
-        '$' if self.peek() == Some('{') => self.read_parameter_expansion()?,
+        '$' if self.peek() == Some('{') => self.read_parameter_expansion(true)?,
         '`' => self.read_list(Some('`'))?,
         _ => {}
       }
@@ -657,7 +674,7 @@ impl Reader {
         }
         Some('$') if self.peek() == Some('{') => {
           placeholder(word);
-          self.read_parameter_expansion()?;
+          self.read_parameter_expansion(true)?;
         }
         Some('`') => {
           placeholder(word);
@@ -730,6 +747,21 @@ mod tests {
     // The `)` in the quoted part of the expansion is part of the expansion, as it is in bash.
     let found = reads("echo \"${a:-\"x)\"}\"\n").unwrap();
     assert_eq!(command_words(&found), ["echo"]);
+  }
+
+  #[test]
+  fn a_single_quoted_run_in_double_quotes_still_runs_its_substitution() {
+    // In double quotes, in arithmetic and in an unquoted heredoc body, bash reads the `'` in an expansion as text, so
+    // the `$(b)` between the quotes runs.
+    assert_eq!(command_words(&reads("echo \"${a:-'$(b)'}\"\n").unwrap()), ["b", "echo"]);
+    assert_eq!(command_words(&reads("echo $(( ${a:-'$(b)'} + 1 ))\n").unwrap()), ["b", "echo"]);
+    assert_eq!(command_words(&reads("cat <<EOF\n${a:-'$(b)'}\nEOF\n").unwrap()), ["cat", "b"]);
+  }
+
+  #[test]
+  fn a_single_quoted_run_outside_double_quotes_hides_its_substitution() {
+    // Here the `'` is a quote, so `$(b)` is text and does not run.
+    assert_eq!(command_words(&reads("echo ${a:-'$(b)'}\n").unwrap()), ["echo"]);
   }
 
   #[test]

@@ -1552,12 +1552,7 @@ async fn push_task_branch(ctx: &TaskLanding, branch: &str) -> anyhow::Result<()>
   } else {
     format!("--force-with-lease=refs/heads/{branch}:")
   };
-  let (ok, _, err) =
-    git::git_stdout(&ctx.worktree, &["push", &lease, "origin", branch], GIT_PUSH_TIMEOUT, "git push task branch").await;
-  if !ok {
-    anyhow::bail!("pushing task branch {branch} failed: {err}");
-  }
-  Ok(())
+  crate::land_push::push_task_branch(&ctx.worktree, "origin", branch, &lease, GIT_PUSH_TIMEOUT).await
 }
 
 async fn origin_has_branch(ctx: &TaskLanding, branch: &str) -> anyhow::Result<bool> {
@@ -1578,7 +1573,7 @@ async fn origin_has_branch(ctx: &TaskLanding, branch: &str) -> anyhow::Result<bo
 /// green PR kept open. Only git's own non-fast-forward report can start a verification; every other
 /// refusal — a local or remote hook included — ends the landing at once.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PushRejection {
+pub(crate) enum PushRejection {
   NonFastForward,
   RepositoryRules,
   Timeout,
@@ -1619,7 +1614,7 @@ const TRANSPORT_MARKERS: [&str; 12] = [
 /// stderr fragments of a refused login: ssh publickey and https credential rejections.
 const AUTH_MARKERS: [&str; 2] = ["permission denied", "authentication failed"];
 
-fn push_rejection_kind(stderr: &str) -> PushRejection {
+pub(crate) fn push_rejection_kind(stderr: &str) -> PushRejection {
   let lowered = stderr.to_lowercase();
   if lowered.contains("gh013") || lowered.contains("repository rule") || lowered.contains("rule violations") {
     PushRejection::RepositoryRules
@@ -2949,7 +2944,7 @@ mod synthetic_repo_tests {
     git_ok(&repo, &["commit", "-q", "--amend", "-m", "rewritten"]);
     let error = push_task_branch(&landing_ctx(&repo, "task1"), "task1").await.expect_err("the other push stands");
     let text = format!("{error:#}");
-    assert!(text.contains("cannot lock ref") && text.contains("but expected"), "{text}");
+    assert!(text.contains("NonFastForward"), "{text}");
     assert_eq!(git::git_rev_parse(&origin, "refs/heads/task1").await.expect("origin holds the branch"), other_tip);
   }
 

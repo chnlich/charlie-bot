@@ -1324,7 +1324,7 @@ mod tests {
   use super::*;
 
   /// The session count of the plan tests. Each builds a full plan, and the unit-test time check allows 0.1 s per test.
-  const SCALED_SESSIONS: usize = 1_200;
+  pub(super) const SCALED_SESSIONS: usize = 1_200;
 
   /// The reference start's follow-up totals, scaled to `sessions`.
   fn scaled(reference: f64, sessions: usize) -> f64 {
@@ -1428,40 +1428,6 @@ mod tests {
     );
   }
 
-  /// The `(id, label)` pairs of the pools in the release trial's config, read from the `backends.pools` section of the
-  /// heredoc that `trial.sh` writes. A row whose backend id names one of these shows that pool's label, not its id.
-  fn trial_pool_labels() -> Vec<(&'static str, &'static str)> {
-    const TRIAL_SCRIPT: &str = include_str!("../../../../../scripts/release/trial.sh");
-    let mut pools: Vec<(&'static str, &'static str)> = Vec::new();
-    let mut in_pools = false;
-    for line in TRIAL_SCRIPT.lines() {
-      if line == "  pools:" {
-        in_pools = true;
-      } else if line == "  calls:" {
-        break;
-      } else if in_pools {
-        if let Some(id) = line.strip_prefix("    - id: ") {
-          pools.push((id, ""));
-        } else if let (Some(label), Some(pool)) = (line.strip_prefix("      label: "), pools.last_mut()) {
-          pool.1 = label;
-        }
-      }
-    }
-    pools
-  }
-
-  /// The serve fixture's row names a backend that the release trial's config declares as a labelled pool, so its
-  /// sidebar row paints that label in full. A backend id the trial config lacks would paint its raw id.
-  #[test]
-  fn the_serve_fixture_backend_resolves_to_a_trial_pool_label() {
-    let (_, _, sizes) = session::planned_home(SCALED_SESSIONS, 1, Language::Mixed);
-    let plan = HomePlan::new(&sizes, 1, Language::Mixed, Shape::ServeTaskTree);
-    let fixture = plan.serve_fixture.expect("the serve plan holds its fixture row");
-    let backend = plan.sessions[fixture.row].backend;
-    let label = trial_pool_labels().into_iter().find(|(id, _)| *id == backend).map(|(_, label)| label);
-    assert!(label.is_some_and(|label| !label.is_empty()), "the trial config declares no labelled pool `{backend}`");
-  }
-
   /// The plan deals every keep reason at its scaled reference count, so a lab start's full-pass distribution lands
   /// within the A1 range of the reference start. The follow-up total is checked at production scale in
   /// `the_production_plan_follow_up_total_lands_within_the_reference`.
@@ -1523,3 +1489,6 @@ mod tests {
     assert!((followups / scaled(7938.0, sessions) - 1.0).abs() < 0.25, "{followups} follow-ups");
   }
 }
+
+#[cfg(test)]
+mod fixture_tests;

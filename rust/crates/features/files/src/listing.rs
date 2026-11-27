@@ -63,9 +63,9 @@ struct Child {
   modified: f64,
 }
 
-/// The listing page of `dir_path`, or `None` when `dir_path` is not a directory. `url_prefix` is the request path
-/// that the rows link under. `load_icons` yields the icon table that draws the folder and file glyphs; it runs only
-/// when `dir_path` is a directory.
+/// The listing page of `dir_path`, or `None` when `dir_path` is not a directory. `url_prefix` is the decoded request
+/// path that the rows link under; each of its segments is quoted in the links. `load_icons` yields the icon table that
+/// draws the folder and file glyphs; it runs only when `dir_path` is a directory.
 pub fn dir_listing_page(
   dir_path: &Path,
   url_prefix: &str,
@@ -107,12 +107,13 @@ pub fn dir_listing_page(
     let folder = glyph(&icons, "folder")?;
     rows.push_str(&format!(
       r#"<tr><td class="icon">{folder}</td><td class="name"><a href="{}">..</a></td><td class="size"></td><td class="modified"></td></tr>"#,
-      escape(parent, EscapeContext::QuotedAttribute)
+      escape(&quote_path(parent), EscapeContext::QuotedAttribute)
     ));
     rows.push('\n');
   }
+  let encoded_base = quote_path(base);
   for child in &children {
-    rows.push_str(&row(child, base, &icons)?);
+    rows.push_str(&row(child, &encoded_base, &icons)?);
     rows.push('\n');
   }
   let display_path = dir_path
@@ -126,11 +127,11 @@ fn glyph(icons: &Icons, key: &str) -> Result<String, ListingError> {
   icons.svg(key, 16, "", "").map_err(|error| failed(FailureKind::RuntimeError, error.to_string()))
 }
 
-/// One child's `<tr>`, without its newline.
-fn row(child: &Child, base: &str, icons: &Icons) -> Result<String, ListingError> {
+/// One child's `<tr>`, without its newline. `encoded_base` is the request path with each segment quoted.
+fn row(child: &Child, encoded_base: &str, icons: &Icons) -> Result<String, ListingError> {
   let icon = glyph(icons, if child.is_dir { "folder" } else { "file" })?;
   let name = escape(&format!("{}{}", child.name, if child.is_dir { "/" } else { "" }), EscapeContext::QuotedAttribute);
-  let href = escape(&format!("{base}/{}", quote(&child.name)), EscapeContext::QuotedAttribute);
+  let href = escape(&format!("{encoded_base}/{}", quote(&child.name)), EscapeContext::QuotedAttribute);
   let size = if child.is_dir { String::new() } else { human_size::format_size(child.size) };
   let modified = modified_minute(child.modified)?;
   Ok(format!(
@@ -178,6 +179,11 @@ fn quote(name: &str) -> String {
   utf8_percent_encode(name, FILENAME_SET).to_string()
 }
 
+/// The path with each segment quoted, so that the `/` separators stay as they are.
+pub(crate) fn quote_path(path: &str) -> String {
+  path.split('/').map(quote).collect::<Vec<_>>().join("/")
+}
+
 fn failed(kind: FailureKind, detail: String) -> ListingError {
   ListingError::Failed { kind, detail }
 }
@@ -185,6 +191,8 @@ fn failed(kind: FailureKind, detail: String) -> ListingError {
 #[cfg(test)]
 mod tests {
   use std::time::{Duration, UNIX_EPOCH};
+
+  use percent_encoding::percent_decode_str;
 
   use super::*;
 
@@ -197,6 +205,20 @@ mod tests {
 
   fn listing(dir: &Path, url_prefix: &str) -> String {
     dir_listing_page(dir, url_prefix, || Ok(icons())).expect("the directory lists").expect("the path is a directory")
+  }
+
+  /// The href of the link whose text is `text`, as the page holds it.
+  fn href_of(page: &str, text: &str) -> String {
+    let end = page.find(&format!(">{text}</a>")).unwrap_or_else(|| panic!("{text} is linked in {page}"));
+    let anchor = &page[..end];
+    let start = anchor.rfind(r#"href=""#).expect("the link has an href") + r#"href=""#.len();
+    anchor[start..].strip_suffix('"').expect("the href closes").to_string()
+  }
+
+  /// The path an href names, decoded the way the file server decodes its path. The href holds no raw `#` or `?`.
+  fn decoded_href(href: &str) -> String {
+    assert!(!href.contains(['#', '?']), "a raw # or ? in {href}");
+    percent_decode_str(href).decode_utf8().expect("the href decodes to UTF-8").into_owned()
   }
 
   fn set_mtime(path: &Path, seconds: u64, nanos: u32) {
@@ -227,8 +249,32 @@ mod tests {
     let page = listing(dir.path(), "/absolute_filepath/tmp/a b/");
     assert!(
       page.contains(
-        r#"<a href="/absolute_filepath/tmp/a b/%3Ci%3E%26%22x%27%20%C3%A9.txt">&lt;i&gt;&amp;&quot;x&#x27; é.txt</a>"#
+        r#"<a href="/absolute_filepath/tmp/a%20b/%3Ci%3E%26%22x%27%20%C3%A9.txt">&lt;i&gt;&amp;&quot;x&#x27; é.txt</a>"#
       ),
+      "{page}"
+    );
+  }
+
+  /// A directory named with `#`, `?`, a space and `%`, listed one level below. Its `..` row and its child links both
+  /// build from the special name, and each href decodes to the intended path with no raw `#` or `?`.
+  #[test]
+  fn the_parent_row_and_child_links_decode_to_the_intended_paths_for_special_names() {
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let special = dir.path().join("a#b?c d%e");
+    let inner = special.join("inner");
+    fs::create_dir_all(&inner).expect("the dirs create");
+    fs::write(inner.join("kid.txt"), "").expect("the file writes");
+    fs::create_dir(inner.join("sub")).expect("the dir creates");
+    let page = listing(&inner, &format!("{FILE_SERVER_MOUNT}{}", inner.display()));
+    assert_eq!(decoded_href(&href_of(&page, "..")), format!("{FILE_SERVER_MOUNT}{}", special.display()), "{page}");
+    assert_eq!(
+      decoded_href(&href_of(&page, "kid.txt")),
+      format!("{FILE_SERVER_MOUNT}{}", inner.join("kid.txt").display()),
+      "{page}"
+    );
+    assert_eq!(
+      decoded_href(&href_of(&page, "sub/")),
+      format!("{FILE_SERVER_MOUNT}{}", inner.join("sub").display()),
       "{page}"
     );
   }

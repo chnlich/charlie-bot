@@ -178,6 +178,7 @@ mod tests {
   use charliebot_store::Store;
   use futures_util::future::BoxFuture;
   use nix::sys::stat::Mode;
+  use percent_encoding::percent_decode_str;
 
   use super::*;
   use crate::api::register;
@@ -380,6 +381,29 @@ mod tests {
     assert!(listing.1.contains(error_page::Refusal::DirectoryDenied.reason()), "{}", listing.1);
     assert_eq!(entry.0, StatusCode::FORBIDDEN);
     assert!(entry.1.contains(error_page::Refusal::EntryDenied.reason()), "{}", entry.1);
+  }
+
+  /// The parent link of a refusal below a directory named with `#`, `?`, a space and `%` decodes to that directory,
+  /// and its href holds no raw `#` or `?`.
+  #[tokio::test]
+  async fn the_parent_link_of_a_refusal_decodes_to_the_special_named_parent() {
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let parent = dir.path().join("a#b?c d%e");
+    let locked = parent.join("locked");
+    fs::create_dir_all(&locked).expect("the dirs create");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).expect("the mode sets");
+    let (_home, features) = test_features(Registry::new());
+    let (status, body) = answer_text(&features, &parts(Method::GET, &[]), &below(&dir, "a#b?c d%e/locked")).await;
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).expect("the mode restores");
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let href = body
+      .split(r#"<a class="parent" href=""#)
+      .nth(1)
+      .and_then(|rest| rest.split('"').next())
+      .unwrap_or_else(|| panic!("the refusal links its parent: {body}"));
+    assert!(!href.contains(['#', '?']), "a raw # or ? in {href}");
+    let decoded = percent_decode_str(href).decode_utf8().expect("the href decodes to UTF-8");
+    assert_eq!(decoded, format!("{MOUNT}{}", parent.display()));
   }
 
   #[tokio::test]

@@ -8,6 +8,7 @@ use charliebot_html::{EscapeContext, escape};
 use http::StatusCode;
 
 use crate::document::document;
+use crate::listing::quote_path;
 use crate::mount::MOUNT;
 
 /// Why the file server refuses a path. Each reason has its own sentence on the page.
@@ -43,7 +44,7 @@ pub(crate) fn refusal(refusal: Refusal, display_path: &str, url_prefix: &str) ->
     let (parent, _) = base.rsplit_once('/').expect("a listed URL runs under the mount, so it holds a slash");
     format!(
       r#"<p><a class="parent" href="{}">Parent directory</a></p>"#,
-      escape(parent, EscapeContext::QuotedAttribute)
+      escape(&quote_path(parent), EscapeContext::QuotedAttribute)
     )
   };
   let body = format!("<h2>{path}</h2>\n<p>{}</p>\n{parent}", refusal.reason());

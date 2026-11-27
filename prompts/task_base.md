@@ -8,10 +8,14 @@ The codebase has a single user. Apply these principles:
 - **No defensive programming**: do not add guards for scenarios that cannot happen.
 - **Switch names**: name each on/off switch for the feature it turns on, as in `ENABLE_X` or `USE_X`. Give each
   switch a default value. A caller turns the feature off with the value 0 or false.
-- **Optimizations stay local**: keep every optimization local to the component it targets, independent of the global
-  model structure. Put its switch inside that component. Put each optimization in its own module or class, apart from
-  the model logic. The model file keeps its pre-optimization form and reaches the optimization through one-line calls.
-  A component-local optimization keeps its speedup and the run working through model edits elsewhere.
+- **New code in its own module**: when new code can stand as its own module, put it in that module. The key file that
+  uses it stays small and reaches the module through short calls. A key file is a large source file;
+  `dev/check-key-file-growth.sh` sets its size. CI runs that check: it fails a pull request whose diff adds more lines
+  to a key file than the check allows. An optimization is one case of this rule: keep it local to the component it
+  targets, independent of the global model structure. Put its switch inside that component. Put each optimization in
+  its own module or class, apart from the model logic. The model file keeps its pre-optimization form and reaches the
+  optimization through one-line calls. A component-local optimization keeps its speedup and the run working through
+  model edits elsewhere.
 - **Superseded code**: delete it in the same change. A retry or a regenerated output overwrites its predecessor.
   Numbered artifacts compare distinct experiment legs.
 - **Known defects and stale docs**: when a change touches code with a known defect or a stale doc, fix that defect

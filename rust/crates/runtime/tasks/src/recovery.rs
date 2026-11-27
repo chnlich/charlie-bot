@@ -2677,6 +2677,62 @@ mod tests {
     }
   }
 
+  /// A turn that thinks for ten minutes after its input stores no event, so its node's log and metadata stay as the
+  /// input left them, before the boot marker. The turn's unended run keeps the node, and once the run ends the same
+  /// files skip: the verdict follows the run, not the log's growth.
+  #[tokio::test]
+  async fn a_thinking_manager_turn_keeps_its_node_when_its_files_predate_the_marker() {
+    let (_home, features) = startup_features().await;
+    let session_id =
+      synthetic_node(&features, "thinking-turn-node", TaskProfile::Manager, RunKind::ManagerTurn, 0, true).await;
+    let run_id = "thinking-turn-run";
+    {
+      let guard = features.store.control_lock().await;
+      let record =
+        RunRecord { session_id: session_id.clone(), ..run(run_id, RunKind::ManagerTurn, Some("2026-10-18T09:50:00Z")) };
+      features.store.register_run_locked(&guard, &session_id, record, None).await.expect("the turn's run registers");
+    }
+    let marker = BootMarker {
+      pass_started_at: UtcDateTime::parse("2026-10-18T10:00:00Z").expect("the synthetic marker parses"),
+      failed_sessions: BTreeSet::new(),
+    };
+    let stamp = SystemTime::from(UtcDateTime::parse("2026-10-18T09:50:00Z").expect("the stamp parses").into_inner());
+    let session_dir = features.store.session_dir(&session_id);
+    for path in [features.store.chat_events_path(&session_id), features.store.metadata_path(&session_id)] {
+      std::fs::File::open(&path).expect("the durable file exists").set_modified(stamp).expect("the mtime is set");
+    }
+    let meta = features.store.load_meta(&session_id).await.expect("the meta loads").expect("the node exists");
+    let check = |source: SkipProofSource| {
+      boot_skip_check(&features, &session_id, &meta, &marker, Some(&source)).expect("the skip check reads")
+    };
+    let source = |session_dir: &std::path::Path| {
+      SkipProofSource::read(session_dir, SkipProofSource::metadata_file(session_dir).expect("the metadata stats"))
+        .expect("the session's log stats")
+        .expect("both files exist")
+    };
+
+    match check(source(&session_dir)) {
+      SkipCheck::Keep(reason) => assert_eq!(reason, "run_unended", "a turn still thinking keeps its node"),
+      SkipCheck::Skip { .. } => panic!("a node whose turn is still running skips"),
+    }
+
+    {
+      let guard = features.store.control_lock().await;
+      features
+        .store
+        .record_finish_locked(&guard, &session_id, run_id, RunOutcome::new(RunOutcomeKind::Success))
+        .await
+        .expect("the turn finishes");
+    }
+    for path in [features.store.chat_events_path(&session_id), features.store.metadata_path(&session_id)] {
+      std::fs::File::open(&path).expect("the durable file exists").set_modified(stamp).expect("the mtime is set");
+    }
+    assert!(
+      matches!(check(source(&session_dir)), SkipCheck::Skip { .. }),
+      "the same quiet files skip once the run ends"
+    );
+  }
+
   /// The skip check's existence test is the metadata file's own stat, which also gives the proof its metadata identity.
   /// A plain file where a session directory would be, and a directory without a metadata file, are no node; a node
   /// whose log is absent is a node that keeps its pass, as it did before.

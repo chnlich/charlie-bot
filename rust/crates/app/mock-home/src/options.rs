@@ -17,7 +17,8 @@ pub enum Shape {
   TaskTree,
   /// The task-tree shape with no live run. A serve trial starts no process to reattach, so a live run would drain at its
   /// start and log a node failure. Each run keeps the end its record states. The improve rounds' shared home is this
-  /// shape, named by `DATA_VERSION`.
+  /// shape, named by `DATA_VERSION`. It also writes the fixture row that a ux round captures: one sidebar row that
+  /// carries the six row indicators, with a long display name and a long backend name (`task_tree::ServeFixture`).
   ServeTaskTree,
   /// Sessions of the default size curve, each with a synthetic task spec sized so that its session row matches a live
   /// view's rows. The default shape writes no task spec, so its bytes do not change.

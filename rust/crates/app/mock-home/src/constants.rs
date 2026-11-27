@@ -2,9 +2,11 @@
 //! words.
 
 /// The data version. It names the mock home's directory, `~/improve/mock-home/<version>/`, and changes with any change
-/// to the bytes that `generate` writes. Version 7 is the task-tree shape, which the improve rounds generate: its boot
-/// marker lets a start skip every session that holds no open task, run or worktree.
-pub const DATA_VERSION: &str = "7";
+/// to the bytes that `generate` writes. Version 8 is the task-tree shape, which the improve rounds generate: its boot
+/// marker lets a start skip every session that holds no open task, run or worktree. Its serve shape also writes the
+/// fixture row that a ux round captures: one sidebar row that carries the six row indicators, with a long display name
+/// and a long backend name (`task_tree::ServeFixture`).
+pub const DATA_VERSION: &str = "8";
 /// The session count of the production home, and the default of `generate`: the live store's session directories when
 /// it was measured (14,451 at 18:04Z on 2026-11-19).
 pub const PRODUCTION_SESSIONS: usize = 14_451;

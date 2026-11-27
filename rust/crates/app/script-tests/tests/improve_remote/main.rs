@@ -473,6 +473,98 @@ fn the_review_runs_with_the_round_clone_as_its_repo_root() {
   assert_eq!(env.get("CHARLIEBOT_REPO_ROOT"), Some(&digest(&clone.display().to_string())), "{}", run.describe());
 }
 
+/// The review builds under the round's TMPDIR, and the round's check builds only in the round clone. The review gets
+/// the round's TMPDIR and no exported target directory, so a build it runs in its scratch clone defaults into that
+/// clone. `round-cargo.sh` refuses a build from that clone before cargo runs. From the round clone it builds into the
+/// direction's pinned target, which the refused build never reached. The round agent makes the review scratch with
+/// `mktemp` under its TMPDIR; this test makes it in the same directory.
+#[test]
+#[ignore = "integration"]
+fn a_review_builds_under_the_round_tmpdir_and_round_cargo_refuses_a_build_outside_the_clone() {
+  let world = World::new();
+  let task = world.sandbox.root().join("review-task.md");
+  fs::write(&task, "Review the diff.\nPR: 1 https://example.invalid/pull/1\n").expect("the review task file");
+  let round_tmpdir = PathBuf::from(format!("/tmp/improve-{DIRECTION}-tmp"));
+  let sandbox_name = world.sandbox.root().file_name().expect("the sandbox directory's name");
+  let scratch = round_tmpdir.join(format!("review-{}", sandbox_name.to_string_lossy()));
+  fs::create_dir_all(&scratch).expect("the review's scratch directory");
+  let mut env = world.env();
+  env.insert("FAKE_CLAUDE_REVIEW_TASK".to_string(), task.display().to_string());
+  env.insert("FAKE_CLAUDE_REVIEW_DIR".to_string(), scratch.display().to_string());
+  let run = world.run(&env);
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(world.review_ran(), "the round's review did not run backend run:\n{}", run.describe());
+  assert_eq!(world.review_directory_received(), scratch.display().to_string(), "{}", run.describe());
+
+  // The review's TMPDIR is the scope directory that the round made under its scratch, and no target directory is
+  // exported to the review.
+  let review_env = world.review_environment();
+  let review_tmpdir = review_env.get("TMPDIR").expect("the review's environment holds TMPDIR");
+  let scope_tmpdir = fs::read_dir(&round_tmpdir)
+    .expect("the round's scratch directory")
+    .map(|entry| entry.expect("an entry of the round's scratch directory").path())
+    .filter(|path| path.file_name().is_some_and(|name| name.to_string_lossy().starts_with("scope.")))
+    .find(|path| &digest(&path.display().to_string()) == review_tmpdir);
+  assert!(
+    scope_tmpdir.is_some(),
+    "the review's TMPDIR is not a scope directory under the round's scratch: {}",
+    run.describe()
+  );
+  assert!(
+    !review_env.contains_key("CARGO_TARGET_DIR"),
+    "the review's environment exports a target directory: {}",
+    run.describe()
+  );
+
+  // The review clones the repository into its scratch. The round clone is the one the round builds in.
+  let round_clone = world.remote_home.join("improve").join(DIRECTION).join("charlie-bot");
+  assert!(round_clone.is_dir(), "the round left no clone at {}: {}", round_clone.display(), run.describe());
+  let source = round_clone.display().to_string();
+  world.git(&scratch, &["clone", "-q", &source, "charlie-bot"]);
+  let review_clone = scratch.join("charlie-bot");
+
+  let helper = harness::repo_root().join("dev/improve/round-cargo.sh");
+  assert!(helper.is_file(), "the kit has no round-cargo.sh: {}", helper.display());
+  let pinned = world.remote_home.join(".cache/improve-target").join(DIRECTION);
+  let cargo_log = world.sandbox.root().join("round-cargo-builds.log");
+  let cargo_env = world.sandbox.root().join("round-cargo-env.txt");
+  let mut helper_env = world.env();
+  helper_env.insert("HOME".to_string(), world.remote_home.display().to_string());
+  helper_env.insert("IMPROVE_DIRECTION".to_string(), DIRECTION.to_string());
+  helper_env.insert(
+    "PATH".to_string(),
+    format!("{}:/usr/local/bin:/usr/bin:/bin", world.remote_home.join(".local/bin").display()),
+  );
+  helper_env.insert("FAKE_CARGO_LOG".to_string(), cargo_log.display().to_string());
+  helper_env.insert("FAKE_CARGO_ENV".to_string(), cargo_env.display().to_string());
+  let round_cargo = |directory: &Path| {
+    let mut command = harness::command(&helper, &helper_env);
+    command.current_dir(directory).args(["check", "--workspace", "--locked"]);
+    harness::run(&mut command)
+  };
+
+  let refused = round_cargo(&review_clone);
+  assert_eq!(refused.code, 2, "a build in the review's clone was not refused: {}", refused.describe());
+  assert!(
+    refused.stderr.contains(&format!("refuses a build in {}", review_clone.display())),
+    "the refusal does not name the review's clone: {}",
+    refused.describe()
+  );
+  assert!(!cargo_log.exists(), "cargo ran for a build outside the round clone: {}", refused.describe());
+  assert!(!pinned.exists(), "the refused build reached the pinned target {}", pinned.display());
+
+  let built = round_cargo(&round_clone);
+  assert_eq!(built.code, 0, "the round clone's build failed: {}", built.describe());
+  assert!(cargo_log.exists(), "the round clone's build did not run cargo: {}", built.describe());
+  assert!(
+    pinned.join("release/charliebot").is_file(),
+    "the round clone's build did not write the pinned target {}: {}",
+    pinned.display(),
+    built.describe()
+  );
+  fs::remove_dir_all(&scratch).expect("the review's scratch directory");
+}
+
 #[test]
 #[ignore = "integration"]
 fn a_subscription_review_gets_its_account_login_in_its_own_process_only() {

@@ -6,6 +6,7 @@ Your working directory is a scratch directory, not a git checkout.
 Clone `chnlich/charlie-bot` into your working directory with `gh repo clone` before your first git command, and run every git command in that clone.
 Run no git command in any other checkout: a running CharlieBot server loads its code from the other checkouts on this host, and a git command there can change the code it runs.
 Each `gh` call names the repository, with `--repo chnlich/charlie-bot` or with the repository argument of `gh repo clone`, because gh cannot resolve the repository from your working directory.
+When you build, put each build's target directory under your working directory: the round removes that directory with the scratch when the next round starts.
 
 Read, in this order:
 

@@ -2205,11 +2205,10 @@ fn a_termed_wrapper_ends_its_scope_and_leaves_no_process() {
     })
     .expect("the remote-runner wrapper process");
 
-  let term = std::process::Command::new("kill")
-    .args(["-TERM", &wrapper_pid.to_string()])
-    .status()
-    .expect("send SIGTERM to wrapper");
-  assert!(term.success(), "kill -TERM {wrapper_pid} failed");
+  // The signal goes through kill(2), not the external `kill`, whose parser drops digits of a negative operand.
+  let wrapper = nix::unistd::Pid::from_raw(i32::try_from(wrapper_pid).expect("a pid fits i32"));
+  nix::sys::signal::kill(wrapper, nix::sys::signal::Signal::SIGTERM)
+    .unwrap_or_else(|error| panic!("kill -TERM {wrapper_pid} failed: {error}"));
 
   let start = Instant::now();
   let output = launcher.wait_with_output().expect("wait for launcher");

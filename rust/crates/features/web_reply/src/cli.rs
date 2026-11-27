@@ -27,6 +27,11 @@ use charliebot_tasks::cold_read;
 use clap::{Args, Parser, Subcommand};
 use serde_json::{Map, Value, json};
 
+use crate::route_paths::{
+  COLD_READ_CHECK_PATH, DIALOG_PATH, REPLY_PATH, REPLY_UNREAD_PATH, STATUS_CONFIRM_PATH, STATUS_PATH,
+  STATUS_UNREAD_PATH,
+};
+
 #[derive(Parser)]
 #[command(name = "web", about = "CharlieBot web session verbs")]
 struct WebCli {
@@ -107,7 +112,7 @@ fn reply(args: &ReplyArgs, lazy_host: &LazyHost) -> Result<(), CliExit> {
   let session_id = resolve::resolve_from_env(args.session.as_deref())?;
   let text = files::read_reply_text(&args.file)?;
   let request = json!({ "session_id": &session_id, "text": &text });
-  let unread_result = client::post("/api/internal/web/reply/unread", request, None, &[])?;
+  let unread_result = client::post(REPLY_UNREAD_PATH, request, None, &[])?;
   let unread = unread_result
     .get("unread")
     .and_then(Value::as_bool)
@@ -126,7 +131,7 @@ fn reply(args: &ReplyArgs, lazy_host: &LazyHost) -> Result<(), CliExit> {
 
     let findings = if !code_findings.is_empty() {
       client::post(
-        "/api/internal/web/cold-read-check",
+        COLD_READ_CHECK_PATH,
         json!({
           "session_id": &session_id,
           "name": cold_read::REPLY,
@@ -160,7 +165,7 @@ fn reply(args: &ReplyArgs, lazy_host: &LazyHost) -> Result<(), CliExit> {
         cold_read::parse_reply_findings(&answer, cold_read::REPLY_QUESTION_COUNT).map_err(anyhow_exit)?;
       if !model_findings.is_empty() {
         client::post(
-          "/api/internal/web/cold-read-check",
+          COLD_READ_CHECK_PATH,
           json!({
             "session_id": &session_id,
             "name": cold_read::REPLY,
@@ -191,14 +196,14 @@ fn reply(args: &ReplyArgs, lazy_host: &LazyHost) -> Result<(), CliExit> {
   if let Some(reason) = &args.keep_language {
     payload.insert("keep_language".to_string(), json!(reason));
   }
-  let readback = client::post("/api/internal/web/reply", Value::Object(payload), None, &[])?;
+  let readback = client::post(REPLY_PATH, Value::Object(payload), None, &[])?;
   print!("{}", json_out::render(&readback, None));
   Ok(())
 }
 
 fn dialog(args: &SessionArgs) -> Result<(), CliExit> {
   let session_id = resolve::resolve_from_env(args.session.as_deref())?;
-  let result = client::get("/api/internal/web/dialog", Some(vec![("session_id".to_string(), session_id)]))?;
+  let result = client::get(DIALOG_PATH, Some(vec![("session_id".to_string(), session_id)]))?;
   let mut blocks = Vec::new();
   for entry in list(field(&result, "entries")?)? {
     let label = match text_repr::value_str(field(entry, "role")?).as_str() {
@@ -219,7 +224,7 @@ fn status_set(args: &StatusSetArgs, lazy_host: &LazyHost) -> Result<(), CliExit>
   let session_id = resolve::resolve_from_env(args.session.as_deref())?;
   let text = files::read_reply_text(&args.file)?;
   let request = json!({ "session_id": &session_id, "text": &text });
-  let unread_result = client::post("/api/internal/web/status/unread", request.clone(), None, &[])?;
+  let unread_result = client::post(STATUS_UNREAD_PATH, request.clone(), None, &[])?;
   let unread = list(field(&unread_result, "unread")?)?;
   let settle = unread_result.get("settle").and_then(Value::as_array).cloned().unwrap_or_default();
   let remaining = unread_result.get("remaining").and_then(Value::as_array).cloned();
@@ -235,7 +240,7 @@ fn status_set(args: &StatusSetArgs, lazy_host: &LazyHost) -> Result<(), CliExit>
     None => None,
   };
   if unread.is_empty() && now_to_check.is_none() && settle.is_empty() && remaining.is_none() {
-    let result = client::post("/api/internal/web/status", request, None, &[])?;
+    let result = client::post(STATUS_PATH, request, None, &[])?;
     print!("{}", json_out::render(&result, None));
     return Ok(());
   }
@@ -289,7 +294,7 @@ fn status_set(args: &StatusSetArgs, lazy_host: &LazyHost) -> Result<(), CliExit>
       };
       let answer = probe.answer.expect("a successful ask probe has the answering backend's response");
       client::post(
-        "/api/internal/web/cold-read-check",
+        COLD_READ_CHECK_PATH,
         json!({
           "session_id": session_id,
           "name": cold_read::ASK,
@@ -339,7 +344,7 @@ fn status_set(args: &StatusSetArgs, lazy_host: &LazyHost) -> Result<(), CliExit>
     let answer = probe.answer.expect("a successful settle probe has the answering backend's response");
     for item in &settle {
       client::post(
-        "/api/internal/web/cold-read-check",
+        COLD_READ_CHECK_PATH,
         json!({
           "session_id": session_id,
           "name": cold_read::SETTLE,
@@ -389,7 +394,7 @@ fn status_set(args: &StatusSetArgs, lazy_host: &LazyHost) -> Result<(), CliExit>
     println!("FAIL Now: {finding}");
   }
   if now_findings.is_empty() && unread.is_empty() && settle.is_empty() && remaining.is_none() {
-    let result = client::post("/api/internal/web/status", request, None, &[])?;
+    let result = client::post(STATUS_PATH, request, None, &[])?;
     print!("{}", json_out::render(&result, None));
     return Ok(());
   }
@@ -412,7 +417,7 @@ fn post_remaining_check(
     payload.insert("previous_remaining".to_string(), json!(previous));
   }
   client::post(
-    "/api/internal/web/cold-read-check",
+    COLD_READ_CHECK_PATH,
     json!({
       "session_id": session_id,
       "name": cold_read::REMAINING,
@@ -452,7 +457,7 @@ fn gate_fork_assertions(host: &CliHost, unread: &[Value]) -> Result<(), CliExit>
 
 fn status_confirm() -> Result<(), CliExit> {
   let session_id = resolve::resolve_from_env(None)?;
-  let result = client::post("/api/internal/web/status/confirm", json!({ "session_id": session_id }), None, &[])?;
+  let result = client::post(STATUS_CONFIRM_PATH, json!({ "session_id": session_id }), None, &[])?;
   print!("{}", json_out::render(&result, None));
   Ok(())
 }
@@ -466,7 +471,7 @@ fn status_show(args: &SessionArgs) -> Result<(), CliExit> {
 
 /// The status response the `show` and `set` verbs read.
 fn status_read(session_id: &str) -> Result<Value, CliExit> {
-  client::get("/api/internal/web/status", Some(vec![("session_id".to_string(), session_id.to_string())]))
+  client::get(STATUS_PATH, Some(vec![("session_id".to_string(), session_id.to_string())]))
 }
 
 /// The non-empty Now value named by a status file, or no Now check for a missing or empty value.

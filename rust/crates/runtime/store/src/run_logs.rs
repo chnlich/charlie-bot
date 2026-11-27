@@ -9,7 +9,7 @@ use std::fs::{self, File, Metadata};
 use std::io::{self, BufReader, Read};
 use std::path::{Path, PathBuf};
 
-use charliebot_core::event_types::SYSTEM;
+use charliebot_core::event_types::{EventFields, SYSTEM};
 use charliebot_core::fsutil::{self, FileBytes};
 use serde_json::Value;
 
@@ -25,10 +25,11 @@ pub const AGENT_STDOUT_LOG_NAME: &str = "agent.stdout.log";
 /// The suffix of a compressed run log: `events.jsonl` is stored as `events.jsonl.zst`.
 pub const COMPRESSED_SUFFIX: &str = ".zst";
 
-/// Whether `event` is a Claude Code thinking-token progress event.
-pub fn is_thinking_tokens_event(event: &Value) -> bool {
-  event.get("type").and_then(Value::as_str) == Some(SYSTEM)
-    && event.get("subtype").and_then(Value::as_str) == Some("thinking_tokens")
+/// Whether `event` is a Claude Code thinking-token progress event. A run log's JSON and the store's parsed chat events
+/// answer alike, so the For-you scan and the run-log writers share this test.
+pub fn is_thinking_tokens_event<E: EventFields>(event: &E) -> bool {
+  event.field("type").and_then(EventFields::as_str_field) == Some(SYSTEM)
+    && event.field("subtype").and_then(EventFields::as_str_field) == Some("thinking_tokens")
 }
 
 /// Whether `line` is a valid JSON event line recognized by [`is_thinking_tokens_event`]. Malformed lines return false.

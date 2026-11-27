@@ -13,12 +13,18 @@ const STDERR_HINT_MAX_CHARS: usize = 500;
 
 fn ansi_escape() -> &'static Regex {
   static ANSI_ESCAPE: OnceLock<Regex> = OnceLock::new();
-  ANSI_ESCAPE.get_or_init(|| Regex::new(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)").unwrap())
+  ANSI_ESCAPE.get_or_init(|| {
+    Regex::new(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
+      .expect("the ANSI escape pattern is a literal, so it always compiles")
+  })
 }
 
 fn control_character() -> &'static Regex {
   static CONTROL_CHARACTER: OnceLock<Regex> = OnceLock::new();
-  CONTROL_CHARACTER.get_or_init(|| Regex::new(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]").unwrap())
+  CONTROL_CHARACTER.get_or_init(|| {
+    Regex::new(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+      .expect("the control-character pattern is a literal, so it always compiles")
+  })
 }
 
 pub fn clean_control_characters(text: &str) -> String {

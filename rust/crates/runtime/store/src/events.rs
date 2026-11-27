@@ -298,10 +298,11 @@ impl Store {
   }
 
   /// Read the latest live-log events without priming the event cache. The page is keyed by
-  /// `(path, limit)` and `(mtime_ns, size)`, then read by seeking from EOF in the same 512 KiB window.
+  /// `(path, limit)` and `(mtime_ns, size)`, then read by seeking back from EOF in 512 KiB steps, doubling each step
+  /// until the lines are in hand.
   pub fn load_chat_events_tail(&self, session_id: &str, limit: usize) -> StoreResult<(Vec<ChatEvent>, usize, bool)> {
     let path = self.chat_events_path(session_id);
-    let Some((metadata, signature)) = file_signature(&path)? else { return Ok((Vec::new(), 0, false)) };
+    let Some((_, signature)) = file_signature(&path)? else { return Ok((Vec::new(), 0, false)) };
     let key = (path.clone(), limit);
     if let Some((events, total, has_more)) =
       lock(&self.event_read_caches, "event read cache mutex").tail.fresh(&key, signature)
@@ -319,7 +320,7 @@ impl Store {
       return Ok((Vec::new(), total, has_more));
     }
     let take = limit.min(total);
-    let (lines, bytes_read) = read_ndjson_tail_lines(&path, metadata.len(), take)?;
+    let (lines, bytes_read) = read_ndjson_tail_lines(&path, take)?;
     let events: Vec<ChatEvent> = lines.iter().filter_map(|line| ndjson::parse_line_compact(line)).collect();
     let events = Arc::new(events);
     {
@@ -1617,34 +1618,50 @@ fn read_ndjson_tail_physical_lines(
   Ok(Some((lines[lines.len() - take..].iter().map(|line| line.to_vec()).collect(), bytes_read)))
 }
 
-fn read_ndjson_tail_lines(path: &Path, file_size: u64, take: usize) -> StoreResult<(Vec<Vec<u8>>, usize)> {
-  let mut file = fs::File::open(path).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
-  let mut tail_bytes_read = 0;
-  if file_size > TAIL_WINDOW_SIZE as u64 {
-    let start = file_size - TAIL_WINDOW_SIZE as u64;
-    file.seek(SeekFrom::Start(start)).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
-    let mut window = Vec::with_capacity(TAIL_WINDOW_SIZE);
-    file.read_to_end(&mut window).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
-    tail_bytes_read = window.len();
-    let mut lines: Vec<&[u8]> = window.split(|byte| *byte == b'\n').skip(1).collect();
-    if lines.last().is_some_and(|line| line.is_empty()) {
-      lines.pop();
+/// The last `take` non-blank lines of a log, split on `\n`, or every such line when the log holds fewer.
+///
+/// The read starts at the end of the file and steps back one `TAIL_WINDOW_SIZE` window, then a step twice the size of
+/// the last, until the bytes it holds contain `take` such lines or the start of the file is reached. The bytes read
+/// therefore grow with the lines returned, not with the log size. Returns the lines and the bytes read.
+fn read_ndjson_tail_lines(path: &Path, take: usize) -> StoreResult<(Vec<Vec<u8>>, usize)> {
+  read_ndjson_tail_lines_from_step(path, take, TAIL_WINDOW_SIZE)
+}
+
+/// `read_ndjson_tail_lines` with its first step given, so a test can cross every step boundary in a small log.
+fn read_ndjson_tail_lines_from_step(path: &Path, take: usize, first_step: usize) -> StoreResult<(Vec<Vec<u8>>, usize)> {
+  let io_error = |error: std::io::Error| StoreError::new(format!("{}: {error}", path.display()));
+  let mut file = fs::File::open(path).map_err(io_error)?;
+  // The end is the file's length when the read opens it. A rewrite replaces the log by rename, so this handle keeps
+  // reading the one file that its end names.
+  let mut start = file.seek(SeekFrom::End(0)).map_err(io_error)?;
+  let mut step = first_step as u64;
+  // `window` holds the bytes from `start` to the end of the file.
+  let mut window: Vec<u8> = Vec::new();
+  loop {
+    let lines = nonblank_window_lines(&window, start > 0);
+    if lines.len() >= take || start == 0 {
+      let selected = lines[lines.len().saturating_sub(take)..].iter().map(|line| line.to_vec()).collect();
+      return Ok((selected, window.len()));
     }
-    let nonblank: Vec<&[u8]> = lines.into_iter().filter(|line| !line.iter().all(u8::is_ascii_whitespace)).collect();
-    if nonblank.len() >= take {
-      return Ok((nonblank[nonblank.len() - take..].iter().map(|line| line.to_vec()).collect(), window.len()));
-    }
+    let len = step.min(start);
+    start -= len;
+    file.seek(SeekFrom::Start(start)).map_err(io_error)?;
+    let mut grown = vec![0; len as usize];
+    file.read_exact(&mut grown).map_err(io_error)?;
+    grown.extend_from_slice(&window);
+    window = grown;
+    step = step.saturating_mul(2);
   }
-  file.seek(SeekFrom::Start(0)).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
-  let mut bytes = Vec::new();
-  file.read_to_end(&mut bytes).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
-  let mut lines: Vec<&[u8]> = bytes.split(|byte| *byte == b'\n').collect();
-  if bytes.ends_with(b"\n") {
-    lines.pop();
-  }
-  let nonblank: Vec<&[u8]> = lines.into_iter().filter(|line| !line.iter().all(u8::is_ascii_whitespace)).collect();
-  let start = nonblank.len().saturating_sub(take);
-  Ok((nonblank[start..].iter().map(|line| line.to_vec()).collect(), tail_bytes_read + bytes.len()))
+}
+
+/// The lines of `window` that hold a byte other than ASCII whitespace, split on `\n`. With `first_is_partial` set, the
+/// first segment is dropped, because the window may begin inside a line.
+fn nonblank_window_lines(window: &[u8], first_is_partial: bool) -> Vec<&[u8]> {
+  window
+    .split(|byte| *byte == b'\n')
+    .skip(usize::from(first_is_partial))
+    .filter(|line| !line.iter().all(u8::is_ascii_whitespace))
+    .collect()
 }
 
 fn read_live_range_suffix(path: &Path, start: usize, size: usize) -> std::io::Result<Vec<u8>> {
@@ -2184,6 +2201,149 @@ mod tests {
     assert!(Arc::ptr_eq(&events, &suffix.events));
     assert_eq!(suffix.start_index, 1);
     assert_eq!(suffix.events[suffix.start_index]["id"].as_str(), Some("second"));
+  }
+
+  /// Reference implementation used to check that returned tail lines keep their existing content.
+  fn read_ndjson_tail_lines_before(path: &Path, file_size: u64, take: usize) -> StoreResult<(Vec<Vec<u8>>, usize)> {
+    let mut file = fs::File::open(path).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+    let mut tail_bytes_read = 0;
+    if file_size > TAIL_WINDOW_SIZE as u64 {
+      let start = file_size - TAIL_WINDOW_SIZE as u64;
+      file.seek(SeekFrom::Start(start)).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+      let mut window = Vec::with_capacity(TAIL_WINDOW_SIZE);
+      file.read_to_end(&mut window).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+      tail_bytes_read = window.len();
+      let mut lines: Vec<&[u8]> = window.split(|byte| *byte == b'\n').skip(1).collect();
+      if lines.last().is_some_and(|line| line.is_empty()) {
+        lines.pop();
+      }
+      let nonblank: Vec<&[u8]> = lines.into_iter().filter(|line| !line.iter().all(u8::is_ascii_whitespace)).collect();
+      if nonblank.len() >= take {
+        return Ok((nonblank[nonblank.len() - take..].iter().map(|line| line.to_vec()).collect(), window.len()));
+      }
+    }
+    file.seek(SeekFrom::Start(0)).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+    let mut lines: Vec<&[u8]> = bytes.split(|byte| *byte == b'\n').collect();
+    if bytes.ends_with(b"\n") {
+      lines.pop();
+    }
+    let nonblank: Vec<&[u8]> = lines.into_iter().filter(|line| !line.iter().all(u8::is_ascii_whitespace)).collect();
+    let start = nonblank.len().saturating_sub(take);
+    Ok((nonblank[start..].iter().map(|line| line.to_vec()).collect(), tail_bytes_read + bytes.len()))
+  }
+
+  fn xorshift(state: &mut u64) -> u64 {
+    *state ^= *state << 13;
+    *state ^= *state >> 7;
+    *state ^= *state << 17;
+    *state
+  }
+
+  #[test]
+  fn tail_lines_equal_the_previous_read_on_edge_cases_at_every_take_and_step() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("events.jsonl");
+    let long = "x".repeat(3_000);
+    let cases: Vec<Vec<u8>> = vec![
+      b"".to_vec(),
+      b"{\"id\":1}".to_vec(),
+      b"{\"id\":1}\n".to_vec(),
+      b"\n\n".to_vec(),
+      b"  \n\t\n\r\n".to_vec(),
+      b"a\n\n  \r\n\t\nb\n".to_vec(),
+      b"a\r\nb\r\nc\r\n".to_vec(),
+      b"a\rb\nc\rd".to_vec(),
+      format!("{long}\n{long}\nlast\n").into_bytes(),
+      format!("first\n{long}\n  \n").into_bytes(),
+      format!("first\n{long}").into_bytes(),
+    ];
+    for case in &cases {
+      fs::write(&path, case).unwrap();
+      let segments = case.split(|byte| *byte == b'\n').count();
+      for take in 0..=segments + 1 {
+        let expected = read_ndjson_tail_lines_before(&path, case.len() as u64, take).unwrap().0;
+        for step in [1, 2, 3, 5, 16, 64, TAIL_WINDOW_SIZE] {
+          let actual = read_ndjson_tail_lines_from_step(&path, take, step).unwrap().0;
+          assert_eq!(actual, expected, "take {take}, first step {step}, log {:?}", String::from_utf8_lossy(case));
+        }
+      }
+    }
+  }
+
+  #[test]
+  fn tail_lines_equal_the_previous_read_on_random_logs() {
+    const ALPHABET: &[u8] = b"ax \t\r\n\n\n";
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("events.jsonl");
+    let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+    for _ in 0..120 {
+      let target = xorshift(&mut state) as usize % 240;
+      let mut log = Vec::new();
+      while log.len() < target {
+        if xorshift(&mut state).is_multiple_of(25) {
+          log.extend(std::iter::repeat_n(b'x', xorshift(&mut state) as usize % 120));
+        } else {
+          log.push(ALPHABET[xorshift(&mut state) as usize % ALPHABET.len()]);
+        }
+      }
+      fs::write(&path, &log).unwrap();
+      let segments = log.split(|byte| *byte == b'\n').count();
+      for take in 0..=segments + 1 {
+        let expected = read_ndjson_tail_lines_before(&path, log.len() as u64, take).unwrap().0;
+        for step in [1, 2, 3, 7, 16, 64, 200, TAIL_WINDOW_SIZE] {
+          let actual = read_ndjson_tail_lines_from_step(&path, take, step).unwrap().0;
+          assert_eq!(actual, expected, "take {take}, first step {step}, log {:?}", String::from_utf8_lossy(&log));
+        }
+      }
+    }
+  }
+
+  #[test]
+  fn tail_lines_equal_the_previous_read_past_the_window() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("events.jsonl");
+    let mut log = String::new();
+    for index in 0..12_000 {
+      log.push_str(&format!("{{\"id\":\"event-{index}\",\"text\":\"{}\"}}\n", "t".repeat(index % 90)));
+    }
+    log.push_str(&format!("{}\n", "L".repeat(600 * 1024)));
+    for index in 0..40 {
+      log.push_str(&format!("{{\"id\":\"tail-{index}\"}}\n\n"));
+    }
+    fs::write(&path, &log).unwrap();
+    for take in [1, 2, 7, 40, 41, 5_000, 13_000] {
+      let expected = read_ndjson_tail_lines_before(&path, log.len() as u64, take).unwrap().0;
+      assert_eq!(read_ndjson_tail_lines(&path, take).unwrap().0, expected, "take {take}");
+    }
+  }
+
+  #[test]
+  fn tail_read_stops_at_one_window_for_short_lines_and_at_the_lines_it_needs_for_long_ones() {
+    let dir = tempfile::tempdir().unwrap();
+    let short_path = dir.path().join("short.jsonl");
+    let short_line = format!("{{\"id\":\"{}\"}}\n", "s".repeat(40));
+    fs::write(&short_path, short_line.repeat(40_000)).unwrap();
+    let (lines, bytes_read) = read_ndjson_tail_lines(&short_path, 10).unwrap();
+    assert_eq!(lines.len(), 10);
+    assert_eq!(bytes_read, TAIL_WINDOW_SIZE);
+
+    let big = "b".repeat(300 * 1024);
+    let long_path = dir.path().join("long.jsonl");
+    let mut log = short_line.repeat(40_000);
+    for _ in 0..3 {
+      log.push_str(&big);
+      log.push('\n');
+    }
+    fs::write(&long_path, &log).unwrap();
+    let (lines, bytes_read) = read_ndjson_tail_lines(&long_path, 2).unwrap();
+    assert_eq!(lines, vec![big.as_bytes().to_vec(), big.as_bytes().to_vec()]);
+    // The two returned lines span `span` bytes to the end of the log. The steps double, so the read stays under twice
+    // the span plus one window, and well short of the whole log.
+    let span = 2 * (big.len() as u64 + 1);
+    assert!(bytes_read as u64 <= 2 * (span + TAIL_WINDOW_SIZE as u64), "read {bytes_read} bytes");
+    assert!((bytes_read as u64) < log.len() as u64, "the read stays short of the whole {} B log", log.len());
   }
 
   mod parity {

@@ -29,16 +29,25 @@ use crate::probe::probe_host_fresh as host_probe;
 #[cfg(test)]
 use crate::test_support::bound_probe as host_probe;
 
+/// The route of a row's status JSON; `{id}` stands for the row's id.
+pub const ROW_PATH: &str = "/api/host-auth/rows/{id}";
+/// The route that checks one row now; `{id}` stands for the row's id.
+pub const ROW_CHECK_PATH: &str = "/api/host-auth/rows/{id}/check";
+/// The route that starts a login's browser flow; `{name}` stands for the login's config name.
+pub const LOGIN_START_PATH: &str = "/api/host-auth/logins/{name}/start";
+/// The route that serves a login's input page; `{name}` stands for the login's config name.
+pub const LOGIN_INPUT_PATH: &str = "/api/host-auth/logins/{name}/input";
+
 /// The host-auth routes, registered with the application feature context as shared state.
 pub fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
     .route("/host-auth", get_only(host_auth_page))
     .route("/api/host-auth/status", get_only(host_auth_status))
     .route("/api/host-auth/probe", post_only(host_auth_probe))
-    .route("/api/host-auth/rows/{id}", get_only(host_auth_row))
-    .route("/api/host-auth/rows/{id}/check", post_only(host_auth_row_check))
-    .route("/api/host-auth/logins/{name}/start", post_only(browser_login_start))
-    .route("/api/host-auth/logins/{name}/input", post_only(browser_login_input))
+    .route(ROW_PATH, get_only(host_auth_row))
+    .route(ROW_CHECK_PATH, post_only(host_auth_row_check))
+    .route(LOGIN_START_PATH, post_only(browser_login_start))
+    .route(LOGIN_INPUT_PATH, post_only(browser_login_input))
     .with_state(Arc::clone(features))
 }
 

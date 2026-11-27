@@ -1,4 +1,4 @@
-//! opencode's part of the cold-storage sweep: no deletion and no category. The sweep runs a manual vacuum that refuses
+//! OpenCode's part of the cold-storage sweep: no deletion and no category. The sweep runs a manual vacuum that refuses
 //! past live writers, and reports the store's freelist.
 //!
 //! The 2.0 store is never deleted from: its `event` table stays empty in use, and `event_sequence` feeds live writes.
@@ -27,7 +27,7 @@ const SQLITE_LOCK_WAIT_MS: i64 = 2000;
 /// The argv of a live writer. CharlieBot starts an opencode server with exactly this argv.
 const SERVE_CMDLINE: &[u8] = b"opencode serve";
 
-/// opencode's part of the sweep: a requested vacuum when the scope is not a dry run, then the freelist, which the vacuum
+/// OpenCode's part of the sweep: a requested vacuum when the scope is not a dry run, then the freelist, which the vacuum
 /// has already reduced.
 pub fn sweep(db: &Path, proc_root: &Path, scope: &SweepScope) -> anyhow::Result<SourceSweep> {
   if scope.vacuum && !scope.dry_run {

@@ -4,17 +4,22 @@
 #   merge-outside-round.sh --evidence-dir <dir> [--review-record <file>] <PR>
 #
 # The runner keeps each kit revision's tools under ~/improve/runner/bin/<revision>/: the charliebot that a round
-# calls, the gh shim and the leak scripts, the kit (kit/) and the skills (skills/). The link
-# ~/improve/runner/bin/charliebot names the live revision, the revision of the latest launch. The round profile home is
-# ~/improve/home, which the runner refreshes at every launch with the leak patterns file that github-post.sh reads.
+# calls, the gh shim, the leak scripts and the kit (kit/). The evidence's skills come from the runner checkout's git
+# content (kit-skills.sh), so no skills directory of a revision is kept there. The link ~/improve/runner/bin/charliebot
+# names the live revision, the revision of the latest launch. The round profile home is ~/improve/home, which the runner
+# refreshes at every launch with the leak patterns file that github-post.sh reads.
 #
 # Before any call to GitHub, the script checks each item that the merge depends on. A missing item stops it with a
 # refusal that names the item: exit 2, nothing merged. Then it runs the live revision's github-post.sh pr-merge with
 # CHARLIEBOT_HOME set to the round profile home and the live revision's tool directory first on PATH. That call's exit
 # code is the script's own.
 #
-# Exit codes: 2 a refusal (nothing sent); otherwise pr-merge's exit code (4: sent, but GitHub does not show it merged).
+# Exit codes: 2 a refusal (nothing sent); otherwise pr-merge's exit code (75: no landing-queue turn within the wait,
+# nothing merged; 4: sent, but GitHub does not show it merged).
 set -euo pipefail
+
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+source "$script_dir/kit-skills.sh"
 
 usage() {
   printf 'usage: merge-outside-round.sh --evidence-dir <dir> [--review-record <file>] <PR>\n' >&2
@@ -70,9 +75,8 @@ done
 evidence_revision=$(<"$evidence_dir/kit-revision")
 [[ $evidence_revision =~ ^[0-9a-f]{40}$ ]] \
   || refuse "$evidence_dir/kit-revision holds no full kit revision"
-evidence_skills="$runner_root/bin/$evidence_revision/skills"
-[[ -d $evidence_skills ]] \
-  || refuse "the round host has no skills directory for kit revision $evidence_revision: $evidence_skills"
+kit_skills_dir "$evidence_revision" > /dev/null \
+  || refuse "the runner checkout holds no skills tree for kit revision $evidence_revision"
 
 args=(pr-merge --evidence-dir "$evidence_dir")
 [[ -z $review_record ]] || args+=(--review-record "$review_record")

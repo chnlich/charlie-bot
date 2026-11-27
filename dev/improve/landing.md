@@ -599,7 +599,7 @@ That directory is `~/improve/<direction>/evidence/<Round start>/`.
 The round keeps three facts in that directory: `inflight-files.txt`, the in-flight list the round read; `round-events.ndjson`, the round's event log as it stands at the round's end; and `kit-revision`, the round's kit revision, which names its skills.
 A merge outside a round checks its claims against the in-flight list and its round skill reads against the event log and kit revision.
 The round host is the improve host that ran the round.
-Its runner keeps the kit and skills directories of every kit revision under `~/improve/runner/bin/<kit revision>/`.
+A merge outside a round checks its round skill reads against the skills tree of the evidence's kit revision, read from the round host's runner checkout (`~/improve/runner/charlie-bot`, whose git content holds each kit revision the runner built); a revision whose tree the checkout lacks stops the merge and names it, and no other revision's skills stand in for it.
 A merge outside a round runs on the round host and reads the evidence directory there.
 The one way to merge outside a round is the kit entry point `dev/improve/merge-outside-round.sh`, run on the round host.
 It runs the merge in the round's environment: `CHARLIEBOT_HOME` is the round profile home, and the live revision's charliebot and kit do the merge.
@@ -614,9 +614,8 @@ Before any call to GitHub, the entry point checks each item the merge needs, and
 On success, pr-merge prints the PR number, the reviewed head, the merge commit and the state that GitHub reports after the merge. Exit 4 means the merge was sent and GitHub does not show it merged at the reviewed head.
 
 Every merge holds the landing queue's turn, so merges reach the base branch in the order their checks passed.
-Inside a round the merge waits in the foreground for the turn, at most 780 seconds, below the round's 900-second foreground tool-call limit.
-Exit 75 inside a round means that bound was reached: the entry was removed, nothing was merged, and the pull request stays open with its clean verdict for the next adoption round, which names it.
-Outside a round, exit 75 means the merge is queued and nothing has merged yet; the queue merges it when the turn comes, and the wake carries the result.
+Inside and outside a round the merge waits in the foreground for the turn, at most 780 seconds, below the round's 900-second foreground tool-call limit.
+Exit 75 means that bound was reached: the entry was removed, nothing was merged, and the pull request stays open with its clean verdict. The next adoption round names it inside a round; outside a round the caller keeps the pull request open and retries the merge later.
 
 When the newest verdict comment has no `Round start:` line, or that directory is missing, or the body names a screenshot file and the record is missing, the merge needs a new review.
 A merge outside a round also needs a new review when that directory lacks one of the three facts; the entry point names the missing file and sends nothing.

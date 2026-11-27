@@ -73,9 +73,9 @@
 #
 # Exit codes: 0 sent, 1 leak hit (nothing sent), 2 setup refusal (nothing sent),
 # 3 credential hit (nothing sent; the round stops), 4 merge sent but its readback does not confirm it,
-# 75 queued with nothing merged: outside a round, a wake merges when the landing queue's turn comes; inside a round,
-# the foreground wait for the turn reached its bound and the entry was removed, so the pull request stays open for the
-# next adoption round.
+# 75 nothing merged: the foreground wait for the landing queue's turn reached its bound and the entry was removed, so
+# the pull request stays open with its clean verdict. Inside a round the next adoption round names it; outside one the
+# caller retries (landing.md, Merging).
 set -euo pipefail
 
 usage() {
@@ -91,6 +91,7 @@ source "$repo_root/dev/improve/code-style-rules.sh"
 source "$repo_root/dev/improve/moved-references.sh"
 source "$repo_root/dev/improve/live-sessions.sh"
 source "$repo_root/dev/improve/claim-check.sh"
+source "$repo_root/dev/improve/kit-skills.sh"
 
 tmp_dir=$(mktemp -d)
 trap 'rm -rf "$tmp_dir"' EXIT
@@ -218,8 +219,8 @@ check_verdict_head() {
 # merge_facts: set facts_dir and skills_dir, the round facts that pr-merge's claim check and skill check read. Inside a
 # round they are the live launch directory and IMPROVE_SKILLS_DIR. Outside a round they are the copies that the round
 # kept in the evidence directory that --evidence-dir names: the in-flight list, the event log and the kit revision. The
-# kit revision names the skills directory of the round host's runner. Each missing fact, or a missing skills
-# directory, stops the merge and names it. This runs before any call to GitHub, so nothing is sent.
+# kit revision names the skills tree that the round host's runner checkout holds (kit-skills.sh). Each missing fact, or
+# a missing skills tree, stops the merge and names it. This runs before any call to GitHub, so nothing is sent.
 merge_facts() {
   local fact revision
   if [[ -n ${IMPROVE_LAUNCH_DIR-} ]]; then
@@ -249,12 +250,9 @@ merge_facts() {
       "$evidence_dir/kit-revision" >&2
     exit 2
   }
-  # The runner keeps each kit revision's skills at ~/improve/runner/bin/<revision>/skills
-  # (dev/improve/remote-runner.sh).
-  skills_dir="$HOME/improve/runner/bin/$revision/skills"
-  [[ -d $skills_dir ]] || {
-    printf 'Refused pr-merge: a merge outside a round runs on the round host, and this host has no skills ' >&2
-    printf 'directory for kit revision %s: %s; nothing was merged.\n' "$revision" "$skills_dir" >&2
+  skills_dir=$(kit_skills_dir "$revision") || {
+    printf 'Refused pr-merge: the runner checkout holds no skills tree for kit revision %s; nothing was merged.\n' \
+      "$revision" >&2
     exit 2
   }
   facts_dir=$evidence_dir
@@ -625,7 +623,7 @@ case "$subcommand" in
       printf ' nothing was merged.\n' >&2
       exit 2
     fi
-    merge_args=(pr merge --squash "$pr_selector" "${repo_args[@]}")
+    merge_args=(pr merge --squash "$pr_selector" --match-head-commit "$merge_head" "${repo_args[@]}")
     if [[ -n "$web_change" ]]; then
       pr_title=$(gh pr view "$pr_selector" "${repo_args[@]}" --json title --jq .title) || {
         printf 'Cannot read the title of PR %s; nothing was merged.\n' "$pr_selector" >&2
@@ -670,67 +668,49 @@ case "$subcommand" in
         printf 'Cannot read the number of PR %s; nothing was merged.\n' "$pr_selector" >&2
         exit 2
       }
+      # The merge takes the landing queue's turn in the foreground, inside and outside a round alike, so no server and no
+      # wake are needed. A round's owner is its launch id. Outside a round each call names its own owner, so two calls
+      # never share an entry or a turn.
       if [[ -n ${IMPROVE_LAUNCH_DIR-} ]]; then
-        # A round has no server and no wake, so it waits in the foreground for the turn. The entry carries the round's
-        # launch id in place of a session id, and the bound stays below the round's tool-call limit.
-        launch_id=$(basename -- "$IMPROVE_LAUNCH_DIR")
-        [[ -n $launch_id ]] || {
+        owner=$(basename -- "$IMPROVE_LAUNCH_DIR")
+        [[ -n $owner ]] || {
           printf 'Refused pr-merge: IMPROVE_LAUNCH_DIR names no launch id; nothing was merged.\n' >&2
           exit 2
         }
-        # The exit trap releases the entry and the turn on every exit, a signal that cuts the wait included: a cut
-        # call must leave no stale entry behind it, waiting out the 180 s heartbeat expiry in the queue's order.
-        holds_queue_refs=1
-        release_turn() {
-          if [[ $holds_queue_refs -eq 1 ]]; then
-            charliebot land queue release --pr "$pr_number" --owner "$launch_id" || {
-              printf 'PR %s: releasing the landing queue entry or turn failed; its heartbeat expires in 180 s.\n' \
-                "$pr_selector" >&2
-            }
-            holds_queue_refs=0
-          fi
-        }
-        trap release_turn EXIT
-        trap 'exit 130' INT
-        trap 'exit 143' TERM
-        set +e
-        charliebot land queue acquire --pr "$pr_number" --owner "$launch_id"
-        acquire_status=$?
-        set -e
-        if [[ $acquire_status -eq 75 ]]; then
-          # The verb removed the entry at the bound, so the exit trap has nothing to release.
-          holds_queue_refs=0
-          printf 'PR %s: the landing queue turn did not come within the round wait; the entry was removed and nothing was merged. The pull request stays open with its clean verdict for the next adoption round.\n' \
-            "$pr_selector" >&2
-          exit 75
-        fi
-        [[ $acquire_status -eq 0 ]] || {
-          printf 'Cannot take the landing queue turn for PR %s (status %s); nothing was merged.\n' \
-            "$pr_selector" "$acquire_status" >&2
-          exit 2
-        }
       else
-        # Outside a round a busy queue is left to a wake: the gate takes the turn and merges now when the queue is
-        # free, and queues this merge with the facts of this call otherwise.
-        merge_cmd="$repo_root/dev/improve/github-post.sh pr-merge"
-        [[ -z $evidence_dir ]] || merge_cmd+=" --evidence-dir $(printf '%q' "$evidence_dir")"
-        [[ -z $review_record ]] || merge_cmd+=" --review-record $(printf '%q' "$review_record")"
-        [[ -z $pr_repo ]] || merge_cmd+=" --repo $(printf '%q' "$pr_repo")"
-        merge_cmd+=" $(printf '%q' "$pr_selector")"
-        set +e
-        charliebot land queue pr-merge --pr "$pr_number" --sha "$merge_head" --merge-cmd "$merge_cmd"
-        gate_status=$?
-        set -e
-        case $gate_status in
-          0) exit 0 ;;
-          75)
-            printf 'PR %s is queued: the merge runs when the landing queue turn comes, and its wake carries the result.\n' \
-              "$pr_selector" >&2
-            exit 75
-            ;;
-          *) exit "$gate_status" ;;
-        esac
+        owner="outside-round-$pr_number-$(date -u +%Y%m%dT%H%M%SZ)-$$"
       fi
+      # The exit trap releases the entry and the turn on every exit, a signal that cuts the wait included: a cut call
+      # must leave no stale entry behind it, waiting out the 180 s heartbeat expiry in the queue's order.
+      holds_queue_refs=1
+      release_turn() {
+        if [[ $holds_queue_refs -eq 1 ]]; then
+          charliebot land queue release --pr "$pr_number" --owner "$owner" || {
+            printf 'PR %s: releasing the landing queue entry or turn failed; its heartbeat expires in 180 s.\n' \
+              "$pr_selector" >&2
+          }
+          holds_queue_refs=0
+        fi
+      }
+      trap release_turn EXIT
+      trap 'exit 130' INT
+      trap 'exit 143' TERM
+      set +e
+      charliebot land queue acquire --pr "$pr_number" --owner "$owner"
+      acquire_status=$?
+      set -e
+      if [[ $acquire_status -eq 75 ]]; then
+        # The verb removed the entry at the bound, so the exit trap has nothing to release.
+        holds_queue_refs=0
+        printf 'PR %s: the landing queue turn did not come within the wait; the entry was removed and nothing was merged. The pull request stays open with its clean verdict.\n' \
+          "$pr_selector" >&2
+        exit 75
+      fi
+      [[ $acquire_status -eq 0 ]] || {
+        printf 'Cannot take the landing queue turn for PR %s (status %s); nothing was merged.\n' \
+          "$pr_selector" "$acquire_status" >&2
+        exit 2
+      }
     fi
     # gh's own merge line goes to stderr, so stdout carries the readback below and nothing else.
     gh "${merge_args[@]}" >&2

@@ -1,8 +1,7 @@
 use std::path::PathBuf;
 use std::process;
 
-use charliebot_cli_common::exit::CliExit;
-use charliebot_core::home;
+use charliebot_cli_common::exit::{CliExit, charliebot_home_or_exit};
 use clap::Args;
 
 use super::store;
@@ -18,7 +17,7 @@ pub(super) struct LintArgs {
 pub(super) fn lint(args: &LintArgs) -> Result<(), CliExit> {
   let root = match args.dir.as_deref().filter(|path| !path.as_os_str().is_empty()) {
     Some(path) => PathBuf::from(charliebot_core::paths::expanduser(&path.to_string_lossy())),
-    None => store_root::memory_dir_in(&home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?),
+    None => store_root::memory_dir_in(&charliebot_home_or_exit()?),
   };
   let (violations, warnings) = store::lint_store(&root)?;
   for warning in warnings {

@@ -8,10 +8,9 @@ use std::sync::Arc;
 
 use charliebot_agents::cli_host::LazyHost;
 use charliebot_cli_common::args as cli_args;
-use charliebot_cli_common::exit::CliExit;
+use charliebot_cli_common::exit::{CliExit, charliebot_home_or_exit};
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::resolve;
-use charliebot_core::home;
 use charliebot_failure_triage::{BackendJudge, JudgeBackends, ScanOptions, log_dir_from_environment, preflight, scan};
 use clap::{Args, Parser, Subcommand};
 
@@ -51,7 +50,7 @@ pub fn main(args: &[OsString], lazy_host: &LazyHost) -> Result<(), CliExit> {
 
 fn scan_command(args: ScanArgs, lazy_host: &LazyHost) -> Result<(), CliExit> {
   let host = lazy_host.get().map_err(|error| CliExit::error(format!("{error:#}")))?;
-  let home = home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
+  let home = charliebot_home_or_exit()?;
   let log_dir = log_dir_from_environment(&host.base_env.values);
   let options = match args.cron.as_deref() {
     Some(task) => {

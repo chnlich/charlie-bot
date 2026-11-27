@@ -6,7 +6,7 @@ use charliebot_core::config;
 use charliebot_core::run_token::SESSION_ID_ENV;
 use serde_json::{Value, json};
 
-use crate::exit::CliExit;
+use crate::exit::{CliExit, charliebot_home_or_exit};
 use crate::json_out;
 
 /// The resolution inputs, passed in so tests exercise the rules without touching process state.
@@ -76,7 +76,7 @@ pub fn resolve_session_id(sources: SessionSources<'_>) -> Result<Resolved, CliEx
 
 /// The process-level entry: reads the environment and cwd, then prints the non-fatal note.
 pub fn resolve_from_env(arg_session: Option<&str>) -> Result<String, CliExit> {
-  let home = charliebot_core::home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
+  let home = charliebot_home_or_exit()?;
   let sessions_dir = config::sessions_dir_in(&home);
   let cwd = std::env::current_dir().map_err(|error| CliExit::error(error.to_string()))?;
   let env_session = std::env::var(SESSION_ID_ENV).ok().filter(|value| !value.is_empty());

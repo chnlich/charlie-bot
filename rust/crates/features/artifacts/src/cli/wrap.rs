@@ -4,7 +4,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use charliebot_cli_common::exit::CliExit;
+use charliebot_cli_common::exit::{CliExit, charliebot_home_or_exit};
 use charliebot_registry::pages::package_directory;
 use clap::Args;
 
@@ -53,7 +53,7 @@ pub(super) fn run(args: &WrapArgs, argv: &[OsString]) -> Result<String, CliExit>
   }
   let output_arg = PathBuf::from(&args.output);
   let output = resolve_path(&output_arg).map_err(|error| CliExit::error(error.to_string()))?;
-  let home = charliebot_core::home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
+  let home = charliebot_home_or_exit()?;
   let repo_root =
     charliebot_core::repo_root::RepoRoot::new(std::env::var_os(charliebot_core::repo_root::REPO_ROOT_ENV))
       .map_err(|error| CliExit::error(error.to_string()))?;

@@ -1,5 +1,7 @@
 //! CLI exits that carry their own stderr object: the `exit_usage_error` / `exit_error` contract.
 
+use std::path::PathBuf;
+
 use serde_json::{Value, json};
 
 /// One CLI failure: the JSON object for stderr and the process exit code.
@@ -27,6 +29,12 @@ impl CliExit {
   pub fn contract(error: Value, code: i32) -> CliExit {
     CliExit { code, body: error }
   }
+}
+
+/// The profile home directory. A `CHARLIEBOT_HOME` value that names no usable home fails with the exit 1 object
+/// that carries the home error's message.
+pub fn charliebot_home_or_exit() -> Result<PathBuf, CliExit> {
+  charliebot_core::home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))
 }
 
 /// The error and each source, joined for a CLI failure message.

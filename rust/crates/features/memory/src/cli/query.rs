@@ -3,11 +3,11 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process;
 
-use charliebot_cli_common::exit::CliExit;
+use charliebot_cli_common::exit::{CliExit, charliebot_home_or_exit};
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_core::proc_identity::PID_START_FIELD;
 use charliebot_core::run_token::RUN_TOKEN_ENV;
-use charliebot_core::{config, credentials, event_types, home, run_token};
+use charliebot_core::{config, credentials, event_types, run_token};
 use charliebot_store::chat_events::{self, LineRule};
 use charliebot_store::metadata::MetadataReadError;
 use charliebot_store::run_records::RunRecord;
@@ -48,7 +48,7 @@ pub(super) fn query(args: &QueryArgs) -> Result<(), CliExit> {
   let fixed_audience = if token.trim().is_empty() {
     None
   } else {
-    let home_dir = home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
+    let home_dir = charliebot_home_or_exit()?;
     Some(run_scoped_audience(&home_dir, token.trim())?)
   };
   if let Some(fixed) = fixed_audience.as_deref()
@@ -62,7 +62,7 @@ pub(super) fn query(args: &QueryArgs) -> Result<(), CliExit> {
   let audience = fixed_audience.as_deref().or(args.audience.as_deref());
   let memory_dir = match args.dir.as_deref().filter(|path| !path.as_os_str().is_empty()) {
     Some(path) => PathBuf::from(charliebot_core::paths::expanduser(&path.to_string_lossy())),
-    None => store_root::memory_dir_in(&home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?),
+    None => store_root::memory_dir_in(&charliebot_home_or_exit()?),
   };
   let store = crate::memory::load_store(&memory_dir).map_err(|error| CliExit::error(error.to_string()))?;
   let unknown: Vec<&str> =

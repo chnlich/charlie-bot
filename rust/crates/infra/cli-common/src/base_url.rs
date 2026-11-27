@@ -7,7 +7,7 @@ use charliebot_core::home;
 use charliebot_core::paths;
 use serde_yaml::{Mapping, Value};
 
-use crate::exit::CliExit;
+use crate::exit::{CliExit, charliebot_home_or_exit};
 use crate::improve_round;
 
 /// Refuses at once when this process runs in an improve round. A command that needs the server calls it before any
@@ -51,7 +51,7 @@ fn round_no_server_message() -> Result<String, CliExit> {
 /// `config.yaml` each time.
 pub fn internal_base_url() -> Result<String, CliExit> {
   refuse_in_round()?;
-  let home = home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
+  let home = charliebot_home_or_exit()?;
   let port = server_port(&home)?;
   Ok(format!("http://localhost:{port}"))
 }

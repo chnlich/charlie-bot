@@ -9,10 +9,9 @@ use std::io;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use charliebot_cli_common::exit::CliExit;
+use charliebot_cli_common::exit::{CliExit, charliebot_home_or_exit};
 use charliebot_core::config;
 use charliebot_core::event_types;
-use charliebot_core::home;
 use charliebot_store::chat_events::{self, LineRule};
 use charliebot_store::layout;
 use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, TimeZone};
@@ -25,7 +24,7 @@ const TOTAL_CAP: usize = 120_000;
 
 /// Print the digest of the live sessions.
 pub fn run() -> Result<(), CliExit> {
-  let home_dir = home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
+  let home_dir = charliebot_home_or_exit()?;
   let now = SystemTime::now()
     .duration_since(UNIX_EPOCH)
     .map(|elapsed| elapsed.as_secs_f64())

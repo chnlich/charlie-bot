@@ -235,7 +235,7 @@ fn is_image_ref(reference: &Value) -> anyhow::Result<bool> {
 mod tests {
   use std::os::unix::fs::symlink;
 
-  use serde_json::json;
+  use serde_json::{Map, json};
 
   use super::*;
 
@@ -275,7 +275,7 @@ mod tests {
       log_dir: None,
       cgroup_session_id: None,
       remote_launch: None,
-      backend_kwargs: serde_json::Map::new(),
+      backend_kwargs: Map::new(),
       manager_turn: false,
     };
     let mut backend = backend(root.path(), option("api_base: http://test.invalid/v1\n"), launch);
@@ -317,7 +317,7 @@ mod tests {
       log_dir: None,
       cgroup_session_id: None,
       remote_launch: None,
-      backend_kwargs: serde_json::Map::new(),
+      backend_kwargs: Map::new(),
       manager_turn: true,
     };
     let mut manager = backend(manager_root.path(), option("api_base: http://test.invalid/v1\n"), manager_launch);
@@ -335,7 +335,7 @@ mod tests {
       log_dir: None,
       cgroup_session_id: None,
       remote_launch: None,
-      backend_kwargs: serde_json::Map::new(),
+      backend_kwargs: Map::new(),
       manager_turn: false,
     };
     let mut worker = backend(worker_root.path(), option("api_base: http://test.invalid/v1\n"), worker_launch);
@@ -363,7 +363,7 @@ mod tests {
         log_dir: None,
         cgroup_session_id: None,
         remote_launch: None,
-        backend_kwargs: serde_json::Map::new(),
+        backend_kwargs: Map::new(),
         manager_turn: false,
       },
     )
@@ -390,7 +390,7 @@ mod tests {
         log_dir: None,
         cgroup_session_id: None,
         remote_launch: None,
-        backend_kwargs: serde_json::Map::new(),
+        backend_kwargs: Map::new(),
         manager_turn: false,
       },
     );
@@ -409,7 +409,7 @@ mod tests {
         log_dir: None,
         cgroup_session_id: None,
         remote_launch: None,
-        backend_kwargs: serde_json::Map::new(),
+        backend_kwargs: Map::new(),
         manager_turn: false,
       },
     );

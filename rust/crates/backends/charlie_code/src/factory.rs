@@ -43,6 +43,7 @@ impl BackendFactory for CharlieCodeFactory {
 mod tests {
   use charliebot_core::config::CREDENTIALS_FILENAME;
   use charliebot_registry::Registry;
+  use serde_json::Map;
 
   use super::*;
 
@@ -78,7 +79,7 @@ mod tests {
           log_dir: None,
           cgroup_session_id: None,
           remote_launch: None,
-          backend_kwargs: serde_json::Map::new(),
+          backend_kwargs: Map::new(),
           manager_turn: false,
         },
       )

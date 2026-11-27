@@ -10,7 +10,7 @@ use charliebot_core::event_types;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-use super::*;
+use super::{Bot, DISCORD};
 use crate::discord_client::REQUIRED_PERMISSIONS;
 use crate::discord_listener::summon_session_id;
 use crate::test_support::{ALLOWED_PERSON, ALLOWED_USER, Home, Msg, TEST_TOKEN, snowflake};

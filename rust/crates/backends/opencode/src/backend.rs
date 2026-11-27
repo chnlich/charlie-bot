@@ -39,7 +39,7 @@ use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_agents::transport::follow::{self, SilenceCallback};
 use charliebot_agents::transport::kill::kill_process_group;
 use charliebot_agents::transport::spawn::{SpawnSpec, spawn_one_shot};
-use charliebot_core::cgroup::SESSION_CGROUP_OOM_SCORE_ADJ;
+use charliebot_core::cgroup::{SESSION_CGROUP_ENV, SESSION_CGROUP_OOM_SCORE_ADJ};
 
 const RUN_PLAN_MARKER: &str = "__charliebot_opencode_run__=";
 
@@ -654,7 +654,7 @@ async fn put_environment(
   }
   if let Some(cgroup) = cgroup {
     variables.insert("BASH_ENV".to_string(), join_script.display().to_string());
-    variables.insert("CHARLIEBOT_SESSION_CGROUP".to_string(), cgroup.display().to_string());
+    variables.insert(SESSION_CGROUP_ENV.to_string(), cgroup.display().to_string());
     variables.insert("CHARLIEBOT_SESSION_OOM_SCORE_ADJ".to_string(), SESSION_CGROUP_OOM_SCORE_ADJ.to_string());
   }
   let response = server

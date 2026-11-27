@@ -698,6 +698,7 @@ impl AgentBackend for AnthropicEndpointBackend {
 
   fn build_command(&self, prompt: &str) -> anyhow::Result<Vec<String>> {
     let mut command = self.backend.build_command(prompt)?;
+    claude_launch::remove_foreground_cap_from_command(&mut command)?;
     disallow_tool(&mut command, TOOL_NAME);
     command.extend([MCP_CONFIG_FLAG.to_string(), web_search_mcp_config(self.server_port)]);
     Ok(command)
@@ -898,7 +899,7 @@ mod tests {
           r#"{{"disableClaudeAiConnectors":true,"syncClaudeAiSkills":false,"disableBundledSkills":true,"hooks":{{{}"#,
           r#","PreToolUse":[{{"matcher":"Bash","hooks":[{{"type":"command","command":"charliebot wait-guard"}}"#,
           r#",{{"type":"command","command":"charliebot scan-guard"}}"#,
-          r#",{{"type":"command","command":"charliebot kill-guard"}}]}}]}},"fastMode":true}}"#
+          r#",{{"type":"command","command":"charliebot kill-guard"}},{{"type":"command","command":"charliebot foreground-cap"}}]}}]}},"fastMode":true}}"#
         ),
         worker_session_start_json()
       )
@@ -965,7 +966,8 @@ mod tests {
         "hooks": [
           {"type": "command", "command": "charliebot wait-guard"},
           {"type": "command", "command": "charliebot scan-guard"},
-          {"type": "command", "command": "charliebot kill-guard"}
+          {"type": "command", "command": "charliebot kill-guard"},
+          {"type": "command", "command": "charliebot foreground-cap"}
         ]
       }])
     );
@@ -990,7 +992,8 @@ mod tests {
       "hooks": [
         {"type": "command", "command": "charliebot wait-guard"},
         {"type": "command", "command": "charliebot scan-guard"},
-        {"type": "command", "command": "charliebot kill-guard"}
+        {"type": "command", "command": "charliebot kill-guard"},
+        {"type": "command", "command": "charliebot foreground-cap"}
       ]
     }]);
     for run_kind in [RunKind::ManagerTurn, RunKind::Work, RunKind::Review, RunKind::Iteration] {
@@ -1003,7 +1006,8 @@ mod tests {
       "matcher": "Bash",
       "hooks": [
         {"type": "command", "command": "charliebot scan-guard"},
-        {"type": "command", "command": "charliebot kill-guard"}
+        {"type": "command", "command": "charliebot kill-guard"},
+        {"type": "command", "command": "charliebot foreground-cap"}
       ]
     }]);
     let settings = claude_launch::headless_claude_settings(
@@ -1021,7 +1025,14 @@ mod tests {
       Some("scheduled-run"),
     )
     .unwrap();
-    assert!(settings["hooks"].get("PreToolUse").is_none());
+    assert_eq!(
+      settings["hooks"]["PreToolUse"],
+      serde_json::json!([{
+        "matcher": "Bash",
+        "hooks": [{"type": "command", "command": "charliebot foreground-cap"}]
+      }]),
+      "a run without guards still carries the foreground cap"
+    );
   }
 
   /// A worker run's settings name its run id in the compaction-context hook, on both launch paths, and a worker run
@@ -1459,7 +1470,7 @@ mod tests {
         r#"{{"disableClaudeAiConnectors":true,"syncClaudeAiSkills":false,"disableBundledSkills":true,"hooks":{{{}"#,
         r#","PreToolUse":[{{"matcher":"Bash","hooks":[{{"type":"command","command":"charliebot wait-guard"}}"#,
         r#",{{"type":"command","command":"charliebot scan-guard"}}"#,
-        r#",{{"type":"command","command":"charliebot kill-guard"}}]}}]}}}}"#
+        r#",{{"type":"command","command":"charliebot kill-guard"}},{{"type":"command","command":"charliebot foreground-cap"}}]}}]}}}}"#
       ),
       worker_session_start_json()
     );

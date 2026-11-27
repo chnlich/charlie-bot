@@ -13,6 +13,7 @@ pub mod git;
 pub mod headers;
 pub mod home;
 pub mod home_init;
+pub mod hooks;
 pub mod hostname;
 pub mod hot_reload;
 pub mod human_size;

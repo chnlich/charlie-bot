@@ -45,14 +45,17 @@ const STDIN_PROMPT_ARG: &str = "-";
 /// The stderr a one-shot keeps for its error message. Later bytes are read and dropped.
 const MAX_ONE_SHOT_STDERR_BYTES: usize = 4 * 1024;
 
-/// The scan-guard and kill-guard `PreToolUse` hooks for a streaming run's Bash calls, given on the command line. The
-/// run passes `--dangerously-bypass-hook-trust` with them, because the hooks are charlie-bot's own commands and the
-/// run already bypasses approvals, so the hooks run without a review stop.
+/// The scan-guard and kill-guard `PreToolUse` hooks, and the foreground cap that rewrites each Bash command into the call
+/// entry, for a streaming run's Bash calls, given on the command line. The run passes
+/// `--dangerously-bypass-hook-trust` with them, because the hooks are charlie-bot's own commands and the run already
+/// bypasses approvals, so the hooks run without a review stop.
 fn bash_guard_hook_args() -> [String; 3] {
   [
     "--config".to_string(),
-    r#"hooks.PreToolUse=[{matcher="Bash",hooks=[{type="command",command="charliebot scan-guard"},{type="command",command="charliebot kill-guard"}]}]"#
-      .to_string(),
+    format!(
+      r#"hooks.PreToolUse=[{{matcher="Bash",hooks=[{{type="command",command="charliebot scan-guard"}},{{type="command",command="charliebot kill-guard"}},{{type="command",command="{}"}}]}}]"#,
+      charliebot_agents::foreground::HOOK_COMMAND
+    ),
     "--dangerously-bypass-hook-trust".to_string(),
   ]
 }

@@ -9,7 +9,8 @@ const workspaceRoot = path.join(repositoryRoot, 'rust');
 const selection = process.env.RUST_INTEGRATION_FILTER;
 if (selection === undefined || selection === '') throw new Error('RUST_INTEGRATION_FILTER is required');
 
-const filter = `(${selection}) and not test(/_subprocess_entry$/)`;
+// The foreground-call suite needs the operator host's delegated systemd user slice and writable cgroup v2 tree.
+const filter = `(${selection}) and not test(/_subprocess_entry$/) and not binary_id(=charliebot-cli::foreground_call)`;
 
 function runCargo(args, env = process.env) {
   const child = spawn('cargo', args, { cwd: workspaceRoot, env });

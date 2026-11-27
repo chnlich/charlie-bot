@@ -4,6 +4,7 @@
 //! over stdout once the process has exited, and `export` turns the trajectory into events.
 
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -11,6 +12,9 @@ use std::time::Duration;
 use anyhow::Context;
 use charliebot_agents::cli_base::{CapturedEvents, finished, framed_prompt};
 use charliebot_agents::event_builders::make_error_event;
+use charliebot_agents::foreground::devin_config::{
+  session_devin_config_path, user_devin_config_path, write_devin_config,
+};
 use charliebot_core::str_methods;
 use charliebot_registry::backend::{
   AgentBackend, Env, FinalStdoutOutcome, LaunchArgs, RetryAfter, Translate, TransportKind,
@@ -48,6 +52,8 @@ pub struct DevinBackend {
   /// The turn's log directory. `prepare_transport` names it for a live launch. A recovered capture names it through
   /// its launch, because no transport runs again for it.
   run_dir: Option<PathBuf>,
+  /// The user's Devin config that the per-launch config extends. Its lookup error fails each turn's launch.
+  user_config: io::Result<PathBuf>,
 }
 
 impl DevinBackend {
@@ -60,6 +66,7 @@ impl DevinBackend {
       resume_session_id: launch.resume_session_id.filter(|id| !id.is_empty()),
       extra_flags: launch.extra_flags,
       run_dir: launch.log_dir,
+      user_config: user_devin_config_path(),
     }
   }
 
@@ -69,14 +76,16 @@ impl DevinBackend {
 
   /// The print-mode command of one turn. Each value is bound with `=`, so the optional-value flags `--export`,
   /// `--resume` and `--respect-workspace-trust` cannot take the next argument as their value. `--print` comes last,
-  /// because its optional value would take the argument after it. The prompt comes from the prompt file.
-  fn argv(&self, prompt_file: &Path, export_file: &Path) -> Vec<String> {
+  /// because its optional value would take the argument after it. The prompt comes from the prompt file, and the
+  /// config is the per-launch file in the CharlieBot session directory that carries the foreground cap.
+  fn argv(&self, prompt_file: &Path, export_file: &Path, config_file: &Path) -> Vec<String> {
     let mut command = vec![
       self.devin_bin.clone(),
       format!("--prompt-file={}", prompt_file.display()),
       "--permission-mode=dangerous".to_string(),
       "--respect-workspace-trust=false".to_string(),
       format!("--model={}", self.model),
+      format!("--config={}", config_file.display()),
     ];
     if let Some(session_id) = &self.resume_session_id {
       command.push(format!("--resume={session_id}"));
@@ -126,13 +135,19 @@ impl AgentBackend for DevinBackend {
   }
 
   /// The command that reads the framed prompt file written into the run's log directory. The prompt file is
-  /// the only carrier of the instructions: the type writes no instructions file in the working directory.
+  /// the only carrier of the instructions: the type writes no instructions file in the working directory. The
+  /// per-launch config is written beside it, from the user's Devin config and the foreground cap's hook.
   fn build_command(&self, prompt: &str) -> anyhow::Result<Vec<String>> {
     let run_dir = self.run_dir()?;
     let prompt_file = run_dir.join(PROMPT_FILE_NAME);
     fs::write(&prompt_file, framed_prompt(self.instructions_content.as_deref(), prompt))
       .with_context(|| format!("writing the devin prompt file {}", prompt_file.display()))?;
-    Ok(self.argv(&prompt_file, &run_dir.join(EXPORT_FILE_NAME)))
+    let config_file = session_devin_config_path(run_dir)
+      .with_context(|| format!("locating the Devin config for session run {}", run_dir.display()))?;
+    let user_config = self.user_config.as_ref().map_err(|error| anyhow::anyhow!("{error}"))?;
+    write_devin_config(&config_file, user_config)
+      .with_context(|| format!("writing the devin config {}", config_file.display()))?;
+    Ok(self.argv(&prompt_file, &run_dir.join(EXPORT_FILE_NAME), &config_file))
   }
 
   fn prepare_env(&self, env: Env) -> anyhow::Result<Env> {
@@ -296,10 +311,18 @@ mod tests {
     pid: Option<u32>,
   }
 
+  fn session_run_dir(root: &Path, run_id: &str) -> PathBuf {
+    root.join("sessions/synthetic-session/data/runs").join(run_id)
+  }
+
   async fn run_turn(root: &Path, launch: LaunchArgs, cgroup_config: SessionCgroupConfig) -> TurnRun {
     let devin_bin = root.join("devin").display().to_string();
-    let runner =
-      AgentRunner::new("devin", Box::new(DevinBackend::from_launch(devin_bin, "swe-2-test", launch.clone())), launch);
+    let user_config = root.join("home/.config/devin/config.json");
+    fs::create_dir_all(user_config.parent().unwrap()).unwrap();
+    fs::write(&user_config, "{}\n").unwrap();
+    let mut backend = DevinBackend::from_launch(devin_bin, "swe-2-test", launch.clone());
+    backend.user_config = Ok(user_config);
+    let runner = AgentRunner::new("devin", Box::new(backend), launch);
     let mut request = RunRequest::new(
       "Pick the number in number.txt.".into(),
       root.to_path_buf(),
@@ -337,26 +360,29 @@ mod tests {
   fn the_first_and_resume_turn_argv_bind_every_value_with_an_equals_sign() {
     let prompt = Path::new("/synthetic/logs/devin_prompt.md");
     let export = Path::new("/synthetic/logs/devin_export.json");
+    let config = Path::new("/synthetic/logs/devin_config.json");
     assert_eq!(
-      backend(launch(None, None)).argv(prompt, export),
+      backend(launch(None, None)).argv(prompt, export, config),
       [
         "/synthetic/bin/devin",
         "--prompt-file=/synthetic/logs/devin_prompt.md",
         "--permission-mode=dangerous",
         "--respect-workspace-trust=false",
         "--model=swe-2-test",
+        "--config=/synthetic/logs/devin_config.json",
         "--export=/synthetic/logs/devin_export.json",
         "--print",
       ]
     );
     assert_eq!(
-      backend(launch(None, Some(SESSION_ID))).argv(prompt, export),
+      backend(launch(None, Some(SESSION_ID))).argv(prompt, export, config),
       [
         "/synthetic/bin/devin",
         "--prompt-file=/synthetic/logs/devin_prompt.md",
         "--permission-mode=dangerous",
         "--respect-workspace-trust=false",
         "--model=swe-2-test",
+        "--config=/synthetic/logs/devin_config.json",
         "--resume=devin-session-7f3a",
         "--export=/synthetic/logs/devin_export.json",
         "--print",
@@ -401,7 +427,9 @@ mod tests {
   #[test]
   fn the_prompt_file_holds_the_framed_instructions_and_the_message() {
     let root = tempfile::tempdir().unwrap();
-    let prompt_file = root.path().join(PROMPT_FILE_NAME);
+    let run_dir = session_run_dir(root.path(), "run-1");
+    fs::create_dir_all(&run_dir).unwrap();
+    let prompt_file = run_dir.join(PROMPT_FILE_NAME);
 
     let mut instructed = backend(LaunchArgs {
       extra_flags: Vec::new(),
@@ -415,13 +443,20 @@ mod tests {
       backend_kwargs: Map::new(),
       manager_turn: false,
     });
-    instructed.prepare_transport(root.path()).unwrap();
+    let user_config = root.path().join("user_devin_config.json");
+    instructed.user_config = Ok(user_config.clone());
+    instructed.prepare_transport(&run_dir).unwrap();
     let argv = instructed.build_command("do the work").unwrap();
     assert_eq!(fs::read_to_string(&prompt_file).unwrap(), frame_system_prompt("Build stuff.", "do the work"));
     assert_eq!(argv[1], format!("--prompt-file={}", prompt_file.display()));
+    assert_eq!(
+      argv[5],
+      format!("--config={}", root.path().join("sessions/synthetic-session/devin_config.json").display())
+    );
 
     let mut plain = backend(launch(None, None));
-    plain.prepare_transport(root.path()).unwrap();
+    plain.user_config = Ok(user_config);
+    plain.prepare_transport(&run_dir).unwrap();
     plain.build_command("just the message").unwrap();
     assert_eq!(fs::read_to_string(&prompt_file).unwrap(), "just the message");
   }
@@ -431,11 +466,12 @@ mod tests {
   async fn a_turn_runs_devin_in_print_mode_and_emits_the_export_events() {
     let root = tempfile::tempdir().unwrap();
     stage_devin(root.path(), &[("export.json", FIXTURE), ("answer.txt", "The number is 41.\n")]);
-    let logs = root.path().join("logs");
+    let logs = session_run_dir(root.path(), "run-1");
     let run = run_turn(root.path(), launch(Some(&logs), None), SessionCgroupConfig::disabled()).await;
     assert_eq!(run.result.unwrap().exit_code, Some(0));
 
     let logs_text = logs.display();
+    let config_file = root.path().join("sessions/synthetic-session/devin_config.json");
     assert_eq!(
       recorded_argv(root.path()),
       [
@@ -443,6 +479,7 @@ mod tests {
         "--permission-mode=dangerous".to_string(),
         "--respect-workspace-trust=false".to_string(),
         "--model=swe-2-test".to_string(),
+        format!("--config={}", config_file.display()),
         format!("--export={logs_text}/devin_export.json"),
         "--print".to_string(),
       ]
@@ -455,7 +492,7 @@ mod tests {
   async fn a_resumed_turn_passes_the_native_session_id() {
     let root = tempfile::tempdir().unwrap();
     stage_devin(root.path(), &[("export.json", FIXTURE), ("answer.txt", ANSWER)]);
-    let logs = root.path().join("logs");
+    let logs = session_run_dir(root.path(), "run-1");
     run_turn(root.path(), launch(Some(&logs), Some(SESSION_ID)), SessionCgroupConfig::disabled()).await.result.unwrap();
     assert!(recorded_argv(root.path()).contains(&format!("--resume={SESSION_ID}")));
   }
@@ -465,7 +502,7 @@ mod tests {
   async fn a_missing_export_fails_the_turn_and_names_its_path() {
     let root = tempfile::tempdir().unwrap();
     stage_devin(root.path(), &[("answer.txt", ANSWER)]);
-    let logs = root.path().join("logs");
+    let logs = session_run_dir(root.path(), "run-1");
     let run = run_turn(root.path(), launch(Some(&logs), None), SessionCgroupConfig::disabled()).await;
     let error = run.result.unwrap_err().to_string();
     let export_path = logs.join(EXPORT_FILE_NAME);
@@ -480,7 +517,7 @@ mod tests {
     let root = tempfile::tempdir().unwrap();
     let without_session = FIXTURE.replace("\"session_id\": \"devin-session-7f3a\",", "");
     stage_devin(root.path(), &[("export.json", without_session.as_str()), ("answer.txt", ANSWER)]);
-    let logs = root.path().join("logs");
+    let logs = session_run_dir(root.path(), "run-1");
     let run = run_turn(root.path(), launch(Some(&logs), None), SessionCgroupConfig::disabled()).await;
     let error = run.result.unwrap_err().to_string();
     assert!(error.contains("devin export has no session_id"), "the error names the missing field: {error}");
@@ -492,7 +529,7 @@ mod tests {
     let root = tempfile::tempdir().unwrap();
     let without_user = FIXTURE.replace("\"source\": \"user\"", "\"source\": \"system\"");
     stage_devin(root.path(), &[("export.json", without_user.as_str()), ("answer.txt", ANSWER)]);
-    let logs = root.path().join("logs");
+    let logs = session_run_dir(root.path(), "run-1");
     let run = run_turn(root.path(), launch(Some(&logs), None), SessionCgroupConfig::disabled()).await;
     let error = run.result.unwrap_err().to_string();
     assert!(
@@ -512,7 +549,7 @@ mod tests {
     last_step.as_object_mut().unwrap().remove("metrics");
     let without_metrics = export.to_string();
     stage_devin(root.path(), &[("export.json", without_metrics.as_str()), ("answer.txt", ANSWER)]);
-    let logs = root.path().join("logs");
+    let logs = session_run_dir(root.path(), "run-1");
     let run = run_turn(root.path(), launch(Some(&logs), None), SessionCgroupConfig::disabled()).await;
     let error = run.result.unwrap_err().to_string();
     assert!(error.contains("an agent step without metrics"), "the error names the missing metrics: {error}");
@@ -525,7 +562,7 @@ mod tests {
   async fn a_nonzero_exit_fails_the_turn_with_devins_stderr() {
     let root = tempfile::tempdir().unwrap();
     stage_devin(root.path(), &[("stderr.txt", "Error: Usage limit reached. Try again later.\n"), ("exit_code", "1")]);
-    let logs = root.path().join("logs");
+    let logs = session_run_dir(root.path(), "run-1");
     let run = run_turn(root.path(), launch(Some(&logs), None), SessionCgroupConfig::disabled()).await;
     assert_eq!(run.result.unwrap().exit_code, Some(1));
     assert_eq!(run.events.len(), 1);
@@ -547,7 +584,7 @@ mod tests {
     fs::write(second.join("export.json"), FIXTURE).unwrap();
     fs::write(second.join("answer.txt"), ANSWER).unwrap();
     stage_devin(root.path(), &[]);
-    let logs = root.path().join("logs");
+    let logs = session_run_dir(root.path(), "run-1");
 
     let first_run = run_turn(root.path(), launch(Some(&logs), None), SessionCgroupConfig::disabled()).await;
     assert_eq!(first_run.result.unwrap().exit_code, Some(1));
@@ -585,14 +622,13 @@ mod tests {
       enable_cpu_weight: false,
       enable_io_weight: false,
     };
-    let logs = root.path().join("logs");
     let cgroup_launch = LaunchArgs {
       extra_flags: Vec::new(),
       buffer_limit: None,
       instructions_content: None,
       instructions_file: None,
       resume_session_id: None,
-      log_dir: Some(logs),
+      log_dir: Some(session_run_dir(root.path(), "run-1")),
       cgroup_session_id: Some("devincgr-session".to_string()),
       remote_launch: None,
       backend_kwargs: Map::new(),

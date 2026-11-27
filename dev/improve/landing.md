@@ -25,7 +25,7 @@ A leak-rule hit is the only hit the round rewrites: the round removes the matche
 The script sends nothing on a hit, so the posted text is always text that passed.
 A credential hit stops the round. The kind that the check names is the round's stop reason, and the round writes no rewrite of the text.
 Inside a round, a merge goes through the posting script's `pr-merge`, which refuses a merge whose head lacks a clean verdict,
-refuses a diff that changes a path that origin/main has and the Step 3 list names under another branch,
+refuses a diff whose claim on a listed path conflicts with the round's change, as Step 3's merge test states,
 refuses a web page change whose evidence directory fails the screenshot check, whose pull request body names no
 `View:` line, or whose review record shows no read of a screenshot that the body names, and carries the `View:` lines
 into the squash commit message. Each `View:` line follows the View contract of the Web UI Screenshots rule in

@@ -6,8 +6,9 @@
 # container run (dev/remote-wake/lock.sh) and each improve trial side that holds the lock (dev/improve/trial-side.sh).
 #
 # A holder that owns its descriptor (bench.mjs) takes the lock with bench_lock_fd_take and releases it with
-# bench_lock_fd_release, and it finds the waiters with bench_lock_waiter_pids. A holder with a fixed hold (run.sh's
-# callers, the improve sides) runs its command under bench_lock_within, which is the same lock.
+# bench_lock_fd_release. It finds the waiters with bench_lock_waiter_pids and the holder with bench_lock_hold_pid. A
+# holder with a fixed hold (run.sh's callers, the improve sides) runs its command under bench_lock_within, which is the
+# same lock.
 #
 # A side attempt that cannot take the lock within its wait exits with BENCH_LOCK_TIMEOUT_EXIT, the status flock uses when
 # its wait runs out.
@@ -139,8 +140,9 @@ bench_lock_waiter_pids() {
   return 0
 }
 
-# _bench_lock_hold_pid: print a pid that /proc/locks lists as holding the bench lock, or nothing when free.
-_bench_lock_hold_pid() {
+# bench_lock_hold_pid: print a pid that /proc/locks lists as holding the bench lock, or nothing when free. The step gate
+# reads it while a process queued at its release waits, to tell a held lock from a free one.
+bench_lock_hold_pid() {
   local state pid holder_pid=''
   while read -r state pid; do
     if [[ $state == hold ]]; then
@@ -164,7 +166,7 @@ bench_lock_holder() {
   local best='' best_ticks=0 holder_pid=''
   local -a candidates=()
   local -A started=() parent=()
-  holder_pid=$(_bench_lock_hold_pid) || return $?
+  holder_pid=$(bench_lock_hold_pid) || return $?
   [[ -n $holder_pid ]] || return 0
   dev_inode=$(_bench_lock_dev_inode) || return $?
   mapfile -t candidates < <(_bench_lock_fd_holders "$dev_inode")
@@ -189,7 +191,7 @@ bench_lock_holder() {
   done
   if [[ -z $best ]]; then
     # The fdinfo scan takes about a second; a lock released during the scan is now free, not unreadable.
-    holder_pid=$(_bench_lock_hold_pid) || return $?
+    holder_pid=$(bench_lock_hold_pid) || return $?
     [[ -n $holder_pid ]] || return 0
     printf 'bench lock: /proc/locks lists pid %s as the holder, but no process holds the descriptor of %s\n' \
       "$holder_pid" "$BENCH_LOCK_FILE" >&2

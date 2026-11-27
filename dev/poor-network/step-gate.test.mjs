@@ -1,6 +1,7 @@
-// Tests of the bench's step gate: the yield rule (a queued process gets the lock at a step's end), the cap (a step past
-// its cap is stopped and runs once more), and the descriptor (no child of the bench holds the lock). The tests run the
-// real lock functions on a scratch lock file (BENCH_LOCK_FILE), so no test waits on a real run's lock.
+// Tests of the bench's step gate: the yield rule (a queued process gets the lock at a step's end, and the takers' wait
+// counts lock-free time only, within the lock-wait budget), the cap (a step past its cap is stopped and runs once
+// more), and the descriptor (no child of the bench holds the lock). The tests run the real lock functions on a scratch
+// lock file (BENCH_LOCK_FILE), so no test waits on a real run's lock.
 
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
@@ -11,7 +12,7 @@ import path from 'node:path';
 import { after, test } from 'node:test';
 
 import { closeAllLive, trackLive } from './live.mjs';
-import { BenchGate } from './step-gate.mjs';
+import { BenchGate, LockWaitTimeout, RELEASE_TAKE_MS } from './step-gate.mjs';
 
 const savedHome = process.env.HOME;
 const savedLockFile = process.env.BENCH_LOCK_FILE;
@@ -48,8 +49,8 @@ async function waitUntil(check, timeoutMs = 10000) {
   }
 }
 
-async function openGate(capMs = 60000) {
-  const gate = new BenchGate({ lockWaitSeconds: 30, capMs });
+async function openGate(capMs = 60000, options = {}) {
+  const gate = new BenchGate({ lockWaitSeconds: 30, capMs, ...options });
   gates.push(gate);
   await gate.open();
   return gate;
@@ -61,6 +62,16 @@ function queueOutsideWaiter(done) {
   const child = spawn('flock', ['-w', '60', lockFile, 'sh', '-c', 'touch "$1"; sleep 0.2', 'sh', done], { stdio: 'ignore' });
   const closed = once(child, 'close').then(([code]) => code);
   return { closed };
+}
+
+// A process outside the bench that queues with `wait` seconds of patience, then runs `sh -c script` with `args` once it
+// holds the lock. `-o` keeps the lock with flock, so the script's child does not hold it. `child` is flock's process,
+// the holder /proc/locks names; `closed` resolves with the exit code.
+function queueWaiter(wait, script, args) {
+  const flockArgs = ['-o', '-w', String(wait), lockFile, 'sh', '-c', script, 'sh', ...args];
+  const child = spawn('flock', flockArgs, { stdio: 'ignore' });
+  const closed = once(child, 'close').then(([code]) => code);
+  return { child, closed };
 }
 
 test('a yield hands the lock to a process queued during the step, and the gate queues again', async () => {
@@ -75,6 +86,7 @@ test('a yield hands the lock to a process queued during the step, and the gate q
   assert.ok(record !== null, 'a queued process means a yield');
   assert.equal(record.waiterPids.length, 1);
   assert.ok(record.seenToReleaseMs >= 0);
+  assert.ok(record.takersWaitMs >= 0);
   assert.equal(gate.held, true, 'the gate queues again after the yield');
   assert.equal(gate.yields.length, 1);
   await gate.close();
@@ -105,6 +117,71 @@ test('nothing queued means no yield, and the gate keeps the lock', async () => {
   await gate.take();
   assert.equal(await gate.yieldIfWaited(), null);
   assert.equal(gate.held, true);
+  await gate.close();
+});
+
+// Both waiters queue before the yield. The one that takes the lock first makes the marker and holds it past
+// RELEASE_TAKE_MS, so the other stays queued while a holder keeps the lock. This test uses the real RELEASE_TAKE_MS.
+test('a yield waits out a taker that holds past RELEASE_TAKE_MS, then retakes', { timeout: 180000 }, async () => {
+  const gate = await openGate(60000, { lockWaitSeconds: 180 });
+  await gate.take();
+  const marker = path.join(home, 'first-taker');
+  const script = 'if mkdir "$1" 2>/dev/null; then sleep "$2"; else sleep 0.2; fi';
+  const holdSeconds = String(RELEASE_TAKE_MS / 1000 + 2);
+  const waiters = [queueWaiter(300, script, [marker, holdSeconds]), queueWaiter(300, script, [marker, holdSeconds])];
+  await waitUntil(async () => (await gate.waiters()).length === 2);
+  const record = await gate.yieldIfWaited();
+  assert.deepEqual(await Promise.all(waiters.map(({ closed }) => closed)), [0, 0]);
+  assert.equal(record.waiterPids.length, 2);
+  assert.ok(record.takersWaitMs >= RELEASE_TAKE_MS, `the takers' wait ${record.takersWaitMs} ms covers the first hold`);
+  assert.equal(gate.held, true, 'the gate queues again after the yield');
+  await gate.close();
+});
+
+test('a free lock with a queued pid that never takes it fails the yield after takeMs of lock-free time', async () => {
+  // The queue reading names a pid that never takes the lock, so the lock stays free while that pid is queued. A real
+  // waiter on a free lock is granted it at once, and a stopped one leaves the queue, so the test supplies the queue.
+  class StuckQueueGate extends BenchGate {
+    async waiters() {
+      return [424242];
+    }
+  }
+  const gate = new StuckQueueGate({ lockWaitSeconds: 30, takeMs: 500 });
+  gates.push(gate);
+  await gate.open();
+  await gate.take();
+  await assert.rejects(gate.yieldIfWaited(), /queued process 424242 did not take the bench lock/);
+  await gate.close();
+});
+
+test('a yield whose takers outlast the budget throws with the waiting pid and holder', { timeout: 30000 }, async () => {
+  const gate = await openGate(60000, { lockWaitSeconds: 1 });
+  await gate.take();
+  // The one that takes the lock first records its parent pid, the flock that holds the lock, and holds for 3 s: the
+  // other stays queued past the 1 s budget.
+  const marker = path.join(home, 'budget-takers');
+  const script = 'if mkdir "$1" 2>/dev/null; then echo "$PPID" > "$1/holder"; sleep 3; else sleep 0.2; fi';
+  const waiters = [queueWaiter(300, script, [marker]), queueWaiter(300, script, [marker])];
+  await waitUntil(async () => (await gate.waiters()).length === 2);
+  const error = await gate.yieldIfWaited().catch((caught) => caught);
+  assert.ok(error instanceof LockWaitTimeout, `the yield throws a LockWaitTimeout, got ${error}`);
+  const holderPid = Number(fs.readFileSync(path.join(marker, 'holder'), 'utf8'));
+  const waitingPid = waiters.map(({ child }) => child.pid).find((pid) => pid !== holderPid);
+  assert.match(error.message, new RegExp(`waiting pids ${waitingPid}; holder ${holderPid} start=`));
+  assert.deepEqual(await Promise.all(waiters.map(({ closed }) => closed)), [0, 0]);
+  await gate.close();
+});
+
+test('a yield whose retake outlasts the lock-wait budget throws with the holder', { timeout: 30000 }, async () => {
+  const gate = await openGate(60000, { lockWaitSeconds: 1 });
+  await gate.take();
+  // The one waiter takes the lock as the gate releases it and holds for 3 s: the gate's retake outlasts the 1 s budget.
+  const waiter = queueWaiter(300, 'sleep 3', []);
+  await waitUntil(async () => (await gate.waiters()).length === 1);
+  const error = await gate.yieldIfWaited().catch((caught) => caught);
+  assert.ok(error instanceof LockWaitTimeout, `the yield throws a LockWaitTimeout, got ${error}`);
+  assert.match(error.message, new RegExp(`waiting pids none; holder ${waiter.child.pid} start=`));
+  assert.equal(await waiter.closed, 0);
   await gate.close();
 });
 

@@ -74,7 +74,7 @@ pub fn find_local_task_child(
 
   Some(json!({
     "session_id": child_id,
-    "parent_session_id": session_id,
+    (crate::metadata::PARENT_SESSION_ID): session_id,
     "run_id": run_id,
     "thread_id": run_id,
   }))

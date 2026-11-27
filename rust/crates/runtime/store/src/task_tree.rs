@@ -25,8 +25,8 @@ use crate::event_types::{FileIdentity, SharedChatEvent};
 use crate::events::LiveHistory;
 use crate::layout;
 use crate::metadata::{
-  EventRef, PROMPT_RULES_FIELD, SUCCESSOR_SESSION_ID, SessionMetadata, SessionStatus, TASK_SCHEDULE_SLOTS, TASK_STATE,
-  TaskApprover, TaskProfile, TaskSpec, UtcDateTime, WORK_STATE,
+  EventRef, PARENT_SESSION_ID, PROMPT_RULES_FIELD, SUCCESSOR_SESSION_ID, SessionMetadata, SessionStatus,
+  TASK_SCHEDULE_SLOTS, TASK_STATE, TaskApprover, TaskProfile, TaskSpec, UtcDateTime, WORK_STATE,
 };
 use crate::path_error;
 use crate::run_facts::{CachedRunFacts, RunFacts};
@@ -1775,7 +1775,7 @@ impl Store {
       }
       let mut refs = Vec::new();
       if other.parent_session_id.as_deref() == Some(session_id) {
-        refs.push("parent_session_id");
+        refs.push(PARENT_SESSION_ID);
       }
       if other.successor_session_id.as_deref() == Some(session_id) {
         refs.push(SUCCESSOR_SESSION_ID);

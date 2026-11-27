@@ -171,34 +171,38 @@
               id="header-session-name"></h2>
         </div>
         <span id="header-session-platform" class="hidden flex-shrink-0"></span>
-        <!-- Backend badge -->
-        <span id="backend-badge" class="text-xs px-2 py-0.5 rounded bg-slate-700 text-slate-300 border border-slate-600 whitespace-nowrap" title="Session backend"></span>
-        <!-- Context usage indicator — starts hidden; the first /usage render fills it -->
-        <div id="usage-indicator" class="flex items-center gap-2 ml-3 mr-2 hidden">
-          <div class="flex items-center gap-1.5" title="Context window usage">
-            <div class="w-20 h-1.5 bg-slate-700 rounded-full overflow-hidden relative">
-              <div id="usage-bar" class="h-full rounded-full transition-all duration-300 bg-blue-500" style="width: 0%"></div>
-              <div id="usage-compact-line" class="absolute top-0 h-full w-0.5 bg-white hidden" style="left: 0%" title=""></div>
+        <!-- The controls group: one flex item, so it takes a line of its own when the name and the controls cannot share
+             one (styles.css). -->
+        <div class="header-controls flex items-center">
+          <!-- Backend badge -->
+          <span id="backend-badge" class="text-xs px-2 py-0.5 rounded bg-slate-700 text-slate-300 border border-slate-600 whitespace-nowrap" title="Session backend"></span>
+          <!-- Context usage indicator — starts hidden; the first /usage render fills it -->
+          <div id="usage-indicator" class="flex items-center gap-2 ml-3 mr-2 hidden">
+            <div class="flex items-center gap-1.5" title="Context window usage">
+              <div class="w-20 h-1.5 bg-slate-700 rounded-full overflow-hidden relative">
+                <div id="usage-bar" class="h-full rounded-full transition-all duration-300 bg-blue-500" style="width: 0%"></div>
+                <div id="usage-compact-line" class="absolute top-0 h-full w-0.5 bg-white hidden" style="left: 0%" title=""></div>
+              </div>
+              <span id="usage-text" class="text-xs text-slate-400 whitespace-nowrap"></span>
             </div>
-            <span id="usage-text" class="text-xs text-slate-400 whitespace-nowrap"></span>
+            <span id="usage-cost" class="text-xs text-slate-500 whitespace-nowrap"></span>
           </div>
-          <span id="usage-cost" class="text-xs text-slate-500 whitespace-nowrap"></span>
+          <button id="compact-btn"
+                  onclick="compactContext()"
+                  class="ml-2 text-xs px-2 py-1 rounded border border-slate-600 text-slate-300 hover:bg-slate-700 transition-colors whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed"
+                  disabled>Compact</button>
+          <a id="events-link"
+             class="border border-slate-600 rounded text-slate-400 hover:bg-slate-700
+                    hover:text-slate-200 transition-colors ml-2 mr-2"
+             title="View JSONL events">
+            {{ icon('events', 16) }}
+          </a>
+          <div id="tab-buttons" class="flex gap-1">
+            {% for part in page_parts('tab_buttons') %}{% include part %}{% endfor %}
+            <button onclick="switchTab('chat')" id="btn-chat" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors bg-blue-600/20 text-blue-300">Chat</button>
+          </div>
+          {% include 'partials/concurrency_badge.html' %}
         </div>
-        <button id="compact-btn"
-                onclick="compactContext()"
-                class="ml-2 text-xs px-2 py-1 rounded border border-slate-600 text-slate-300 hover:bg-slate-700 transition-colors whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed"
-                disabled>Compact</button>
-        <a id="events-link"
-           class="border border-slate-600 rounded text-slate-400 hover:bg-slate-700
-                  hover:text-slate-200 transition-colors ml-2 mr-2"
-           title="View JSONL events">
-          {{ icon('events', 16) }}
-        </a>
-        <div id="tab-buttons" class="flex gap-1">
-          {% for part in page_parts('tab_buttons') %}{% include part %}{% endfor %}
-          <button onclick="switchTab('chat')" id="btn-chat" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors bg-blue-600/20 text-blue-300">Chat</button>
-        </div>
-        {% include 'partials/concurrency_badge.html' %}
       </header>
       {% for part in page_parts('below_header') %}{% include part %}{% endfor %}
 

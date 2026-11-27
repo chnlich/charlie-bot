@@ -332,7 +332,7 @@ body.resizing { cursor: col-resize; user-select: none; }
    it holds a label, because a label is not a control; the rule below gives a badge that holds a switch
    the same floor. No row, strip or label is added: the header's tallest item still sets its height. On
    a phone, the box with its margins fills the 2.5rem the tab row reserves. */
-main > header > a[title="View JSONL events"] {
+main > header a[title="View JSONL events"] {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -340,7 +340,7 @@ main > header > a[title="View JSONL events"] {
   height: 24px;
   border-color: #64748b;
 }
-main > header > a[title="View JSONL events"]:hover {
+main > header a[title="View JSONL events"]:hover {
   border-color: #94a3b8;
 }
 /* The backend badge's switch (session-view.js) is a select whose text-xs line and px-1.5 py-0.5 pad
@@ -360,16 +360,23 @@ main > header > a[title="View JSONL events"]:hover {
 /* A badge with no backend to name does not render. A no-copy open never writes one (session-view.js), so the
    header shows no empty pill where a stored session shows its backend. */
 #backend-badge:empty { display: none; }
-/* A pool session's badge can carry a 64-character label ("Human communication → CC · aigw Gemini Flash · …"). On a
-   desktop header the badge is the one item that gives way: it ellipsizes at its bound, and its title holds the full
-   label. The session name keeps a readable width, and the other controls keep theirs. */
+/* The header's first line holds the session name and its platform badge, the name taking the line's width. The
+   controls group (index.html) is one flex item beside them: it takes a line of its own only when the name and the
+   group cannot share one, and then sits at that line's right end. So a long name keeps its whole text, the badge
+   stays at the name line's far right, and the controls keep their order. The name's share stops 4rem short of the
+   row, which leaves the badge its place. */
+main > header { flex-wrap: wrap; }
+main > header > .header-controls { flex: 0 1 auto; min-width: 0; margin-left: auto; }
+/* A pool session's backend badge can carry a 64-character label ("Human communication → CC · aigw Gemini Flash · …").
+   On a desktop header the badge takes its whole label while the group fits its line, and it gives way at the group's
+   narrowest width: it ellipsizes there, and its title holds the full label. */
 @media (min-width: 769px) {
-  main > header > .flex-1.min-w-0 { min-width: 8rem; margin-right: 0.5rem; }
+  main > header > .flex-1.min-w-0 { flex: 1 1 auto; min-width: 8rem; max-width: calc(100% - 4rem); margin-right: 0.5rem; }
   /* The active tab's fill would otherwise touch the concurrency badge's outline. The gap matches the events link's. */
   #tab-buttons { margin-right: 0.5rem; }
-  #backend-badge { min-width: 0; max-width: clamp(10rem, 22vw, 18rem); overflow: hidden; text-overflow: ellipsis; }
+  #backend-badge { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   #backend-badge select { width: 100%; overflow: hidden; text-overflow: ellipsis; }
-  #usage-indicator, #compact-btn, #events-link, #tab-buttons, main > header > .cb-slot { flex-shrink: 0; }
+  #usage-indicator, #compact-btn, #events-link, #tab-buttons, main > header .cb-slot { flex-shrink: 0; }
 }
 @media (max-width: 768px) {
   .input-row { flex-wrap: nowrap; }
@@ -382,26 +389,23 @@ main > header > a[title="View JSONL events"]:hover {
   #resize-handle { display: none; }
   .sidebar-overlay.active { display: block; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 99; }
   .hamburger-btn { display: inline-flex !important; }
-  /* Header on phones: the menu and the session name keep the first row, so the
-     name shows its topic and number instead of the first few characters. The
-     backend badge and Compact share the second row, and the badge may paint up
-     to the row's remaining width: an id the config does not hold carries the
-     "(not in config)" state, and that label paints whole instead of
-     ellipsizing at "mock-backen…". The tabs, the events link and the
-     concurrency badge share the third, the concurrency badge at its right end.
-     The header's ::after item holds a line of its own, so the tabs always start
-     the third row; without it a short backend label would let them join the
-     second. No row is added: the third row already holds the tabs and the
-     link. */
-  main > header { flex-wrap: wrap; }
-  main > header > .flex-1.min-w-0 { flex-basis: calc(100% - 2.5rem); }
+  /* Header on phones: the menu and the platform badge take the first row, where the demo's brand sits; the session
+     name, which wraps so its whole text shows, takes the second. The backend badge takes the third row's width, and
+     Compact wraps beneath it when the label fills that width. The tabs, the events link and the concurrency badge take
+     the row after, the concurrency badge at its right end. The controls group is display: contents, so its items lay
+     out as the header's own. The badge may paint up to the row's remaining width: an id the config does not hold
+     carries the "(not in config)" state, and that label paints whole instead of ellipsizing. The header's ::after item
+     holds a line of its own, so the tabs always start their row. */
+  main > header > .header-controls { display: contents; }
+  main > header > .flex-1.min-w-0 { order: 1; flex-basis: 100%; }
+  main > header > .flex-1.min-w-0 > h2 { white-space: normal; overflow: visible; text-overflow: clip; }
   main > header::after { content: ''; flex-basis: 100%; order: 98; }
   #backend-badge, #compact-btn { order: 1; }
-  main > header > .cb-slot { order: 101; }
+  main > header .cb-slot { order: 101; }
   #backend-badge { max-width: 100%; min-width: 0; flex: 0 1 auto; overflow: hidden; }
   #tab-buttons { width: auto; flex: 1 1 auto; overflow-x: auto; order: 99; -webkit-overflow-scrolling: touch; }
   #tab-buttons button { white-space: nowrap; }
-  main > header > a[title="View JSONL events"] { order: 100; align-self: center; }
+  main > header a[title="View JSONL events"] { order: 100; align-self: center; }
   #usage-indicator { display: none !important; }
   .input-buttons button { min-width: 44px; min-height: 44px; }
 }

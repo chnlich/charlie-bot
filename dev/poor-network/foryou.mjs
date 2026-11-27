@@ -350,15 +350,30 @@ async function failedPageCell(ctx, tab, target, name) {
   };
 }
 
+// Whether a worker-trace entry is a response for the target document. Only an entry without a recorded failure and
+// with a numeric status counts; a 204 or 304 leaves no document body on the wire. The bench's own DevTools attach to
+// the worker records the navigation request itself as an aborted entry
+// (`type: Other, status: null, failed: net::ERR_ABORTED, bytes: 0`), which is not a response.
+function isDocumentResponse(req) {
+  return (
+    (req.failed === null || req.failed === undefined) &&
+    typeof req.status === 'number' &&
+    req.status !== 204 &&
+    req.status !== 304
+  );
+}
+
 // Whether the target document came from the stored shell ('stored-shell') or from the network ('network'), or null
 // when the navigation never painted a row and no network fetch ran. A service-worker navigation leaves
 // `documentBytes` zero on the tab even when the worker fell back to `fetch(request)` on the network, so the worker's
-// own trace from `navigatedAt` (ignoring any navigation preload 204) is checked alongside `documentBytes`.
+// own trace from `navigatedAt` (counting only entries without a recorded failure and with a response status) is
+// checked alongside `documentBytes`.
 export function openDocumentPath({ documentBytes, workerRequests, documentPattern, report }) {
+  const workerFetch = (req) => req.startMs >= 0 && documentPattern.test(req.url) && isDocumentResponse(req);
   if (documentBytes > 0) {
     return 'network';
   }
-  if (workerRequests.some((req) => req.startMs >= 0 && documentPattern.test(req.url) && req.status !== 204)) {
+  if (workerRequests.some(workerFetch)) {
     return 'network';
   }
   return report === null ? null : 'stored-shell';

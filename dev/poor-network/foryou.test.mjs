@@ -340,4 +340,61 @@ test('each open rep records whether it came from the stored shell or the network
     }),
     'stored-shell',
   );
+
+  // The bench's own DevTools attach to the worker leaves an aborted navigation request for the target document
+  // (`type: Other, status: null, failed: net::ERR_ABORTED, bytes: 0`). An entry without a numeric status is not a
+  // response, so the aborted attach artifact keeps the stored-shell label.
+  assert.equal(
+    openDocumentPath({
+      documentBytes: 0,
+      workerRequests: [
+        { url: 'https://front.test/?session=target-id', startMs: 0, status: 204 },
+        {
+          url: 'https://front.test/?session=target-id',
+          type: 'Other',
+          status: null,
+          wireStatus: null,
+          fromServiceWorker: null,
+          fromDiskCache: null,
+          failed: 'net::ERR_ABORTED',
+          startMs: 15,
+          finishMs: null,
+          bytes: 0,
+        },
+        { url: 'https://front.test/?session=target-id', startMs: 20 },
+      ],
+      documentPattern: /\?session=target-id$/,
+      report: { at: 100 },
+    }),
+    'stored-shell',
+  );
+
+  // A failed request is not a response even if the trace also has a numeric status.
+  assert.equal(
+    openDocumentPath({
+      documentBytes: 0,
+      workerRequests: [
+        {
+          url: 'https://front.test/?session=target-id',
+          startMs: 15,
+          status: 500,
+          failed: 'net::ERR_ABORTED',
+        },
+      ],
+      documentPattern: /\?session=target-id$/,
+      report: { at: 100 },
+    }),
+    'stored-shell',
+  );
+
+  // A completed 200 for the target document is a network response, so the classification still reads network.
+  assert.equal(
+    openDocumentPath({
+      documentBytes: 0,
+      workerRequests: [{ url: 'https://front.test/?session=target-id', startMs: 15, status: 200 }],
+      documentPattern: /\?session=target-id$/,
+      report: { at: 100 },
+    }),
+    'network',
+  );
 });

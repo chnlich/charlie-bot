@@ -1395,6 +1395,7 @@ fn to_index(value: i64) -> usize {
 #[cfg(test)]
 mod tests {
   use std::collections::HashMap;
+  use std::io::Write;
 
   use charliebot_registry::{Registry, store_hooks};
   use charliebot_store::for_you::{self, FOR_YOU_MAX_JSON_BYTES, FOR_YOU_MAX_ROWS};
@@ -2040,18 +2041,25 @@ backends:
     // Each turn is a user event and a note that folds to nothing, so the first read of the budget's count of events
     // folds to half the budget's messages. The loop then reads again.
     let turns = 100usize;
+    // The fixture's lines go to the node's log in one write: each store append syncs the file, and this test covers
+    // the bootstrap's reads, not the append.
+    let mut lines = Vec::new();
     for turn in 1..=turns {
-      features
-        .store
-        .append_chat_event(&meta.id, json!({"type": "user", "content": fixture_text(turn as u64, 40)}))
-        .await
-        .unwrap();
-      features
-        .store
-        .append_chat_event(&meta.id, json!({"type": "unrendered_note", "content": "filler"}))
-        .await
-        .unwrap();
+      let user = json!({"type": "user", "content": fixture_text(turn as u64, 40)});
+      let note = json!({"type": "unrendered_note", "content": "filler"});
+      for (kind, mut event) in [("user", user), ("note", note)] {
+        event["id"] = json!(format!("fixture-{kind}-{turn}"));
+        event["timestamp"] = json!("2100-01-01T00:00:00+00:00");
+        serde_json::to_writer(&mut lines, &event).unwrap();
+        lines.push(b'\n');
+      }
     }
+    std::fs::OpenOptions::new()
+      .append(true)
+      .open(features.store.chat_events_path(&meta.id))
+      .unwrap()
+      .write_all(&lines)
+      .unwrap();
     let total = features.store.load_chat_events_sync(&meta.id).unwrap().len();
     assert_eq!(total, 2 * turns + 1, "the fixture's log is its two events per turn and the node's own event");
     let payload = build_bootstrap_payload(&features.store, &cfg_of(&features), &meta).unwrap();

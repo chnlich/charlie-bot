@@ -23,6 +23,7 @@ use crate::chat_event_type::ChatEventType;
 use crate::control::ControlLock;
 use crate::event_state::EventReadCaches;
 use crate::event_types::SharedChatEvent;
+use crate::held_run_lists::HeldRunLists;
 use crate::hooks::{EventRenderer, RuntimeEventHooks};
 use crate::layout;
 use crate::metadata::{
@@ -36,8 +37,10 @@ use crate::streaming::StreamingManager;
 use crate::task_tree_state::IdentityHook;
 use crate::task_tree_state::{
   CachedActivity, CachedNodeFacts, CachedNodeState, CachedRunFactsAt, CachedTaskStateTail, CachedTreeIndex,
-  CachedTreePage,
+  CachedTreePage, SealedPromptChanges,
 };
+#[cfg(any(test, feature = "write-faults"))]
+use crate::write_fault_types::WriteFaults;
 use crate::{ControlGuard, StoreError, StoreResult};
 
 pub(crate) const METADATA_CACHE_TTL: Duration = Duration::from_secs(30);
@@ -401,11 +404,11 @@ pub struct Store {
   /// The outcomes memo: each node's run facts keyed by the history identity they were folded from.
   pub(crate) run_facts_by_session: StdMutex<HashMap<String, CachedRunFactsAt>>,
   /// Each boot-scanned node's newest live `prompt_changed` fact of each scope, keyed by the log identity scanned.
-  pub(crate) sealed_prompt_changes: StdMutex<HashMap<String, crate::task_tree_state::SealedPromptChanges>>,
+  pub(crate) sealed_prompt_changes: StdMutex<HashMap<String, SealedPromptChanges>>,
   /// Chat-history walks that read a node's facts from its files without caching them.
   pub(crate) history_fact_walks: AtomicU64,
   pub(crate) run_record_reads: AtomicU64,
-  pub(crate) held_run_lists: crate::held_run_lists::HeldRunLists,
+  pub(crate) held_run_lists: HeldRunLists,
   pub(crate) task_tree_activity_calls: AtomicU64,
   /// `tree_rows_lock`: one tree page's row computation runs at a time, so concurrent pages never walk the
   /// same histories in parallel.
@@ -451,7 +454,7 @@ pub struct Store {
   /// still hold.
   pub(crate) tree_page_memo: StdMutex<Option<CachedTreePage>>,
   #[cfg(any(test, feature = "write-faults"))]
-  pub(crate) write_faults: Arc<crate::write_fault_types::WriteFaults>,
+  pub(crate) write_faults: Arc<WriteFaults>,
 }
 
 impl Store {

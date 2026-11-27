@@ -9,7 +9,7 @@ use charliebot_core::timefmt;
 use serde_json::Value;
 
 use crate::metadata::{SessionMetadata, SessionStatus, UtcDateTime};
-use crate::store::{CachedListing, CachedSortedListing, DirNames};
+use crate::store::{CachedListing, CachedMetadata, CachedSortedListing, CachedSubtreeRoots, DirNames};
 use crate::{Store, StoreError, StoreResult};
 
 /// One read-only view of session metadata and the sequence fields derived for its rows.
@@ -196,7 +196,7 @@ impl Store {
                 .lock()
                 .expect("metadata cache mutex is not poisoned")
                 .entry(session_id.clone())
-                .or_insert_with(|| super::store::CachedMetadata {
+                .or_insert_with(|| CachedMetadata {
                   value: Arc::clone(&meta),
                   at: std::time::Instant::now(),
                   signature,
@@ -409,7 +409,7 @@ impl Store {
     }
     let sequence = Arc::new(self.sequence_listing.sequence_subtree_roots(rows.as_slice())?);
     let views = Arc::new(self.sequence_listing.view_subtree_roots(rows.as_slice())?);
-    *cached = Some(super::store::CachedSubtreeRoots {
+    *cached = Some(CachedSubtreeRoots {
       metadata_snapshot: Arc::clone(&rows),
       sequence: Arc::clone(&sequence),
       views: Arc::clone(&views),

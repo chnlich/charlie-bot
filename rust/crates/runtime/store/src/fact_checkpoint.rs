@@ -304,7 +304,7 @@ pub(crate) fn encode_events<'a>(events: impl IntoIterator<Item = &'a SharedChatE
 /// Write the stand-in line for an event that is one. The line is an object holding exactly its string `id` and `type`,
 /// in that order, whose text holds no separator or line break. Returns whether the event was written.
 fn encode_stand_in(event: &SharedChatEvent, line: &mut String) -> bool {
-  let crate::compact::CompactValue::Object(entries) = event.as_ref() else {
+  let CompactValue::Object(entries) = event.as_ref() else {
     return false;
   };
   let (id, event_type) = match entries.as_ref() {

@@ -24,8 +24,8 @@ const HANDLER_MARK_ICONS = {handler_ok: 'done', handler_error: 'failed'};
 
 function renderToolActivity(tools) {
   if (!Array.isArray(tools) || !tools.length) return '';
-  var rows = renderToolRows(tools);
-  var label = tools.length + ' tool call' + (tools.length !== 1 ? 's' : '');
+  const rows = renderToolRows(tools);
+  const label = tools.length + ' tool call' + (tools.length !== 1 ? 's' : '');
   return '<div class="mt-2 border border-slate-600/30 rounded-lg overflow-hidden">'
     + '<button onclick="toggleToolCalls(this)" class="w-full flex items-center justify-between px-3 py-1.5'
     + ' bg-slate-800/50 hover:bg-slate-800 transition-colors text-xs text-slate-400">'
@@ -46,23 +46,23 @@ function toggleToolCalls(btn) {
 // The rows of one tool list. A row that started a subagent carries the subagent's card under its header.
 function renderToolRows(tools) {
   return tools.map(function(tool, i) {
-    var summary = toolInputSummary(tool.name, tool.input);
-    var text = summary.text;
-    var limit = summary.limit;
-    var summaryHtml;
+    const summary = toolInputSummary(tool.name, tool.input);
+    const text = summary.text;
+    const limit = summary.limit;
+    let summaryHtml;
     if (limit > 0 && text.length > limit) {
-      var sid = 'ts-' + Math.random().toString(36).slice(2);
+      const sid = 'ts-' + Math.random().toString(36).slice(2);
       summaryHtml = escapeHtml(text.substring(0, limit))
         + showMoreToggleHtml(sid, escapeHtml(text.substring(limit)));
     } else {
       summaryHtml = escapeHtml(text);
     }
-    var outputHtml = '';
+    let outputHtml = '';
     if (tool.output) {
-      var outText = String(tool.output);
-      var colorCls = tool.is_error ? 'text-red-400' : 'text-slate-400';
+      const outText = String(tool.output);
+      const colorCls = tool.is_error ? 'text-red-400' : 'text-slate-400';
       if (outText.length > 500) {
-        var oid = 'to-' + Math.random().toString(36).slice(2);
+        const oid = 'to-' + Math.random().toString(36).slice(2);
         outputHtml = '<pre class="mt-1 text-xs ' + colorCls + ' whitespace-pre-wrap break-words">'
           + wrapWideChars(escapeHtml(outText.substring(0, 500)))
           + showMoreToggleHtml(oid, wrapWideChars(escapeHtml(outText.substring(500))))
@@ -77,9 +77,9 @@ function renderToolRows(tools) {
     if (tool.input_truncated) {
       outputHtml += '<div class="mt-1 text-xs text-slate-500">input truncated &mdash; full text in the session\'s raw events</div>';
     }
-    var borderCls = i > 0 ? 'border-t border-slate-600/50 ' : '';
-    var truncCls = (limit > 0 && text.length > limit) ? '' : 'truncate ';
-    var subagentHtml = tool.subagent ? renderSubagentCard(tool.subagent) : '';
+    const borderCls = i > 0 ? 'border-t border-slate-600/50 ' : '';
+    const truncCls = (limit > 0 && text.length > limit) ? '' : 'truncate ';
+    const subagentHtml = tool.subagent ? renderSubagentCard(tool.subagent) : '';
     return '<div class="' + borderCls + 'py-1.5">'
       + '<div class="flex items-center gap-2">'
       + toolNameChipHtml(tool.name || '')
@@ -110,13 +110,13 @@ function subagentStatusClass(status) {
 // The card of a subagent under the Agent row that started it. The header stays visible. The subagent's own rows
 // fold below it. The row count in the header is the subagent's tool uses, so the parent's count never includes them.
 function renderSubagentCard(subagent) {
-  var statusCls = subagentStatusClass(subagent.status);
-  var uses = subagent.tool_uses == null ? ''
+  const statusCls = subagentStatusClass(subagent.status);
+  const uses = subagent.tool_uses == null ? ''
     : '<span class="text-slate-500 whitespace-nowrap">' + subagent.tool_uses + ' tool call'
       + (subagent.tool_uses !== 1 ? 's' : '') + '</span>';
-  var time = subagent.duration_ms == null ? ''
+  const time = subagent.duration_ms == null ? ''
     : '<span class="text-slate-500 whitespace-nowrap">' + (subagent.duration_ms / 1000).toFixed(1) + 's</span>';
-  var body = '';
+  let body = '';
   if (subagent.tools.length) {
     body = '<button onclick="this.nextElementSibling.classList.toggle(\'hidden\')" class="mt-1 text-xs text-slate-400 hover:text-slate-300">'
       + subagent.tools.length + ' row' + (subagent.tools.length !== 1 ? 's' : '') + '</button>'
@@ -757,12 +757,12 @@ function runHeaderNoteHtml(msg, runId) {
 // one "N more lines" button, and that button swaps the hidden block in. A
 // dead process's hundred-line stderr stays one line until the reader opens it.
 function errorLinesToggleHtml(text) {
-  var full = String(text || '');
+  const full = String(text || '');
   if (!full.includes('\n')) return wrapWideChars(escapeHtml(full));
-  var head = full.slice(0, full.indexOf('\n'));
-  var rest = full.slice(head.length + 1);
-  var restLines = rest.split('\n').length;
-  var id = 'errl-' + Math.random().toString(36).slice(2);
+  const head = full.slice(0, full.indexOf('\n'));
+  const rest = full.slice(head.length + 1);
+  const restLines = rest.split('\n').length;
+  const id = 'errl-' + Math.random().toString(36).slice(2);
   return wrapWideChars(escapeHtml(head))
     + '<span id="' + id + '-short"> &hellip; <button type="button"'
     + ' onclick="document.getElementById(\'' + id + '-short\').style.display=\'none\';'
@@ -822,11 +822,11 @@ function renderMetadataRow(label, value) {
 // member reads through `msg.backend` (the server-filtered member, never `invocation.backend`, which names the pool the
 // caller asked for); an event without a pool shows its member as it always did.
 function delegateBackendModel(invocation, msg) {
-  var member = msg.pool
+  const member = msg.pool
     ? (msg.backend || '')
     : ((invocation && invocation.backend) || msg.backend || msg.resolved_backend || '');
-  var model = displayMetadataValue(msg.model || msg.resolved_model, '');
-  var backend = msg.pool
+  const model = displayMetadataValue(msg.model || msg.resolved_model, '');
+  const backend = msg.pool
     ? sessionModelLabel(msg.pool, member || null, null, 'full')
     : displayMetadataValue(member, '(none)');
   return model ? backend + ' / ' + model : backend;
@@ -863,18 +863,18 @@ function delegateLiveStateHtml(msg, sessionId) {
 }
 
 function renderDelegateMetadata(msg, sessionId) {
-  var invocation = msg.delegate_invocation;
+  const invocation = msg.delegate_invocation;
   // The rendered session owns the message: its id anchors the live-state
   // line's poll scope.
   sessionId = sessionId || (typeof SESSION_ID !== 'undefined' ? SESSION_ID : '');
-  var liveState = delegateLiveStateHtml(msg, sessionId);
-  var childLink = delegateChildLinkHtml(msg);
-  var rows = [];
+  const liveState = delegateLiveStateHtml(msg, sessionId);
+  const childLink = delegateChildLinkHtml(msg);
+  let rows = [];
   if (invocation) {
-    var taskType = displayMetadataValue(invocation.task_type || msg.task_type, '(unknown)');
-    var repoLess = taskType === 'verify' || taskType === 'cold-read';
-    var repoEmpty = repoLess ? '(none)' : '(unknown)';
-    var baseEmpty = repoLess ? '(none)' : '(unknown)';
+    const taskType = displayMetadataValue(invocation.task_type || msg.task_type, '(unknown)');
+    const repoLess = taskType === 'verify' || taskType === 'cold-read';
+    const repoEmpty = repoLess ? '(none)' : '(unknown)';
+    const baseEmpty = repoLess ? '(none)' : '(unknown)';
     rows = [
       ['task type', taskType],
       ['thread id', displayMetadataValue(msg.thread_id, '(unknown)')],
@@ -889,13 +889,13 @@ function renderDelegateMetadata(msg, sessionId) {
     rows = [
       ['thread id', displayMetadataValue(msg.thread_id, '(unknown)')],
     ];
-    var backendModel = delegateBackendModel(null, msg);
+    const backendModel = delegateBackendModel(null, msg);
     if (backendModel !== '(none)') rows.push(['backend/model', backendModel]);
   }
-  var html = '<div class="font-mono text-xs leading-5 bg-slate-950/35 border border-amber-700/20 rounded-lg px-3 py-2 space-y-1">'
+  let html = '<div class="font-mono text-xs leading-5 bg-slate-950/35 border border-amber-700/20 rounded-lg px-3 py-2 space-y-1">'
     + rows.map(row => renderMetadataRow(row[0], row[1])).join('');
   if (msg.route && typeof msg.route === 'object') {
-    var routeBackends = msg.route.backends.length ? msg.route.backends.join(', ') : 'pool';
+    const routeBackends = msg.route.backends.length ? msg.route.backends.join(', ') : 'pool';
     html += '<div class="grid grid-cols-[9rem_minmax(0,1fr)] gap-3"><span class="text-slate-500 not-italic font-sans">route</span>'
       + '<span class="min-w-0 break-words font-sans not-italic">' + escapeHtml(routeBackends)
       + (msg.route.reason ? ' &middot; ' + escapeHtml(msg.route.reason) : '')
@@ -920,7 +920,7 @@ function openMessageWrapper(layoutClass, msg) {
 // The one markdown bubble body: chat bubbles and a separator panel's answer body
 // render through the same escape + renderProseMarkdown + data-raw round-trip.
 function mdDiv(text) {
-  var raw = escapeHtml(text || "").replace(/"/g, "&quot;");
+  const raw = escapeHtml(text || "").replace(/"/g, "&quot;");
   return "<div class=\"prose-msg\" data-raw=\"" + raw + "\">" + renderProseMarkdown(text || "") + "</div>";
 }
 
@@ -955,7 +955,7 @@ function renderMessage(msg, sessionId) {
 
   function timeDiv(colorClass) {
     if (!msg.timestamp) return "";
-    var cls = colorClass || BUBBLE_TIME_CLASS;
+    const cls = colorClass || BUBBLE_TIME_CLASS;
     return "<div class=\"text-[10px] " + cls + " mt-1\">" + formatBubbleTime(msg.timestamp) + "</div>";
   }
 
@@ -963,7 +963,7 @@ function renderMessage(msg, sessionId) {
   // group on the right once the For-you projection hangs it there. The
   // bubble-time-row class is the projection's hook into the row.
   function webReplyTimeRow() {
-    var time = msg.timestamp
+    const time = msg.timestamp
       ? "<span>" + formatBubbleTime(msg.timestamp) + "</span>" : "";
     return "<div class=\"text-[10px] " + BUBBLE_TIME_CLASS + " mt-1 flex items-center justify-between bubble-time-row\">"
       + time + "</div>";
@@ -975,14 +975,14 @@ function renderMessage(msg, sessionId) {
           msg.content, msg.input_mode, msg.timestamp, msg.uploaded_files, msg.request_id, msg.delivery_status) + "</div>";
   }
   if (msg.role === "assistant") {
-    var content = msg.content || "";
-    var contentHtml = content.trimStart().startsWith("<tool_call>")
+    const content = msg.content || "";
+    const contentHtml = content.trimStart().startsWith("<tool_call>")
       ? renderRawBackendOutput(content)
       : mdDiv(content);
-    var toolsHtml = renderToolActivity(msg.tools);
-    var thinkingHtml = "";
+    const toolsHtml = renderToolActivity(msg.tools);
+    let thinkingHtml = "";
     if (msg.thinking) {
-      var thinkId = 'think-' + (msg.id || Math.random().toString(36).slice(2));
+      const thinkId = 'think-' + (msg.id || Math.random().toString(36).slice(2));
       thinkingHtml = thinkingToggleHtml(thinkId, msg.thinking);
     }
     return openMessageWrapper("flex justify-start", msg) + "<div class=\"max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm\">"
@@ -1003,7 +1003,7 @@ function renderMessage(msg, sessionId) {
   // kept on its line breaks and scrolled inside the row past about twelve lines. A run_error row
   // takes the branch above, so it never reaches this one.
   if (isErrorRow(msg)) {
-    var titleAttr = msg.timestamp ? " title=\"" + formatBubbleTime(msg.timestamp) + "\"" : "";
+    const titleAttr = msg.timestamp ? " title=\"" + formatBubbleTime(msg.timestamp) + "\"" : "";
     return openMessageWrapper("flex justify-start", msg)
       + "<div class=\"max-w-[90%] max-h-48 overflow-y-auto bg-red-900/20 border border-red-700/30 rounded-lg px-3 py-1.5 text-xs text-red-400\""
       + titleAttr + ">"
@@ -1014,7 +1014,7 @@ function renderMessage(msg, sessionId) {
   if (msg.role === "cold_read_check" && msg.name === "reply") return "";
   // A reply a chat thread received: the agent's text, under a badge that names the platform. A legacy `Posted to
   // <Platform>:` system line reads as the same reply.
-  var threadReply = threadReplyOf(msg);
+  const threadReply = threadReplyOf(msg);
   if (threadReply) {
     return openMessageWrapper("flex justify-start", msg) + "<div class=\"max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm\">"
       + "<div class=\"flex items-center gap-2 text-[10px] font-semibold tracking-wider text-slate-400 mb-1\">"
@@ -1023,7 +1023,7 @@ function renderMessage(msg, sessionId) {
       + mdDiv(threadReply.content) + timeDiv() + "</div></div>";
   }
   // A message from a platform thread that summoned this session: the thread's own text, under its platform badge.
-  var summonPlatform = summonPlatformOf(msg);
+  const summonPlatform = summonPlatformOf(msg);
   if (summonPlatform) {
     return openMessageWrapper("flex justify-start", msg) + "<div class=\"max-w-[90%] overflow-hidden bg-slate-800 border border-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-200\">"
       + "<div class=\"flex items-center gap-2 mb-1 text-xs text-slate-400\">"
@@ -1033,9 +1033,9 @@ function renderMessage(msg, sessionId) {
   }
   // A web_status change and a cold read of a waiting item read as a system line. The For you view folds both instead.
   if (msg.role === "system" || msg.role === "web_status" || msg.role === "web_ask_check" || msg.role === "cold_read_check") {
-    var titleAttr = msg.timestamp ? " title=\"" + formatBubbleTime(msg.timestamp) + "\"" : "";
-    var handlerMark = Object.hasOwn(HANDLER_MARK_ICONS, msg.kind) ? cbIcon(HANDLER_MARK_ICONS[msg.kind], 12) + " " : "";
-    var pillClass = msg.role === "cold_read_check"
+    const titleAttr = msg.timestamp ? " title=\"" + formatBubbleTime(msg.timestamp) + "\"" : "";
+    const handlerMark = Object.hasOwn(HANDLER_MARK_ICONS, msg.kind) ? cbIcon(HANDLER_MARK_ICONS[msg.kind], 12) + " " : "";
+    const pillClass = msg.role === "cold_read_check"
       ? "bg-slate-700/50 text-slate-400 text-xs px-3 py-1.5 rounded-full max-w-[85%] overflow-hidden truncate"
       : "bg-slate-700/50 text-slate-400 text-xs px-3 py-1.5 rounded-2xl max-w-[85%] whitespace-normal break-words text-center";
     return openMessageWrapper("flex justify-center", msg) + "<div class=\"" + pillClass + "\"" + titleAttr + ">"
@@ -1051,17 +1051,17 @@ function renderMessage(msg, sessionId) {
   if (msg.role === "run_delivery") {
     // The worker transcript's close: the delivery summary and the evidence
     // links.
-    var delivered = msg.completed;
-    var palette = delivered ? 'border-green-500/50 bg-green-500/10' : 'border-slate-600 bg-slate-800';
-    var labelClass = delivered ? 'text-green-300' : 'text-slate-400';
-    var stateLabel = delivered ? 'Delivered' : 'Task ' + (msg.task_state || 'closed');
-    var links = [
+    const delivered = msg.completed;
+    const palette = delivered ? 'border-green-500/50 bg-green-500/10' : 'border-slate-600 bg-slate-800';
+    const labelClass = delivered ? 'text-green-300' : 'text-slate-400';
+    const stateLabel = delivered ? 'Delivered' : 'Task ' + (msg.task_state || 'closed');
+    const links = [
       evidenceLinkHtml('Raw log', evidenceHref(msg.raw_log_ref)),
       evidenceLinkHtml('Events', evidenceHref(msg.events_ref)),
       evidenceLinkHtml('Result', evidenceHref(msg.result_ref)),
     ].join('') + deliveryLinksHtml(msg, sessionId);
-    var refsHtml = '';
-    var refs = Array.isArray(msg.result_refs) ? msg.result_refs : [];
+    let refsHtml = '';
+    const refs = Array.isArray(msg.result_refs) ? msg.result_refs : [];
     if (refs.length) {
       refsHtml = '<div class="mt-1 pt-1 border-t border-slate-700/50 text-xs text-slate-400/70 space-y-0.5">'
         + refs.map(function(ref) { return '<div class="break-all">' + escapeHtml(String(ref)) + '</div>'; }).join('')
@@ -1074,25 +1074,25 @@ function renderMessage(msg, sessionId) {
       + refsHtml + timeDiv() + '</div></div>';
   }
   if (msg.role === "child_report") {
-    var reportOutcome = String(msg.outcome || "completed");
+    const reportOutcome = String(msg.outcome || "completed");
     // Literal classes only: the Tailwind scanner never sees composed names.
-    var outcomeColorCls = (reportOutcome === "completed" || reportOutcome === "archived") ? "text-emerald-400" : (reportOutcome === "cancelled" ? "text-slate-400" : "text-amber-400");
-    var reportText = String(msg.content || "");
-    var refs = Array.isArray(msg.result_refs) ? msg.result_refs : [];
+    const outcomeColorCls = (reportOutcome === "completed" || reportOutcome === "archived") ? "text-emerald-400" : (reportOutcome === "cancelled" ? "text-slate-400" : "text-amber-400");
+    const reportText = String(msg.content || "");
+    const refs = Array.isArray(msg.result_refs) ? msg.result_refs : [];
     // A report folds behind a button when it is a long passage or it has refs.
-    var longText = isLongPassage(reportText);
-    var foldable = longText || refs.length > 0;
-    var refsHtml = "";
+    const longText = isLongPassage(reportText);
+    const foldable = longText || refs.length > 0;
+    let refsHtml = "";
     if (refs.length) {
       refsHtml = "<div class=\"child-report-refs mt-2 pt-2 border-t border-emerald-700/30 text-xs text-emerald-400/50\">"
         + refs.map(function(ref) { return "<div>" + escapeHtml(String(ref)) + "</div>"; }).join("")
         + "</div>";
     }
-    var moreLabel = (longText ? "Show full report" : "Show")
+    const moreLabel = (longText ? "Show full report" : "Show")
       + (refs.length ? (longText ? " · " : " ") + refs.length + " ref" + (refs.length === 1 ? "" : "s") : "");
     // The fold state lives on the card node only: a page reload folds the card again.
-    var toggleHtml = foldable
-      ? "<button type=\"button\" class=\"child-report-toggle\" aria-expanded=\"false\" onclick=\"var c=this.closest('.child-report');var o=c.dataset.folded==='true';c.dataset.folded=o?'false':'true';this.setAttribute('aria-expanded',String(o))\">"
+    const toggleHtml = foldable
+      ? "<button type=\"button\" class=\"child-report-toggle\" aria-expanded=\"false\" onclick=\"const c=this.closest('.child-report');const o=c.dataset.folded==='true';c.dataset.folded=o?'false':'true';this.setAttribute('aria-expanded',String(o))\">"
         + "<span class=\"child-report-more\">" + escapeHtml(moreLabel) + " " + cbIcon("disclosure", 12) + "</span>"
         + "<span class=\"child-report-less\">Show less " + cbIcon("disclosure-open", 12) + "</span></button>"
       : "";
@@ -1107,7 +1107,7 @@ function renderMessage(msg, sessionId) {
       + refsHtml + toggleHtml + timeDiv() + "</div></div>";
   }
   if (msg.role === "worker_summary") {
-    var originFooter = "";
+    let originFooter = "";
     if (msg.origin_session_id && msg.thread_id && msg.origin_session_id !== sessionId) {
       originFooter = "<div class=\"mt-2 pt-2 border-t border-emerald-700/30 text-xs text-emerald-400/50\">"
         + "Ran in session <a href=\"/?session=" + encodeURIComponent(msg.origin_session_id)
@@ -1172,7 +1172,7 @@ function renderMessage(msg, sessionId) {
   // needs, so the marker draws nothing.
   if (msg.role === "web_reply_check") return "";
   if (msg.role === "separator") {
-    var eventIndexAttr = msg.event_index != null ? " data-event-index=\"" + msg.event_index + "\"" : "";
+    const eventIndexAttr = msg.event_index != null ? " data-event-index=\"" + msg.event_index + "\"" : "";
     return "<div class=\"" + SEPARATOR_ROW_CLASS + "\""
       + messageIdentityAttrs(msg) + eventIndexAttr + ">"
       + separatorRowInnerHtml(sessionId, msg) + "</div>";
@@ -1186,8 +1186,8 @@ function renderMessage(msg, sessionId) {
 // The engine renders it synchronously, like the legacy path, then materializes
 // the projection and pins the bottom when the reader is there.
 function ingestLiveMessage(msg, sessionId, forceScroll) {
-  var container = document.getElementById("messages");
-  var engine = Chat.activeTurnEngineFor(container);
+  const container = document.getElementById("messages");
+  const engine = Chat.activeTurnEngineFor(container);
   if (engine) {
     engine.appendMessage(msg, forceScroll);
     return true;
@@ -1196,13 +1196,13 @@ function ingestLiveMessage(msg, sessionId, forceScroll) {
 }
 
 function _appendRenderedMessage(html, forceScroll) {
-  var container = document.getElementById("messages");
-  var wasAtBottom = shouldAutoScroll(container);
-  var wrapper = document.createElement("div");
+  const container = document.getElementById("messages");
+  const wasAtBottom = shouldAutoScroll(container);
+  const wrapper = document.createElement("div");
   wrapper.innerHTML = html;
   globalThis.postProcessRenderedMessages(wrapper);
-  var el = wrapper.firstElementChild || wrapper;
-  var streamEl = document.getElementById("streaming-msg");
+  const el = wrapper.firstElementChild || wrapper;
+  const streamEl = document.getElementById("streaming-msg");
   container.insertBefore(el, streamEl);
   // A landed separator finishes a turn: derive so it becomes a wrapper and the
   // turn before it folds.
@@ -1221,7 +1221,7 @@ function appendMessageObject(msg, sessionId, forceScroll) {
 }
 
 function appendMessage(role, content, inputMode, timestamp, uploadedFiles, requestId) {
-  var msg = {
+  const msg = {
     role: role,
     content: content || "",
     input_mode: inputMode || null,

@@ -21,11 +21,12 @@
 # IMPROVE_TRIAL_USE_LOCK chooses whether the side holds the host's bench lock around its command. 1, the default,
 # holds the lock: the side waits at most IMPROVE_TRIAL_LOCK_WAIT_SECONDS (default 900, the round's 15 minutes) for
 # it. When the wait runs out, the command does not run: the side prints its stop reason on stderr and exits with
-# BENCH_LOCK_TIMEOUT_EXIT. 0 is available only to improve-ux sides, which run beside any bench with no wait. Such a
-# side writes the lock's holder, or none, at its start and at its end to a bench-lock record under
-# $CHARLIEBOT_RELEASE_RUN_DIR, and it serves on a port range the bench's default does not use. Either way the side
-# exits with the command's exit code. The lock and its flock call belong to dev/poor-network/lock.sh; the poor-network
-# bench's own sides take the same lock with their own wait.
+# BENCH_LOCK_TIMEOUT_EXIT. 0 is available only to improve-ux sides, which never wait for the lock and never refuse to
+# start because of it. Such a side writes the lock's holder, or none, at its start and at its end to a bench-lock
+# record under $CHARLIEBOT_RELEASE_RUN_DIR; when the holder cannot be read, it writes that unreadable holder with the
+# reader's reason, and it runs its command anyway. The side serves on a port range the bench's default does not use.
+# Either way the side exits with the command's exit code. The lock and its flock call belong to
+# dev/poor-network/lock.sh; the poor-network bench's own sides take the same lock with their own wait.
 #
 # Lock-free serve sides in one round share a lock in the round's record directory. A side holds it through the trial
 # command, so the next side starts after the previous trial has stopped its server and scope.
@@ -103,14 +104,20 @@ if [[ -n $SIDE_COMMIT && -z ${CHARLIEBOT_RELEASE_RUN_DIR:-} ]]; then
   exit 2
 fi
 
-# bench_lock_record <record file> <point>: append the bench lock's holder at one point of the side, start or end.
+# bench_lock_record <record file> <point>: append the bench lock's holder at one point of the side, start or end. A
+# failed holder read is recorded as an unreadable holder with the reader's reason, and the side goes on: a side beside
+# the bench lock never waits for the lock and never refuses to run because of its holder.
 bench_lock_record() {
-  local holder
-  if ! holder=$(bench_lock_holder); then
-    printf 'improve trial side: cannot read the bench lock holder at the side %s\n' "$2" >&2
-    return 1
+  local holder reason
+  if holder=$(bench_lock_holder 2>&1); then
+    printf '%s side %s: bench lock holder %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$2" "${holder:-none}" >>"$1"
+    return
   fi
-  printf '%s side %s: bench lock holder %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$2" "${holder:-none}" >>"$1"
+  # The holder read's reason arrives on stderr; a record line holds one line.
+  reason=${holder//$'\n'/ }
+  printf 'improve trial side: the bench lock holder at the side %s is unreadable; recorded with its reason\n' "$2" >&2
+  printf '%s side %s: bench lock holder unreadable: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$2" \
+    "${reason:-the holder read failed without a message}" >>"$1"
 }
 
 # open_side_record: for a serve trial, create its side record and export its output directory to the command.

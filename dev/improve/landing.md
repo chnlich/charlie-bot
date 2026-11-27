@@ -125,7 +125,8 @@ Only an improve-ux side runs beside the bench lock. Its entry runs with `IMPROVE
 `dev/improve/trial-side.sh` refuses that value for every other direction. Screenshots and clicks do not depend on a
 quiet host, and the bench's scopes keep CPU priority over the improve scopes, so the side does not take the bench's CPU.
 The side's evidence records the bench-lock holder (the process that holds the lock, or `none`) at the side's start and
-at its end.
+at its end. A holder that the side cannot read is recorded as unreadable, with the reader's reason, and the side runs
+anyway: a side beside the bench lock never waits for it and never refuses to start because of its holder.
 
 Every other direction's screenshot side holds the bench lock from trial startup through its screenshots, its clicks and
 trial shutdown. It keeps the default of `IMPROVE_TRIAL_USE_LOCK`. A side that reports any timing or byte-over-time

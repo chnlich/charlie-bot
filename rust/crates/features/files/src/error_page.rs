@@ -1,6 +1,7 @@
 //! The readable page that answers a path the file server cannot show: a directory or an entry the reader has no
 //! permission to read, and an entry that is not a regular file. The page names the path and the reason, and it links to
-//! the parent directory, so the reader can go on from the refusal.
+//! the parent directory, so the reader can go on from the refusal, except when the request is at the mount root, where
+//! the page has no parent link.
 
 use axum::response::Response;
 use charliebot_compat::responses;
@@ -34,7 +35,8 @@ impl Refusal {
 }
 
 /// The answer that refuses `display_path`, which the request reached under `url_prefix`: a 403 whose page names the
-/// path and the reason, and links to the parent directory.
+/// path and the reason, and links to the parent directory, except when the request is at the mount root, where the page
+/// has no parent link.
 pub(crate) fn refusal(refusal: Refusal, display_path: &str, url_prefix: &str) -> Response {
   let path = escape(display_path, EscapeContext::Text);
   let base = url_prefix.trim_end_matches('/');

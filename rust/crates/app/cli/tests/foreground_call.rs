@@ -230,7 +230,7 @@ fn a_job_moved_into_the_session_cgroup_survives_the_deadline() {
     proc_cgroup.trim_end().ends_with(session.dir.file_name().unwrap().to_str().unwrap()),
     "the detached job stays in the session cgroup, got {proc_cgroup:?}"
   );
-  Command::new("kill").arg("-9").arg(pid.to_string()).status().unwrap();
+  nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), nix::sys::signal::Signal::SIGKILL).unwrap();
 }
 
 #[test]

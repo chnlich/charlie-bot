@@ -239,6 +239,16 @@ pub enum Step {
   Waiting,
 }
 
+/// What a heartbeat renewal found.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Renewal {
+  /// The claim still holds its entry: no renewal was due, the renewal landed, or a refused push left the entry in
+  /// place.
+  Held,
+  /// Origin no longer holds the entry at the sha the claim last wrote. The reason is git's stderr for the refused push.
+  Removed(String),
+}
+
 impl Site {
   /// Reads the queue from origin. A dead ref is deleted first, with a message naming it and the reason.
   pub async fn read(&self) -> anyhow::Result<QueueView> {
@@ -578,6 +588,27 @@ impl Claim {
       self.beat_at = Instant::now();
     }
     Ok(pushed)
+  }
+
+  /// Renews the heartbeat when it is due. A refused renewal is read back: when origin still holds this claim's entry at
+  /// the sha the claim last wrote, the refusal was a failed push, so the claim keeps its place and logs the refusal's
+  /// stderr. Otherwise the entry is gone or moved, and `Removed` carries git's stderr as the reason.
+  pub async fn renew_if_due(&mut self, cadence: Cadence) -> anyhow::Result<Renewal> {
+    if !self.beat_due(cadence) {
+      return Ok(Renewal::Held);
+    }
+    let parent = self.parent.clone();
+    let Pushed::Refused(err) = self.beat(&parent).await? else {
+      return Ok(Renewal::Held);
+    };
+    if self.entry_holds_lease().await? {
+      eprintln!(
+        "heartbeat of {} was refused while its entry still holds its sha; it keeps its place: {err}",
+        self.holder
+      );
+      return Ok(Renewal::Held);
+    }
+    Ok(Renewal::Removed(err))
   }
 
   /// Whether origin still holds this claim's entry at the sha this claim last wrote, read from origin now.
@@ -928,14 +959,11 @@ pub async fn acquire(
   }
   let started = Instant::now();
   loop {
-    if claim.beat_due(cadence) {
-      let parent = claim.parent.clone();
-      if let Pushed::Refused(err) = claim.beat(&parent).await? {
-        // A prune after a stalled push removes an entry whose heartbeat went stale; the waiter keeps its place.
-        eprintln!("{} was removed while it waited ({err}); re-entered at its original key {owner}", name.refname());
-        claim = Claim::enter(site, &name, head).await?;
-        continue;
-      }
+    if let Renewal::Removed(err) = claim.renew_if_due(cadence).await? {
+      // A prune after a stalled push removes an entry whose heartbeat went stale; the waiter keeps its place.
+      eprintln!("{} was removed while it waited ({err}); re-entered at its original key {owner}", name.refname());
+      claim = Claim::enter(site, &name, head).await?;
+      continue;
     }
     let view = site.read().await?;
     if may_take(&view, claim.entry_refname()) && claim.take_turn().await? == Take::Taken {
@@ -1005,20 +1033,11 @@ pub async fn pr_head(worktree: &Path, repo: &str, pr: u64) -> anyhow::Result<Str
 }
 
 /// One step toward the turn: renews the heartbeat when it is due, then takes the turn when the queue lets this claim.
-/// A refused renewal is an error only when origin no longer holds the claim's entry at the sha it last wrote. A refusal
-/// that leaves the entry in place is a failed push, and the claim keeps waiting at its key.
+/// A renewal that finds the entry removed is an error; a refused push that leaves the entry in place keeps the claim
+/// waiting at its key.
 pub async fn turn_step(claim: &mut Claim, cadence: Cadence) -> anyhow::Result<Step> {
-  if claim.beat_due(cadence) {
-    let parent = claim.parent.clone();
-    if let Pushed::Refused(err) = claim.beat(&parent).await? {
-      if !claim.entry_holds_lease().await? {
-        anyhow::bail!("the queue entry of {} was removed while it waited: {err}", claim.holder);
-      }
-      eprintln!(
-        "heartbeat of {} was refused while its entry still holds its sha; it keeps waiting: {err}",
-        claim.holder
-      );
-    }
+  if let Renewal::Removed(err) = claim.renew_if_due(cadence).await? {
+    anyhow::bail!("the queue entry of {} was removed while it waited: {err}", claim.holder);
   }
   let view = claim.site.read().await?;
   if may_take(&view, claim.entry_refname()) && claim.take_turn().await? == Take::Taken {

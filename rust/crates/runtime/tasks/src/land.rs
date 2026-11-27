@@ -3814,29 +3814,37 @@ exit 0
     .expect("the landing queued within 30 s")
   }
 
-  /// Makes origin decline the next push that moves the ref that `flag` names, and removes `flag` when it declines. The
-  /// wrapper runs in front of the leak scanner that `install_pre_receive_leak_scan` installed, which still checks every
-  /// other push.
-  fn decline_the_next_push_to_the_flagged_ref(origin: &Path, flag: &Path) {
+  /// Makes origin decline each push that moves the ref that `flag` names, for as long as `flag` exists. A deletion of
+  /// the ref passes, and each declined push is logged in the returned file. The wrapper runs in front of the leak
+  /// scanner that `install_pre_receive_leak_scan` installed, which still checks every other push.
+  fn decline_moves_of_the_flagged_ref(origin: &Path, flag: &Path) -> PathBuf {
     let scanner = origin.join("hooks/pre-receive.scan");
     fs::rename(origin.join("hooks/pre-receive"), &scanner).expect("the leak scanner hook is moved aside");
+    let log = flag.with_file_name("declined.log");
     let script = format!(
       r#"#!/bin/sh
 input=$(cat)
 flag='{flag}'
+log='{log}'
 if [ -f "$flag" ]; then
   target=$(cat "$flag")
   case "$input" in
     *" $target"*)
-      rm -f "$flag"
-      echo "declined by the test: $target" >&2
-      exit 1
+      case "$input" in
+        *" 0000000000000000000000000000000000000000 $target"*) ;;
+        *)
+          echo "declined by the test: $target" >> "$log"
+          echo "declined by the test: $target" >&2
+          exit 1
+          ;;
+      esac
       ;;
   esac
 fi
 printf '%s\n' "$input" | '{scanner}'
 "#,
       flag = flag.display(),
+      log = log.display(),
       scanner = scanner.display()
     );
     let hook = origin.join("hooks/pre-receive");
@@ -3844,6 +3852,7 @@ printf '%s\n' "$input" | '{scanner}'
     let mut permissions = fs::metadata(&hook).expect("the declining hook exists").permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(&hook, permissions).expect("the declining hook is executable");
+    log
   }
 
   /// A task session under `home` whose metadata names `repo` as its repository, and whose one run record names `work`
@@ -4149,8 +4158,8 @@ printf '%s\n' "$input" | '{scanner}'
     let b = venue(&b_work, "task-b", SESSION_B);
     let sha_b = head(&b_work);
     write_landing_record(&b.session_dir, &queue_record(502, &sha_b)).expect("the landing record is written");
-    let flag = root.path().join("decline-next-push");
-    decline_the_next_push_to_the_flagged_ref(&root.path().join("origin.git"), &flag);
+    let flag = root.path().join("decline-flag");
+    let declined = decline_moves_of_the_flagged_ref(&root.path().join("origin.git"), &flag);
     let remote = QueueRemote::new(&remote_work, &[(&sha_b, "2026-11-27T00:00:02Z")], "2026-11-27T00:00:09Z");
     let site = land_queue::Site { worktree: b_work.clone() };
     let main_tip = git_async(&holder_work, &["rev-parse", "origin/main"]).await.expect("the main tip reads");
@@ -4160,10 +4169,10 @@ printf '%s\n' "$input" | '{scanner}'
     let mut b_run = Box::pin(queued_landing(&b, &registry, &home, &sha_b, &remote, CADENCE, Duration::from_secs(60)));
     let b_owner = land_queue::owner_token(SESSION_B).expect("the session id names a token");
     let entry = wait_for_entry(&site, &b_owner, 502, &mut b_run).await;
-    // The next heartbeat push of B's entry is declined while the entry still holds B's sha.
+    // B's heartbeat pushes move its entry, so they are declined while the entry still holds B's sha.
     fs::write(&flag, &entry.refname).expect("the decline flag is written");
     tokio::time::timeout(Duration::from_secs(30), async {
-      while flag.exists() {
+      while !declined.exists() {
         tokio::select! {
           result = b_run.as_mut() => panic!(
             "the waiter ended after its heartbeat was declined: {:?}",
@@ -4174,8 +4183,9 @@ printf '%s\n' "$input" | '{scanner}'
       }
     })
     .await
-    .expect("the heartbeat push was declined within 30 s");
-    // B keeps its place: the holder releases the turn, and B takes it and lands.
+    .expect("a heartbeat push was declined within 30 s");
+    // The declining stops, so B's take of the turn is not declined; B keeps its place until the holder releases.
+    fs::remove_file(&flag).expect("the decline flag is removed");
     let (released, end) = tokio::join!(holder.release(), b_run);
     released.expect("the holder releases the turn");
     assert_eq!(landed_record(end, "B").state, STATE_LANDED);
@@ -4214,6 +4224,42 @@ printf '%s\n' "$input" | '{scanner}'
     let text = format!("{error:#}");
     assert!(text.contains("was removed while it waited"), "{text}");
     assert!(text.contains("failed to push"), "the error names git's reason: {text}");
+    holder.release().await.expect("the holder releases the turn");
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_round_waiter_whose_heartbeats_are_declined_reaches_its_bound_and_removes_its_entry() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    synthetic_queue_repo(root.path(), "main");
+    let round_work = task_clone(root.path(), "round");
+    let holder_work = task_clone(root.path(), "holder");
+    let site = land_queue::Site { worktree: round_work.clone() };
+    let round_head = head(&round_work);
+    // The round's owner key is its launch id, which the entry carries as it is.
+    let launch = "20261127T120000-4242-fc8d9d";
+    let ci_passed_ms = 1_795_000_000_000;
+    let main_tip = git_async(&holder_work, &["rev-parse", "origin/main"]).await.expect("the main tip reads");
+    let mut holder = land_queue::Claim::direct(&land_queue::Site { worktree: holder_work.clone() }, 700, &main_tip);
+    assert_eq!(holder.take_turn().await.expect("the holder takes the turn"), land_queue::Take::Taken);
+    // The round's entry is queued first, so its heartbeat pushes move it while it still holds the round's sha.
+    let name = land_queue::EntryName::new(ci_passed_ms, 701, launch);
+    land_queue::Claim::enter(&site, &name, &round_head).await.expect("the round's entry enters");
+    let flag = root.path().join("decline-flag");
+    let declined = decline_moves_of_the_flagged_ref(&root.path().join("origin.git"), &flag);
+    fs::write(&flag, name.refname()).expect("the decline flag is written");
+
+    let bound = Duration::from_millis(900);
+    let started = Instant::now();
+    let acquired = land_queue::acquire(&site, launch, 701, &round_head, ci_passed_ms, bound, CADENCE)
+      .await
+      .expect("the round's wait ends at its bound");
+    let waited = started.elapsed();
+    assert_eq!(acquired, land_queue::Acquired::BoundReached);
+    assert!(waited >= bound && waited < bound + Duration::from_secs(3), "the wait ended at its bound: {waited:?}");
+    assert!(declined.exists(), "the heartbeat pushes were declined while the entry held the round's sha");
+    let view = site.read().await.expect("the queue reads");
+    assert!(view.entry_of(701, launch).is_none(), "the bound removed the round's entry");
     holder.release().await.expect("the holder releases the turn");
   }
 

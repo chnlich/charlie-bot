@@ -293,9 +293,6 @@ impl TaskLanding {
       .ok_or_else(|| anyhow::anyhow!("task {task_session_id} records no base branch"))?;
     let worktree = latest.worktree_path.clone().expect("the filter keeps a worktree path");
     let branch_name = latest.branch_name.clone().expect("the filter keeps a branch name");
-    if !Path::new(&worktree).is_dir() {
-      anyhow::bail!("worktree {worktree} of task {task_session_id} does not exist");
-    }
     let (ok, url, err) =
       git::git_stdout(Path::new(&repo_path), &["remote", "get-url", "origin"], GIT_READ_TIMEOUT, "git remote get-url")
         .await;
@@ -901,6 +898,10 @@ async fn land_in(
   home: &Path,
   options: &LandOptions,
 ) -> anyhow::Result<LandingRecord> {
+  // The session's own call works in the session's worktree; a queued command never reads it.
+  if !ctx.worktree.is_dir() {
+    anyhow::bail!("worktree {} of task {} does not exist", ctx.worktree.display(), ctx.session_id);
+  }
   let published = review_text::review_published_branch(&ctx.base_branch);
   let base_ref = format!("origin/{published}");
   fetch_base(&ctx.worktree, published).await?;
@@ -4015,6 +4016,7 @@ printf '%s\n' "$input" | '{scanner}'
   const SESSION_CI_FAILED: &str = "00000000-0000-4000-8000-000000000015";
   const SESSION_SIGNAL: &str = "00000000-0000-4000-8000-000000000016";
   const SESSION_LANDED_REPEAT: &str = "00000000-0000-4000-8000-000000000017";
+  const SESSION_WORKTREE_GONE: &str = "00000000-0000-4000-8000-000000000018";
   /// The environment that hands `queued_landing_child` its paths: the profile home, the queued sha, the remote's work
   /// clone, and the file the child writes its outcome to.
   const CHILD_HOME_ENV: &str = "CHARLIEBOT_LAND_TEST_CHILD_HOME";
@@ -4408,6 +4410,25 @@ printf '%s\n' "$input" | '{scanner}'
       );
     }
     assert_eq!(head(&work), sha, "the session's worktree keeps its head");
+  }
+
+  /// Task completion can remove the session's worktree while its landing waits. The queued landing reads the task record
+  /// and the repository only, so it still publishes.
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_queued_landing_completes_after_its_session_worktree_is_removed() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    let (home, work, sha) = queued_task(root.path(), SESSION_WORKTREE_GONE).await;
+    fs::remove_dir_all(&work).expect("the session worktree is removed");
+    let ctx = TaskLanding::load(&home, SESSION_WORKTREE_GONE).await.expect("the task loads without its worktree");
+    let outside = task_clone(root.path(), "outside");
+    let remote = QueueRemote::new(&outside, &[], "2026-11-27T00:00:09Z");
+    let end = queued_landing(&ctx, &Registry::new(), &home, &sha, &remote, CADENCE, Duration::from_secs(60)).await;
+    let record = landed_record(end, "the queued landing");
+    assert_eq!(record.state, STATE_LANDED);
+    let main = git_async(&outside, &["ls-remote", "origin", "refs/heads/main"]).await.expect("main reads");
+    assert_eq!(main.split_whitespace().next(), Some(record.sha.as_str()), "the landed commit is main's tip");
+    assert!(scratch_worktrees(&home).is_empty(), "the scratch worktree is removed: {:?}", scratch_worktrees(&home));
   }
 
   /// The child process of `a_stop_signal_ends_a_queued_landing_and_removes_its_scratch_worktree`: runs one queued

@@ -31,12 +31,14 @@ Source code: the server and the `charliebot` CLI are `rust/crates/`.
    `pull_request` workflow, the command moves the base only when its CI gate passes on the landed commit. When that
    gate does not apply, the landing does not wait for CI and reports `landed-no-ci`. `landed` and `landed-no-ci` exit
    0 and leave the task branch's PR merged or closed. `waiting` (exit 8) means the queued command owns the rest of the
-   landing and wakes the session with its result. Every other state leaves the change unlanded and names what
-   holds it. Before any push, a diff that changes a web page (a file that a CharlieBot page serves, or a page template
-   directly under `prompts/`) is refused unless its PR body names the approved demo on a `Demo:` line, a `View:` line
-   with the full URL that opens the changed state, and a screenshot at each CSS window size `charliebot land --help`
-   lists, each by file name in the `--evidence-dir` directory. Each `View:` line is written into the landed commit as a
-   trailer, which the release switch reads back to capture the live page and to check that the capture shows the change.
+   landing and wakes the session with its result. The command works in a scratch worktree of its own, so edits and
+   commits in the session's worktree do not stop it; only a later `land` call with a new head replaces it. Every other
+   state leaves the change unlanded and names what holds it. Before any push, a diff that changes a web page (a file
+   that a CharlieBot page serves, or a page template directly under `prompts/`) is refused unless its PR body names
+   the approved demo on a `Demo:` line, a `View:` line with the full URL that opens the changed state, and a
+   screenshot at each CSS window size `charliebot land --help` lists, each by file name in the `--evidence-dir`
+   directory. Each `View:` line is written into the landed commit as a trailer, which the release switch reads back to
+   capture the live page and to check that the capture shows the change.
 5. On landing → master agent gets summary
 
 ### Merge-back failover

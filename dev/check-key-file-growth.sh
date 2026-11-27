@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # The key-file growth guard: fail when a diff adds more lines than allowed to a key file. A key file is a tracked
-# source file under rust/ or web/ of KEY_FILE_LINES lines or more at HEAD. The source files are Rust, JavaScript and
-# ES module files. The guard reads the lines that the diff from the base ref to HEAD adds to each file. CI runs it on
-# each pull request with the base commit as the argument; run it by hand from anywhere inside the checkout:
+# source file under rust/, web/, dev/ or scripts/ of KEY_FILE_LINES lines or more at HEAD. The source files are Rust,
+# JavaScript, ES module and shell files. The guard reads the lines that the diff from the base ref to HEAD adds to each
+# file. CI runs it on each pull request with the base commit as the argument; run it by hand from anywhere inside
+# the checkout:
 # `dev/check-key-file-growth.sh <base-ref>`. With --self-test, it also proves on synthetic repositories that the guard
 # passes a diff that keeps the rule and fails a diff that breaks it.
 #
 # The rule it enforces is `New code in its own module` in prompts/task_base.md. The guard counts lines, so it cannot
 # tell whether a piece of code could stand as its own module; the reviewer judges that.
 #
-# Test code is out of scope: test directories, `*_tests.rs` and `tests.rs` files.
+# Test code is out of scope: test directories and files whose names mark them as tests.
 set -euo pipefail
 shopt -s inherit_errexit
 
@@ -22,12 +23,13 @@ MAX_ADDED_LINES=20
 # path, its added lines, its line count at HEAD and the limit. Return 1 after printing every failure.
 check_root() {  # <root> <base>
   local root=$1 base=$2 status=0 numstat added deleted path lines
-  numstat=$(git -C "$root" diff --numstat --no-renames "$base...HEAD" -- rust web)
+  numstat=$(git -C "$root" diff --numstat --no-renames "$base...HEAD" -- rust web dev scripts)
   while IFS=$'\t' read -r added deleted path; do
     [[ -n $path ]] || continue
     case "$path" in
-      web/tests/*|*/tests/*|*_tests.rs|*/tests.rs) continue ;;
-      *.rs|*.js|*.mjs) ;;
+      */test/*|*/tests/*|*_tests.rs|*_test.rs|*/tests.rs|*.test.js|*.test.mjs|\
+        *.test.sh|*_test.sh|*_tests.sh) continue ;;
+      *.rs|*.js|*.mjs|*.sh) ;;
       *) continue ;;
     esac
     # A binary file reports `-` where the added count goes.
@@ -77,11 +79,15 @@ self_test() {
   self_test_dir=$(mktemp -d)
   trap 'rm -rf "$self_test_dir"' EXIT
   git init -q "$self_test_dir"
-  mkdir -p "$self_test_dir/rust/src/tests" "$self_test_dir/web/static"
+  mkdir -p "$self_test_dir/rust/src/tests" "$self_test_dir/web/static" "$self_test_dir/scripts" "$self_test_dir/dev"
   seq 1 1000 > "$self_test_dir/rust/src/key.rs"
   seq 1 1000 > "$self_test_dir/rust/src/tests/big.rs"
   seq 1 1000 > "$self_test_dir/web/static/key.js"
+  seq 1 1000 > "$self_test_dir/scripts/key.sh"
+  seq 1 1000 > "$self_test_dir/dev/key.mjs"
   seq 1 1000 > "$self_test_dir/rust/src/data.json"
+  seq 1 1000 > "$self_test_dir/dev/check.test.mjs"
+  seq 1 1000 > "$self_test_dir/scripts/check.test.sh"
   seq 1 10 > "$self_test_dir/rust/src/small.rs"
   commit_all "$self_test_dir" base
   base=$(git -C "$self_test_dir" rev-parse HEAD)
@@ -107,12 +113,28 @@ self_test() {
     'web/static/key.js: 50 lines added' || status=1
   git -C "$self_test_dir" reset -q --hard "$base"
 
+  # Maintenance source under dev/ uses the same limit.
+  seq 1001 1050 >> "$self_test_dir/dev/key.mjs"
+  commit_all "$self_test_dir" grow-dev
+  expect 'a dev key file that gains 50 lines fails at its path' "$self_test_dir" "$base" 1 \
+    'dev/key.mjs: 50 lines added' || status=1
+  git -C "$self_test_dir" reset -q --hard "$base"
+
+  # The same growth in an operator shell script is covered by the same rule.
+  seq 1001 1050 >> "$self_test_dir/scripts/key.sh"
+  commit_all "$self_test_dir" grow-shell
+  expect 'a shell key file that gains 50 lines fails at its path' "$self_test_dir" "$base" 1 \
+    'scripts/key.sh: 50 lines added' || status=1
+  git -C "$self_test_dir" reset -q --hard "$base"
+
   # A file under the key-file size passes, and so do a test file and a data file of any size.
   seq 11 60 >> "$self_test_dir/rust/src/small.rs"
   seq 1001 1050 >> "$self_test_dir/rust/src/tests/big.rs"
   seq 1001 1050 >> "$self_test_dir/rust/src/data.json"
+  seq 1001 1050 >> "$self_test_dir/dev/check.test.mjs"
+  seq 1001 1050 >> "$self_test_dir/scripts/check.test.sh"
   commit_all "$self_test_dir" small-test-and-data
-  expect 'a small file, a test file and a data file pass' "$self_test_dir" "$base" 0 '' || status=1
+  expect 'a small file, test files and a data file pass' "$self_test_dir" "$base" 0 '' || status=1
   git -C "$self_test_dir" reset -q --hard "$base"
 
   return "$status"

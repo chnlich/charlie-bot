@@ -21,7 +21,10 @@ pub(crate) async fn push_task_branch(
   let (dry_ok, dry_stdout, dry_stderr) =
     git::git_output(worktree, &["push", "--dry-run", lease, remote, branch], timeout, "git push --dry-run").await;
   let (kind, detail) = if dry_ok {
-    (PushRejection::Refused, "server-side refusal; not NonFastForward, Transport, or Auth")
+    match push_rejection_kind(&stderr) {
+      PushRejection::Refused => (PushRejection::Refused, "server-side refusal; not NonFastForward, Transport, or Auth"),
+      kind => (kind, "the dry run with the same lease passed"),
+    }
   } else {
     (push_rejection_kind(&format!("{stderr}\n{dry_stderr}")), "push and dry-run both failed")
   };

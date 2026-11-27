@@ -16,6 +16,7 @@ mod world;
 use std::fs::{self, OpenOptions};
 use std::io::ErrorKind;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::sync::mpsc;
@@ -25,7 +26,7 @@ use std::time::{Duration, Instant};
 use charliebot_core::logline;
 use charliebot_shell_harness::{self as harness, Env, Run, Sandbox};
 use nix::errno::Errno;
-use nix::sys::signal::{Signal, kill};
+use nix::sys::signal::{Signal, kill, killpg};
 use nix::unistd::Pid;
 use regex::Regex;
 use release_lock::LockHolder;
@@ -502,6 +503,32 @@ fn test_prior_switch_refuses_a_run_that_never_resumed_before_stopping_the_server
   preflight_refusal_exits_1_and_changes_nothing("prior-switch-unresumed");
 }
 
+// ---- the detached switch: a kill of its caller's process group ---------------------------------------------------
+
+#[test]
+#[ignore = "integration"]
+fn test_a_switch_reaches_its_end_after_a_kill_of_its_caller_process_group() {
+  let mut world = World::new();
+  let pane = world.start_pane();
+  world.start_server(&pane);
+  world.seed_live_run("run-live", Some("claude-opus"));
+  let target = world.no_owner_sha.clone();
+  let mut caller = world.spawn_switch(&["rust", &target]);
+
+  // The caller's group dies while the switch waits on the stop of the old server.
+  wait_until(|| world.switch_logs_text().contains("stopping the old server"), Duration::from_secs(60));
+  killpg(Pid::from_raw(caller.id() as i32), Signal::SIGKILL).expect("the caller's process group");
+  let status = caller.wait().expect("the caller's exit status");
+  assert_eq!(status.signal(), Some(Signal::SIGKILL as i32));
+
+  wait_until(|| world.switch_logs_text().contains("SWITCH COMPLETE"), Duration::from_secs(120));
+  assert!(world.serves_release(&target), "the target release does not serve: {}", world.switch_logs_text());
+  // The switch process exits after its last line. Its exit is reaped by the test's runner, which counts a child that
+  // outlives the test as a leak, so the test waits for the process to be gone.
+  let unit = world.switch_unit_pid();
+  wait_until(|| !Path::new(&format!("/proc/{unit}")).exists(), Duration::from_secs(30));
+}
+
 // ---- preflight: check A, the prior switch accounted for every run ------------------------------------------------
 
 #[test]
@@ -519,6 +546,77 @@ fn test_prior_switch_that_accounted_for_every_run_passes_the_preflight() {
 
   assert_eq!(run.code, 0, "{}", world.report(&run));
   assert!(run.stdout.contains("every run of the prior switch"), "{}", world.report(&run));
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_prior_switch_killed_after_its_stop_accounts_for_every_run_in_the_server_its_pane_started() {
+  // The prior switch's log ends before the server it started, as switch 7's did. Check A reads the server's resume
+  // record for the run that resumed. The run that ended with success is accounted by a readback line, which this
+  // record holds. Switch 7 wrote no readback line: the test after this one covers its exit-0 run.
+  let world = World::new();
+  world.seed_prior_switch_killed_after_stop(
+    &["readback: run run-success ended during the switch: outcome success"],
+    &["run-resumed", "run-success"],
+  );
+  world.seed_killed_switch_server_log(&[("task_recovery_resume", "run-resumed")]);
+  let running = format!("rust {}", world.old_sha);
+
+  let run = world.stubbed_preflight(&running, "rust", &world.rust_sha);
+
+  assert_eq!(run.code, 0, "{}", world.report(&run));
+  assert!(run.stdout.contains("every run of the prior switch"), "{}", world.report(&run));
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_prior_switch_killed_before_its_readback_still_names_the_run_that_ended_with_exit_0() {
+  // Switch 7's runs as its record and server log hold them: the resumed run reattached on the server its pane started,
+  // and the other run ended with exit 0 with no readback line, since the kill came before the readback. Check A's
+  // accounting rules are unchanged, so only the reattached run is accounted and the exit-0 run is named.
+  let world = World::new();
+  world.seed_prior_switch_killed_after_stop(&[], &["run-resumed", "run-success"]);
+  world.seed_killed_switch_server_log(&[("task_recovery_resume", "run-resumed")]);
+  let running = format!("rust {}", world.old_sha);
+
+  let run = world.stubbed_preflight(&running, "rust", &world.rust_sha);
+
+  assert_eq!(run.code, 1, "{}", world.report(&run));
+  assert!(run.stdout.contains("unaccounted: run-success"), "{}", world.report(&run));
+  assert!(!run.stdout.contains("run-resumed"), "{}", world.report(&run));
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_prior_switch_names_the_gap_when_only_a_server_from_before_its_stop_is_logged() {
+  // A server launched before the prior switch's stop is not the server that switch started, so its resume record does
+  // not reattach the run.
+  let world = World::new();
+  world.seed_prior_switch(&[], &["run-resumed"]);
+  world.seed_server_log_at("20241231_235959", &[("task_recovery_resume", "run-resumed")]);
+  let running = format!("rust {}", world.old_sha);
+
+  let run = world.stubbed_preflight(&running, "rust", &world.rust_sha);
+
+  assert_eq!(run.code, 1, "{}", world.report(&run));
+  assert!(run.stdout.contains("unaccounted: run-resumed;"), "{}", world.report(&run));
+  assert!(run.stdout.contains("no server log in"), "{}", world.report(&run));
+  assert!(run.stdout.contains("last server stop at 2025-01-01 00:00:01.000"), "{}", world.report(&run));
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_prior_switch_killed_before_its_stop_names_the_gap() {
+  // The switch stopped no server, so no server log can hold its runs' reattach records.
+  let world = World::new();
+  world.seed_prior_switch_killed_before_stop(&["run-resumed"]);
+  let running = format!("rust {}", world.old_sha);
+
+  let run = world.stubbed_preflight(&running, "rust", &world.rust_sha);
+
+  assert_eq!(run.code, 1, "{}", world.report(&run));
+  assert!(run.stdout.contains("unaccounted: run-resumed;"), "{}", world.report(&run));
+  assert!(run.stdout.contains("the prior switch stopped no server"), "{}", world.report(&run));
 }
 
 #[test]

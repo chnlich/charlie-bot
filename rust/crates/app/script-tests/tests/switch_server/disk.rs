@@ -113,7 +113,8 @@ fn test_disk_preflight_times_out_and_names_the_heaviest_cgroup_and_process() {
   assert!(logged.contains("preflight failed: the root disk read stayed above 40 MB/s within 0s"), "{logged}");
   assert!(logged.contains("cgroup charliebot-sess-aaaa 1000 bytes (io.stat)"), "{logged}");
   assert!(logged.contains("process 1234 (grep) 4000 bytes"), "{logged}");
-  assert!(!logged.contains("stopping the old server"), "{logged}");
+  // The switch's own log is its stdout; the prior switch's seeded record holds a stop line of its own.
+  assert!(!run.stdout.contains("stopping the old server"), "{logged}");
   // The report sampled one window of its own after the wait ran out.
   assert_eq!(fs::read_to_string(&counter).expect("the sample count").trim(), "2", "{logged}");
 }

@@ -18,11 +18,7 @@ pub(crate) const SYSTEMCTL: &str = r#"case "$*" in
 esac
 "#;
 
-pub(crate) const SYSTEMD_RUN: &str = r#"if [ "${SYSTEMD_RUN_REFUSE_ALL:-0}" = "1" ]; then
-  echo "stub systemd-run: start refused by test" >&2
-  exit 1
-fi
-arguments=("$@")
+pub(crate) const SYSTEMD_RUN: &str = r#"arguments=("$@")
 separator=-1
 for index in "${!arguments[@]}"; do
   if [ "${arguments[index]}" = "--" ]; then
@@ -36,6 +32,16 @@ for argument in "$@"; do
     --unit=*) unit_name=${argument#--unit=} ;;
   esac
 done
+# The refusal applies to the launcher's scope starts. A switch unit is not one of them.
+case "$unit_name" in
+  charliebot-switch-*) ;;
+  *)
+    if [ "${SYSTEMD_RUN_REFUSE_ALL:-0}" = "1" ]; then
+      echo "stub systemd-run: start refused by test" >&2
+      exit 1
+    fi
+    ;;
+esac
 records="${BASH_SOURCE[0]%/*}/systemd-run.records"
 if [ -f "$records" ] && cut -f1 "$records" | grep -Fxq -- "$unit_name"; then
   echo "Failed to start transient scope unit: Unit $unit_name.scope was already loaded or has a fragment file." >&2
@@ -46,6 +52,14 @@ for argument in "$@"; do
   printf '\t%s' "$argument" >> "$records"
 done
 printf '\n' >> "$records"
+case "$unit_name" in
+  # A switch unit runs outside the caller's process group, as a unit of the user manager does. The setsid exec keeps
+  # this pid, so the file names the switch process for a test that waits for it to end.
+  charliebot-switch-*)
+    echo "$$" > "${BASH_SOURCE[0]%/*}/switch-unit.pid"
+    exec setsid -w "${arguments[@]:separator+1}"
+    ;;
+esac
 exec "${arguments[@]:separator+1}"
 "#;
 

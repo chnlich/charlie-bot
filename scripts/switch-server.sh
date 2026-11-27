@@ -20,8 +20,9 @@
 # scripts/install-slice-units.sh and reloads the user manager, starts the release, reads it back, probes a turn and
 # checks a delegation. A refusal changes nothing and exits 1 with the refusing release's text, except that a missing
 # helper binary exits 2 (below). The switch
-# runs detached under setsid, because stopping the old server ends the master turn that started this command. The
-# command prints the log path, waits for the verdict and exits with it: 0 when the readback, the probe turn and the
+# runs in a transient user unit (`systemd-run --user --wait`), because stopping the old server ends the master turn that
+# started this command, and a kill of that command's process group, process tree or cgroup must not stop the switch.
+# The command prints the log path, waits for the verdict and exits with it: 0 when the readback, the probe turn and the
 # delegation check passed; 2 when a check failed on the server's side and the switch switched back, so the previous
 # implementation serves again; 3 when the switch back failed too, and the log ends with the state the server is in, and
 # with the old release's refusal text when that is the cause; 4 when the switch completed but a recorded run died
@@ -44,9 +45,11 @@
 # retries the work in a run with its own id. Or it must end with outcome success in the switch's own log
 # (`readback: run <id> ended during the switch: outcome success`). Or it must end failed on its own quota end, with a
 # run of its session that the server started for it as a retry: `own_failure` reads that rule from the run's records,
-# and the readback applies the same rule. The server is the newest server log launched inside the switch's window, from
-# its first stamp to its last. A run that is neither refuses the switch and is named. No switch record, or a record
-# without its runs file, refuses it too.
+# and the readback applies the same rule. The server is the first server log launched after the prior switch's last
+# server stop (its `stopping the old server` line, or its `no server listens` line) and no later than this check. The
+# prior switch's log may end before that server starts: a switch killed after its stop leaves the server's launcher to
+# start it. A prior switch with no stop, or no server log in that span, names the gap in its refusal. A run that is
+# neither refuses the switch and is named. No switch record, or a record without its runs file, refuses it too.
 # `--approve-unaccounted-runs` is the only override: pass it once the user approves the restart over the named runs.
 # Check B (no concurrent release or switch) is the host release lock. The switch takes it in run_detached before the
 # preflight, and scripts/release.sh takes it before its first stage, so a second release or switch exits at once while
@@ -1567,29 +1570,29 @@ prior_switch_log() {
   return 1
 }
 
-# switch_window LOG: the local clock of the record's first and last timestamped lines, each as YYYYMMDDHHMMSS.
-switch_window() {
-  grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3} ' "$1" | sed -n -e '1p' -e '$p' \
-    | cut -c1-19 | tr -dc '0-9\n'
+# prior_stop_line LOG: the record's last server stop, as its timestamped line. A stop is either the `stopping the old
+# server` line of a stop that signalled the server, or the `no server listens` line of a stop step that found none.
+# Prints nothing when the record holds neither, which means the switch stopped no server.
+prior_stop_line() {
+  local pattern='^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3} switch: '
+  pattern+='(stopping the old server, |no server listens on port )'
+  grep -E "$pattern" "$1" | tail -n 1
 }
 
-# new_server_log LOG: the server log of the server that served when the switch record LOG ended: the newest server log
-# launched inside the record's window. The log names and the record's lines carry the same local clock. Prints nothing
-# when no server launched inside the window.
+# new_server_log STAMP: the first server log launched at or after STAMP and no later than now. STAMP and the log names
+# carry the same local clock, as YYYYMMDDHHMMSS. Prints nothing when no server launched in that span.
 new_server_log() {
-  local window start end server stamp
-  window="$(switch_window "$1")"
-  start="$(sed -n 1p <<<"$window")"
-  end="$(sed -n '$p' <<<"$window")"
+  local start=$1 end server stamp
+  end="$(date '+%Y%m%d%H%M%S')"
   while IFS= read -r server; do
     stamp="${server##*/server_}"
     stamp="${stamp%.log}"
     stamp="${stamp//_/}"
-    if [ "$stamp" -le "$end" ]; then
-      if [ "$stamp" -ge "$start" ]; then echo "$server"; fi
+    if [ "$stamp" -ge "$start" ] && [ "$stamp" -le "$end" ]; then
+      echo "$server"
       return 0
     fi
-  done < <(find "$LOG_DIR" -maxdepth 1 -name 'server_*.log' | sort -r)
+  done < <(find "$LOG_DIR" -maxdepth 1 -name 'server_*.log' | sort)
   return 0
 }
 
@@ -1634,14 +1637,24 @@ reattached_in_log() {
 # the run its session continued in (own_failure). A run that is neither refuses the switch and is named.
 # --approve-unaccounted-runs lets the switch proceed over the named runs, and nothing else does.
 check_prior_switch() {
-  local prior runs server run session facts kind successor why unaccounted=""
+  local prior runs stop stop_stamp server run session facts kind successor why gap="" unaccounted=""
   if ! prior="$(prior_switch_log)"; then
     why="no switch record under $LOG_DIR passed its preflight"
   elif [ ! -f "${prior%.log}.runs" ]; then
     why="the prior switch $(basename "$prior") has no runs file"
   else
     runs="${prior%.log}.runs"
-    server="$(new_server_log "$prior")"
+    server=""
+    stop="$(prior_stop_line "$prior")"
+    if [ -z "$stop" ]; then
+      gap="the prior switch stopped no server, so none of its runs was reattached on a server it started"
+    else
+      stop_stamp="$(cut -c1-19 <<<"$stop" | tr -dc '0-9')"
+      server="$(new_server_log "$stop_stamp")"
+      if [ -z "$server" ]; then
+        gap="no server log in $LOG_DIR started after the prior switch's last server stop at ${stop:0:23}"
+      fi
+    fi
     while IFS=$'\t' read -r _state session run _rest; do
       if [ -n "$server" ] && reattached_in_log "$server" "$run"; then continue; fi
       if grep -Fq "readback: run $run ended during the switch: outcome success" "$prior"; then continue; fi
@@ -1658,6 +1671,7 @@ check_prior_switch() {
       return 0
     fi
     why="the prior switch $(basename "$prior") left run(s) unaccounted:$unaccounted"
+    [ -z "$gap" ] || why="$why; $gap"
   fi
   [ "$APPROVE_UNACCOUNTED_RUNS" = 1 ] \
     || fail "$why; after the user approves the restart, rerun with --approve-unaccounted-runs"
@@ -1910,11 +1924,21 @@ if [ -n "$DETACHED_LOG" ]; then
   run_detached
 fi
 
-# Foreground: detach the switch from this process, and return its verdict if this process survives to see it.
+# Foreground: run the switch in a transient user unit, and return its verdict if this process survives to see it. The
+# user manager parents the unit and gives it a cgroup of its own, so no kill of this process's group, tree or cgroup
+# reaches it. `--wait` exits with the unit's exit status. The environment goes over as `--setenv`, because a unit starts
+# from the user manager's environment, not the caller's.
 mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/switch_$(date +%Y%m%d_%H%M%S).log"
 echo "switch log: $LOG"
-setsid -w nohup "$SCRIPT_DIR/switch-server.sh" "${ARGS[@]}" --detached "$LOG" >> "$LOG" 2>&1 < /dev/null
+ENVIRONMENT_ARGS=()
+while IFS= read -r -d '' entry; do
+  ENVIRONMENT_ARGS+=("--setenv=$entry")
+done < <(env -0)
+"$SCRIPT_DIR/systemd-user.sh" systemd-run --wait --collect --quiet \
+  --unit="charliebot-switch-$(date +%Y%m%d%H%M%S)-$$" --working-directory="$PWD" "${ENVIRONMENT_ARGS[@]}" -- \
+  bash -c 'log=$1; shift; exec "$@" >> "$log" 2>&1 < /dev/null' bash "$LOG" \
+  "$SCRIPT_DIR/switch-server.sh" "${ARGS[@]}" --detached "$LOG" >> "$LOG" 2>&1 < /dev/null
 RC=$?
 tail -n 40 "$LOG"
 exit "$RC"

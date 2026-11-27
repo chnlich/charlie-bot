@@ -116,16 +116,43 @@ fn trigger_cmd(words: &[String]) -> Option<&str> {
 
 /// Whether `words` is a GitHub watch: `gh run watch`, or `gh pr checks` with `--watch` turned on.
 fn is_watch(words: &[String]) -> bool {
-  let [program, first, second, arguments @ ..] = words else {
+  let Some(program) = words.first() else {
     return false;
   };
   if base_name(program) != "gh" {
     return false;
   }
+
+  let mut command_index = 1;
+  skip_repo_options(words, &mut command_index);
+  let Some(first) = words.get(command_index) else {
+    return false;
+  };
+  command_index += 1;
+  skip_repo_options(words, &mut command_index);
+  let Some(second) = words.get(command_index) else {
+    return false;
+  };
+  let arguments = &words[command_index + 1..];
+
   match (first.as_str(), second.as_str()) {
     ("run", "watch") => true,
     ("pr", "checks") => watch_flag_set(arguments),
     _ => false,
+  }
+}
+
+/// Skips GitHub CLI's inherited repository option while reading its command path. `gh` accepts this option before
+/// either subcommand, so it may appear before the top-level command or between it and the watch command.
+fn skip_repo_options(words: &[String], index: &mut usize) {
+  while let Some(argument) = words.get(*index).map(String::as_str) {
+    if argument == "--repo" || argument == "-R" {
+      *index += 2;
+    } else if argument.starts_with("--repo=") || argument.strip_prefix("-R").is_some_and(|value| !value.is_empty()) {
+      *index += 1;
+    } else {
+      return;
+    }
   }
 }
 
@@ -445,8 +472,13 @@ mod tests {
       "gh run watch 123 -i 5",
       "gh run watch 123 --interval 120 --interval 5",
       "gh run watch 123 --interval",
+      "gh --repo owner/repo run watch 123",
+      "gh -R owner/repo run watch 123 --interval 5",
+      "gh run --repo owner/repo watch 123",
       "gh pr checks 55 --watch",
       "gh pr checks 55 --watch --interval 30",
+      "gh --repo owner/repo pr checks 55 --watch",
+      "gh pr -Rowner/repo checks 55 --watch --interval 30",
       "cd repo && gh run watch 123",
       "echo start; gh pr checks 55 --watch",
       "nohup gh run watch 123 > log 2>&1 &",
@@ -468,8 +500,10 @@ mod tests {
       "gh run watch 123 -i120",
       "gh run watch 123 -i=120",
       "gh run watch 123 --interval 5 --interval 120",
+      "gh -R owner/repo run watch 123 --interval 120",
       "gh pr checks 55 --watch --interval 90",
       "gh pr checks 55 --watch=true --interval 90",
+      "gh --repo owner/repo pr checks 55 --watch --interval 90",
     ] {
       assert_eq!(watch_refusal(command), None, "{command}");
     }

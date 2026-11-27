@@ -715,6 +715,7 @@ impl World {
     for name in [
       "remote-launch.sh",
       "remote-runner.sh",
+      "round-cargo.sh",
       "inflight-files.sh",
       "clone-check.sh",
       "codex-skill-roots.sh",

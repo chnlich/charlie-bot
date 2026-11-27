@@ -565,6 +565,102 @@ fn a_review_builds_under_the_round_tmpdir_and_round_cargo_refuses_a_build_outsid
   fs::remove_dir_all(&scratch).expect("the review's scratch directory");
 }
 
+/// Runs round-cargo's startup cache preparation with controlled sizes, so the test does not need a 128 GiB fixture.
+fn prepare_target_cache(world: &World, du_stub: &Path, before_mib: u64, after_incremental_mib: u64) -> harness::Run {
+  let helper = harness::repo_root().join("dev/improve/round-cargo.sh");
+  let du_calls = world.sandbox.root().join("target-cache-du-calls");
+  if du_calls.exists() {
+    fs::remove_file(&du_calls).expect("reset the size stub call count");
+  }
+  let mut env = world.env();
+  env.insert("HOME".to_string(), world.remote_home.display().to_string());
+  env.insert("IMPROVE_DIRECTION".to_string(), DIRECTION.to_string());
+  env.insert("PATH".to_string(), format!("{}:/usr/local/bin:/usr/bin:/bin", du_stub.parent().unwrap().display()));
+  env.insert("FAKE_DU_CALLS".to_string(), du_calls.display().to_string());
+  env.insert("FAKE_DU_FIRST_SIZE".to_string(), before_mib.to_string());
+  env.insert("FAKE_DU_SECOND_SIZE".to_string(), after_incremental_mib.to_string());
+  let mut command = harness::command(&helper, &env);
+  command.args(["prepare-target"]).current_dir(world.sandbox.root());
+  harness::run(&mut command)
+}
+
+fn write_target_cache(world: &World) -> PathBuf {
+  let target = world.remote_home.join(".cache/improve-target").join(DIRECTION);
+  if target.exists() {
+    fs::remove_dir_all(&target).expect("remove the previous target fixture");
+  }
+  fs::create_dir_all(target.join("debug/incremental")).expect("the incremental cache");
+  fs::create_dir_all(target.join("debug/deps")).expect("the debug dependencies");
+  fs::create_dir_all(target.join("release/deps")).expect("the release dependencies");
+  fs::write(target.join("debug/incremental/session.o"), "incremental").expect("the incremental object");
+  fs::write(target.join("debug/deps/libcached.rlib"), "debug").expect("the debug product");
+  fs::write(target.join("release/deps/libcached.rlib"), "release").expect("the release product");
+  target
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_round_cache_stays_under_its_cap_and_discards_incremental_data_before_the_target() {
+  let world = World::new();
+  let bin = world.sandbox.dir("target-cache-bin");
+  let du_stub = bin.join("du");
+  harness::write_executable(
+    &du_stub,
+    r##"#!/usr/bin/env bash
+set -euo pipefail
+count=0
+if [[ -f $FAKE_DU_CALLS ]]; then
+  count=$(<"$FAKE_DU_CALLS")
+fi
+((count += 1))
+printf '%s\n' "$count" >"$FAKE_DU_CALLS"
+if (( count == 1 )); then
+  size=$FAKE_DU_FIRST_SIZE
+else
+  size=$FAKE_DU_SECOND_SIZE
+fi
+printf '%s\t%s\n' "$size" "${@: -1}"
+"##,
+  );
+
+  let target = write_target_cache(&world);
+  let under_cap = prepare_target_cache(&world, &du_stub, 100_000, 100_000);
+  assert_eq!(under_cap.code, 0, "{}", under_cap.describe());
+  assert!(under_cap.stdout.is_empty(), "the cache report reached the round event stream: {}", under_cap.describe());
+  assert_eq!(under_cap.stderr.lines().count(), 1, "{}", under_cap.describe());
+  assert!(
+    under_cap.stderr.contains("before=100000MiB action=none after=100000MiB cap=131072MiB"),
+    "{}",
+    under_cap.describe()
+  );
+  assert!(target.join("debug/incremental/session.o").is_file(), "{}", under_cap.describe());
+  assert!(target.join("debug/deps/libcached.rlib").is_file(), "{}", under_cap.describe());
+
+  let _ = write_target_cache(&world);
+  let incremental_only = prepare_target_cache(&world, &du_stub, 131_073, 100_000);
+  assert_eq!(incremental_only.code, 0, "{}", incremental_only.describe());
+  assert_eq!(incremental_only.stderr.lines().count(), 1, "{}", incremental_only.describe());
+  assert!(
+    incremental_only.stderr.contains("before=131073MiB action=incremental after=100000MiB cap=131072MiB"),
+    "{}",
+    incremental_only.describe()
+  );
+  assert!(!target.join("debug/incremental").exists(), "{}", incremental_only.describe());
+  assert!(target.join("debug/deps/libcached.rlib").is_file(), "{}", incremental_only.describe());
+  assert!(target.join("release/deps/libcached.rlib").is_file(), "{}", incremental_only.describe());
+
+  let _ = write_target_cache(&world);
+  let whole_target = prepare_target_cache(&world, &du_stub, 131_073, 131_073);
+  assert_eq!(whole_target.code, 0, "{}", whole_target.describe());
+  assert_eq!(whole_target.stderr.lines().count(), 1, "{}", whole_target.describe());
+  assert!(
+    whole_target.stderr.contains("before=131073MiB action=incremental+directory after=0MiB cap=131072MiB"),
+    "{}",
+    whole_target.describe()
+  );
+  assert!(!target.exists(), "{}", whole_target.describe());
+}
+
 #[test]
 #[ignore = "integration"]
 fn a_subscription_review_gets_its_account_login_in_its_own_process_only() {
@@ -772,7 +868,9 @@ fn run_in_scope_for(
   harness::write_executable(&bin.join("improve-sandbox"), format!("#!/usr/bin/env bash\n{SCOPE_ENV_STUB}"));
   let mut env = harness::Env::new();
   env.insert("HOME".to_string(), world.remote_home.display().to_string());
+  env.insert("IMPROVE_DIRECTION".to_string(), direction.to_string());
   env.insert("IMPROVE_SKILLS_DIR".to_string(), round_skills_dir(world).display().to_string());
+  env.insert("IMPROVE_KIT_DIR".to_string(), world.repo.display().to_string());
   env.insert("PATH".to_string(), "/usr/local/bin:/usr/bin:/bin".to_string());
   env.insert("FAKE_SCOPE_ENV".to_string(), world.sandbox.root().join("scope-env.txt").display().to_string());
   env.insert("FAKE_SCOPE_AUTH".to_string(), world.sandbox.root().join("scope-auth.json").display().to_string());

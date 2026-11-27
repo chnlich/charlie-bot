@@ -1041,6 +1041,8 @@ round_evidence_dir() {
 }
 
 run_in_scope() {
+  # systemd refuses a second improve-$direction.scope, so its leader trims the cache before the agent can build.
+  "$IMPROVE_KIT_DIR/dev/improve/round-cargo.sh" prepare-target
   # The round's evidence directory is new for each round, so an earlier round's facts are never overwritten. It is made
   # before the marker, so a refused directory leaves no marker and the launch keeps no facts.
   [[ ! -e $(round_evidence_dir) ]] || fail 1 "the round's evidence directory already exists: $(round_evidence_dir)"

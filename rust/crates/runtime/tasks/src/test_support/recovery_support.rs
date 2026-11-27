@@ -295,7 +295,11 @@ impl AgentBackend for ScriptBackend {
     _stderr: &str,
     exit_code: i32,
   ) -> charliebot_registry::backend::FinalStdoutOutcome {
-    let events = if exit_code == 0 { serde_json::from_str(stdout).unwrap() } else { Vec::new() };
+    let events = if exit_code == 0 {
+      serde_json::from_str(stdout).expect("a scripted success writes its events as a JSON array")
+    } else {
+      Vec::new()
+    };
     charliebot_registry::backend::FinalStdoutOutcome { events, exit_code, guard_error: None }
   }
 }

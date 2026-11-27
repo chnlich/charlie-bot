@@ -931,6 +931,13 @@ check_error() {
   session_error "$1"
 }
 
+# ascii_lower TEXT: sets LOWER_TEXT to TEXT with its ASCII letters lowercased. The shell's own case map does it
+# under the C locale, so no process starts per call and the caller's locale is unchanged after it.
+ascii_lower() {
+  local LC_ALL=C
+  LOWER_TEXT=${1,,}
+}
+
 # model_side_error TEXT: TEXT, a run's error message, names a failure of the model service rather than of the server.
 # The measured false alarms since 2026-10-30 were the gateway's 5xx and the model service's errors (a BadGatewayError
 # and Error code: 520, findings.md §2a), and the class the release decision keeps without a switch back is a gateway
@@ -939,8 +946,8 @@ check_error() {
 # resets at …") or "quota_error, recovers at …", so the plain wordings classify model-side too. A spawn failure, a
 # cgroup failure, a disk quota failure and a git timeout read as the server's.
 model_side_error() {
-  local text
-  text="$(tr '[:upper:]' '[:lower:]' <<<"$1")"
+  ascii_lower "$1"
+  local text=$LOWER_TEXT
   case "$text" in
     *badgatewayerror* | *"bad gateway"* | *internalservererror* | *"internal server error"* | \
       *ratelimiterror* | *"rate limit"* | *"too many requests"* | *"error code: 429"* | *"error code: 5"* | \

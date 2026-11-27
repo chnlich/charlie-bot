@@ -130,9 +130,11 @@ pub(crate) fn resolve_sidebar_state(
         entry.insert(HAS_RUNNING_TASKS.to_string(), Value::Bool(false));
       }
       if include_trigger {
-        entry.insert(HAS_PENDING_TRIGGER.to_string(), Value::Bool(false));
-        entry.insert(PENDING_TRIGGER_COUNT.to_string(), Value::from(0));
-        entry.insert(NEXT_TRIGGER_AT.to_string(), Value::Null);
+        let triggers_dir = layout::triggers_dir(&store.session_dir(&meta.id));
+        let (pending_count, next_trigger) = charliebot_store::trigger_files::pending_trigger_state(&triggers_dir);
+        entry.insert(HAS_PENDING_TRIGGER.to_string(), Value::Bool(pending_count > 0));
+        entry.insert(PENDING_TRIGGER_COUNT.to_string(), Value::from(pending_count));
+        entry.insert(NEXT_TRIGGER_AT.to_string(), next_trigger.map_or(Value::Null, |value| json!(value.to_str())));
       }
       if include_plan {
         entry.insert(HAS_PENDING_PLAN_APPROVAL.to_string(), Value::Bool(false));
@@ -575,7 +577,6 @@ mod tests {
       has_running_tasks: false,
       work_state: None,
       has_pending_trigger: false,
-      pending_trigger_count: 0,
       next_trigger_at: None,
       has_pending_plan_approval: false,
       starred: false,
@@ -612,7 +613,6 @@ mod tests {
     let mut entry = Map::new();
     entry.insert(HAS_RUNNING_TASKS.to_string(), Value::Bool(false));
     entry.insert("has_pending_trigger".to_string(), Value::Bool(false));
-    entry.insert("pending_trigger_count".to_string(), Value::from(0));
     entry.insert("next_trigger_at".to_string(), Value::Null);
     entry.insert(HAS_PENDING_PLAN_APPROVAL.to_string(), Value::Bool(false));
     assert_eq!(meta.status, SessionStatus::Archived);

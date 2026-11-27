@@ -98,7 +98,8 @@ pub const THINKING_SINCE: &str = "thinking_since";
 pub const RUN_BACKEND: &str = "run_backend";
 /// The session-metadata field saying whether a trigger waits for the session.
 pub const HAS_PENDING_TRIGGER: &str = "has_pending_trigger";
-/// The session-metadata field holding the number of triggers waiting for the session.
+/// The session-detail key holding the number of triggers waiting for the session. The count is read from the session's
+/// trigger files, not stored in the session metadata.
 pub const PENDING_TRIGGER_COUNT: &str = "pending_trigger_count";
 /// The session-metadata field holding the next instant a waiting trigger fires.
 pub const NEXT_TRIGGER_AT: &str = "next_trigger_at";
@@ -548,7 +549,6 @@ pub const SESSION_DECLARED_FIELDS: &[&str] = &[
   HAS_RUNNING_TASKS,
   WORK_STATE,
   HAS_PENDING_TRIGGER,
-  PENDING_TRIGGER_COUNT,
   NEXT_TRIGGER_AT,
   "has_pending_plan_approval",
   "starred",
@@ -623,8 +623,6 @@ pub struct SessionMetadata {
   pub work_state: Option<String>,
   #[serde(default)]
   pub has_pending_trigger: bool,
-  #[serde(default)]
-  pub pending_trigger_count: i64,
   #[serde(default)]
   pub next_trigger_at: Option<UtcDateTime>,
   #[serde(default)]
@@ -709,7 +707,6 @@ impl SessionMetadata {
       has_running_tasks: false,
       work_state: None,
       has_pending_trigger: false,
-      pending_trigger_count: 0,
       next_trigger_at: None,
       has_pending_plan_approval: false,
       starred: false,
@@ -795,7 +792,6 @@ impl SessionMetadata {
       push(&mut declared, HAS_RUNNING_TASKS, &self.has_running_tasks);
       push(&mut declared, WORK_STATE, &self.work_state);
       push(&mut declared, HAS_PENDING_TRIGGER, &self.has_pending_trigger);
-      push(&mut declared, PENDING_TRIGGER_COUNT, &self.pending_trigger_count);
       push(&mut declared, NEXT_TRIGGER_AT, &self.next_trigger_at);
       push(&mut declared, "has_pending_plan_approval", &self.has_pending_plan_approval);
     }
@@ -1113,7 +1109,6 @@ mod tests {
       "has_running_tasks",
       "work_state",
       "has_pending_trigger",
-      "pending_trigger_count",
       "next_trigger_at",
       "has_pending_plan_approval",
       "starred",
@@ -1165,7 +1160,6 @@ mod tests {
       ("has_running_tasks", json!(false)),
       ("work_state", Value::Null),
       ("has_pending_trigger", json!(false)),
-      ("pending_trigger_count", json!(0)),
       ("next_trigger_at", Value::Null),
       ("has_pending_plan_approval", json!(false)),
       ("starred", json!(false)),

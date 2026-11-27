@@ -166,7 +166,7 @@ side_procs() {
     pid=${stat_path#/proc/}
     pid=${pid%/stat}
     # The command name in field 2 is in parentheses, so the fields start after its last ")".
-    rest=${stat##*) }
+    rest=${stat##*\) }
     read -r state ppid pgrp _ <<<"$rest"
     if [[ $state == [ZX] ]]; then
       continue

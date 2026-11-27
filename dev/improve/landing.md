@@ -534,11 +534,13 @@ The comment records the topic for the next round.
 
 The merge names the evidence directory of the round whose newest verdict names the merge head.
 That round is this round, or, for an adopted pull request or a merge after the round ends, the round that the newest verdict comment's `Round start:` line names.
-That directory is `~/improve/<direction>/evidence/<Round start>/` on the host that runs the merge.
+That directory is `~/improve/<direction>/evidence/<Round start>/`.
 
 The round keeps three facts in that directory: `inflight-files.txt`, the in-flight list the round read; `round-events.ndjson`, the round's event log as it stands at the round's end; and `kit-revision`, the round's kit revision, which names its skills.
 A merge outside a round checks its claims against the in-flight list and its round skill reads against the event log and kit revision.
-That merge runs on a host that holds the skills of the round's kit revision at `~/improve/runner/bin/<kit revision>/skills`.
+The round host is the improve host that ran the round.
+Its runner keeps the kit and skills directories of every kit revision under `~/improve/runner/bin/<kit revision>/`.
+A merge outside a round runs on the round host and reads the evidence directory there.
 
 - The merge names that directory with `--evidence-dir`. A merge outside a round needs it.
 - A pull request whose body names a screenshot file also passes `--review-record <that directory>/review-events.ndjson`.

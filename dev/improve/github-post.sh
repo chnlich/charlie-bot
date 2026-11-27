@@ -64,7 +64,10 @@
 #   github-post.sh push [git push args...]
 #
 # Exit codes: 0 sent, 1 leak hit (nothing sent), 2 setup refusal (nothing sent),
-# 3 credential hit (nothing sent; the round stops), 4 merge sent but its readback does not confirm it.
+# 3 credential hit (nothing sent; the round stops), 4 merge sent but its readback does not confirm it,
+# 75 queued with nothing merged: outside a round, a wake merges when the landing queue's turn comes; inside a round,
+# the foreground wait for the turn reached its bound and the entry was removed, so the pull request stays open for the
+# next adoption round.
 set -euo pipefail
 
 usage() {
@@ -638,6 +641,83 @@ case "$subcommand" in
       check_string title "$pr_title"
       check_text body "$tmp_dir/merge-body"
       merge_args+=(--subject "$pr_title" --body-file "$tmp_dir/merge-body")
+    fi
+    # Every merge into the base branch holds the landing queue's turn. The queue verbs live in the `charliebot` on
+    # PATH, so this script refuses when that binary predates them: a round script and the binary it calls must come
+    # from the same release.
+    if [[ -z ${CHARLIEBOT_LAND_TURN-} ]]; then
+      for verb in acquire release; do
+        charliebot land queue "$verb" --help >/dev/null 2>&1 || {
+          printf 'Refused pr-merge: the charliebot binary on PATH has no `land queue %s` verb; this host must run the release that ships it; nothing was merged.\n' \
+            "$verb" >&2
+          exit 2
+        }
+      done
+      pr_number=$(gh pr view "$pr_selector" "${repo_args[@]}" --json number --jq .number) || {
+        printf 'Cannot read the number of PR %s; nothing was merged.\n' "$pr_selector" >&2
+        exit 2
+      }
+      [[ $pr_number =~ ^[0-9]+$ ]] || {
+        printf 'Cannot read the number of PR %s; nothing was merged.\n' "$pr_selector" >&2
+        exit 2
+      }
+      if [[ -n ${IMPROVE_LAUNCH_DIR-} ]]; then
+        # A round has no server and no wake, so it waits in the foreground for the turn. The entry carries the round's
+        # launch id in place of a session id, and the bound stays below the round's tool-call limit.
+        launch_id=$(basename -- "$IMPROVE_LAUNCH_DIR")
+        [[ -n $launch_id ]] || {
+          printf 'Refused pr-merge: IMPROVE_LAUNCH_DIR names no launch id; nothing was merged.\n' >&2
+          exit 2
+        }
+        turn_held=0
+        release_turn() {
+          if [[ $turn_held -eq 1 ]]; then
+            charliebot land queue release --pr "$pr_number" --owner "$launch_id" || {
+              printf 'PR %s: releasing the landing queue turn failed; its heartbeat expires in 180 s.\n' "$pr_selector" >&2
+            }
+            turn_held=0
+          fi
+        }
+        trap release_turn EXIT
+        trap 'exit 130' INT
+        trap 'exit 143' TERM
+        set +e
+        charliebot land queue acquire --pr "$pr_number" --owner "$launch_id"
+        acquire_status=$?
+        set -e
+        if [[ $acquire_status -eq 75 ]]; then
+          printf 'PR %s: the landing queue turn did not come within the round wait; the entry was removed and nothing was merged. The pull request stays open with its clean verdict for the next adoption round.\n' \
+            "$pr_selector" >&2
+          exit 75
+        fi
+        [[ $acquire_status -eq 0 ]] || {
+          printf 'Cannot take the landing queue turn for PR %s (status %s); nothing was merged.\n' \
+            "$pr_selector" "$acquire_status" >&2
+          exit 2
+        }
+        turn_held=1
+      else
+        # Outside a round a busy queue is left to a wake: the gate takes the turn and merges now when the queue is
+        # free, and queues this merge with the facts of this call otherwise.
+        merge_cmd="$repo_root/dev/improve/github-post.sh pr-merge"
+        [[ -z $evidence_dir ]] || merge_cmd+=" --evidence-dir $(printf '%q' "$evidence_dir")"
+        [[ -z $review_record ]] || merge_cmd+=" --review-record $(printf '%q' "$review_record")"
+        [[ -z $pr_repo ]] || merge_cmd+=" --repo $(printf '%q' "$pr_repo")"
+        merge_cmd+=" $(printf '%q' "$pr_selector")"
+        set +e
+        charliebot land queue pr-merge --pr "$pr_number" --sha "$merge_head" --merge-cmd "$merge_cmd"
+        gate_status=$?
+        set -e
+        case $gate_status in
+          0) exit 0 ;;
+          75)
+            printf 'PR %s is queued: the merge runs when the landing queue turn comes, and its wake carries the result.\n' \
+              "$pr_selector" >&2
+            exit 75
+            ;;
+          *) exit "$gate_status" ;;
+        esac
+      fi
     fi
     # gh's own merge line goes to stderr, so stdout carries the readback below and nothing else.
     gh "${merge_args[@]}" >&2

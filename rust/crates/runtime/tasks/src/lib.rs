@@ -12,6 +12,7 @@ pub mod git;
 pub mod github_api;
 pub mod handoff;
 pub mod land;
+pub mod land_queue;
 pub mod master_queue;
 pub mod master_run;
 pub mod master_state;

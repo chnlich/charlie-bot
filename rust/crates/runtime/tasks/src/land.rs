@@ -1,10 +1,10 @@
 //! The implement landing gate: the engine behind `charliebot land`.
 //!
 //! This module is the one owner of the implement landing. Every call re-reads git and GitHub state
-//! and acts on it — no saved intermediate state — so a review run that a trigger wake resumes and a
-//! later run in the task's own session take the same path. The gate applies when the base is
-//! the repository's default branch and that branch declares a workflow with a `pull_request`
-//! trigger; every other landing pushes as today and records `landed-no-ci`.
+//! and acts on it, and the landing record (`landing.json`) carries the state the queue's wake resumes,
+//! so a review run that a trigger wake resumes and a later run in the task's own session take the same
+//! path. The gate applies when the base is the repository's default branch and that branch declares a
+//! workflow with a `pull_request` trigger; every other landing records `landed-no-ci`.
 //!
 //! Before any push and before the PR is created, the call checks the commits' messages and diffs, the decompressed
 //! `*.gz` blobs they add or modify, the branch name and the PR's title and body for the exact value of a credential
@@ -21,19 +21,22 @@
 //! base branch carries them for the release switch's live capture.
 //!
 //! Under the gate the call rebases onto `origin/<base>`, pushes the task branch with
-//! `--force-with-lease`, keeps one draft PR for the branch, and pushes `<sha>:<base>` only when
-//! every expected workflow ran green on the head sha and every check run and commit status on it is
-//! success, skipped or neutral. Both clocks — the 10-minute not-started clock and the 90-minute
-//! timeout — run per head sha from the time that sha was pushed to the task branch, so a rebase
-//! starts both again and a busy main costs `rebase_retries`, never a timeout. Main is never pushed
-//! on any state other than a pass, and no state falls back to a direct push.
+//! `--force-with-lease`, keeps one draft PR for the branch, and registers the landing queue's command
+//! (`charliebot land queue run --sha`, `land_queue`) with the head's CI pass time, so the record reads
+//! `waiting`. That command waits for CI, enters the queue, and, once it holds the turn, rebases onto the
+//! base, pushes the task branch, waits for CI on the rebased head, and writes `<sha>:<base>` in one
+//! atomic push that also releases the turn and the entry. Only a commit that passed CI on itself
+//! reaches the base branch. Both clocks — the 10-minute not-started clock and the 90-minute timeout —
+//! run per head sha from the time that sha was pushed to the task branch, so a rebase starts both again
+//! and a busy main costs `rebase_retries`, never a timeout. Main is never pushed on any state other than
+//! a pass, and no state falls back to a direct push.
 //!
-//! A push that moves the base branch, gated or not, leaves no open PR of the task branch behind:
-//! the call reads the branch's PRs back after the push and closes each one GitHub has not marked
+//! A landing that moves the base branch, gated or not, leaves no open PR of the task branch behind:
+//! the command reads the branch's PRs back after the push and closes each one GitHub has not marked
 //! merged, so `landed` and `landed-no-ci` both mean the PR reads merged or closed.
 //!
-//! A rejected push of the base starts another round only when the remote base verifiably advanced
-//! past the pushed commit's base; every other refusal — a hook, a dead transport, a timeout, an
+//! A refused write of the base starts another round only when the remote base verifiably advanced
+//! past the write's leased base; every other refusal — a hook, a dead transport, a timeout, an
 //! auth error — ends the call at once with git's stderr verbatim.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -43,7 +46,7 @@ use std::io::Read as _;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
 use charliebot_backend_check::{Hit, Vocabulary, gate};
@@ -53,16 +56,16 @@ use charliebot_core::text_repr::string_field;
 use charliebot_registry::Registry;
 use charliebot_registry::pages::WEB_DIR_NAME;
 use charliebot_store::layout;
-use charliebot_store::metadata::{read_metadata_value, read_session_metadata};
+use charliebot_store::metadata::read_session_metadata;
 use charliebot_store::run_records::{self, RunRecord};
-use charliebot_store::trigger_files;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use crate::git;
-use crate::github_api::{GhOutput, RestOutcome, rest_get, run_gh};
+use crate::github_api::{RestOutcome, rest_get, run_gh};
+use crate::land_queue::{self, Cadence};
 use crate::review_text;
 use crate::web_screenshots;
 
@@ -75,6 +78,8 @@ pub const NOT_STARTED_SECS: i64 = 600;
 pub const TIMEOUT_SECS: i64 = 5400;
 /// Rebase rounds one landing call allows before it refuses to keep racing main.
 const MAX_LANDING_ROUNDS: usize = 5;
+/// The longest a turn holder waits for CI on the head it is about to land, in seconds. A test overrides it.
+pub const HOLDER_CI_WAIT_SECS: i64 = 1800;
 /// GitHub marks a PR merged about a second after its head sha reaches the base branch; a landing
 /// waits this long for that mark on a PR whose head is the landed sha before it closes the PR.
 const PR_MERGE_WAIT: Duration = Duration::from_secs(30);
@@ -138,12 +143,8 @@ pub struct LandingRecord {
   pub ci_passed_at: Option<String>,
   pub pushed_at: Option<String>,
   pub rebase_retries: i64,
-}
-
-impl LandingRecord {
-  fn with_state(&self, state: &str) -> LandingRecord {
-    LandingRecord { state: state.to_string(), ..self.clone() }
-  }
+  /// The waiting entry of the landing queue this landing is in (`refs/land-queue/...`), while it waits.
+  pub queue_ref: Option<String>,
 }
 
 /// What one landing call decided, carried to the CLI for the per-state exit code.
@@ -208,7 +209,8 @@ impl TryFrom<&str> for LandState {
 }
 
 /// The repo, base, branch, worktree and session directory one landing acts on, all from the task record.
-struct TaskLanding {
+pub(crate) struct TaskLanding {
+  session_id: String,
   repo: String,
   worktree: PathBuf,
   repo_path: PathBuf,
@@ -218,6 +220,21 @@ struct TaskLanding {
 }
 
 impl TaskLanding {
+  /// The queue's git side: the task's worktree, whose `origin` holds the queue refs.
+  fn queue_site(&self) -> land_queue::Site {
+    land_queue::Site { worktree: self.worktree.clone() }
+  }
+
+  /// The queue's session side: the waiting entries carry this session, and its wakes are its triggers.
+  fn queue_owner(&self) -> land_queue::Owner {
+    land_queue::Owner {
+      session_id: self.session_id.clone(),
+      session_dir: self.session_dir.clone(),
+      worktree: self.worktree.clone(),
+      program: PathBuf::from("charliebot"),
+    }
+  }
+
   /// The newest run record that carries a branch and worktree names the landing, plus the task
   /// spec's repo and base. A run record inherits its predecessor's repo fields, so the newest
   /// record with a branch always names the live landing venue.
@@ -274,9 +291,10 @@ impl TaskLanding {
     if !ok {
       anyhow::bail!("git remote get-url origin failed in {repo_path}: {err}");
     }
-    let repo = repo_from_remote_url(&url)
+    let repo = git::repo_from_remote_url(&url)
       .ok_or_else(|| anyhow::anyhow!("origin's URL {url} in {repo_path} names no owner/repo path"))?;
     Ok(Self {
+      session_id: task_session_id.to_string(),
       repo,
       worktree: PathBuf::from(worktree),
       repo_path: PathBuf::from(repo_path),
@@ -285,20 +303,6 @@ impl TaskLanding {
       session_dir,
     })
   }
-}
-
-/// The `owner/repo` path a remote URL names, the form every `gh api` path needs. The URL forms
-/// GitHub serves — `https://`, `ssh://` and the scp style — all end in an `owner/repo` path.
-fn repo_from_remote_url(url: &str) -> Option<String> {
-  let trimmed = url.trim().trim_end_matches('/');
-  let trimmed = trimmed.strip_suffix(".git").unwrap_or(trimmed);
-  let path = if let Some((_, rest)) = trimmed.split_once("://") {
-    rest.split_once('/').map(|(_, tail)| tail)
-  } else {
-    trimmed.split_once(':').map(|(_, tail)| tail)
-  }?;
-  let repo = path.trim_start_matches('/');
-  (!repo.is_empty() && repo.contains('/') && !repo.contains(':')).then(|| repo.to_string())
 }
 
 /// The scanner that the credential check runs: the same file the improve round's writes run
@@ -862,8 +866,9 @@ fn header_path(path: &str) -> anyhow::Result<Option<PathBuf>> {
   Ok(Some(PathBuf::from(relative)))
 }
 
-/// Run one landing: the whole flow, ending in a written `landing.json` and the record returned. The backend-literal
-/// check runs on the head that the landing pushes, before either push.
+/// Run one landing call. A gated head that passes its checks, and every ungated head, goes to the landing queue: the
+/// command `charliebot land queue run --sha` takes the turn and writes `main`, and this call records `waiting` with the
+/// queue's wake registered. A repeat call for a head that already landed returns its record.
 pub async fn land(
   registry: &Registry,
   home: &Path,
@@ -875,6 +880,11 @@ pub async fn land(
   let published = review_text::review_published_branch(&ctx.base_branch);
   let base_ref = format!("origin/{published}");
   fetch_base(&ctx.worktree, published).await?;
+  let landed_head = head_sha(&ctx.worktree).await?;
+  let prev = read_landing_record(&ctx.session_dir)?;
+  if let Some(record) = prev.as_ref().filter(|record| record.sha == landed_head && is_landed(&record.state)) {
+    return Ok(record.clone());
+  }
   let changed = changed_paths(&ctx.worktree, &base_ref).await?;
   // The release switch captures each View line that a pushed commit carries, whatever the diff changes, so a session
   // view the live server cannot resolve is refused here.
@@ -889,102 +899,41 @@ pub async fn land(
   }
 
   let gated = matches!(gate_applicability(&ctx.repo_path, published).await?, GateApplicability::Applies);
-  let prev = read_landing_record(&ctx.session_dir)?;
-  let prev = prev.filter(|record| record.state != STATE_LANDED && record.state != STATE_LANDED_NO_CI);
+  let prev = prev.filter(|record| !is_landed(&record.state));
   let mut retries = prev.as_ref().map_or(0, |record| record.rebase_retries);
-  let mut moved_base_tips: Vec<String> = Vec::new();
-  let mut first_round = true;
-
-  for _round in 0..MAX_LANDING_ROUNDS {
-    if !first_round {
-      fetch_base(&ctx.worktree, published).await?;
+  match rebase_onto_base(&ctx.worktree, &base_ref).await? {
+    RebaseStep::Conflict => {
+      abort_rebase(&ctx.worktree).await;
+      let record = LandingRecord {
+        state: STATE_REBASE_CONFLICT.to_string(),
+        repo: ctx.repo.clone(),
+        base: published.to_string(),
+        sha: head_sha(&ctx.worktree).await?,
+        pr_url: None,
+        checks: Vec::new(),
+        head_pushed_at: None,
+        ci_passed_at: None,
+        pushed_at: None,
+        rebase_retries: retries,
+        queue_ref: None,
+      };
+      write_landing_record(&ctx.session_dir, &record)?;
+      return Ok(record);
     }
-    match rebase_onto_base(&ctx.worktree, &base_ref).await? {
-      RebaseStep::Conflict => {
-        abort_rebase(&ctx.worktree).await;
-        let record = LandingRecord {
-          state: STATE_REBASE_CONFLICT.to_string(),
-          repo: ctx.repo.clone(),
-          base: published.to_string(),
-          sha: head_sha(&ctx.worktree).await?,
-          pr_url: None,
-          checks: Vec::new(),
-          head_pushed_at: None,
-          ci_passed_at: None,
-          pushed_at: None,
-          rebase_retries: retries,
-        };
-        write_landing_record(&ctx.session_dir, &record)?;
-        return Ok(record);
-      }
-      RebaseStep::UpToDate => {}
-      RebaseStep::Rewrote => {
-        if rewrite_counts_as_retry(prev.as_ref(), first_round) {
-          retries += 1;
-        }
+    RebaseStep::UpToDate => {}
+    RebaseStep::Rewrote => {
+      if rewrite_counts_as_retry(prev.as_ref(), true) {
+        retries += 1;
       }
     }
-    first_round = false;
+  }
 
-    carry_view_trailers(&ctx.worktree, &views).await?;
-    backend_literal_check(registry, home, &ctx.worktree, &base_ref).await?;
-    let sha = head_sha(&ctx.worktree).await?;
-    let push_base_sha = git::git_rev_parse(&ctx.worktree, &base_ref)
-      .await
-      .ok_or_else(|| anyhow::anyhow!("{base_ref} does not resolve in {}", ctx.worktree.display()))?;
-    let head_pushed_at = carried_pushed_at(prev.as_ref(), &sha, &now_rfc3339());
-
-    if !gated {
-      // No gate: land as today — one fast-forward push of the head onto the base branch.
-      outbound_checks(home, &ctx.worktree, &ctx.repo_path, &ctx.branch_name, &base_ref, None).await?;
-      let (ok, _, err) = git::git_stdout(
-        &ctx.worktree,
-        &["push", "origin", &format!("{sha}:refs/heads/{published}")],
-        GIT_PUSH_TIMEOUT,
-        "git push",
-      )
-      .await;
-      if ok {
-        let record = LandingRecord {
-          state: STATE_LANDED_NO_CI.to_string(),
-          repo: ctx.repo.clone(),
-          base: published.to_string(),
-          sha,
-          pr_url: None,
-          checks: Vec::new(),
-          head_pushed_at,
-          ci_passed_at: None,
-          pushed_at: Some(now_rfc3339()),
-          rebase_retries: retries,
-        };
-        return record_landed(&ctx, published, record).await;
-      }
-      match judge_push_rejection(&ctx.worktree, published, &push_base_sha, &sha, &err).await? {
-        PushOutcome::PrMergeRequired => {
-          let record = LandingRecord {
-            state: STATE_PR_MERGE_REQUIRED.to_string(),
-            repo: ctx.repo.clone(),
-            base: published.to_string(),
-            sha,
-            pr_url: None,
-            checks: Vec::new(),
-            head_pushed_at,
-            ci_passed_at: None,
-            pushed_at: None,
-            rebase_retries: retries,
-          };
-          write_landing_record(&ctx.session_dir, &record)?;
-          return Ok(record);
-        }
-        PushOutcome::BaseMoved(tip) => {
-          // The base verifiably moved: the next round rebases onto the new tip and pushes again.
-          tracing::info!(target: "charliebot_tasks", repo = %ctx.repo_path.display(), base_tip = %tip, error = %err, "land_push_rejected_retry");
-          moved_base_tips.push(tip);
-          continue;
-        }
-      }
-    }
-
+  carry_view_trailers(&ctx.worktree, &views).await?;
+  backend_literal_check(registry, home, &ctx.worktree, &base_ref).await?;
+  let sha = head_sha(&ctx.worktree).await?;
+  let head_pushed_at = carried_pushed_at(prev.as_ref(), &sha, &now_rfc3339());
+  let queue_ref = prev.as_ref().filter(|record| record.sha == sha).and_then(|record| record.queue_ref.clone());
+  let (pr_url, pr_number, checks, ci_passed_at) = if gated {
     let pr_text = resolve_draft_pr_text(&ctx.worktree, published, options).await?;
     outbound_checks(home, &ctx.worktree, &ctx.repo_path, &ctx.branch_name, &base_ref, Some(&pr_text)).await?;
     push_task_branch(&ctx, &ctx.branch_name).await?;
@@ -999,85 +948,464 @@ pub async fn land(
         let verdict = judge_ci(&expected, &evaluation.runs, &evaluation.check_runs, &evaluation.statuses, elapsed);
         (*evaluation, verdict)
       }
-      // The watch that this state registers waits out the quota and then reads the head sha again.
+      // The queued command reads the head sha again once the quota resets.
       CiRead::RateLimited { reset } => {
         tracing::info!(target: "charliebot_tasks", branch = %ctx.branch_name, reset, "land_ci_read_rate_limited");
         (CiEvaluation::unread(), CiVerdict::Waiting)
       }
     };
-
-    let base_record = LandingRecord {
-      state: String::new(),
-      repo: ctx.repo.clone(),
-      base: published.to_string(),
-      sha: sha.clone(),
-      pr_url: Some(pr_url.clone()),
-      checks: evaluation.check_rows(),
-      head_pushed_at: head_pushed_at.clone(),
-      ci_passed_at: evaluation.ci_passed_at(),
-      pushed_at: None,
-      rebase_retries: retries,
+    let checks = evaluation.check_rows();
+    let ci_passed_at = evaluation.ci_passed_at();
+    let stop = match verdict {
+      CiVerdict::Pass | CiVerdict::Waiting => None,
+      CiVerdict::Failed { .. } => Some(STATE_CI_FAILED),
+      CiVerdict::NotStarted { .. } => Some(STATE_CI_NOT_STARTED),
+      CiVerdict::Timeout => Some(STATE_CI_TIMEOUT),
     };
-    match verdict {
-      CiVerdict::Pass => {
-        let (ok, _, err) = git::git_stdout(
-          &ctx.worktree,
-          &["push", "origin", &format!("{sha}:refs/heads/{published}")],
-          GIT_PUSH_TIMEOUT,
-          "git push",
-        )
-        .await;
-        if ok {
-          let record = LandingRecord { state: STATE_LANDED.to_string(), pushed_at: Some(now_rfc3339()), ..base_record };
-          return record_landed(&ctx, published, record).await;
-        }
-        match judge_push_rejection(&ctx.worktree, published, &push_base_sha, &sha, &err).await? {
-          PushOutcome::PrMergeRequired => {
-            let record = base_record.with_state(STATE_PR_MERGE_REQUIRED);
-            write_landing_record(&ctx.session_dir, &record)?;
-            return Ok(record);
-          }
-          PushOutcome::BaseMoved(tip) => {
-            // Main moved while the checks ran: the next round rebases, and both clocks restart.
-            tracing::info!(target: "charliebot_tasks", repo = %ctx.repo_path.display(), base_tip = %tip, error = %err, "land_main_push_rejected_rebase");
-            moved_base_tips.push(tip);
-            continue;
-          }
-        }
+    if let Some(state) = stop {
+      let record = LandingRecord {
+        state: state.to_string(),
+        repo: ctx.repo.clone(),
+        base: published.to_string(),
+        sha: sha.clone(),
+        pr_url: Some(pr_url),
+        checks,
+        head_pushed_at: head_pushed_at.clone(),
+        ci_passed_at,
+        pushed_at: None,
+        rebase_retries: retries,
+        queue_ref: None,
+      };
+      write_landing_record(&ctx.session_dir, &record)?;
+      return Ok(record);
+    }
+    (Some(pr_url), pr_number, checks, ci_passed_at)
+  } else {
+    outbound_checks(home, &ctx.worktree, &ctx.repo_path, &ctx.branch_name, &base_ref, None).await?;
+    (None, 0, Vec::new(), None)
+  };
+  let record = LandingRecord {
+    state: STATE_WAITING.to_string(),
+    repo: ctx.repo.clone(),
+    base: published.to_string(),
+    sha,
+    pr_url,
+    checks,
+    head_pushed_at,
+    ci_passed_at,
+    pushed_at: None,
+    rebase_retries: retries,
+    queue_ref,
+  };
+  // The record comes first: the queued command reads it before it waits for CI, and a repeat call re-arms from it when
+  // the registration failed.
+  write_landing_record(&ctx.session_dir, &record)?;
+  land_queue::arm_landing(&ctx.queue_site(), &ctx.queue_owner(), u64::try_from(pr_number)?, &record.sha).await?;
+  Ok(record)
+}
+
+/// Whether a landing state means the head is on the base branch.
+fn is_landed(state: &str) -> bool {
+  state == STATE_LANDED || state == STATE_LANDED_NO_CI
+}
+
+/// One CI read of a head sha: the verdict, the check rows and the latest completed check time.
+#[derive(Clone, Debug)]
+pub(crate) struct CiSnapshot {
+  pub verdict: CiVerdict,
+  pub checks: Vec<CheckRow>,
+  pub ci_passed_at: Option<String>,
+}
+
+impl CiSnapshot {
+  /// The read of a landing that has no CI read, such as an ungated head or a conflicted rebase.
+  fn unread() -> Self {
+    Self { verdict: CiVerdict::Waiting, checks: Vec::new(), ci_passed_at: None }
+  }
+}
+
+/// The GitHub reads of a queued landing: the CI verdict of a head sha, and the close of a landed branch's PRs. The
+/// queued command takes its GitHub through this seam, so its queue protocol runs against a bare repository in tests.
+pub(crate) trait LandRemote {
+  fn ci_snapshot(
+    &self,
+    ctx: &TaskLanding,
+    sha: &str,
+    head_pushed_at: Option<&str>,
+  ) -> impl Future<Output = anyhow::Result<CiSnapshot>>;
+  fn close_task_prs(&self, ctx: &TaskLanding, published: &str, sha: &str) -> impl Future<Output = anyhow::Result<()>>;
+}
+
+/// The GitHub remote of production.
+pub(crate) struct GitHub;
+
+impl LandRemote for GitHub {
+  async fn ci_snapshot(
+    &self,
+    ctx: &TaskLanding,
+    sha: &str,
+    head_pushed_at: Option<&str>,
+  ) -> anyhow::Result<CiSnapshot> {
+    let expected = expected_workflow_paths(&workflow_files_at(&ctx.worktree, sha).await?)?;
+    match read_ci_state(&ctx.worktree, &ctx.repo, sha).await? {
+      CiRead::Evaluated(evaluation) => {
+        let elapsed = match head_pushed_at {
+          Some(pushed_at) => elapsed_secs(pushed_at)?,
+          None => 0,
+        };
+        let verdict = judge_ci(&expected, &evaluation.runs, &evaluation.check_runs, &evaluation.statuses, elapsed);
+        Ok(CiSnapshot { verdict, checks: evaluation.check_rows(), ci_passed_at: evaluation.ci_passed_at() })
       }
-      CiVerdict::Failed { .. } => {
-        let record = base_record.with_state(STATE_CI_FAILED);
-        write_landing_record(&ctx.session_dir, &record)?;
-        return Ok(record);
-      }
-      CiVerdict::NotStarted { .. } => {
-        let record = base_record.with_state(STATE_CI_NOT_STARTED);
-        write_landing_record(&ctx.session_dir, &record)?;
-        return Ok(record);
-      }
-      CiVerdict::Timeout => {
-        let record = base_record.with_state(STATE_CI_TIMEOUT);
-        write_landing_record(&ctx.session_dir, &record)?;
-        return Ok(record);
-      }
-      CiVerdict::Waiting => {
-        ensure_waiting_trigger(&ctx, &ctx.repo, pr_number, &sha).await?;
-        let record = base_record.with_state(STATE_WAITING);
-        write_landing_record(&ctx.session_dir, &record)?;
-        return Ok(record);
+      CiRead::RateLimited { reset } => {
+        tracing::info!(target: "charliebot_tasks", branch = %ctx.branch_name, reset, "land_ci_read_rate_limited");
+        Ok(CiSnapshot { verdict: CiVerdict::Waiting, checks: Vec::new(), ci_passed_at: None })
       }
     }
   }
+
+  async fn close_task_prs(&self, ctx: &TaskLanding, published: &str, sha: &str) -> anyhow::Result<()> {
+    close_task_prs(ctx, published, sha).await
+  }
+}
+
+/// How a queued landing ended: its record, or no record because a newer landing call of the task owns the landing.
+pub enum QueueEnd {
+  Record(Box<LandingRecord>),
+  Superseded,
+}
+
+/// The command `charliebot land queue run --sha` runs: waits for CI on the head, enters the queue, takes the turn when
+/// it is the earliest entry, rebases, pushes the task branch, waits for CI on the rebased head, and writes `main` in
+/// one atomic push that also releases the turn and the entry.
+pub async fn run_queued(
+  registry: &Registry,
+  home: &Path,
+  task_session_id: &str,
+  sha: &str,
+  cadence: Cadence,
+  ci_wait: Duration,
+) -> anyhow::Result<QueueEnd> {
+  let ctx = TaskLanding::load(home, task_session_id).await?;
+  queued_landing(&ctx, registry, home, sha, &GitHub, cadence, ci_wait).await
+}
+
+/// The context one queued landing shares across its phases.
+struct Lane<'a> {
+  ctx: &'a TaskLanding,
+  registry: &'a Registry,
+  home: &'a Path,
+  /// The landing record `land` wrote for the head: the repository, base and PR of the task.
+  prev: &'a LandingRecord,
+  gated: bool,
+  cadence: Cadence,
+}
+
+/// One head sha the turn holder works on: the sha, when its branch was pushed, its rebase retries and its CI read.
+struct Round {
+  sha: String,
+  head_pushed_at: Option<String>,
+  retries: i64,
+  snapshot: Option<CiSnapshot>,
+}
+
+/// The queued landing of one task, over the remote `R`.
+async fn queued_landing<R: LandRemote>(
+  ctx: &TaskLanding,
+  registry: &Registry,
+  home: &Path,
+  start_sha: &str,
+  remote: &R,
+  cadence: Cadence,
+  ci_wait: Duration,
+) -> anyhow::Result<QueueEnd> {
+  let published = review_text::review_published_branch(&ctx.base_branch).to_string();
+  let prev = read_landing_record(&ctx.session_dir)?.ok_or_else(|| {
+    anyhow::anyhow!(
+      "{} holds no landing record; `charliebot land` writes it before the queue runs",
+      ctx.session_dir.display()
+    )
+  })?;
+  let pr = match prev.pr_url.as_deref() {
+    Some(url) => pr_number_of(url)?,
+    None => 0,
+  };
+  let gated = matches!(gate_applicability(&ctx.repo_path, &published).await?, GateApplicability::Applies);
+  let lane = Lane { ctx, registry, home, prev: &prev, gated, cadence };
+  let site = ctx.queue_site();
+  let owner = ctx.queue_owner();
+  let mut round = Round {
+    sha: start_sha.to_string(),
+    head_pushed_at: carried_pushed_at(Some(&prev), start_sha, &now_rfc3339()),
+    retries: prev.rebase_retries,
+    snapshot: None,
+  };
+
+  if gated {
+    loop {
+      if head_sha(&ctx.worktree).await? != round.sha {
+        return Ok(QueueEnd::Superseded);
+      }
+      let read = remote.ci_snapshot(ctx, &round.sha, round.head_pushed_at.as_deref()).await?;
+      let state = match read.verdict {
+        CiVerdict::Pass => {
+          round.snapshot = Some(read);
+          break;
+        }
+        CiVerdict::Waiting => {
+          tokio::time::sleep(cadence.poll).await;
+          continue;
+        }
+        CiVerdict::Failed { .. } => STATE_CI_FAILED,
+        CiVerdict::NotStarted { .. } => STATE_CI_NOT_STARTED,
+        CiVerdict::Timeout => STATE_CI_TIMEOUT,
+      };
+      let record = stopped_record(&lane, &round, state, &read);
+      write_landing_record(&ctx.session_dir, &record)?;
+      return Ok(QueueEnd::Record(Box::new(record)));
+    }
+  }
+
+  let ci_passed_ms = match round.snapshot.as_ref().and_then(|read| read.ci_passed_at.as_deref()) {
+    Some(at) => rfc3339_millis(at)?,
+    None => u64::try_from(OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000)?,
+  };
+  let name = land_queue::EntryName::new(ci_passed_ms, pr, &owner.session_id);
+  let mut claim = land_queue::Claim::enter_or_resume(&site, &name, &round.sha).await?;
+  let read = round.snapshot.take().unwrap_or_else(CiSnapshot::unread);
+  let mut waiting = stopped_record(&lane, &round, STATE_WAITING, &read);
+  waiting.queue_ref = Some(claim.holder.clone());
+  if let Err(error) = write_landing_record(&ctx.session_dir, &waiting) {
+    claim.release().await?;
+    return Err(error);
+  }
+  round.snapshot = Some(read);
+
+  loop {
+    match head_sha(&ctx.worktree).await {
+      Ok(head) if head != round.sha => {
+        claim.release().await?;
+        return Ok(QueueEnd::Superseded);
+      }
+      Ok(_) => {}
+      Err(error) => {
+        claim.release().await?;
+        return Err(error);
+      }
+    }
+    match land_queue::turn_step(&mut claim, cadence).await {
+      Ok(land_queue::Step::Held) => break,
+      Ok(land_queue::Step::Waiting) => tokio::time::sleep(cadence.poll).await,
+      Err(error) => {
+        // A newer landing call may have replaced the entry between the head check and the heartbeat.
+        let released = claim.release().await;
+        if head_sha(&ctx.worktree).await? != round.sha {
+          return Ok(QueueEnd::Superseded);
+        }
+        released?;
+        return Err(error);
+      }
+    }
+  }
+
+  match hold_and_publish(&lane, remote, &mut claim, &mut round, ci_wait).await {
+    Ok(end) => Ok(end),
+    Err(error) => {
+      if let Err(release) = claim.release().await {
+        tracing::error!(target: "charliebot_tasks", holder = %claim.holder, error = %release, "land_queue_release_failed");
+      }
+      Err(error)
+    }
+  }
+}
+
+/// The record of a landing that stops at `state` on the round's head, carrying the CI read that stopped it.
+fn stopped_record(lane: &Lane<'_>, round: &Round, state: &str, read: &CiSnapshot) -> LandingRecord {
+  LandingRecord {
+    state: state.to_string(),
+    repo: lane.ctx.repo.clone(),
+    base: lane.prev.base.clone(),
+    sha: round.sha.clone(),
+    pr_url: lane.prev.pr_url.clone(),
+    checks: read.checks.clone(),
+    head_pushed_at: round.head_pushed_at.clone(),
+    ci_passed_at: read.ci_passed_at.clone(),
+    pushed_at: None,
+    rebase_retries: round.retries,
+    queue_ref: None,
+  }
+}
+
+/// The rounds of a turn holder: rebase onto main, push the task branch, wait for CI on the rebased head, and write
+/// `main` in one push that also releases the turn and the entry. A refused write that moved main starts another round.
+async fn hold_and_publish<R: LandRemote>(
+  lane: &Lane<'_>,
+  remote: &R,
+  claim: &mut land_queue::Claim,
+  round: &mut Round,
+  ci_wait: Duration,
+) -> anyhow::Result<QueueEnd> {
+  let ctx = lane.ctx;
+  let published = review_text::review_published_branch(&ctx.base_branch).to_string();
+  let base_ref = format!("origin/{published}");
+  let site = ctx.queue_site();
+  for _ in 0..MAX_LANDING_ROUNDS {
+    if head_sha(&ctx.worktree).await? != round.sha {
+      claim.release().await?;
+      return Ok(QueueEnd::Superseded);
+    }
+    fetch_base(&ctx.worktree, &published).await?;
+    match rebase_onto_base(&ctx.worktree, &base_ref).await? {
+      RebaseStep::Conflict => {
+        abort_rebase(&ctx.worktree).await;
+        claim.release().await?;
+        let record = stopped_record(lane, round, STATE_REBASE_CONFLICT, &CiSnapshot::unread());
+        write_landing_record(&ctx.session_dir, &record)?;
+        return Ok(QueueEnd::Record(Box::new(record)));
+      }
+      RebaseStep::UpToDate => {}
+      RebaseStep::Rewrote => round.retries += 1,
+    }
+    let head = head_sha(&ctx.worktree).await?;
+    if head != round.sha {
+      push_task_branch(ctx, &ctx.branch_name).await?;
+      round.sha = head;
+      round.head_pushed_at = Some(now_rfc3339());
+      round.snapshot = None;
+      if claim.beat(&round.sha).await? != land_queue::Pushed::Done {
+        // A newer landing call replaced this head's entry; the worktree's branch holds the head it serves.
+        claim.release().await?;
+        return Ok(QueueEnd::Superseded);
+      }
+    }
+    backend_literal_check(lane.registry, lane.home, &ctx.worktree, &base_ref).await?;
+    outbound_checks(lane.home, &ctx.worktree, &ctx.repo_path, &ctx.branch_name, &base_ref, None).await?;
+    let tested_base = git::git_rev_parse(&ctx.worktree, &base_ref)
+      .await
+      .ok_or_else(|| anyhow::anyhow!("{base_ref} does not resolve in {}", ctx.worktree.display()))?;
+
+    if lane.gated {
+      let started = Instant::now();
+      let read = loop {
+        if head_sha(&ctx.worktree).await? != round.sha {
+          claim.release().await?;
+          return Ok(QueueEnd::Superseded);
+        }
+        if let Some(end) = keep_turn_alive(ctx, claim, &round.sha, lane.cadence).await? {
+          return Ok(end);
+        }
+        if started.elapsed() >= ci_wait {
+          claim.release().await?;
+          anyhow::bail!(
+            "CI on {} did not pass within {}s of the turn; the turn and its entry were released",
+            round.sha,
+            ci_wait.as_secs()
+          );
+        }
+        let read = remote.ci_snapshot(ctx, &round.sha, round.head_pushed_at.as_deref()).await?;
+        let state = match read.verdict {
+          CiVerdict::Pass => break read,
+          CiVerdict::Waiting => {
+            tokio::time::sleep(lane.cadence.poll).await;
+            continue;
+          }
+          CiVerdict::Failed { .. } => STATE_CI_FAILED,
+          CiVerdict::NotStarted { .. } => STATE_CI_NOT_STARTED,
+          CiVerdict::Timeout => STATE_CI_TIMEOUT,
+        };
+        claim.release().await?;
+        let record = stopped_record(lane, round, state, &read);
+        write_landing_record(&ctx.session_dir, &record)?;
+        return Ok(QueueEnd::Record(Box::new(record)));
+      };
+      round.snapshot = Some(read);
+    }
+
+    let read = round.snapshot.take().unwrap_or_else(CiSnapshot::unread);
+    let publish = claim.publish_changes(&format!("refs/heads/{published}"), &tested_base, &round.sha);
+    match site.push(&publish).await? {
+      land_queue::Pushed::Done => {
+        claim.landed();
+        let state = if lane.gated { STATE_LANDED } else { STATE_LANDED_NO_CI };
+        let record = LandingRecord { pushed_at: Some(now_rfc3339()), ..stopped_record(lane, round, state, &read) };
+        write_landing_record(&ctx.session_dir, &record)?;
+        remote.close_task_prs(ctx, &published, &record.sha).await.map_err(|error| {
+          anyhow::anyhow!("{published} holds {} and landing.json reads {}, but {error:#}", record.sha, record.state)
+        })?;
+        return Ok(QueueEnd::Record(Box::new(record)));
+      }
+      land_queue::Pushed::Refused(err) => {
+        if push_rejection_kind(&err) == PushRejection::RepositoryRules {
+          claim.release().await?;
+          let record = stopped_record(lane, round, STATE_PR_MERGE_REQUIRED, &read);
+          write_landing_record(&ctx.session_dir, &record)?;
+          return Ok(QueueEnd::Record(Box::new(record)));
+        }
+        let tip = remote_main_tip(&ctx.worktree, &published).await?;
+        if tip == tested_base {
+          claim.release().await?;
+          anyhow::bail!("the landing queue refused the write of {} to {published}: {err}", round.sha);
+        }
+        tracing::info!(target: "charliebot_tasks", base_tip = %tip, "land_queue_main_moved_rebase");
+      }
+    }
+  }
+  claim.release().await?;
   anyhow::bail!(
-    "main kept moving past {MAX_LANDING_ROUNDS} landing rounds (the base advanced to {}); run `charliebot land` again when main settles",
-    moved_base_tips.join(", ")
+    "main kept moving past {MAX_LANDING_ROUNDS} landing rounds; run `charliebot land` again when main settles"
   )
+}
+
+/// Renews the turn's heartbeat when it is due. A refused renewal ends the holder: when the head moved on, the landing
+/// is superseded and the turn is released; otherwise the refs were removed under the holder and that is an error.
+async fn keep_turn_alive(
+  ctx: &TaskLanding,
+  claim: &mut land_queue::Claim,
+  sha: &str,
+  cadence: Cadence,
+) -> anyhow::Result<Option<QueueEnd>> {
+  if !claim.beat_due(cadence) {
+    return Ok(None);
+  }
+  let parent = claim.parent.clone();
+  if claim.beat(&parent).await? == land_queue::Pushed::Done {
+    return Ok(None);
+  }
+  claim.release().await?;
+  if head_sha(&ctx.worktree).await? != sha {
+    return Ok(Some(QueueEnd::Superseded));
+  }
+  anyhow::bail!("the landing queue refs of {} were removed while {sha} held the turn", claim.holder)
+}
+
+/// The sha that `refs/heads/<published>` holds on origin.
+async fn remote_main_tip(worktree: &Path, published: &str) -> anyhow::Result<String> {
+  let refname = format!("refs/heads/{published}");
+  let (ok, out, err) =
+    git::git_stdout(worktree, &["ls-remote", "origin", &refname], GIT_READ_TIMEOUT, "git ls-remote").await;
+  if !ok {
+    anyhow::bail!("git ls-remote origin {refname} failed: {err}");
+  }
+  out.split_whitespace().next().map(str::to_string).ok_or_else(|| anyhow::anyhow!("origin has no {refname}"))
+}
+
+/// The pull request number a PR URL ends with.
+fn pr_number_of(url: &str) -> anyhow::Result<u64> {
+  url
+    .rsplit('/')
+    .next()
+    .and_then(|number| number.parse().ok())
+    .ok_or_else(|| anyhow::anyhow!("PR URL {url} does not end with a number"))
+}
+
+/// The millisecond time of an RFC 3339 instant.
+fn rfc3339_millis(at: &str) -> anyhow::Result<u64> {
+  let parsed = OffsetDateTime::parse(at, &Rfc3339).with_context(|| format!("{at} is not RFC 3339"))?;
+  u64::try_from(parsed.unix_timestamp_nanos() / 1_000_000).with_context(|| format!("{at} is before 1970"))
 }
 
 const GIT_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const GIT_WRITE_TIMEOUT: Duration = Duration::from_secs(120);
 const GIT_PUSH_TIMEOUT: Duration = Duration::from_secs(120);
-const GH_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// The paths the task branch changes against the base, from the three-dot range that a review reads.
 async fn changed_paths(worktree: &Path, base_ref: &str) -> anyhow::Result<Vec<String>> {
@@ -1225,13 +1553,6 @@ async fn origin_has_branch(ctx: &TaskLanding, branch: &str) -> anyhow::Result<bo
   Ok(!out.trim().is_empty())
 }
 
-/// The verdict of one rejected base push: `PrMergeRequired` keeps the repository-rules record, and
-/// `BaseMoved` — the only outcome that starts another round — names the moved base tip.
-enum PushOutcome {
-  PrMergeRequired,
-  BaseMoved(String),
-}
-
 /// The push-to-base rejection class: repository rules (GH013) answer `pr-merge-required` with the
 /// green PR kept open. Only git's own non-fast-forward report can start a verification; every other
 /// refusal — a local or remote hook included — ends the landing at once.
@@ -1293,81 +1614,6 @@ fn push_rejection_kind(stderr: &str) -> PushRejection {
     PushRejection::Transport
   } else {
     PushRejection::Refused
-  }
-}
-
-/// The terminal error of a rejected push no round follows: the refusal's class name plus git's
-/// stderr verbatim.
-fn push_failure_text(kind: PushRejection, published: &str, stderr: &str) -> String {
-  let wording = match kind {
-    PushRejection::Timeout => "timed out",
-    PushRejection::Transport => "failed on the transport",
-    PushRejection::Auth => "failed authentication",
-    PushRejection::NonFastForward => "was rejected as non-fast-forward",
-    PushRejection::Refused => "was refused",
-    PushRejection::RepositoryRules => unreachable!("repository rules keep their own record"),
-  };
-  format!("push to refs/heads/{published} {wording}: {stderr}")
-}
-
-/// Decide one rejected base push: repository rules hand back `PrMergeRequired`; a rejection whose
-/// class can report on a moved base yields `BaseMoved` only when the remote tip really advanced
-/// past the pushed commit's base — the pushed sha is no descendant of the just-fetched tip. Every
-/// other refusal ends the landing here with git's stderr verbatim.
-async fn judge_push_rejection(
-  worktree: &Path,
-  published: &str,
-  push_base_sha: &str,
-  sha: &str,
-  stderr: &str,
-) -> anyhow::Result<PushOutcome> {
-  let kind = push_rejection_kind(stderr);
-  match kind {
-    PushRejection::RepositoryRules => return Ok(PushOutcome::PrMergeRequired),
-    PushRejection::Timeout | PushRejection::Transport | PushRejection::Auth | PushRejection::Refused => {
-      anyhow::bail!("{}", push_failure_text(kind, published, stderr))
-    }
-    PushRejection::NonFastForward => {}
-  }
-  match verify_base_moved(worktree, published, push_base_sha, sha).await {
-    Ok(Some(tip)) => Ok(PushOutcome::BaseMoved(tip)),
-    Ok(None) => anyhow::bail!("{}", push_failure_text(kind, published, stderr)),
-    Err(error) => {
-      anyhow::bail!(
-        "{}; checking whether {published} advanced failed too: {error:#}",
-        push_failure_text(kind, published, stderr)
-      )
-    }
-  }
-}
-
-/// Whether the remote base really advanced past the pushed commit's base: re-fetch the base, then
-/// check the pushed sha against the new tip. `Some(tip)` names the moved tip; `None` means the push
-/// still fast-forwards, so the rejection named a refusal of another kind.
-async fn verify_base_moved(
-  worktree: &Path,
-  published: &str,
-  push_base_sha: &str,
-  sha: &str,
-) -> anyhow::Result<Option<String>> {
-  fetch_base(worktree, published).await?;
-  let base_ref = format!("origin/{published}");
-  let tip = git::git_rev_parse(worktree, &base_ref)
-    .await
-    .ok_or_else(|| anyhow::anyhow!("{base_ref} does not resolve in {}", worktree.display()))?;
-  let advanced =
-    git::git_stdout(worktree, &ancestry_args(push_base_sha, &tip), GIT_READ_TIMEOUT, "git merge-base").await;
-  match advanced {
-    (true, _, _) => {}
-    (false, _, err) if merge_base_unknown(&err) => return Ok(None),
-    (false, _, err) => anyhow::bail!("git merge-base --is-ancestor {push_base_sha} {tip} failed: {err}"),
-  }
-  let pushed_sha_is_ancestor =
-    git::git_stdout(worktree, &ancestry_args(&tip, sha), GIT_READ_TIMEOUT, "git merge-base").await;
-  match pushed_sha_is_ancestor {
-    (true, _, _) => Ok(None),
-    (false, _, err) if merge_base_unknown(&err) => Ok(Some(tip)),
-    (false, _, err) => anyhow::bail!("git merge-base --is-ancestor {tip} {sha} failed: {err}"),
   }
 }
 
@@ -1738,148 +1984,6 @@ async fn gh_stdout(workdir: &Path, args: &[&str]) -> anyhow::Result<Vec<u8>> {
   Ok(output.stdout)
 }
 
-/// The wake the waiting state registers: one `charliebot session trigger --cmd` per head sha, running
-/// `ci_gate_watch_command`. A pending trigger for this head sha already sitting in the session's
-/// triggers directory is left alone, so repeated `land` calls never stack wakes.
-async fn ensure_waiting_trigger(ctx: &TaskLanding, repo: &str, pr_number: i64, sha: &str) -> anyhow::Result<()> {
-  let message = trigger_message(sha);
-  if pending_trigger_with_message(&ctx.session_dir, &message)? {
-    return Ok(());
-  }
-  let cmd = ci_gate_watch_command(repo, pr_number, sha);
-  let max_wait = TIMEOUT_SECS.to_string();
-  let mut command = tokio::process::Command::new("charliebot");
-  command
-    .args(["session", "trigger", "--max-wait", &max_wait, "--message", &message, "--cmd", &cmd])
-    .current_dir(&ctx.worktree)
-    .stdout(std::process::Stdio::piped())
-    .stderr(std::process::Stdio::piped())
-    .kill_on_drop(true);
-  let output = tokio::time::timeout(GH_TIMEOUT, command.output()).await;
-  match output {
-    Ok(Ok(output)) if output.status.success() => Ok(()),
-    Ok(Ok(output)) => anyhow::bail!(
-      "registering the waiting trigger failed (exit {}): {}",
-      output.status.code().unwrap_or(-1),
-      String::from_utf8_lossy(&output.stderr).trim()
-    ),
-    Ok(Err(error)) => anyhow::bail!("charliebot session trigger failed to start: {error}"),
-    Err(_) => anyhow::bail!("charliebot session trigger timed out after {}s", GH_TIMEOUT.as_secs()),
-  }
-}
-
-/// The pause between the CI gate's registration polls of a head sha. A poll whose answer is unchanged costs no
-/// count against the primary rate limit (a 304), so the pause only bounds how fast a registration is noticed.
-pub const CHECK_REGISTRATION_POLL: Duration = Duration::from_secs(30);
-/// Seconds the CI gate's watch may run past `TIMEOUT_SECS`. `start_and_register` in
-/// `rust/crates/app/cli/src/commands/session_trigger.rs` starts the watch before it posts the
-/// registration that sets the wake's clock. A watch bounded at exactly `TIMEOUT_SECS` would exit
-/// first and wake as a failed watch; this margin lets the trigger's timeout end the wait instead.
-const CI_WATCH_BOUND_MARGIN_SECS: i64 = 120;
-
-/// The CI gate's watch command for one head sha. An empty check list right after a push means GitHub
-/// has not registered the checks yet, so `charliebot ci-wait` polls until the head sha has a check run or a
-/// commit status (`await_check_registration`). The command then watches the PR's checks to their end with
-/// fail-fast: exit 0 when every check passes, exit 1 at the first failure. The whole command ends at
-/// `TIMEOUT_SECS + CI_WATCH_BOUND_MARGIN_SECS`, so a PR that never gets a check wakes as the trigger's timeout.
-fn ci_gate_watch_command(repo: &str, pr_number: i64, sha: &str) -> String {
-  let bound = TIMEOUT_SECS + CI_WATCH_BOUND_MARGIN_SECS;
-  format!(
-    "timeout {bound} sh -c 'charliebot ci-wait --repo {repo} --sha {sha} || exit $?; \
-     gh pr checks {pr_number} --repo {repo} --watch --fail-fast'"
-  )
-}
-
-/// The CI gate's registration wait: polls the head sha's check runs, then its commit statuses, until one of
-/// them exists. Each endpoint's ETag goes back with its next poll, so an unchanged answer is a 304, which GitHub
-/// does not count against the primary rate limit. A rate-limit 403 is reported through `report` with its reset
-/// time, and the poll waits until that time before it goes on. Any other failure ends the wait as an error.
-pub async fn await_check_registration<Run, Fut>(
-  run: &Run,
-  repo: &str,
-  sha: &str,
-  interval: Duration,
-  report: &dyn Fn(&str),
-) -> anyhow::Result<()>
-where
-  Run: Fn(Vec<String>) -> Fut,
-  Fut: Future<Output = anyhow::Result<GhOutput>>,
-{
-  let paths = [format!("repos/{repo}/commits/{sha}/check-runs"), format!("repos/{repo}/commits/{sha}/status")];
-  let mut etags: [Option<String>; 2] = [None, None];
-  loop {
-    for (path, etag) in paths.iter().zip(etags.iter_mut()) {
-      let Some((body, fresh_etag)) = poll_until_answered(run, path, etag.as_deref(), report).await? else {
-        continue;
-      };
-      let total = body
-        .get("total_count")
-        .and_then(Value::as_u64)
-        .with_context(|| format!("gh api {path} printed no total_count"))?;
-      if total > 0 {
-        return Ok(());
-      }
-      *etag = fresh_etag;
-    }
-    tokio::time::sleep(interval).await;
-  }
-}
-
-/// One endpoint's answer: its body with the ETag to send next, or `None` when the body is unchanged. A
-/// rate-limit 403 is reported and waited out before the same request is sent again.
-async fn poll_until_answered<Run, Fut>(
-  run: &Run,
-  path: &str,
-  etag: Option<&str>,
-  report: &dyn Fn(&str),
-) -> anyhow::Result<Option<(Value, Option<String>)>>
-where
-  Run: Fn(Vec<String>) -> Fut,
-  Fut: Future<Output = anyhow::Result<GhOutput>>,
-{
-  loop {
-    match rest_get(run, path, etag).await? {
-      RestOutcome::Body { value, etag: next_etag } => return Ok(Some((value, next_etag))),
-      RestOutcome::NotModified => return Ok(None),
-      RestOutcome::RateLimited { reset } => {
-        let reset_at = OffsetDateTime::from_unix_timestamp(reset)
-          .with_context(|| format!("the X-RateLimit-Reset epoch {reset} is out of range"))?
-          .format(&Rfc3339)
-          .expect("the RFC 3339 format accepts a valid timestamp");
-        report(&format!("GitHub REST quota is exhausted; {path} waits until {reset_at}"));
-        tokio::time::sleep(duration_until(reset)).await;
-      }
-    }
-  }
-}
-
-/// The time from now until the epoch second `reset`, zero when that second has passed.
-fn duration_until(reset: i64) -> Duration {
-  let seconds = (reset - OffsetDateTime::now_utc().unix_timestamp()).max(0);
-  Duration::from_secs(u64::try_from(seconds).expect("the seconds are clamped to zero or more"))
-}
-
-/// The wake label of one head sha's checks; the dedup key of the landing's triggers.
-pub fn trigger_message(sha: &str) -> String {
-  format!("ci gate {}", &sha[..sha.len().min(12)])
-}
-
-fn pending_trigger_with_message(session_dir: &Path, message: &str) -> anyhow::Result<bool> {
-  let triggers_dir = layout::triggers_dir(session_dir);
-  if !triggers_dir.is_dir() {
-    return Ok(false);
-  }
-  for (path, _) in trigger_files::iter_trigger_file_stats(&triggers_dir)? {
-    let Ok(stored) = read_metadata_value(&path) else { continue };
-    if stored.get("status").and_then(Value::as_str) == Some("pending")
-      && stored.get("message").and_then(Value::as_str) == Some(message)
-    {
-      return Ok(true);
-    }
-  }
-  Ok(false)
-}
-
 /// One commit's subject and body from the branch range used to derive a gated PR description.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CommitMessage {
@@ -2051,17 +2155,6 @@ fn pr_url_and_number(pr: &Value) -> anyhow::Result<(String, i64)> {
   Ok((url, number))
 }
 
-/// Write the record of a landing whose push moved the base branch to `record.sha`, then close what
-/// GitHub left open of the task branch's PRs. The record comes first: the base branch holds the sha
-/// whatever the PR step meets, and the delivery check reads that record.
-async fn record_landed(ctx: &TaskLanding, published: &str, record: LandingRecord) -> anyhow::Result<LandingRecord> {
-  write_landing_record(&ctx.session_dir, &record)?;
-  close_task_prs(ctx, published, &record.sha).await.map_err(|error| {
-    anyhow::anyhow!("{published} holds {} and landing.json reads {}, but {error:#}", record.sha, record.state)
-  })?;
-  Ok(record)
-}
-
 /// One open PR of the task branch.
 struct OpenPr {
   number: i64,
@@ -2132,8 +2225,7 @@ async fn open_task_prs(ctx: &TaskLanding, repo: &str) -> anyhow::Result<Vec<Open
 
 #[cfg(test)]
 mod tests {
-  use std::cell::RefCell;
-  use std::collections::{HashSet, VecDeque};
+  use std::collections::HashSet;
 
   use super::*;
   use serde_json::json;
@@ -2391,6 +2483,7 @@ mod tests {
       ci_passed_at: None,
       pushed_at: None,
       rebase_retries,
+      queue_ref: None,
     }
   }
 
@@ -2487,13 +2580,6 @@ mod tests {
       ),
       PushRejection::Auth
     );
-    // The terminal error names the class and carries the push's stderr verbatim.
-    let text = push_failure_text(PushRejection::Refused, "dev", hook);
-    assert!(text.contains("was refused"), "{text}");
-    assert!(text.contains(hook), "{text}");
-    assert!(push_failure_text(PushRejection::Transport, "dev", "x").contains("transport"));
-    assert!(push_failure_text(PushRejection::Timeout, "dev", "x").contains("timed out"));
-    assert!(push_failure_text(PushRejection::Auth, "dev", "x").contains("authentication"));
   }
 
   #[test]
@@ -2537,6 +2623,7 @@ mod tests {
       ci_passed_at: Some("2026-11-10T03:01:00Z".to_string()),
       pushed_at: Some("2026-11-10T03:02:00Z".to_string()),
       rebase_retries: 1,
+      queue_ref: None,
     };
     write_landing_record(session.path(), &record).expect("the record is written");
     assert_eq!(read_landing_record(session.path()).expect("the record is read"), Some(record));
@@ -2548,23 +2635,6 @@ mod tests {
     assert_eq!(read_landing_record(session.path()).expect("no record reads as none"), None);
     std::fs::write(session.path().join(LANDING_FILE_NAME), "{not json").expect("the malformed record is written");
     assert!(read_landing_record(session.path()).is_err());
-  }
-
-  #[test]
-  fn a_pending_trigger_for_the_head_sha_dedups_the_wake() {
-    let session = tempfile::tempdir().expect("temporary directory is available");
-    let sha = "c".repeat(40);
-    assert!(!pending_trigger_with_message(session.path(), &trigger_message(&sha)).expect("the probe reads"));
-    let triggers_dir = layout::triggers_dir(session.path());
-    std::fs::create_dir_all(&triggers_dir).expect("the triggers directory is created");
-    std::fs::write(
-      triggers_dir.join("pending.json"),
-      json!({ "id": "t1", "session_id": "s", "fire_at": "2026-11-10T03:00:00Z", "message": trigger_message(&sha), "status": "pending" })
-        .to_string(),
-    )
-    .expect("the trigger file is written");
-    assert!(pending_trigger_with_message(session.path(), &trigger_message(&sha)).expect("the probe reads"));
-    assert!(!pending_trigger_with_message(session.path(), &trigger_message(&"d".repeat(40))).expect("the probe reads"));
   }
 
   #[test]
@@ -2581,192 +2651,13 @@ mod tests {
   }
 
   #[test]
-  fn the_trigger_message_caps_at_the_head_sha_prefix() {
-    let sha = "e".repeat(40);
-    assert_eq!(trigger_message(&sha), "ci gate eeeeeeeeeeee");
-  }
-
-  /// The stubs of the watch command: `charliebot ci-wait` exits `CI_WAIT_EXIT`, and `gh pr checks` records that
-  /// the PR check watch started and exits `GH_WATCH_EXIT`.
-  const CI_WAIT_STUB: &str = "echo ran >> \"$GH_STATE/ci-wait\"\nexit \"$CI_WAIT_EXIT\"\n";
-  const GH_WATCH_STUB: &str = r#"
-case "$1 $2" in
-  "pr checks")
-    echo started > "$GH_STATE/watch"
-    exit "$GH_WATCH_EXIT"
-    ;;
-  *) echo "unexpected gh $*" >&2; exit 2 ;;
-esac
-"#;
-
-  /// Runs the CI gate's watch command with the stubbed `ci-wait` and `gh`. Returns the run and whether the PR check
-  /// watch started; the stubs' state is read before the sandbox is dropped.
-  fn run_ci_gate_watch(ci_wait_exit: u8, watch_exit: u8) -> (charliebot_shell_harness::Run, bool) {
-    let sandbox = charliebot_shell_harness::Sandbox::new();
-    let state = sandbox.dir("state");
-    sandbox.stub("charliebot", CI_WAIT_STUB);
-    sandbox.stub("gh", GH_WATCH_STUB);
-    let mut env = sandbox.env();
-    env.insert("GH_STATE".to_string(), state.display().to_string());
-    env.insert("CI_WAIT_EXIT".to_string(), ci_wait_exit.to_string());
-    env.insert("GH_WATCH_EXIT".to_string(), watch_exit.to_string());
-    let cmd = ci_gate_watch_command("acme/widgets", 7, &"a".repeat(40));
-    let mut command = charliebot_shell_harness::command("bash", &env);
-    command.arg("-c").arg(&cmd);
-    let run = charliebot_shell_harness::run(&mut command);
-    let watch_started = state.join("watch").exists();
-    (run, watch_started)
-  }
-
-  #[test]
-  fn a_registered_head_sha_starts_the_pr_check_watch_and_keeps_its_exit() {
-    for watch_exit in [0, 1] {
-      let (run, watch_started) = run_ci_gate_watch(0, watch_exit);
-      assert_eq!(run.code, i32::from(watch_exit), "{}", run.describe());
-      assert!(watch_started, "the PR check watch starts once the registration wait returns");
-    }
-  }
-
-  #[test]
-  fn a_failed_registration_wait_fails_without_starting_the_watch() {
-    let (run, watch_started) = run_ci_gate_watch(9, 0);
-    assert_eq!(run.code, 9, "{}", run.describe());
-    assert!(!watch_started, "the PR check watch must not start after a failed registration wait");
-  }
-
-  /// Replies to the registration poll's calls in order, and records the arguments of each call.
-  struct Script {
-    replies: RefCell<VecDeque<GhOutput>>,
-    calls: RefCell<Vec<Vec<String>>>,
-  }
-
-  impl Script {
-    fn new(replies: Vec<GhOutput>) -> Self {
-      Self { replies: RefCell::new(VecDeque::from(replies)), calls: RefCell::new(Vec::new()) }
-    }
-
-    fn run(&self) -> impl Fn(Vec<String>) -> std::future::Ready<anyhow::Result<GhOutput>> + '_ {
-      move |args: Vec<String>| {
-        self.calls.borrow_mut().push(args);
-        let next = self.replies.borrow_mut().pop_front().expect("the script has a reply for each call");
-        std::future::ready(Ok(next))
-      }
-    }
-  }
-
-  fn json_reply(body: Value, etag: &str) -> GhOutput {
-    GhOutput {
-      success: true,
-      stdout: format!("HTTP/2.0 200 OK\r\nEtag: {etag}\r\n\r\n{body}").into_bytes(),
-      stderr: String::new(),
-    }
-  }
-
-  fn not_modified() -> GhOutput {
-    GhOutput {
-      success: false,
-      stdout: b"HTTP/2.0 304 Not Modified\r\n\r\n".to_vec(),
-      stderr: "gh: HTTP 304".to_string(),
-    }
-  }
-
-  fn rate_limited(reset: i64) -> GhOutput {
-    GhOutput {
-      success: false,
-      stdout: format!(
-        "HTTP/2.0 403 Forbidden\r\nX-RateLimit-Remaining: 0\r\nX-RateLimit-Reset: {reset}\r\n\r\n{{\"message\":\"x\"}}"
-      )
-      .into_bytes(),
-      stderr: "gh: API rate limit exceeded (HTTP 403)".to_string(),
-    }
-  }
-
-  fn server_error() -> GhOutput {
-    GhOutput {
-      success: false,
-      stdout: b"HTTP/2.0 500 Internal Server Error\r\n\r\n".to_vec(),
-      stderr: "gh: Internal Server Error (HTTP 500)".to_string(),
-    }
-  }
-
-  const WATCHED_REPO: &str = "acme/widgets";
-  const WATCHED_SHA: &str = "abcdef0123456789abcdef0123456789abcdef01";
-
-  #[tokio::test(start_paused = true)]
-  async fn a_rate_limited_registration_poll_waits_until_the_reset_then_continues() {
-    let reset = OffsetDateTime::now_utc().unix_timestamp() + 60;
-    let script = Script::new(vec![rate_limited(reset), json_reply(json!({"total_count": 1}), "\"checks-1\"")]);
-    let reports = RefCell::new(Vec::new());
-    let report = |line: &str| reports.borrow_mut().push(line.to_string());
-    let start = tokio::time::Instant::now();
-    await_check_registration(&script.run(), WATCHED_REPO, WATCHED_SHA, Duration::from_secs(30), &report)
-      .await
-      .expect("the poll continues after the quota returns");
-    let waited = start.elapsed();
-    assert!(
-      (Duration::from_secs(59)..=Duration::from_secs(61)).contains(&waited),
-      "the poll waits until the reset second, which is 60 s away; it waited {waited:?}"
-    );
-    assert_eq!(script.calls.borrow().len(), 2, "the same check-runs request is sent again after the reset");
-    let reports = reports.borrow();
-    assert_eq!(reports.len(), 1, "the 403 is reported once");
-    assert!(reports[0].contains("quota is exhausted") && reports[0].contains("waits until"), "{}", reports[0]);
-  }
-
-  #[tokio::test(start_paused = true)]
-  async fn an_unchanged_registration_poll_sends_its_etag_and_reads_the_304_as_still_empty() {
-    let script = Script::new(vec![
-      json_reply(json!({"total_count": 0}), "\"checks-1\""),
-      json_reply(json!({"total_count": 0}), "\"status-1\""),
-      not_modified(),
-      not_modified(),
-      json_reply(json!({"total_count": 1}), "\"checks-2\""),
-    ]);
-    let report = |_: &str| panic!("no rate limit was hit");
-    await_check_registration(&script.run(), WATCHED_REPO, WATCHED_SHA, Duration::from_secs(30), &report)
-      .await
-      .expect("a registered check run ends the wait");
-    let calls = script.calls.borrow();
-    assert_eq!(calls.len(), 5, "check-runs, status, then both again, then check-runs");
-    assert!(!calls[0].iter().any(|arg| arg.starts_with("If-None-Match")), "the first poll has no ETag to send");
-    assert_eq!(calls[2][3], "If-None-Match: \"checks-1\"", "{:?}", calls[2]);
-    assert_eq!(calls[3][3], "If-None-Match: \"status-1\"", "{:?}", calls[3]);
-  }
-
-  #[tokio::test(start_paused = true)]
-  async fn a_commit_status_registers_the_head_sha_without_a_check_run() {
-    let script = Script::new(vec![
-      json_reply(json!({"total_count": 0}), "\"checks-1\""),
-      json_reply(json!({"total_count": 1}), "\"status-1\""),
-    ]);
-    let report = |_: &str| panic!("no rate limit was hit");
-    await_check_registration(&script.run(), WATCHED_REPO, WATCHED_SHA, Duration::from_secs(30), &report)
-      .await
-      .expect("a commit status ends the wait");
-    assert_eq!(script.calls.borrow().len(), 2);
-  }
-
-  #[tokio::test(start_paused = true)]
-  async fn a_failed_registration_poll_is_an_error_and_waits_for_nothing() {
-    let script = Script::new(vec![server_error()]);
-    let report = |_: &str| panic!("a 500 is not a rate limit");
-    let start = tokio::time::Instant::now();
-    let error = await_check_registration(&script.run(), WATCHED_REPO, WATCHED_SHA, Duration::from_secs(30), &report)
-      .await
-      .unwrap_err();
-    assert!(error.to_string().contains("answered HTTP 500"), "{error:#}");
-    assert_eq!(script.calls.borrow().len(), 1);
-    assert_eq!(start.elapsed(), Duration::ZERO, "a failure does not sleep");
-  }
-
-  #[test]
   fn the_remote_url_names_the_owner_repo_path() {
-    assert_eq!(repo_from_remote_url("https://github.com/owner/repo.git"), Some("owner/repo".to_string()));
-    assert_eq!(repo_from_remote_url("git@github.com:owner/repo.git"), Some("owner/repo".to_string()));
-    assert_eq!(repo_from_remote_url("ssh://git@github.com/owner/repo"), Some("owner/repo".to_string()));
-    assert_eq!(repo_from_remote_url("ssh://git@github.com:22/owner/repo.git"), Some("owner/repo".to_string()));
-    assert_eq!(repo_from_remote_url("https://github.com/owner/repo/"), Some("owner/repo".to_string()));
-    assert_eq!(repo_from_remote_url("not-a-remote"), None);
+    assert_eq!(git::repo_from_remote_url("https://github.com/owner/repo.git"), Some("owner/repo".to_string()));
+    assert_eq!(git::repo_from_remote_url("git@github.com:owner/repo.git"), Some("owner/repo".to_string()));
+    assert_eq!(git::repo_from_remote_url("ssh://git@github.com/owner/repo"), Some("owner/repo".to_string()));
+    assert_eq!(git::repo_from_remote_url("ssh://git@github.com:22/owner/repo.git"), Some("owner/repo".to_string()));
+    assert_eq!(git::repo_from_remote_url("https://github.com/owner/repo/"), Some("owner/repo".to_string()));
+    assert_eq!(git::repo_from_remote_url("not-a-remote"), None);
   }
 
   /// The check reads each changed file that still exists, and a changed Rust file's whole crate, so a `cfg(test)`
@@ -2929,57 +2820,10 @@ mod synthetic_repo_tests {
     assert!(git::git_stdout(repo, &["fetch", "origin", "main"], GIT_WRITE_TIMEOUT, "git fetch").await.0);
   }
 
-  /// A lease-check rejection becomes `BaseMoved` only when the remote base verifiably advanced, and a
-  /// hook refusal never turns into one even after the base moved.
-  #[tokio::test]
-  #[ignore = "integration"]
-  async fn a_lease_check_rejection_is_a_base_move_only_when_the_remote_tip_moved() {
-    let root = tempfile::tempdir().expect("temporary directory is available");
-    let repo = synthetic_repo(root.path(), "feature");
-    commit(&repo, "notes.txt", "feature work\n");
-    let sha = head(&repo);
-    let push_base_sha = git::git_rev_parse(&repo, "origin/main").await.expect("origin/main resolves");
-    let lease_stderr = "remote: error: cannot lock ref 'refs/heads/main': is at 1111111 but expected 2222222\n\
-                        To ../origin.git\n ! [remote rejected] abc123 -> main (cannot lock ref)\n\
-                        error: failed to push some refs";
-
-    // The base still holds the pushed base: the same lease-check stderr stays terminal.
-    let unmoved = match judge_push_rejection(&repo, "main", &push_base_sha, &sha, lease_stderr).await {
-      Ok(_) => panic!("an unmoved base keeps the rejection terminal"),
-      Err(error) => format!("{error:#}"),
-    };
-    assert!(unmoved.contains("was rejected as non-fast-forward"), "{unmoved}");
-
-    // The base really moved: the rejection starts another round at the new tip.
-    let main_work = root.path().join("main-work");
-    let clone =
-      Command::new("git").args(["clone", "-q"]).arg(root.path().join("origin.git")).arg(&main_work).output().unwrap();
-    assert!(clone.status.success(), "git clone failed: {}", String::from_utf8_lossy(&clone.stderr));
-    commit(&main_work, "main.txt", "main work\n");
-    assert!(
-      Command::new("git").arg("-C").arg(&main_work).args(["push", "-q", "origin", "main"]).status().unwrap().success()
-    );
-    let moved_tip = head(&main_work);
-    match judge_push_rejection(&repo, "main", &push_base_sha, &sha, lease_stderr).await {
-      Ok(PushOutcome::BaseMoved(tip)) => assert_eq!(tip, moved_tip),
-      Ok(PushOutcome::PrMergeRequired) => panic!("a lease check is not a repository-rules answer"),
-      Err(error) => panic!("the moved base starts another round: {error:#}"),
-    }
-
-    // A hook refusal keeps its own class even now that the base moved.
-    let hook_stderr = "remote: push to main is restricted; use merge_to_dev.sh <branch>\n\
-                       ! [remote rejected] abc123 -> main (pre-receive hook declined)\n\
-                       error: failed to push some refs";
-    let hook = match judge_push_rejection(&repo, "main", &push_base_sha, &sha, hook_stderr).await {
-      Ok(_) => panic!("a hook refusal is terminal"),
-      Err(error) => format!("{error:#}"),
-    };
-    assert!(hook.contains("was refused"), "{hook}");
-  }
-
   /// A landing venue over *worktree* on *branch*: the push reads only the worktree.
   fn landing_ctx(worktree: &Path, branch: &str) -> TaskLanding {
     TaskLanding {
+      session_id: "synthetic-task".to_string(),
       repo: "synthetic/synthetic".to_string(),
       worktree: worktree.to_path_buf(),
       repo_path: worktree.to_path_buf(),
@@ -3629,5 +3473,652 @@ mod synthetic_repo_tests {
     let error =
       outbound_checks(&home, &repo, &repo, "feature", "origin/main", None).await.expect_err("the corrupt blob refuses");
     assert!(format!("{error:#}").contains("decompress"), "{}", format!("{error:#}"));
+  }
+  // -- the landing queue over a real bare origin --
+
+  use std::collections::{HashMap, VecDeque};
+  use std::future::Future;
+  use std::os::unix::fs::PermissionsExt;
+  use std::pin::Pin;
+  use std::sync::Mutex;
+  use std::sync::atomic::{AtomicU64, Ordering};
+
+  static MANUAL_MOVES: AtomicU64 = AtomicU64::new(0);
+
+  /// A repository whose base branch declares a pull_request workflow, so the CI gate applies, checked out on
+  /// *branch*.
+  fn gated_repo(root: &Path, branch: &str) -> PathBuf {
+    let repo = synthetic_repo(root, "main");
+    fs::create_dir_all(repo.join(".github/workflows")).expect("the workflows directory is created");
+    fs::write(repo.join(".github/workflows/ci.yml"), "on:\n  pull_request:\njobs: {}\n")
+      .expect("the workflow is written");
+    git_ok(&repo, &["add", "."]);
+    git_ok(
+      &repo,
+      &["-c", "user.name=Synthetic", "-c", "user.email=synthetic@example.test", "commit", "-q", "-m", "workflow"],
+    );
+    git_ok(&repo, &["push", "-q", "origin", "main"]);
+    if branch != "main" {
+      git_ok(&repo, &["switch", "-q", "-c", branch]);
+    }
+    repo
+  }
+
+  /// One task's clone of the synthetic origin, on its own branch, with one commit pushed.
+  fn task_clone(root: &Path, name: &str) -> PathBuf {
+    let origin = root.join("origin.git");
+    let work = root.join(name);
+    git_ok(
+      root,
+      &[
+        "clone",
+        "-q",
+        origin.to_str().expect("the origin path is UTF-8"),
+        work.to_str().expect("the work path is UTF-8"),
+      ],
+    );
+    git_ok(&work, &["switch", "-q", "-c", name]);
+    commit(&work, &format!("{name}.txt"), &format!("{name}\n"));
+    git_ok(&work, &["push", "-q", "-u", "origin", name]);
+    work
+  }
+
+  /// The landing context of a task clone, with its own session directory.
+  fn venue(worktree: &Path, branch: &str, session_id: &str) -> TaskLanding {
+    let mut ctx = landing_ctx(worktree, branch);
+    ctx.session_id = session_id.to_string();
+    fs::create_dir_all(&ctx.session_dir).expect("the session directory is created");
+    ctx
+  }
+
+  /// The waiting record `land` wrote before it registered the queued command.
+  fn queue_record(pr: u64, sha: &str) -> LandingRecord {
+    LandingRecord {
+      state: STATE_WAITING.to_string(),
+      repo: "synthetic/synthetic".to_string(),
+      base: "main".to_string(),
+      sha: sha.to_string(),
+      pr_url: Some(format!("https://example.test/owner/repo/pull/{pr}")),
+      checks: Vec::new(),
+      head_pushed_at: None,
+      ci_passed_at: None,
+      pushed_at: None,
+      rebase_retries: 0,
+      queue_ref: None,
+    }
+  }
+
+  async fn git_async(repo: &Path, args: &[&str]) -> anyhow::Result<String> {
+    let (ok, out, err) = git::git_stdout(repo, args, GIT_READ_TIMEOUT, "git").await;
+    if !ok {
+      anyhow::bail!("git {args:?} failed: {err}");
+    }
+    Ok(out.trim().to_string())
+  }
+
+  /// Pushes one empty commit onto origin's main from *work* and returns its sha: the outside write that a landing's
+  /// leased main push must notice.
+  async fn push_main_commit(work: &Path) -> anyhow::Result<String> {
+    git_async(work, &["fetch", "-q", "origin", "main"]).await?;
+    let tree = git_async(work, &["rev-parse", "origin/main^{tree}"]).await?;
+    let message = format!("manual main move {}", MANUAL_MOVES.fetch_add(1, Ordering::Relaxed) + 1);
+    let commit = git_async(
+      work,
+      &[
+        "-c",
+        "user.name=Synthetic",
+        "-c",
+        "user.email=synthetic@example.test",
+        "commit-tree",
+        &tree,
+        "-p",
+        "origin/main",
+        "-m",
+        &message,
+      ],
+    )
+    .await?;
+    git_async(work, &["push", "-q", "origin", &format!("{commit}:refs/heads/main")]).await?;
+    Ok(commit)
+  }
+
+  /// A scripted GitHub for a queued landing: each head sha's CI reads answer from its own queue (a sha with no queue
+  /// passes), every read is recorded, and the remote can move main before it answers.
+  struct QueueRemote {
+    answers: Mutex<HashMap<String, VecDeque<CiVerdict>>>,
+    passed_at: Mutex<HashMap<String, String>>,
+    reads: Mutex<HashMap<String, usize>>,
+    seen: Mutex<Vec<(String, CiVerdict)>>,
+    moved: Mutex<Vec<String>>,
+    work: PathBuf,
+    default_passed_at: String,
+    /// Moves main before answering a read of this sha (every sha when empty) at this read count (every read when 0).
+    move_main: Option<(String, usize)>,
+  }
+
+  impl QueueRemote {
+    fn new(work: &Path, passed: &[(&str, &str)], default_passed_at: &str) -> QueueRemote {
+      let mut times = HashMap::new();
+      for (sha, at) in passed {
+        times.insert((*sha).to_string(), (*at).to_string());
+      }
+      QueueRemote {
+        answers: Mutex::new(HashMap::new()),
+        passed_at: Mutex::new(times),
+        reads: Mutex::new(HashMap::new()),
+        seen: Mutex::new(Vec::new()),
+        moved: Mutex::new(Vec::new()),
+        work: work.to_path_buf(),
+        default_passed_at: default_passed_at.to_string(),
+        move_main: None,
+      }
+    }
+
+    fn answer(&self, sha: &str, verdicts: Vec<CiVerdict>) {
+      self.answers.lock().expect("the answers lock").insert(sha.to_string(), verdicts.into());
+    }
+
+    fn moves_main_at(&mut self, sha: &str, read: usize) {
+      self.move_main = Some((sha.to_string(), read));
+    }
+
+    fn passed_reads(&self, sha: &str) -> usize {
+      self
+        .seen
+        .lock()
+        .expect("the seen lock")
+        .iter()
+        .filter(|(seen, verdict)| seen == sha && *verdict == CiVerdict::Pass)
+        .count()
+    }
+  }
+
+  impl LandRemote for QueueRemote {
+    async fn ci_snapshot(
+      &self,
+      _ctx: &TaskLanding,
+      sha: &str,
+      _head_pushed_at: Option<&str>,
+    ) -> anyhow::Result<CiSnapshot> {
+      let verdict = self
+        .answers
+        .lock()
+        .expect("the answers lock")
+        .get_mut(sha)
+        .and_then(|answers| answers.pop_front())
+        .unwrap_or(CiVerdict::Pass);
+      self.seen.lock().expect("the seen lock").push((sha.to_string(), verdict.clone()));
+      let count = {
+        let mut reads = self.reads.lock().expect("the reads lock");
+        let count = reads.entry(sha.to_string()).or_insert(0);
+        *count += 1;
+        *count
+      };
+      let move_main =
+        self.move_main.as_ref().is_some_and(|(who, at)| (who.is_empty() || who == sha) && (*at == 0 || *at == count));
+      let passed_at = self
+        .passed_at
+        .lock()
+        .expect("the times lock")
+        .get(sha)
+        .cloned()
+        .unwrap_or_else(|| self.default_passed_at.clone());
+      if move_main {
+        let moved = push_main_commit(&self.work).await?;
+        self.moved.lock().expect("the moved lock").push(moved);
+      }
+      Ok(CiSnapshot { verdict, checks: Vec::new(), ci_passed_at: Some(passed_at) })
+    }
+
+    async fn close_task_prs(&self, _ctx: &TaskLanding, _published: &str, _sha: &str) -> anyhow::Result<()> {
+      Ok(())
+    }
+  }
+
+  /// An owner whose wake program is a stub: it records its arguments and, for a trigger registration, writes the
+  /// pending trigger file that the queue's dedupe reads; a cancel removes that file.
+  fn stub_owner(root: &Path, worktree: &Path, session_id: &str) -> (land_queue::Owner, PathBuf) {
+    let session_dir = root.join("sessions").join(session_id);
+    let triggers = layout::triggers_dir(&session_dir);
+    fs::create_dir_all(&triggers).expect("the triggers directory is created");
+    let log = root.join(format!("{session_id}-program.log"));
+    let program = root.join(format!("{session_id}-program.sh"));
+    let script = format!(
+      r#"#!/bin/sh
+printf '%s\n' "$*" >> "{log}"
+case " $* " in
+  *" session trigger "*)
+    message=
+    previous=
+    for argument in "$@"; do
+      if [ "$previous" = "--message" ]; then message=$argument; fi
+      previous=$argument
+    done
+    printf '{{"id":"wake-%s","message":"%s","status":"pending"}}\n' "$$" "$message" > "{triggers}/wake-$$.json"
+    ;;
+  *" trigger cancel "*)
+    id=
+    for argument in "$@"; do id=$argument; done
+    rm -f "{triggers}/"*"$id"*
+    ;;
+esac
+exit 0
+"#,
+      log = log.display(),
+      triggers = triggers.display()
+    );
+    fs::write(&program, script).expect("the stub program is written");
+    let mut permissions = fs::metadata(&program).expect("the stub program exists").permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&program, permissions).expect("the stub program is executable");
+    let owner =
+      land_queue::Owner { session_id: session_id.to_string(), session_dir, worktree: worktree.to_path_buf(), program };
+    (owner, log)
+  }
+
+  /// Drives a queued landing until the queue shows its turn held, so the test can start the clients that must wait
+  /// behind it; the run itself stays unfinished.
+  async fn wait_for_turn<F>(site: &land_queue::Site, run: &mut Pin<Box<F>>)
+  where
+    F: Future<Output = anyhow::Result<QueueEnd>>,
+  {
+    tokio::time::timeout(Duration::from_secs(30), async {
+      loop {
+        if site.read().await.expect("the queue reads").turn.is_some() {
+          return;
+        }
+        tokio::select! {
+          result = run.as_mut() => panic!(
+            "the landing ended before it held the turn: {:?}",
+            result.err().map(|error| format!("{error:#}"))
+          ),
+          _ = tokio::time::sleep(Duration::from_millis(5)) => {}
+        }
+      }
+    })
+    .await
+    .expect("the landing took the turn within 30 s");
+  }
+
+  fn landed_record(end: anyhow::Result<QueueEnd>, who: &str) -> LandingRecord {
+    match end.expect("the landing ends without an error") {
+      QueueEnd::Record(record) => *record,
+      QueueEnd::Superseded => panic!("{who} was superseded"),
+    }
+  }
+
+  /// The subjects of origin's main, oldest first, as the test clones see them.
+  async fn main_subjects(repo: &Path) -> Vec<String> {
+    assert!(git::git_stdout(repo, &["fetch", "-q", "origin", "main"], GIT_WRITE_TIMEOUT, "git fetch").await.0);
+    git_async(repo, &["log", "--reverse", "--format=%s", "origin/main"])
+      .await
+      .expect("the log reads")
+      .lines()
+      .map(str::to_string)
+      .collect()
+  }
+
+  /// The merge command of a queued pull request merge: a squash-like empty commit on main.
+  fn merge_command(work: &Path, pr: u64) -> String {
+    let dir = work.display();
+    format!(
+      "git -C {dir} fetch -q origin main && git -C {dir} checkout -q -B landqueue origin/main && \
+       git -C {dir} -c user.name=Synthetic -c user.email=synthetic@example.test commit -q --allow-empty -m 'merged PR {pr}' && \
+       git -C {dir} push -q origin landqueue:main"
+    )
+  }
+
+  const CADENCE: Cadence = Cadence { poll: Duration::from_millis(5), beat: Duration::from_millis(30) };
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn landings_and_a_merge_reach_main_in_ci_pass_order() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    gated_repo(root.path(), "main");
+    let a_work = task_clone(root.path(), "task-a");
+    let b_work = task_clone(root.path(), "task-b");
+    let c_work = task_clone(root.path(), "task-c");
+    let merge_work = task_clone(root.path(), "merge-work");
+    let remote_work = task_clone(root.path(), "remote-work");
+    let home = root.path().join("home");
+    fs::create_dir_all(&home).expect("the home is created");
+    let a = venue(&a_work, "task-a", "session-a");
+    let b = venue(&b_work, "task-b", "session-b");
+    let c = venue(&c_work, "task-c", "session-c");
+    let (sha_a, sha_b, sha_c) = (head(&a_work), head(&b_work), head(&c_work));
+    for (ctx, pr, sha) in [(&a, 101, &sha_a), (&b, 102, &sha_b), (&c, 103, &sha_c)] {
+      write_landing_record(&ctx.session_dir, &queue_record(pr, sha)).expect("the landing record is written");
+    }
+    let remote = QueueRemote::new(
+      &remote_work,
+      &[(&sha_a, "2026-11-27T00:00:01Z"), (&sha_b, "2026-11-27T00:00:02Z"), (&sha_c, "2026-11-27T00:00:05Z")],
+      "2026-11-27T00:00:09Z",
+    );
+    // The first landing holds the turn while its CI is still running, which gives the other clients time to queue.
+    remote.answer(&sha_a, vec![CiVerdict::Pass, CiVerdict::Waiting, CiVerdict::Pass]);
+    let registry = Registry::new();
+    let merge_site = land_queue::Site { worktree: merge_work.clone() };
+    let (owner, _log) = stub_owner(root.path(), &merge_work, "merge-session");
+    let merge_head = head(&merge_work);
+    let merge_cmd = merge_command(&merge_work, 104);
+    let merge_key = rfc3339_millis("2026-11-27T00:00:03Z").expect("the merge pass time parses");
+
+    let mut a_run = Box::pin(queued_landing(&a, &registry, &home, &sha_a, &remote, CADENCE, Duration::from_secs(60)));
+    wait_for_turn(&land_queue::Site { worktree: a_work.clone() }, &mut a_run).await;
+    let gate = tokio::time::timeout(
+      Duration::from_secs(10),
+      land_queue::pr_merge_gate(
+        &merge_site,
+        Some(&owner),
+        104,
+        &merge_head,
+        Some(&merge_cmd),
+        None,
+        CADENCE,
+        merge_key,
+      ),
+    )
+    .await
+    .expect("the merge gate answers")
+    .expect("the merge gate reads the queue");
+    assert_eq!(gate, land_queue::MergeGate::Queued, "the held turn queues the merge");
+    let b_run = Box::pin(queued_landing(&b, &registry, &home, &sha_b, &remote, CADENCE, Duration::from_secs(60)));
+    let c_run = Box::pin(queued_landing(&c, &registry, &home, &sha_c, &remote, CADENCE, Duration::from_secs(60)));
+    let merge_run = Box::pin(land_queue::run_pr_merge_queued(&merge_site, &owner, 104, &merge_cmd, CADENCE));
+
+    let (a_end, b_end, c_end, merge_end) = tokio::join!(a_run, b_run, c_run, merge_run);
+    let (a_record, b_record, c_record) =
+      (landed_record(a_end, "A"), landed_record(b_end, "B"), landed_record(c_end, "C"));
+    assert_eq!(merge_end.expect("the queued merge ends without an error"), 0);
+    assert_eq!(a_record.state, STATE_LANDED);
+    assert_eq!(b_record.state, STATE_LANDED);
+    assert_eq!(c_record.state, STATE_LANDED);
+
+    // The merge key sits between B's and C's, so main takes exactly the queue's order.
+    assert_eq!(
+      main_subjects(&a_work).await,
+      vec![
+        "base".to_string(),
+        "workflow".to_string(),
+        "task-a.txt".to_string(),
+        "task-b.txt".to_string(),
+        "merged PR 104".to_string(),
+        "task-c.txt".to_string()
+      ]
+    );
+    // Each landed commit passed its own CI read on itself.
+    for record in [&a_record, &b_record, &c_record] {
+      assert!(remote.passed_reads(&record.sha) > 0, "{} never passed a CI read", record.sha);
+    }
+    let view = land_queue::Site { worktree: a_work.clone() }.read().await.expect("the queue reads");
+    assert!(view.turn.is_none() && view.entries.is_empty(), "the queue is empty after the landings");
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn an_earlier_ci_pass_written_later_goes_first_without_interrupting_the_holder() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    gated_repo(root.path(), "main");
+    let a_work = task_clone(root.path(), "task-a");
+    let b_work = task_clone(root.path(), "task-b");
+    let c_work = task_clone(root.path(), "task-c");
+    let remote_work = task_clone(root.path(), "remote-work");
+    let home = root.path().join("home");
+    fs::create_dir_all(&home).expect("the home is created");
+    let a = venue(&a_work, "task-a", "session-a");
+    let b = venue(&b_work, "task-b", "session-b");
+    let c = venue(&c_work, "task-c", "session-c");
+    let (sha_a, sha_b, sha_c) = (head(&a_work), head(&b_work), head(&c_work));
+    for (ctx, pr, sha) in [(&a, 201, &sha_a), (&b, 202, &sha_b), (&c, 203, &sha_c)] {
+      write_landing_record(&ctx.session_dir, &queue_record(pr, sha)).expect("the landing record is written");
+    }
+    let remote = QueueRemote::new(
+      &remote_work,
+      &[(&sha_a, "2026-11-27T00:00:01Z"), (&sha_b, "2026-11-27T00:00:05Z"), (&sha_c, "2026-11-27T00:00:03Z")],
+      "2026-11-27T00:00:09Z",
+    );
+    remote.answer(&sha_a, vec![CiVerdict::Pass, CiVerdict::Waiting, CiVerdict::Pass]);
+    let registry = Registry::new();
+    let mut a_run = Box::pin(queued_landing(&a, &registry, &home, &sha_a, &remote, CADENCE, Duration::from_secs(60)));
+    wait_for_turn(&land_queue::Site { worktree: a_work.clone() }, &mut a_run).await;
+    // B writes its entry first; C, whose CI passed earlier, writes second and takes the place ahead of B.
+    let b_run = Box::pin(queued_landing(&b, &registry, &home, &sha_b, &remote, CADENCE, Duration::from_secs(60)));
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let c_run = Box::pin(queued_landing(&c, &registry, &home, &sha_c, &remote, CADENCE, Duration::from_secs(60)));
+    let (a_end, b_end, c_end) = tokio::join!(a_run, b_run, c_run);
+    for (end, who) in [(a_end, "A"), (b_end, "B"), (c_end, "C")] {
+      assert_eq!(landed_record(end, who).state, STATE_LANDED);
+    }
+    assert_eq!(
+      main_subjects(&a_work).await,
+      vec![
+        "base".to_string(),
+        "workflow".to_string(),
+        "task-a.txt".to_string(),
+        "task-c.txt".to_string(),
+        "task-b.txt".to_string()
+      ]
+    );
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_repeat_landing_call_registers_nothing_and_a_new_head_replaces_the_entry() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    gated_repo(root.path(), "main");
+    let work = task_clone(root.path(), "task");
+    let remote_work = task_clone(root.path(), "remote-work");
+    let home = root.path().join("home");
+    fs::create_dir_all(&home).expect("the home is created");
+    let ctx = venue(&work, "task", "session-c");
+    let sha = head(&work);
+    write_landing_record(&ctx.session_dir, &queue_record(301, &sha)).expect("the landing record is written");
+    let site = land_queue::Site { worktree: work.clone() };
+    let (owner, log) = stub_owner(root.path(), &work, "session-c");
+    let remote = QueueRemote::new(&remote_work, &[(&sha, "2026-11-27T00:00:01Z")], "2026-11-27T00:00:09Z");
+    remote
+      .answer(&sha, vec![CiVerdict::Pass, CiVerdict::Waiting, CiVerdict::Waiting, CiVerdict::Waiting, CiVerdict::Pass]);
+    assert_eq!(
+      land_queue::arm_landing(&site, &owner, 301, &sha).await.expect("the first call registers"),
+      land_queue::Armed::Registered
+    );
+    let registry = Registry::new();
+    let mut run = Box::pin(queued_landing(&ctx, &registry, &home, &sha, &remote, CADENCE, Duration::from_secs(60)));
+    wait_for_turn(&site, &mut run).await;
+    // A repeat call for the same head returns the current state and registers no second command.
+    assert_eq!(
+      land_queue::arm_landing(&site, &owner, 301, &sha).await.expect("the repeat reads"),
+      land_queue::Armed::Existing
+    );
+    let registered = fs::read_to_string(&log).expect("the program log reads");
+    assert_eq!(registered.matches("session trigger").count(), 1, "no second trigger was registered: {registered}");
+    // A new head replaces the old entry and registers the new head's command.
+    commit(&work, "two.txt", "two\n");
+    let new_sha = head(&work);
+    assert_eq!(
+      land_queue::arm_landing(&site, &owner, 301, &new_sha).await.expect("the new head registers"),
+      land_queue::Armed::Registered
+    );
+    let view = site.read().await.expect("the queue reads");
+    assert!(view.entry_of(301, "session-c").is_none(), "the replaced head's entry was removed");
+    assert!(matches!(run.await.expect("the old command ends"), QueueEnd::Superseded), "the moved head supersedes it");
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_failed_holder_ci_releases_the_turn_to_the_next_entry() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    gated_repo(root.path(), "main");
+    let a_work = task_clone(root.path(), "task-a");
+    let b_work = task_clone(root.path(), "task-b");
+    let remote_work = task_clone(root.path(), "remote-work");
+    let home = root.path().join("home");
+    fs::create_dir_all(&home).expect("the home is created");
+    let a = venue(&a_work, "task-a", "session-a");
+    let b = venue(&b_work, "task-b", "session-b");
+    let (sha_a, sha_b) = (head(&a_work), head(&b_work));
+    for (ctx, pr, sha) in [(&a, 401, &sha_a), (&b, 402, &sha_b)] {
+      write_landing_record(&ctx.session_dir, &queue_record(pr, sha)).expect("the landing record is written");
+    }
+    let remote = QueueRemote::new(
+      &remote_work,
+      &[(&sha_a, "2026-11-27T00:00:01Z"), (&sha_b, "2026-11-27T00:00:02Z")],
+      "2026-11-27T00:00:09Z",
+    );
+    remote.answer(&sha_a, vec![CiVerdict::Pass, CiVerdict::Failed { failing: Vec::new() }]);
+    let registry = Registry::new();
+    let mut a_run = Box::pin(queued_landing(&a, &registry, &home, &sha_a, &remote, CADENCE, Duration::from_secs(60)));
+    wait_for_turn(&land_queue::Site { worktree: a_work.clone() }, &mut a_run).await;
+    let b_run = Box::pin(queued_landing(&b, &registry, &home, &sha_b, &remote, CADENCE, Duration::from_secs(60)));
+    let (a_end, b_end) = tokio::join!(a_run, b_run);
+    assert_eq!(landed_record(a_end, "A").state, STATE_CI_FAILED);
+    assert_eq!(landed_record(b_end, "B").state, STATE_LANDED);
+    let view = land_queue::Site { worktree: a_work.clone() }.read().await.expect("the queue reads");
+    assert!(view.turn.is_none() && view.entries.is_empty());
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_stale_heartbeat_is_pruned_from_the_entry_and_the_turn() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    let repo = gated_repo(root.path(), "main");
+    let parent = head(&repo);
+    let stale = |refname: &str| {
+      let stamp = format!("@{} +0000", OffsetDateTime::now_utc().unix_timestamp() - 600);
+      let output = Command::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .args([
+          "-c",
+          "commit.gpgsign=false",
+          "commit-tree",
+          "--no-gpg-sign",
+          "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+        ])
+        .args(["-p", &parent, "-m", refname])
+        .env("GIT_AUTHOR_NAME", "charliebot land queue")
+        .env("GIT_AUTHOR_EMAIL", "land-queue@charliebot.invalid")
+        .env("GIT_COMMITTER_NAME", "charliebot land queue")
+        .env("GIT_COMMITTER_EMAIL", "land-queue@charliebot.invalid")
+        .env("GIT_AUTHOR_DATE", &stamp)
+        .env("GIT_COMMITTER_DATE", &stamp)
+        .output()
+        .expect("git commit-tree runs");
+      assert!(output.status.success(), "commit-tree failed: {}", String::from_utf8_lossy(&output.stderr));
+      let sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
+      git_ok(&repo, &["push", "-q", "--force", "origin", &format!("{sha}:{refname}")]);
+    };
+    stale("refs/land-queue/1795000000000-7-session-e");
+    stale(land_queue::TURN_REF);
+    let site = land_queue::Site { worktree: repo.clone() };
+    let view = site.read().await.expect("the queue reads and prunes");
+    assert!(view.turn.is_none(), "the stale turn is pruned");
+    assert!(view.entries.is_empty(), "the stale entry is pruned");
+    let left = git_async(&repo, &["ls-remote", "origin", land_queue::TURN_REF, "refs/land-queue/*"])
+      .await
+      .expect("ls-remote runs");
+    assert!(left.is_empty(), "origin holds no stale queue refs: {left}");
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_main_push_from_outside_starts_another_rebase_round() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    gated_repo(root.path(), "main");
+    let work = task_clone(root.path(), "task");
+    let remote_work = task_clone(root.path(), "remote-work");
+    let home = root.path().join("home");
+    fs::create_dir_all(&home).expect("the home is created");
+    let ctx = venue(&work, "task", "session-f");
+    let sha = head(&work);
+    write_landing_record(&ctx.session_dir, &queue_record(501, &sha)).expect("the landing record is written");
+    let mut remote = QueueRemote::new(&remote_work, &[(&sha, "2026-11-27T00:00:01Z")], "2026-11-27T00:00:09Z");
+    // The turn holder's first CI read is answered after main moves from outside.
+    remote.moves_main_at(&sha, 2);
+    let end = queued_landing(&ctx, &Registry::new(), &home, &sha, &remote, CADENCE, Duration::from_secs(60))
+      .await
+      .expect("the landing recovers");
+    let record = landed_record(Ok(end), "A");
+    assert_eq!(record.state, STATE_LANDED);
+    let moved = remote.moved.lock().expect("the moved lock").clone();
+    assert_eq!(moved.len(), 1, "one outside push moved main");
+    let subjects = main_subjects(&work).await;
+    assert!(subjects.contains(&"task.txt".to_string()), "{subjects:?}");
+    let tip = git_async(&work, &["rev-parse", "origin/main"]).await.expect("the tip reads");
+    assert_eq!(tip, record.sha, "the landed commit is main's tip");
+    let ancestry = Command::new("git")
+      .arg("-C")
+      .arg(&work)
+      .args(["merge-base", "--is-ancestor", &moved[0], &record.sha])
+      .status()
+      .expect("git runs");
+    assert!(ancestry.success(), "the outside commit stays under the landing");
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_pr_merge_takes_the_turn_directly_and_completes_from_the_queue() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    gated_repo(root.path(), "main");
+    let work = task_clone(root.path(), "task");
+    let site = land_queue::Site { worktree: work.clone() };
+    let head = head(&work);
+    let direct_marker = root.path().join("direct-marker");
+    let direct_cmd = format!("printf '%s' \"$CHARLIEBOT_LAND_TURN\" > {}", direct_marker.display());
+    let (direct_owner, _log) = stub_owner(root.path(), &work, "direct-session");
+    let gate = land_queue::pr_merge_gate(&site, Some(&direct_owner), 601, &head, Some(&direct_cmd), None, CADENCE, 1)
+      .await
+      .expect("the gate answers");
+    assert_eq!(gate, land_queue::MergeGate::Ran(0));
+    assert_eq!(fs::read_to_string(&direct_marker).expect("the marker reads"), "direct pr 601");
+    assert!(site.read().await.expect("the queue reads").turn.is_none(), "the direct merge released the turn");
+
+    // With the turn held, the same call queues and its wake completes the merge.
+    let mut holder = land_queue::Claim::direct(&site, 602, &head);
+    assert_eq!(holder.take_turn().await.expect("the holder takes the turn"), land_queue::Take::Taken);
+    let queued_marker = root.path().join("queued-marker");
+    let queued_cmd = format!("printf '%s' \"$CHARLIEBOT_LAND_TURN\" > {}", queued_marker.display());
+    let (queued_owner, _log) = stub_owner(root.path(), &work, "queued-session");
+    let gate = land_queue::pr_merge_gate(&site, Some(&queued_owner), 601, &head, Some(&queued_cmd), None, CADENCE, 5)
+      .await
+      .expect("the gate answers");
+    assert_eq!(gate, land_queue::MergeGate::Queued);
+    let view = site.read().await.expect("the queue reads");
+    let (entry, _) = view.entry_of(601, "queued-session").expect("the queued merge entered the queue").clone();
+    let mut runner = Box::pin(land_queue::run_pr_merge_queued(&site, &queued_owner, 601, &queued_cmd, CADENCE));
+    tokio::select! {
+      result = &mut runner => panic!("the merge ran before the turn was free: {:?}", result.err().map(|error| format!("{error:#}"))),
+      _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+    }
+    holder.release().await.expect("the holder releases");
+    assert_eq!(runner.await.expect("the queued merge ends"), 0);
+    assert_eq!(fs::read_to_string(&queued_marker).expect("the marker reads"), entry.refname());
+    let view = site.read().await.expect("the queue reads");
+    assert!(view.turn.is_none() && view.entries.is_empty(), "the queued merge released the turn and its entry");
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn main_that_keeps_moving_past_five_rounds_releases_the_turn() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    gated_repo(root.path(), "main");
+    let work = task_clone(root.path(), "task");
+    let remote_work = task_clone(root.path(), "remote-work");
+    let home = root.path().join("home");
+    fs::create_dir_all(&home).expect("the home is created");
+    let ctx = venue(&work, "task", "session-h");
+    let sha = head(&work);
+    write_landing_record(&ctx.session_dir, &queue_record(701, &sha)).expect("the landing record is written");
+    let mut remote = QueueRemote::new(&remote_work, &[(&sha, "2026-11-27T00:00:01Z")], "2026-11-27T00:00:09Z");
+    // Every CI read moves main, so every round's leased main push is refused.
+    remote.moves_main_at("", 0);
+    let error =
+      match queued_landing(&ctx, &Registry::new(), &home, &sha, &remote, CADENCE, Duration::from_secs(60)).await {
+        Ok(_) => panic!("the landing gives up after five rounds"),
+        Err(error) => error,
+      };
+    assert!(format!("{error:#}").contains("kept moving past 5"), "{error:#}");
+    let view = land_queue::Site { worktree: work.clone() }.read().await.expect("the queue reads");
+    assert!(view.turn.is_none() && view.entries.is_empty(), "the give-up released the turn and the entry");
   }
 }

@@ -47,7 +47,7 @@ const STYLE_CHECK: &str = "Style: Google Style, 2-space indent, 120-col (only fl
 
 const COMMIT_STEP: &str = "10. Before the rebase, confirm every change you keep is committed and restore tool-generated files with `git restore <path>`; untracked files stay in place.";
 
-const LAND_STEP: &str = "11. `charliebot land` takes a gated PR's title and body from the branch's single commit. A branch of several commits lands with an explicit `--title` and `--body` or `--body-file`, both written by `~/.claude/skills/writing-style/genres/commits-and-prs.md`. Act on its JSON state: `landed` and `landed-no-ci` complete the delivery; `waiting` ends the run, and the trigger the command registered wakes it; on `ci-failed`, fix only the failures this diff causes and run the command again; report every other state as blocked and leave the base branch untouched. A run that a trigger wake resumes runs this command before anything else.";
+const LAND_STEP: &str = "11. `charliebot land` takes a gated PR's title and body from the branch's single commit. A branch of several commits lands with an explicit `--title` and `--body` or `--body-file`, both written by `~/.claude/skills/writing-style/genres/commits-and-prs.md`. Act on its JSON state: `landed` and `landed-no-ci` complete the delivery; `waiting` ends the run, and the wake the command registered carries the landing result; on `ci-failed`, fix only the failures this diff causes and run the command again; report every other state as blocked and leave the base branch untouched. A run that a trigger wake resumes runs this command before anything else.";
 
 /// The reviewer contract's stable rules: the managed instruction block of a review Run (`review_rules_text`).
 pub fn review_rules_text() -> String {

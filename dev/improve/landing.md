@@ -137,6 +137,10 @@ side takes no screenshot or measurement. The round reports no result from an inc
 pull request, and names the held bench lock in its stop reason. The round reports the stop, and a later fire takes the
 topic again.
 
+Two waits in the kit end with exit 75, and no caller reads one for the other: this bench-lock wait leaves no side
+record and no pull request, and `pr-merge`'s landing-queue wait merges nothing and leaves its pull request open for the
+next adoption round.
+
 ### Input profile, clicks and writes
 
 Every capture and click runs under the input profile of its window size, which `dev/improve/ux-input-profile.mjs` gives:
@@ -544,6 +548,11 @@ That merge runs on a host that holds the skills of the round's kit revision at `
     $IMPROVE_KIT_DIR/dev/improve/github-post.sh pr-merge --evidence-dir <that directory> [--review-record <that directory>/review-events.ndjson] <PR>
 
 On success, pr-merge prints the PR number, the reviewed head, the merge commit and the state that GitHub reports after the merge. Exit 4 means the merge was sent and GitHub does not show it merged at the reviewed head.
+
+Every merge holds the landing queue's turn, so merges reach the base branch in the order their checks passed.
+Inside a round the merge waits in the foreground for the turn, at most 780 seconds, below the round's 900-second foreground tool-call limit.
+Exit 75 inside a round means that bound was reached: the entry was removed, nothing was merged, and the pull request stays open with its clean verdict for the next adoption round, which names it.
+Outside a round, exit 75 means the merge is queued and nothing has merged yet; the queue merges it when the turn comes, and the wake carries the result.
 
 When the newest verdict comment has no `Round start:` line, or that directory is missing, or the body names a screenshot file and the record is missing, the merge needs a new review.
 A merge outside a round also needs a new review when that directory lacks one of the three facts; pr-merge names the missing file and sends nothing.

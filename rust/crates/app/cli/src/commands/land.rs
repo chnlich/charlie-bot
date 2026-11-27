@@ -22,6 +22,9 @@ const ABOUT: &str = "Land an implement task: rebase, push the task branch, keep 
      branch only after CI passed on the head sha, and leave no PR of the task branch open";
 
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
+  if args.first().is_some_and(|verb| verb == "queue") {
+    return super::land_queue::main(&args[1..]);
+  }
   let body_requirement = format!(
     "A diff that changes a web page needs the PR body to {}",
     charliebot_tasks::web_screenshots::body_requirement()

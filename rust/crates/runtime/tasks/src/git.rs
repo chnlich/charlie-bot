@@ -1162,6 +1162,20 @@ pub async fn git_verify_commit_landed(repo_path: &Path, branch: &str, commit: &s
   (true, String::new())
 }
 
+/// The `owner/repo` path a remote URL names, the form every `gh api` path needs. The URL forms
+/// GitHub serves — `https://`, `ssh://` and the scp style — all end in an `owner/repo` path.
+pub fn repo_from_remote_url(url: &str) -> Option<String> {
+  let trimmed = url.trim().trim_end_matches('/');
+  let trimmed = trimmed.strip_suffix(".git").unwrap_or(trimmed);
+  let path = if let Some((_, rest)) = trimmed.split_once("://") {
+    rest.split_once('/').map(|(_, tail)| tail)
+  } else {
+    trimmed.split_once(':').map(|(_, tail)| tail)
+  }?;
+  let repo = path.trim_start_matches('/');
+  (!repo.is_empty() && repo.contains('/') && !repo.contains(':')).then(|| repo.to_string())
+}
+
 /// Runs a `git` binary against *repo* and returns its output, for the fixtures of this module's tests.
 #[cfg(test)]
 pub(crate) fn run_git(repo: &Path, args: &[&str]) -> std::process::Output {

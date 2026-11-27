@@ -3,7 +3,6 @@
 pub mod backend;
 pub mod backup;
 pub mod bash_hook;
-pub mod ci_wait;
 pub mod compaction_context;
 pub mod config;
 pub mod delegate;
@@ -12,6 +11,7 @@ pub mod files;
 pub mod gc_trash;
 pub mod kill_guard;
 pub mod land;
+pub mod land_queue;
 pub mod linear;
 pub mod preflight_charlie_code;
 pub mod read_budget;

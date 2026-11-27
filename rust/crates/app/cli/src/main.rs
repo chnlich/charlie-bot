@@ -17,11 +17,10 @@ use charliebot_cli_common::json_out;
 
 /// The subcommand vocabulary, sorted: every registered command with a
 /// caller. A caller-less name is an unknown name here.
-const COMMANDS: [&str; 37] = [
+const COMMANDS: [&str; 36] = [
   "artifact",
   "backend",
   "backup",
-  "ci-wait",
   "compaction-context",
   "config",
   "delegate",
@@ -108,7 +107,6 @@ fn run_subcommand(
     "artifact" => charliebot_artifacts::cli::artifact::main(args, host),
     "backend" => commands::backend::main(args, host),
     "backup" => commands::backup::main(args, host),
-    "ci-wait" => commands::ci_wait::main(args),
     "compaction-context" => commands::compaction_context::main(args),
     "config" => commands::config::main(args),
     "delegate" => commands::delegate::main(args),

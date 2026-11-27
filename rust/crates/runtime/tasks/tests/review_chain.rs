@@ -1965,6 +1965,7 @@ async fn a_work_commit_on_main_with_a_landed_record_closes_the_reviewed_task() -
     ci_passed_at: None,
     pushed_at: None,
     rebase_retries: 0,
+    queue_ref: None,
   };
   fs::write(stack.store().session_dir(&worker.id).join(LANDING_FILE_NAME), serde_json::to_string(&record)?)?;
   register_work_and_review(&stack, &worker.id, &repo, branch, &worktree).await?;

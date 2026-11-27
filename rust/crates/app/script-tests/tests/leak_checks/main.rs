@@ -5,6 +5,7 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use charliebot_shell_harness::{self as harness, Env, Run, Sandbox};
 
@@ -107,6 +108,15 @@ fn run_with_stdin(command: &mut Command, cwd: &Path, input: &str) -> Run {
     stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
     stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
   }
+}
+
+/// Runs one git command against `cwd` with exactly `env`, and returns its trimmed stdout.
+fn git_in(env: &Env, cwd: &Path, args: &[&str]) -> String {
+  let mut command = harness::command("git", env);
+  command.args(args).current_dir(cwd);
+  let run = run(&mut command);
+  assert_eq!(run.code, 0, "git {args:?} did not run: {}", run.describe());
+  run.stdout.trim().to_string()
 }
 
 fn git(env: &Env, cwd: &Path, args: &[&str]) -> String {
@@ -1101,7 +1111,8 @@ fn tools_scanner(repo: &Path) -> PathBuf {
 /// The `gh` stand-in for `pr-merge` and the verdict comment: it answers the diff and view reads from files the test
 /// writes, runs a `--jq` filter over the comments file with jq as gh does, records every call, and copies the
 /// `--body-file` of a merge and of a comment aside so a test can read what reached GitHub.
-const MERGE_GH_STUB: &str = r#"case "$1 $2" in
+const MERGE_GH_STUB: &str = r#"if [[ "$1" == api ]]; then cat "$GH_CHECK_RUNS"; fi
+case "$1 $2" in
   'pr diff')
     cat "$GH_CHANGED_PATHS"
     ;;
@@ -1113,6 +1124,7 @@ const MERGE_GH_STUB: &str = r#"case "$1 $2" in
       previous=$argument
     done
     case "$json" in
+      number) printf '5046\n' ;;
       title) cat "$GH_PR_TITLE" ;;
       body) cat "$GH_PR_BODY" ;;
       isDraft) cat "$GH_PR_DRAFT" ;;
@@ -1139,8 +1151,7 @@ if [[ "$1 $2" == 'pr comment' ]]; then
 fi
 "#;
 
-/// The head sha of the synthetic pull request, and an older head it was rebased or fixed from.
-const HEAD_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+/// An older head that the pull request was rebased or fixed from.
 const OLDER_SHA: &str = "89abcdef0123456789abcdef0123456789abcdef";
 /// The squash commit that GitHub reports as the merged pull request's merge commit.
 const MERGE_SHA: &str = "fedcba9876543210fedcba9876543210fedcba98";
@@ -1200,6 +1211,8 @@ fn body_naming(names: &[String], rest: &str) -> String {
 struct MergeWorld {
   sandbox: Sandbox,
   env: Env,
+  /// The pull request's head: a real commit, present in the sandbox worktree and on its origin.
+  head: String,
   gh_log: PathBuf,
   merge_body: PathBuf,
   comment_body: PathBuf,
@@ -1211,8 +1224,8 @@ struct MergeWorld {
 }
 
 impl MergeWorld {
-  /// A pull request at `HEAD_SHA` whose newest verdict comment reports no issues on that head. Its readback after the
-  /// merge reports it merged at `HEAD_SHA`, until a test replaces the readback.
+  /// A pull request at the sandbox's head commit whose newest verdict comment reports no issues on that head. Its
+  /// readback after the merge reports it merged at that head, until a test replaces the readback.
   fn new(changed: &str, pr_body: &str) -> MergeWorld {
     let sandbox = Sandbox::new();
     let home = pattern_home(&sandbox);
@@ -1222,6 +1235,27 @@ impl MergeWorld {
     let binary = harness::built_binary("charliebot").display().to_string();
     assert!(!binary.contains('\''), "the binary path carries no quote: {binary}");
     sandbox.stub("charliebot", &format!("exec '{binary}' \"$@\"\n"));
+    // Every merge holds the landing queue's turn on origin, so the sandbox is a worktree whose origin is a bare
+    // repository, and the pull request's head is a commit in both. The queue keys an entry by the head's check
+    // completion, which the gh stub answers from a fixed check-runs document.
+    let origin = sandbox.dir("origin.git");
+    let root = sandbox.root();
+    git_in(
+      &env,
+      root,
+      &["init", "-q", "--bare", "--initial-branch=main", origin.to_str().expect("the origin path is UTF-8")],
+    );
+    git_in(&env, root, &["init", "-q", "-b", "main"]);
+    git_in(&env, root, &["remote", "add", "origin", &format!("file://{}", origin.display())]);
+    std::fs::write(root.join("tracked.txt"), "base\n").unwrap();
+    git_in(&env, root, &["add", "tracked.txt"]);
+    git_in(&env, root, &["commit", "-q", "-m", "base"]);
+    git_in(&env, root, &["push", "-q", "origin", "main"]);
+    git_in(&env, root, &["commit", "-q", "--allow-empty", "-m", "pr head"]);
+    git_in(&env, root, &["push", "-q", "origin", "HEAD:refs/heads/improve/pr-head"]);
+    let head = git_in(&env, root, &["rev-parse", "HEAD"]);
+    let check_runs = root.join("check-runs.json");
+    std::fs::write(&check_runs, r#"{"check_runs":[{"completed_at":"2026-11-27T00:00:00Z"}]}"#).unwrap();
     let changed_paths = sandbox.root().join("changed-paths");
     let pr_title = sandbox.root().join("pr-title");
     let pr_body_file = sandbox.root().join("pr-body");
@@ -1241,8 +1275,9 @@ impl MergeWorld {
     env.insert("GH_MERGE_BODY".to_string(), merge_body.display().to_string());
     env.insert("GH_COMMENT_BODY".to_string(), comment_body.display().to_string());
     env.insert("GH_COMMENTS".to_string(), comments.display().to_string());
-    env.insert("GH_HEAD_SHA".to_string(), HEAD_SHA.to_string());
+    env.insert("GH_HEAD_SHA".to_string(), head.clone());
     env.insert("GH_HEAD_BRANCH".to_string(), HEAD_BRANCH.to_string());
+    env.insert("GH_CHECK_RUNS".to_string(), check_runs.display().to_string());
     let evidence = sandbox.dir("evidence");
     // The round's launch directory already holds its in-flight list; add an empty event log until a test writes its
     // tool calls.
@@ -1255,6 +1290,7 @@ impl MergeWorld {
     let world = MergeWorld {
       sandbox,
       env,
+      head,
       gh_log,
       merge_body,
       comment_body,
@@ -1264,8 +1300,8 @@ impl MergeWorld {
       readback,
       round_events,
     };
-    world.set_comments(&[verdict_comment(HEAD_SHA, CLEAN_REVIEW)]);
-    world.set_readback("MERGED", HEAD_SHA);
+    world.set_comments(&[verdict_comment(&world.head, CLEAN_REVIEW)]);
+    world.set_readback("MERGED", &world.head);
     world
   }
 
@@ -1378,6 +1414,149 @@ impl MergeWorld {
 
   fn merge_calls(&self) -> Vec<String> {
     gh_log_lines(&self.gh_log).into_iter().filter(|line| line.starts_with("pr merge")).collect()
+  }
+
+  /// Runs one git command in the sandbox worktree and returns its trimmed stdout.
+  fn git(&self, args: &[&str]) -> String {
+    git_in(&self.env, self.sandbox.root(), args)
+  }
+
+  /// The landing queue's live refs on the sandbox origin, as (name, sha) pairs.
+  fn queue_refs(&self) -> Vec<(String, String)> {
+    self
+      .git(&["ls-remote", "origin", "refs/land-turn/main", "refs/land-queue/*"])
+      .lines()
+      .filter_map(|line| line.split_once('\t').map(|(sha, name)| (name.to_string(), sha.to_string())))
+      .collect()
+  }
+
+  /// The name on the turn's heartbeat commit, when the turn is held.
+  fn turn_holder(&self) -> Option<String> {
+    let (_, sha) = self.queue_refs().into_iter().find(|(name, _)| name == "refs/land-turn/main")?;
+    Some(self.git(&["show", "-s", "--format=%s", &sha]))
+  }
+
+  /// The waiting entries in name order.
+  fn entry_refs(&self) -> Vec<(String, String)> {
+    self.queue_refs().into_iter().filter(|(name, _)| name.starts_with("refs/land-queue/")).collect()
+  }
+
+  /// A heartbeat commit on the pull request's head, stamped now, named `holder`.
+  fn beat_commit(&self, holder: &str) -> String {
+    let stamp = format!(
+      "@{} +0000",
+      std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("the clock reads after 1970").as_secs()
+    );
+    let mut command = harness::command("git", &self.env);
+    command
+      .current_dir(self.sandbox.root())
+      .args([
+        "-c",
+        "commit.gpgsign=false",
+        "commit-tree",
+        "--no-gpg-sign",
+        "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+        "-p",
+        &self.head,
+        "-m",
+        holder,
+      ])
+      .env("GIT_AUTHOR_DATE", &stamp)
+      .env("GIT_COMMITTER_DATE", &stamp);
+    let run = run(&mut command);
+    assert_eq!(run.code, 0, "git commit-tree: {}", run.describe());
+    run.stdout.trim().to_string()
+  }
+
+  /// Holds the turn as `holder`.
+  fn hold_turn(&self, holder: &str) {
+    let sha = self.beat_commit(holder);
+    self.git(&["push", "-q", "origin", &format!("{sha}:refs/land-turn/main")]);
+  }
+
+  /// Creates a waiting entry for the pull request as `round-launch`, keyed by `key`.
+  fn hold_entry(&self, key: &str) -> String {
+    let refname = format!("refs/land-queue/{key}-5046-round-launch");
+    let sha = self.beat_commit(&refname);
+    self.git(&["push", "-q", "origin", &format!("{sha}:{refname}")]);
+    refname
+  }
+
+  /// Deletes one queue ref with a lease on the value it holds.
+  fn delete_ref(&self, refname: &str) {
+    let listed = self.git(&["ls-remote", "origin", refname]);
+    let sha = listed.split_once('\t').map(|(sha, _)| sha.to_string()).expect("the ref is held before it is deleted");
+    self.git(&["push", "-q", &format!("--force-with-lease={refname}:{sha}"), "origin", &format!(":{refname}")]);
+  }
+
+  /// The pr-merge command with `extra` environment, for a test that runs it in the background.
+  fn merge_command(&self, args: &[&str], extra: &[(&str, &str)]) -> Command {
+    let mut env = self.env.clone();
+    for (name, value) in extra {
+      env.insert((*name).to_string(), (*value).to_string());
+    }
+    let mut command = harness::command("bash", &env);
+    command.arg(github_post()).arg("pr-merge").args(args).current_dir(self.sandbox.root());
+    command
+  }
+
+  /// Runs pr-merge with `extra` environment.
+  fn merge_with_env(&self, args: &[&str], extra: &[(&str, &str)]) -> Run {
+    run(&mut self.merge_command(args, extra))
+  }
+}
+
+/// Starts `command` in a thread and returns the channel its run arrives on.
+fn spawn_merge(mut command: Command) -> std::sync::mpsc::Receiver<Run> {
+  let (sender, receiver) = std::sync::mpsc::channel();
+  std::thread::spawn(move || {
+    let output = command.output().expect("pr-merge runs");
+    sender
+      .send(Run {
+        code: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+      })
+      .expect("the test receives the run");
+  });
+  receiver
+}
+
+/// Polls the sandbox origin until a waiting entry appears, or the limit runs out.
+fn wait_for_entry(world: &MergeWorld, limit: Duration) -> (String, String) {
+  let start = Instant::now();
+  loop {
+    if let Some(entry) = world.entry_refs().into_iter().next() {
+      return entry;
+    }
+    assert!(start.elapsed() < limit, "no waiting entry appeared within {limit:?}");
+    std::thread::sleep(Duration::from_millis(20));
+  }
+}
+
+/// Polls until `name`'s heartbeat differs from `old_sha`, or the limit runs out.
+fn wait_for_new_beat(world: &MergeWorld, name: &str, old_sha: &str, limit: Duration) -> String {
+  let start = Instant::now();
+  loop {
+    if let Some((_, sha)) = world.entry_refs().into_iter().find(|(refname, _)| refname == name)
+      && sha != old_sha
+    {
+      return sha;
+    }
+    assert!(start.elapsed() < limit, "the entry {name} did not heartbeat within {limit:?}");
+    std::thread::sleep(Duration::from_millis(20));
+  }
+}
+
+/// Polls until the entry `name` exists again, or the limit runs out.
+fn wait_for_named_entry(world: &MergeWorld, name: &str, limit: Duration) -> (String, String) {
+  let start = Instant::now();
+  loop {
+    if let Some(entry) = world.entry_refs().into_iter().find(|(refname, _)| refname == name) {
+      return entry;
+    }
+    assert!(start.elapsed() < limit, "the entry {name} did not come back within {limit:?}");
+    std::thread::sleep(Duration::from_millis(20));
   }
 }
 
@@ -1542,7 +1721,7 @@ fn a_pr_merge_prints_the_pr_number_reviewed_head_merge_commit_and_state_read_bac
   // The title and body checks of a web change print nothing on a pass, so stdout is the merge result alone.
   assert_eq!(
     run.stdout,
-    format!("PR 5046\nReviewed head: {HEAD_SHA}\nMerge commit: {MERGE_SHA}\nState: MERGED\n"),
+    format!("PR 5046\nReviewed head: {}\nMerge commit: {MERGE_SHA}\nState: MERGED\n", world.head),
     "{}",
     run.describe()
   );
@@ -1552,7 +1731,7 @@ fn a_pr_merge_prints_the_pr_number_reviewed_head_merge_commit_and_state_read_bac
 #[ignore = "integration"]
 fn a_pr_merge_whose_readback_does_not_show_the_merge_exits_4_and_claims_no_result() {
   let world = MergeWorld::new("rust/crates/x/src/lib.rs\n", CLEAN_BODY);
-  world.set_readback("OPEN", HEAD_SHA);
+  world.set_readback("OPEN", &world.head);
 
   let run = world.merge(&["5046"]);
 
@@ -1650,7 +1829,7 @@ fn a_pr_merge_refuses_a_verdict_that_names_an_older_head() {
   let run = world.merge(&["5046"]);
 
   assert_eq!(run.code, 2, "{}", run.describe());
-  assert!(run.stderr.contains(OLDER_SHA) && run.stderr.contains(HEAD_SHA), "{}", run.describe());
+  assert!(run.stderr.contains(OLDER_SHA) && run.stderr.contains(&world.head), "{}", run.describe());
   assert!(world.merge_calls().is_empty(), "nothing may merge: {}", run.describe());
 }
 
@@ -1658,7 +1837,7 @@ fn a_pr_merge_refuses_a_verdict_that_names_an_older_head() {
 #[ignore = "integration"]
 fn a_pr_merge_refuses_a_verdict_on_the_head_that_reports_findings() {
   let world = MergeWorld::new("rust/crates/x/src/lib.rs\n", "## Evidence\nno screenshot needed.\n");
-  world.set_comments(&[verdict_comment(HEAD_SHA, FINDING_REVIEW)]);
+  world.set_comments(&[verdict_comment(&world.head, FINDING_REVIEW)]);
 
   let run = world.merge(&["5046"]);
 
@@ -1681,9 +1860,10 @@ fn a_pr_merge_passes_a_clean_verdict_on_the_head() {
 #[test]
 #[ignore = "integration"]
 fn a_pr_merge_reads_the_newest_verdict_after_a_fix_and_its_rerun() {
-  // The round's fix moves the head to HEAD_SHA, and the rerun of the same review posts a clean verdict on it.
+  // The round's fix moves the head to the pull request's head, and the rerun of the same review posts a clean verdict
+  // on it.
   let world = MergeWorld::new("rust/crates/x/src/lib.rs\n", "## Evidence\nno screenshot needed.\n");
-  world.set_comments(&[verdict_comment(OLDER_SHA, FINDING_REVIEW), verdict_comment(HEAD_SHA, CLEAN_REVIEW)]);
+  world.set_comments(&[verdict_comment(OLDER_SHA, FINDING_REVIEW), verdict_comment(&world.head, CLEAN_REVIEW)]);
 
   let run = world.merge(&["5046"]);
 
@@ -1837,6 +2017,117 @@ fn a_pr_merge_outside_a_round_needs_an_evidence_directory() {
   assert!(world.merge_calls().is_empty(), "nothing may merge:\n{}", run.describe());
 }
 
+/// The fast cadence and a short bound a queue test uses: the production intervals and the production bound are too
+/// long for a test, and the round's tool call is not shortened by them.
+const FAST_QUEUE: [(&str, &str); 3] = [
+  ("CHARLIEBOT_LAND_QUEUE_POLL_MS", "50"),
+  ("CHARLIEBOT_LAND_QUEUE_BEAT_MS", "100"),
+  ("CHARLIEBOT_LAND_QUEUE_BOUND_SECS", "120"),
+];
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_refuses_a_charliebot_without_the_landing_queue_verbs() {
+  let world = MergeWorld::new("rust/crates/x/src/lib.rs\n", "## Evidence\nno screenshot needed.\n");
+  // A binary from an older release has no queue verb: the kit script must refuse rather than merge outside the queue.
+  let binary = harness::built_binary("charliebot").display().to_string();
+  assert!(!binary.contains('\''), "the binary path carries no quote: {binary}");
+  world
+    .sandbox
+    .stub("charliebot", &format!("if [[ \"$1 $2\" == 'land queue' ]]; then exit 2; fi\nexec '{binary}' \"$@\"\n"));
+
+  let run = world.merge(&["5046"]);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("land queue acquire"), "the missing verb is named: {}", run.describe());
+  assert!(world.merge_calls().is_empty(), "nothing may merge: {}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn an_in_round_pr_merge_waits_with_heartbeats_for_the_turn_and_merges_when_it_frees() {
+  let world = MergeWorld::new("rust/crates/x/src/lib.rs\n", "## Evidence\nno screenshot needed.\n");
+  // Another writer holds the turn, so the round's merge must wait in the foreground.
+  world.hold_turn("another writer");
+  assert_eq!(world.turn_holder().as_deref(), Some("another writer"));
+  // A round carries the launching session's CHARLIEBOT_SESSION_ID; its entry must still key on the launch id.
+  let mut extra = FAST_QUEUE.to_vec();
+  extra.push(("CHARLIEBOT_SESSION_ID", "launching-worker-session"));
+
+  let run = spawn_merge(world.merge_command(&["5046"], &extra));
+  let (name, first_beat) = wait_for_entry(&world, Duration::from_secs(20));
+  assert!(name.ends_with("-round-launch"), "the entry carries the launch id: {name}");
+  assert!(!name.contains("launching-worker-session"), "the entry never carries the session id: {name}");
+  // The waiter keeps its entry alive while the turn is held, and nothing merges yet.
+  let second_beat = wait_for_new_beat(&world, &name, &first_beat, Duration::from_secs(20));
+  assert_ne!(second_beat, first_beat, "the heartbeat moved while the turn was held");
+  assert!(world.merge_calls().is_empty(), "nothing merges before the turn frees");
+
+  world.delete_ref("refs/land-turn/main");
+  let run = run.recv_timeout(Duration::from_secs(30)).expect("the merge finishes once the turn frees");
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert_eq!(world.merge_calls(), ["pr merge --squash 5046"], "{}", run.describe());
+  assert!(world.queue_refs().is_empty(), "the merge releases the turn and its entry: {:?}", world.queue_refs());
+}
+
+#[test]
+#[ignore = "integration"]
+fn an_in_round_pr_merge_that_reaches_its_bound_removes_its_entry_and_exits_75() {
+  let world = MergeWorld::new("rust/crates/x/src/lib.rs\n", "## Evidence\nno screenshot needed.\n");
+  world.hold_turn("another writer");
+  let mut extra = FAST_QUEUE.to_vec();
+  extra[2] = ("CHARLIEBOT_LAND_QUEUE_BOUND_SECS", "2");
+
+  let run = world.merge_with_env(&["5046"], &extra);
+
+  assert_eq!(run.code, 75, "{}", run.describe());
+  assert!(run.stderr.contains("did not come within"), "{}", run.describe());
+  assert!(world.merge_calls().is_empty(), "nothing may merge: {}", run.describe());
+  assert!(world.entry_refs().is_empty(), "the bound removed the entry: {:?}", world.entry_refs());
+  assert_eq!(world.turn_holder().as_deref(), Some("another writer"), "another writer's turn is untouched");
+}
+
+#[test]
+#[ignore = "integration"]
+fn an_in_round_pr_merge_reenters_at_an_existing_entrys_original_key() {
+  let world = MergeWorld::new("rust/crates/x/src/lib.rs\n", "## Evidence\nno screenshot needed.\n");
+  world.hold_turn("another writer");
+  // The entry is already waiting at a key older than the head's check completion: a repeated call keeps that place.
+  let original = world.hold_entry("1700000000000");
+  let run = spawn_merge(world.merge_command(&["5046"], &FAST_QUEUE));
+  wait_for_new_beat(&world, &original, "0".repeat(40).as_str(), Duration::from_secs(20));
+  assert_eq!(world.entry_refs().len(), 1, "the repeated call keeps one entry: {:?}", world.entry_refs());
+  assert_eq!(world.entry_refs()[0].0, original, "the entry keeps its original key");
+
+  world.delete_ref("refs/land-turn/main");
+  let run = run.recv_timeout(Duration::from_secs(30)).expect("the merge finishes once the turn frees");
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert_eq!(world.merge_calls(), ["pr merge --squash 5046"], "{}", run.describe());
+  assert!(world.queue_refs().is_empty(), "the merge releases the turn and its entry: {:?}", world.queue_refs());
+}
+
+#[test]
+#[ignore = "integration"]
+fn an_in_round_pr_merge_reenters_at_its_original_key_after_its_entry_disappears() {
+  let world = MergeWorld::new("rust/crates/x/src/lib.rs\n", "## Evidence\nno screenshot needed.\n");
+  world.hold_turn("another writer");
+  let run = spawn_merge(world.merge_command(&["5046"], &FAST_QUEUE));
+  let (name, _) = wait_for_entry(&world, Duration::from_secs(20));
+  // A prune removes the entry, as a stalled push past the 180 s heartbeat limit would.
+  world.delete_ref(&name);
+  wait_for_named_entry(&world, &name, Duration::from_secs(20));
+
+  world.delete_ref("refs/land-turn/main");
+  let run = run.recv_timeout(Duration::from_secs(30)).expect("the merge finishes once the turn frees");
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(
+    run.stderr.contains("re-entered at its original key"),
+    "the re-entry is stated in the output: {}",
+    run.describe()
+  );
+  assert_eq!(world.merge_calls(), ["pr merge --squash 5046"], "{}", run.describe());
+}
+
 #[test]
 #[ignore = "integration"]
 fn a_pr_comment_with_a_verdict_head_posts_the_head_line_that_pr_merge_reads() {
@@ -1846,7 +2137,7 @@ fn a_pr_comment_with_a_verdict_head_posts_the_head_line_that_pr_merge_reads() {
 
   let run = world.comment(&[
     "--verdict-head",
-    HEAD_SHA,
+    &world.head,
     "--body-file",
     review.to_str().unwrap(),
     "--repo",
@@ -1856,7 +2147,7 @@ fn a_pr_comment_with_a_verdict_head_posts_the_head_line_that_pr_merge_reads() {
 
   assert_eq!(run.code, 0, "{}", run.describe());
   let posted = std::fs::read_to_string(&world.comment_body).expect("the verdict comment was posted");
-  assert_eq!(posted, verdict_comment(HEAD_SHA, CLEAN_REVIEW), "{}", run.describe());
+  assert_eq!(posted, verdict_comment(&world.head, CLEAN_REVIEW), "{}", run.describe());
   let log = gh_log_lines(&world.gh_log);
   let calls: Vec<String> = log.iter().filter(|line| line.starts_with("pr comment")).cloned().collect();
   assert_eq!(calls.len(), 1, "{}", run.describe());
@@ -1874,7 +2165,8 @@ fn a_pr_comment_with_a_verdict_head_posts_the_head_line_that_pr_merge_reads() {
 #[test]
 #[ignore = "integration"]
 fn a_pr_comment_refuses_a_verdict_head_that_is_not_the_prs_full_head_and_posts_nothing() {
-  // The pull request's head is HEAD_SHA. Each call names a head that is empty, short, or an older commit's full sha.
+  // The pull request's head is the sandbox's head commit. Each call names a head that is empty, short, or an older
+  // commit's full sha.
   let world = MergeWorld::new("rust/crates/x/src/lib.rs\n", "## Evidence\nno screenshot needed.\n");
   let review = world.sandbox.root().join("review.md");
   std::fs::write(&review, CLEAN_REVIEW).unwrap();
@@ -1883,7 +2175,7 @@ fn a_pr_comment_refuses_a_verdict_head_that_is_not_the_prs_full_head_and_posts_n
   for (case, head) in refusals {
     let run = world.comment(&["--verdict-head", head, "--body-file", review, "5046"]);
     assert_eq!(run.code, 2, "{case}: {}", run.describe());
-    assert!(run.stderr.contains(HEAD_SHA), "{case} does not name the pull request's head: {}", run.describe());
+    assert!(run.stderr.contains(&world.head), "{case} does not name the pull request's head: {}", run.describe());
     assert!(run.stderr.contains(head), "{case} does not name the given head: {}", run.describe());
     assert!(!world.comment_body.exists(), "{case} posted a comment");
   }

@@ -36,6 +36,11 @@
 # (classic) lookup. It reads the PR's URL with gh pr view, then sends the
 # checked title and body with gh api -X PATCH on the REST pull endpoint.
 #
+# pr-create runs the merge's screenshot check on the changed paths, the evidence directory and the body before the
+# review (dev/improve/web-evidence.sh). A change that alters no web page passes. A web page change needs an evidence
+# directory whose top level holds exactly the screenshots the body names, and it must pass `charliebot screenshots
+# check`, so a layout fault stops the round before the review instead of at the merge.
+#
 # pr-create and pr-merge check the side record citations of the body (dev/improve/side-record.sh): a line that
 # contains `Side record:` outside the accepted form is refused. The cited records are checked against the round's
 # evidence directory when they receive --evidence-dir, and a body that cites a record without it is refused.
@@ -79,6 +84,7 @@ repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 scanner="$repo_root/dev/check-skills-host-leak.sh"
 source "$repo_root/dev/push-text-lists.sh"
 source "$repo_root/dev/improve/side-record.sh"
+source "$repo_root/dev/improve/web-evidence.sh"
 source "$repo_root/dev/improve/code-style-rules.sh"
 source "$repo_root/dev/improve/moved-references.sh"
 
@@ -363,6 +369,7 @@ case "$subcommand" in
       exit 2
     }
     moved_references_check "$tmp_dir" "$pr_head" "$body_file" || exit 2
+    web_evidence_check "$evidence_dir" "$body_file" "$tmp_dir/changed" "$tmp_dir" || exit 2
     without_evidence_dir
     gh pr create "${gh_args[@]}"
     ;;

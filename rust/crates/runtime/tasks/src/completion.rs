@@ -287,7 +287,7 @@ impl TaskCompletion {
     }
     let (records, mut outcomes) = self.delivery_run_outcomes(meta)?;
     for run_id in succeeding_run_ids.into_iter().flatten() {
-      outcomes.insert(run_id.clone(), Some("success".to_string()));
+      outcomes.insert(run_id.clone(), Some(RunOutcomeKind::Success.as_str().to_string()));
     }
     let some_run_judged_success = succeeding_run_ids.is_some_and(|run_ids| !run_ids.is_empty());
     let facts = self.store().node_facts(&meta.id)?;
@@ -1450,7 +1450,7 @@ impl TaskCompletion {
           json!("never_launched")
         } else {
           match run_records::terminal_outcome(&events, &run.id)? {
-            Some(RunOutcomeKind::Interrupted) => json!("interrupted"),
+            Some(RunOutcomeKind::Interrupted) => json!(RunOutcomeKind::Interrupted.as_str()),
             None => Value::Null,
             Some(outcome) => {
               return Err(StoreError::new(format!(

@@ -330,12 +330,18 @@ pub enum RunOutcomeKind {
 }
 
 impl RunOutcomeKind {
-  fn as_str(self) -> &'static str {
+  /// The spelling of this outcome in a `run_finished` fact and in the run-stop response.
+  pub fn as_str(self) -> &'static str {
     match self {
       Self::Success => "success",
       Self::Failed => "failed",
       Self::Interrupted => "interrupted",
     }
+  }
+
+  /// The outcome that `word` spells, or `None` for a word that names no outcome.
+  pub fn parse(word: &str) -> Option<Self> {
+    [Self::Success, Self::Failed, Self::Interrupted].into_iter().find(|outcome| outcome.as_str() == word)
   }
 }
 
@@ -373,11 +379,6 @@ impl HostBoot {
   pub fn was_read(&self) -> bool {
     self.0.is_some()
   }
-}
-
-/// Whether `terminal_outcome` maps a `run_finished` outcome to a run outcome.
-fn is_known_outcome(value: &str) -> bool {
-  matches!(value, "success" | "failed" | "interrupted")
 }
 
 impl RunFacts {
@@ -535,7 +536,7 @@ impl RunFacts {
 
   /// Whether some run's last `run_finished` fact carries an outcome that [`RunFacts::terminal_outcome`] rejects.
   pub fn has_unknown_outcome(&self) -> bool {
-    self.outcomes.values().any(|outcome| outcome.as_deref().is_some_and(|value| !is_known_outcome(value)))
+    self.outcomes.values().any(|outcome| outcome.as_deref().is_some_and(|value| RunOutcomeKind::parse(value).is_none()))
   }
 
   /// Whether any `run_finished` fact exists for this run, even when it has no outcome value.
@@ -547,10 +548,9 @@ impl RunFacts {
   pub fn terminal_outcome(&self, run_id: &str) -> StoreResult<Option<RunOutcomeKind>> {
     match self.outcomes.get(run_id).and_then(Option::as_deref) {
       None => Ok(None),
-      Some("success") => Ok(Some(RunOutcomeKind::Success)),
-      Some("failed") => Ok(Some(RunOutcomeKind::Failed)),
-      Some("interrupted") => Ok(Some(RunOutcomeKind::Interrupted)),
-      Some(value) => Err(StoreError::new(format!("run {run_id} has unknown terminal outcome {value:?}"))),
+      Some(value) => RunOutcomeKind::parse(value)
+        .map(Some)
+        .ok_or_else(|| StoreError::new(format!("run {run_id} has unknown terminal outcome {value:?}"))),
     }
   }
 
@@ -1390,10 +1390,9 @@ pub fn terminal_outcome<T: AsRef<ChatEvent>>(events: &[T], run_id: &str) -> Stor
   let event = finish_facts(events, run_id).next_back();
   match event.and_then(|event| event.get("outcome")).and_then(CompactValue::as_str) {
     None => Ok(None),
-    Some("success") => Ok(Some(RunOutcomeKind::Success)),
-    Some("failed") => Ok(Some(RunOutcomeKind::Failed)),
-    Some("interrupted") => Ok(Some(RunOutcomeKind::Interrupted)),
-    Some(value) => Err(StoreError::new(format!("run {run_id} has unknown terminal outcome {value:?}"))),
+    Some(value) => RunOutcomeKind::parse(value)
+      .map(Some)
+      .ok_or_else(|| StoreError::new(format!("run {run_id} has unknown terminal outcome {value:?}"))),
   }
 }
 

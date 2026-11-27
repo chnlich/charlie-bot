@@ -28,7 +28,8 @@ use charliebot_store::layout::{chat_events_path, runs_dir};
 use charliebot_store::metadata::EXIT_CODE_FIELD;
 use charliebot_store::run_logs;
 use charliebot_store::run_records::{
-  self, OBSERVATION_EVENTS_REF, OBSERVATION_RESULT_REF, RUN_METADATA_NAME, STDERR_LOG_NAME, stop_requested_in_events,
+  self, OBSERVATION_EVENTS_REF, OBSERVATION_RESULT_REF, RUN_METADATA_NAME, RunOutcomeKind, STDERR_LOG_NAME,
+  stop_requested_in_events,
 };
 use jiff::Timestamp;
 use jiff::civil;
@@ -42,8 +43,6 @@ use crate::signature::{
 const STDERR_TAIL_BYTES: u64 = 8_000;
 /// The number of examples one signature keeps.
 const EXAMPLE_LIMIT: usize = 5;
-/// The terminal outcome value a requested or recovered stop writes.
-const INTERRUPTED_OUTCOME: &str = "interrupted";
 /// The default server log directory, the launcher's `CHARLIEBOT_LOG_DIR` default.
 pub const DEFAULT_LOG_DIR: &str = "/tmp/charliebot-logs";
 /// The environment variable that moves the server log directory.
@@ -269,7 +268,8 @@ fn collect_runs(options: &ScanOptions, groups: &mut BTreeMap<String, Group>) -> 
         continue;
       }
       let outcome = facts.finished.get(&record.id).map(String::as_str);
-      let failed = record.exit_code.is_some_and(|code| code != 0) || outcome == Some(INTERRUPTED_OUTCOME);
+      let failed =
+        record.exit_code.is_some_and(|code| code != 0) || outcome == Some(RunOutcomeKind::Interrupted.as_str());
       if !failed {
         continue;
       }

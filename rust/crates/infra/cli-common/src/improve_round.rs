@@ -8,9 +8,9 @@
 use std::env::VarError;
 use std::path::Path;
 
-use charliebot_core::{home, paths};
+use charliebot_core::paths;
 
-use crate::exit::CliExit;
+use crate::exit::{CliExit, charliebot_home_or_exit};
 
 /// The variable that names the round's launch directory. Only the runner sets it.
 pub const LAUNCH_DIR_ENV: &str = "IMPROVE_LAUNCH_DIR";
@@ -26,7 +26,7 @@ pub fn in_improve_round() -> Result<bool, CliExit> {
   if std::env::var_os(LAUNCH_DIR_ENV).is_none_or(|value| value.is_empty()) {
     return Ok(false);
   }
-  let charliebot_home = home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
+  let charliebot_home = charliebot_home_or_exit()?;
   Ok(is_round_home(&charliebot_home, Path::new(&paths::expanduser("~"))))
 }
 

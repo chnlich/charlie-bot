@@ -5,9 +5,8 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 use charliebot_cli_common::args as cli_args;
-use charliebot_cli_common::exit::CliExit;
+use charliebot_cli_common::exit::{CliExit, charliebot_home_or_exit};
 use charliebot_cli_common::json_out;
-use charliebot_core::home;
 use charliebot_usage_page::{UsageLedger, default_ledger_path, host_name, rebuild_run_records};
 use clap::{Parser, Subcommand};
 use serde_json::json;
@@ -34,7 +33,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   let UsageVerb::RebuildRuns { ledger } = cli.verb;
 
   let registry = charliebot_packages::registry().map_err(|error| CliExit::error(error.to_string()))?;
-  let home = home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
+  let home = charliebot_home_or_exit()?;
   let cfg = registry.load_config(&home).map_err(|error| CliExit::error(error.to_string()))?;
   let path = ledger.unwrap_or_else(|| default_ledger_path(&cfg.charliebot_home));
   if !path.is_file() {

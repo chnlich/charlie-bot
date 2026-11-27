@@ -5,8 +5,8 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use charliebot_cli_common::args as cli_args;
-use charliebot_cli_common::exit::CliExit;
-use charliebot_core::{config, home};
+use charliebot_cli_common::exit::{CliExit, charliebot_home_or_exit};
+use charliebot_core::config;
 use clap::{Args, Parser, Subcommand};
 use serde_json::Value;
 use time::OffsetDateTime;
@@ -98,7 +98,7 @@ where
 }
 
 fn store_dir() -> Result<PathBuf, CliExit> {
-  let home_dir = home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
+  let home_dir = charliebot_home_or_exit()?;
   Ok(store::taste_dir(&home_dir))
 }
 
@@ -167,7 +167,7 @@ where
       sources
     }
   };
-  let home_dir = home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
+  let home_dir = charliebot_home_or_exit()?;
   let sessions_root = config::sessions_dir_in(&home_dir);
   let candidates = candidates::collect(&sessions_root, since, &sources, read_plans)
     .map_err(|error| CliExit::error(format!("{error:#}")))?;

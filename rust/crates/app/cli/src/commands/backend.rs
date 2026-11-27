@@ -18,11 +18,10 @@ use charliebot_agents::cli_host::{CliHost, LazyHost};
 use charliebot_backend_check::{Vocabulary, gate};
 use charliebot_cli_common::args as cli_args;
 use charliebot_cli_common::client;
-use charliebot_cli_common::exit::CliExit;
+use charliebot_cli_common::exit::{CliExit, charliebot_home_or_exit};
 use charliebot_cli_common::files;
 use charliebot_cli_common::json_out;
 use charliebot_core::config::{self, BackendOption};
-use charliebot_core::home;
 use charliebot_registry::backend::{CLAUDE_CONFIG_DIR_FIELD, Env};
 use clap::{Args, Parser, Subcommand};
 use serde_json::{Value, json};
@@ -119,7 +118,7 @@ pub fn main(args: &[OsString], lazy_host: &LazyHost) -> Result<(), CliExit> {
 /// come from the same scan the gates run (`charliebot_backend_check::gate`).
 fn check_command(args: CheckArgs) -> Result<(), CliExit> {
   let registry = charliebot_packages::registry().map_err(|error| CliExit::error(format!("{error:#}")))?;
-  let home = home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
+  let home = charliebot_home_or_exit()?;
   let (repo, paths) = if args.paths.is_empty() {
     let repo = working_tree()?;
     let paths = charliebot_backend_check::default_paths(repo.as_deref(), &home);

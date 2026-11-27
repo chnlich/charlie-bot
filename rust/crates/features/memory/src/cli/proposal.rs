@@ -4,9 +4,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use charliebot_cli_common::args as cli_args;
-use charliebot_cli_common::exit::CliExit;
+use charliebot_cli_common::exit::{CliExit, charliebot_home_or_exit};
 use charliebot_core::git::{ancestry_args, worktree_add_existing_branch_args};
-use charliebot_core::{home, paths, str_methods, text_repr};
+use charliebot_core::{paths, str_methods, text_repr};
 use clap::{Args, Parser, Subcommand};
 
 use super::proposal_check;
@@ -72,7 +72,7 @@ type ProposalResult<T> = Result<T, ProposalError>;
 pub(super) fn main(args: &[OsString]) -> Result<(), CliExit> {
   let cli: ProposalCli = cli_args::parse("charliebot memory proposal", args);
 
-  let home_dir = home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
+  let home_dir = charliebot_home_or_exit()?;
   let memory_dir = store_root::memory_dir_in(&home_dir);
   crate::memory::ensure_store(&memory_dir).map_err(|error| CliExit::error(error.to_string()))?;
   let memory_dir = fs::canonicalize(&memory_dir)

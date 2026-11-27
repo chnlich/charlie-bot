@@ -16,7 +16,7 @@ use std::path::Path;
 use crate::commands::session_trigger;
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::client;
-use charliebot_cli_common::exit::CliExit;
+use charliebot_cli_common::exit::{CliExit, charliebot_home_or_exit};
 use charliebot_cli_common::fields::{LIMIT, SESSION_ID};
 use charliebot_cli_common::files;
 use charliebot_cli_common::json_out;
@@ -283,7 +283,7 @@ fn send_source_group(command: clap::Command) -> clap::Command {
 }
 
 pub(crate) fn home_dir() -> Result<std::path::PathBuf, CliExit> {
-  charliebot_core::home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))
+  charliebot_home_or_exit()
 }
 
 fn parse_json(flag_name: &str, text: &str) -> Result<Value, CliExit> {

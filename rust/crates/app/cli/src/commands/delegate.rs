@@ -6,7 +6,7 @@ use std::path::Path;
 
 use charliebot_cli_common::args::{self, with_infer_long_args};
 use charliebot_cli_common::client;
-use charliebot_cli_common::exit::CliExit;
+use charliebot_cli_common::exit::{CliExit, charliebot_home_or_exit};
 use charliebot_cli_common::fields::SESSION_ID;
 use charliebot_cli_common::files;
 use charliebot_cli_common::json_out;
@@ -224,7 +224,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   if let Some(repo) = &cli.repo {
     delegate_sources::check_source_files(&task_spec, Path::new(repo))?;
   }
-  let home = charliebot_core::home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
+  let home = charliebot_home_or_exit()?;
   validate_requester_words(&task_spec, &home)?;
 
   let keep_worktree = cli.keep_worktree.expect("clap requires --keep-worktree without --bound-task") == 1;

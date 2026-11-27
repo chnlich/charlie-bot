@@ -16,7 +16,7 @@
 use std::ffi::OsString;
 
 use charliebot_cli_common::args as cli_args;
-use charliebot_cli_common::exit::CliExit;
+use charliebot_cli_common::exit::{CliExit, charliebot_home_or_exit};
 use charliebot_cli_common::json_out;
 use charliebot_core::config::{self, BackendOption, CharlieBotConfig, OptionFieldKind};
 use charliebot_core::home;
@@ -87,7 +87,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
     eprintln!("{}", failure.message);
     std::process::exit(failure.code);
   }
-  let home = home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
+  let home = charliebot_home_or_exit()?;
   let cfg = registry.load_config(&home).map_err(|error| CliExit::error(error.to_string()))?;
   match get(&key, &cfg, &registry) {
     Ok(text) => {

@@ -2,8 +2,8 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
-use charliebot_cli_common::exit::CliExit;
-use charliebot_core::{config, home, str_methods, timefmt};
+use charliebot_cli_common::exit::{CliExit, charliebot_home_or_exit};
+use charliebot_core::{config, str_methods, timefmt};
 use clap::Args;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -38,7 +38,7 @@ pub(super) fn add(args: &AddArgs) -> Result<(), CliExit> {
   if title.is_empty() {
     exit_error("error: empty title after '# '");
   }
-  let home_dir = home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
+  let home_dir = charliebot_home_or_exit()?;
   let cwd = std::env::current_dir().map_err(|error| CliExit::error(error.to_string()))?;
   let memory_dir = store_root::memory_dir_in(&home_dir);
   let target = write_capture(&memory_dir, &config::sessions_dir_in(&home_dir), &cwd, title, &body, cli_clock)?;

@@ -2,10 +2,9 @@
 
 use charliebot_core::credentials;
 use charliebot_core::headers::{AUTHORIZATION, bearer_value};
-use charliebot_core::home;
 use charliebot_core::run_token::{CALLER_SESSION_HEADER, RUN_TOKEN_ENV, SESSION_ID_ENV};
 
-use crate::exit::CliExit;
+use crate::exit::{CliExit, charliebot_home_or_exit};
 
 /// The `Authorization` and caller-session headers for one internal-API call.
 ///
@@ -46,7 +45,7 @@ fn caller_session() -> Option<String> {
 /// The `charliebot.access_key` credential, or `None` when unset. A credentials file that does not
 /// load is an error.
 fn access_key() -> Result<Option<String>, CliExit> {
-  let home = home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
+  let home = charliebot_home_or_exit()?;
   let credentials = credentials::load_credentials(&home).map_err(|error| CliExit::error(error.0))?;
   Ok(credentials.access_key())
 }

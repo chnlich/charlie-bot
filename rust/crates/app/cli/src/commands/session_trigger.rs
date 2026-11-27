@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::base_url;
 use charliebot_cli_common::client;
-use charliebot_cli_common::exit::CliExit;
+use charliebot_cli_common::exit::{CliExit, charliebot_home_or_exit};
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::resolve;
 use charliebot_cli_common::route;
@@ -480,7 +480,7 @@ fn response_field<'a>(response: &'a Value, key: &str) -> Result<&'a Value, CliEx
 }
 
 fn home_dir() -> Result<PathBuf, CliExit> {
-  charliebot_core::home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))
+  charliebot_home_or_exit()
 }
 
 /// Refuses a wait past the trigger cap here, before `--cmd` starts anything the registration would have to kill.

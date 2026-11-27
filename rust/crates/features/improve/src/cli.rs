@@ -10,7 +10,7 @@ use std::path::Path;
 
 use charliebot_cli_common::args::{self, with_infer_long_args};
 use charliebot_cli_common::client;
-use charliebot_cli_common::exit::CliExit;
+use charliebot_cli_common::exit::{CliExit, charliebot_home_or_exit};
 use charliebot_cli_common::files;
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::resolve;
@@ -132,7 +132,7 @@ fn start_loop(args: &StartArgs) -> Result<(), CliExit> {
     payload.insert(wire::PLAN.to_string(), json!(plan_text));
   }
 
-  let home = charliebot_core::home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
+  let home = charliebot_home_or_exit()?;
   let readback_session = session_id.clone();
   let readback_goal = goal.clone();
   let readback_plan = plan.clone();

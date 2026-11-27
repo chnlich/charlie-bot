@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 
 use charliebot_agents::cli_host::LazyHost;
 use charliebot_cli_common::args as cli_args;
-use charliebot_cli_common::exit::CliExit;
+use charliebot_cli_common::exit::{CliExit, charliebot_home_or_exit};
 use charliebot_cli_common::http;
-use charliebot_core::{credentials, home};
+use charliebot_core::credentials;
 use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser)]
@@ -40,7 +40,7 @@ pub fn main(args: &[OsString], lazy_host: &LazyHost) -> Result<(), CliExit> {
 
 fn transcribe(file: &Path, lazy_host: &LazyHost) -> Result<(), CliExit> {
   let host = lazy_host.get().map_err(|error| CliExit::error(format!("{error:#}")))?;
-  let home = home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
+  let home = charliebot_home_or_exit()?;
   let credentials = credentials::load_credentials(&home).map_err(|error| CliExit::error(error.to_string()))?;
   http::ensure_crypto_provider();
   let runtime = tokio::runtime::Builder::new_current_thread()

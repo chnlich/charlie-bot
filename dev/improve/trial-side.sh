@@ -133,8 +133,11 @@ fi
 bench_lock_record() {
   local holder reason
   if holder=$(bench_lock_holder 2>&1); then
-    printf '%s side %s: bench lock holder %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$2" "${holder:-none}" >>"$1"
-    return
+    printf '%s side %s: bench lock holder %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$2" "${holder:-none}" >>"$1" \
+      || return 1
+    # The status is explicit: a bare return in a function that a trap handler calls returns the status of the command
+    # that the trap interrupted, which a stop's interrupted wait makes 128 plus the signal number.
+    return 0
   fi
   # The holder read's reason arrives on stderr; a record line holds one line.
   reason=${holder//$'\n'/ }

@@ -2195,9 +2195,10 @@ impl TaskExecutionAdapter {
 
   /// The landing a work run delivers, or the reason it delivers none.
   ///
-  /// The branch must add a commit of its own past its creation point, and that commit must reach the
-  /// base's published ref. A branch that adds nothing points at a commit the base already holds, so the
-  /// ancestry check alone would pass it; the creation point tells the two cases apart.
+  /// The branch must add a commit of its own past its creation point, and each commit it adds must reach the
+  /// base's published ref, by ancestry or as a patch-equivalent commit (a rebasing merge gives new shas). The
+  /// landing reports the base commit that holds the branch's tip. A branch that adds nothing points at a commit
+  /// the base already holds, so the ancestry check alone would pass it; the creation point tells the two apart.
   async fn landing_for_work(
     &self,
     session_id: &str,
@@ -2233,10 +2234,11 @@ impl TaskExecutionAdapter {
       }
     }
     let target = review_text::review_landing_target(base_branch);
-    let (landed, reason) = git::git_verify_commit_landed(Path::new(repo_path), &target, &commit).await;
-    if !landed {
-      return (None, reason);
-    }
+    let landed_commit =
+      match git::git_verify_branch_landed(Path::new(repo_path), &target, branch_name, &commit, &creation).await {
+        Ok(landed_commit) => landed_commit,
+        Err(reason) => return (None, reason),
+      };
     match crate::land::landed_without_gate_blocker(
       Path::new(repo_path),
       base_branch,
@@ -2248,7 +2250,7 @@ impl TaskExecutionAdapter {
       Ok(None) => {}
       Err(error) => return (None, format!("the landing gate check failed: {error:#}")),
     }
-    (Some((target, commit, repo_path.to_string())), String::new())
+    (Some((target, landed_commit, repo_path.to_string())), String::new())
   }
 
   /// The quota failure recorded for one run, left recorded for the owner that takes it.

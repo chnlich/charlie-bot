@@ -566,18 +566,22 @@ function refreshShell(pageVersion, onDemand) {
 }
 
 // Stores the page's on-demand files: the same-origin files a view or panel loads when it is first used. Each is stored
-// under the URL the page requests, which carries the release's version. A file the cache holds under that URL is
-// skipped. Otherwise the copy stored for the same path under an earlier version is revalidated with its ETag: a 304
-// keeps that body under the new URL with no body bytes, and a 200 stores the new body. The ETag names the file's bytes
-// (static_files.rs), so a file a release leaves unchanged costs a request and no body. The earlier copy goes once its
-// replacement is decided, and a response without an ETag is not stored. The page asks once it is current and idle, so
-// the link has carried the first screen first.
+// under the URL the page requests, which carries the release's version. A file the cache holds under that URL is kept
+// as it is, and a copy of the same path under an earlier version goes: the page caches its files as it loads them, so
+// it may have stored the current URL before this store runs. Otherwise the copy stored for the same path under an
+// earlier version is revalidated with its ETag: a 304 keeps that body under the new URL with no body bytes, and a 200
+// stores the new body. The ETag names the file's bytes (static_files.rs), so a file a release leaves unchanged costs a
+// request and no body. The earlier copy goes once its replacement is decided, and a response without an ETag is not
+// stored. The page asks once it is current and idle, so the link has carried the first screen first.
 async function storeOnDemandFiles(urls) {
   const files = await caches.open(FILE_CACHE);
   let stored = 0;
   let revalidated = 0;
   for (const url of urls) {
-    if (await files.match(url)) continue;
+    if (await files.match(url)) {
+      await deleteEarlierCopiesOfPath(files, url);
+      continue;
+    }
     const earlier = await storedCopyOfPath(files, new URL(url, self.location.origin).pathname);
     const headers = earlier ? {'If-None-Match': earlier.response.headers.get('ETag')} : {};
     const response = await installFetch(url, {credentials: 'same-origin', cache: 'no-store', headers});
@@ -611,6 +615,16 @@ async function storedCopyOfPath(files, path) {
     if (new URL(request.url).pathname === path) return {url: request.url, response: await files.match(request)};
   }
   return null;
+}
+
+// Deletes the stored copies of a path under any URL but the current release's. The entry the caller matched stays,
+// and a copy of another path is never touched.
+async function deleteEarlierCopiesOfPath(files, url) {
+  const current = new URL(url, self.location.origin);
+  for (const request of await files.keys()) {
+    const stored = new URL(request.url);
+    if (stored.pathname === current.pathname && stored.href !== current.href) await files.delete(request);
+  }
 }
 
 self.addEventListener('message', (event) => {

@@ -992,6 +992,35 @@ test('the store-files ask fetches each on-demand file the cache lacks, stores th
   assert.equal(await files.match(untagged), undefined, 'a file without an ETag is not stored');
 });
 
+test('the store-files ask drops an earlier release copy when the page already cached the current URL', async () => {
+  // The page caches its on-demand files as it loads them, so a store that runs afterwards finds the current URL
+  // already held. The earlier release's copy of the same path is still here and would answer with the release it
+  // names: matching the current URL must drop it.
+  const h = harness();
+  const earlier = ORIGIN + '/static/js/chat/status-panel.js?v=1';
+  const current = ORIGIN + '/static/js/chat/status-panel.js?v=2';
+  const other = ORIGIN + '/static/css/other.css?v=1';
+  const files = await h.caches.api.open('last-state-files');
+  await files.put(earlier, new Response('status(1)', {
+    status: 200, headers: {ETag: '"same"', 'X-Asset-Version': 'v1'},
+  }));
+  await files.put(current, new Response('status(1)', {
+    status: 200, headers: {ETag: '"same"', 'X-Asset-Version': 'v2'},
+  }));
+  await files.put(other, new Response('other', {status: 200, headers: {ETag: '"other"'}}));
+  const channel = messageChannel();
+  await Promise.all(h.fire('message', {
+    data: {type: 'store-files', files: [current]},
+    ports: [channel.port2],
+  }).waits);
+  assert.deepEqual(JSON.parse(JSON.stringify(channel.replies)), [{stored: 0, revalidated: 0}],
+      'a copy the cache already holds under the current URL costs no fetch');
+  assert.equal(await (await files.match(current)).text(), 'status(1)', 'the current copy stays');
+  assert.equal(await files.match(earlier), undefined, 'the earlier release copy of the same path goes');
+  assert.equal(await (await files.match(other)).text(), 'other', 'a copy of another path stays');
+  assert.deepEqual(h.state.calls, [], 'the store asks the network for nothing');
+});
+
 test('a kept file whose bytes a release leaves unchanged is revalidated with its stored ETag: no body crosses the link', async () => {
   const h = harness();
   const earlier = ORIGIN + '/static/js/chat/status-panel.js?v=1';

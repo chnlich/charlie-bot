@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
@@ -58,9 +59,11 @@ function loadPlanPanelScript(opts = {}) {
   return {context, planPanel};
 }
 
-// A label constant config.js declares. Read on use, so only the tests that paint the label depend on it.
+// A label constant config.js declares, read from the source on disk. The panel under test runs on the served form, and
+// the expected label comes from the source, so the expectation does not depend on how the table serves config.js.
 function configLabel(name) {
-  return new RegExp(`^const ${name} = '([^']*)';`, 'm').exec(readStatic('config.js'))[1];
+  const source = fs.readFileSync(path.join(__dirname, '..', 'static', 'js', 'config.js'), 'utf8');
+  return new RegExp(`^const ${name} = '([^']*)';`, 'm').exec(source)[1];
 }
 
 test('offline, the plan panel shows the offline label in place of its plans', () => {

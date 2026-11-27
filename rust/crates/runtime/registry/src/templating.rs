@@ -46,6 +46,8 @@ use crate::registry::TemplateGlobalScope;
 use crate::watch::TreeWatch;
 use crate::{inlined_script, inlined_style};
 
+mod minified_inline_script;
+
 /// A zero-argument template global: the name and the value the call returns.
 ///
 /// The engine evaluates a live global at every render. A global registered stable reads only the config and the
@@ -89,6 +91,8 @@ pub struct Templating {
   /// A page carries a core script or style inline, so its document includes the file the server would otherwise
   /// serve at `/static/`. A template keeps the first place, so a template name always resolves to a template.
   loader: Vec<PathBuf>,
+  /// Whether a `.js` template is served from the build-time table, from `USE_MINIFIED_INLINE_JS` read at startup.
+  minify_inline_js: bool,
   /// Whether the unique-name check has passed once (it runs when the engine is first built).
   names_checked: AtomicBool,
   /// The cached `git_version()` value, computed at the first render that asks for it.
@@ -220,6 +224,7 @@ impl Templating {
       packages: packages.to_vec(),
       directories,
       loader,
+      minify_inline_js: minified_inline_script::enabled_from_env(),
       names_checked: AtomicBool::new(false),
       git_version: OnceLock::new(),
       asset_digest: Mutex::new(AssetDigestState::default()),
@@ -638,17 +643,22 @@ impl Templating {
     // A page carries its scripts and its stylesheets inline, and a comment in either explains it to an editor rather
     // than to the browser. The inline copy leaves the comments out, and a script's code indentation with them. A
     // template keeps every byte.
+    let minify_inline_js = self.minify_inline_js;
     let loader = move |name: &str| {
       let source = loader(name)?;
-      Ok(source.map(|text| {
-        if name.ends_with(".js") {
-          inlined_script::without_comments(&text)
-        } else if name.ends_with(".css") {
-          inlined_style::without_comments(&text)
+      let Some(text) = source else { return Ok(None) };
+      let text = if name.ends_with(".js") {
+        if minify_inline_js {
+          minified_inline_script::served(name, &text)?
         } else {
-          text
+          inlined_script::without_comments(&text)
         }
-      }))
+      } else if name.ends_with(".css") {
+        inlined_style::without_comments(&text)
+      } else {
+        text
+      };
+      Ok(Some(text))
     };
     let mut environment = jinja::environment(loader);
     let icon_renderer = Arc::clone(&icons);
@@ -1281,7 +1291,10 @@ mod tests {
     .unwrap();
     let home = tempfile::tempdir().unwrap();
     let features = features_over(home.path(), Arc::new(Registry::new()));
-    features.startup.insert(Templating::new(root.path(), &[])).unwrap();
+    // The page's `page.js` is not a table name, so this test serves the comment-stripped form the table does not hold.
+    let mut templating = Templating::new(root.path(), &[]);
+    templating.minify_inline_js = false;
+    features.startup.insert(templating).unwrap();
     let (parts, _) = Request::builder().method("GET").uri("/scripted").body(()).unwrap().into_parts();
     let templating = features.startup.require::<Templating>().unwrap();
 

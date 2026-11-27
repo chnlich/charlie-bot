@@ -33,8 +33,9 @@ const CHAT_CHANNELS: [&str; 3] = ["slack", "discord", "feishu"];
 ///
 /// A runtime crate depends only on its own layer or a lower layer. The table must cover every runtime crate and name
 /// no missing one.
-const RUNTIME_LAYERS: [(&str, usize); 10] = [
+const RUNTIME_LAYERS: [(&str, usize); 11] = [
   ("store", 1),
+  ("inline-js", 1),
   ("registry", 2),
   ("user_text_checks", 3),
   ("usage", 3),
@@ -2893,6 +2894,7 @@ fn the_checks_find_each_break() {
     "crates/features/alpha",
     "crates/features/beta",
     "crates/runtime/store",
+    "crates/runtime/inline-js",
     "crates/runtime/registry",
     "crates/runtime/usage",
     "crates/runtime/backend_check",
@@ -2911,6 +2913,7 @@ fn the_checks_find_each_break() {
       ("crates/features/alpha/Cargo.toml", crate_manifest("alpha", &[("beta", "../beta")], &[])),
       ("crates/features/beta/Cargo.toml", crate_manifest("beta", &[], &[])),
       ("crates/runtime/store/Cargo.toml", crate_manifest("store-crate", &[("triggers-crate", "../triggers")], &[])),
+      ("crates/runtime/inline-js/Cargo.toml", crate_manifest("inline-js-crate", &[], &[])),
       ("crates/runtime/registry/Cargo.toml", crate_manifest("registry-crate", &[], &[])),
       ("crates/runtime/usage/Cargo.toml", crate_manifest("usage-crate", &[], &[])),
       ("crates/runtime/backend_check/Cargo.toml", crate_manifest("backend-check-crate", &[], &[])),

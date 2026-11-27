@@ -1,0 +1,72 @@
+//! The `.js` names the page loader serves, split by how the table holds them.
+//!
+//! The names the chat page inlines are compressed: the table holds each one's minified text. Every other loader-served
+//! name is passed through: the table holds its source hash, and the loader serves the source with its comments removed.
+//! The crate's test checks that these two lists hold exactly the names the page templates include.
+
+/// The names the chat page inlines. The table holds each one minified.
+pub const COMPRESSED: &[&str] = &[
+  "js/app.js",
+  "js/chat/attachments.js",
+  "js/chat/file-links.js",
+  "js/chat/for-you.js",
+  "js/chat/input.js",
+  "js/chat/namespace.js",
+  "js/chat/ratings.js",
+  "js/chat/rendering.js",
+  "js/chat/scroll.js",
+  "js/chat/shared.js",
+  "js/chat/displayed-session.js",
+  "js/chat/status-panel.js",
+  "js/chat/triggers-tray.js",
+  "js/chat/turn-engine.js",
+  "js/chat/worker-summary.js",
+  "js/config.js",
+  "js/file-upload.js",
+  "js/icons.js",
+  "js/markdown-renderer.js",
+  "js/math-scanner.js",
+  "js/offline-shell.js",
+  "js/opened-sessions.js",
+  "js/page-timers.js",
+  "js/platform.js",
+  "js/reload-guard.js",
+  "js/sidebar/archived.js",
+  "js/sidebar/filters.js",
+  "js/sidebar/groups.js",
+  "js/sidebar/last-state.js",
+  "js/sidebar/modals.js",
+  "js/sidebar/namespace.js",
+  "js/sidebar/row-menu.js",
+  "js/sidebar/session-actions.js",
+  "js/sidebar/session-menus.js",
+  "js/sidebar/session-view.js",
+  "js/sidebar/status.js",
+  "js/stream-draft.js",
+  "js/tabs.js",
+  "js/usage.js",
+  "js/utils.js",
+  "js/view-requests.js",
+  "js/websocket-handlers.js",
+  "js/websocket.js",
+  "artifacts/artifact-cards.js",
+  "artifacts/plan-events.js",
+  "chat_threads/channel-binding.js",
+  "chat_threads/threads-filter.js",
+  "diag/client-events.js",
+  "diff_view/delivery-diff-link.js",
+  "drafts/draft-cards.js",
+  "voice/voice-events.js",
+];
+
+/// The names other pages serve. The table holds their source hash; the loader serves them comment-stripped.
+pub const PASS_THROUGH: &[&str] = &[
+  "diff_comments.js",
+  "diff_page.js",
+  "js/comment_post.js",
+  "js/concurrency-badge.js",
+  "js/offline-shell-worker.js",
+  "offline-shell-worker.js",
+  "open-in-code-server.js",
+  "partials/json-highlight.js",
+];

@@ -58,6 +58,7 @@ members = [
     "crates/runtime/backend_check",
     "crates/runtime/store",
     "crates/runtime/registry",
+    "crates/runtime/inline-js",
     "crates/runtime/session-api",
     "crates/runtime/triggers",
     "crates/runtime/usage",
@@ -191,10 +192,12 @@ charliebot-google = { path = "crates/features/google" }
 charliebot-improve = { path = "crates/features/improve" }
 charliebot-host-auth = { path = "crates/features/host_auth" }
 charliebot-memory = { path = "crates/features/memory" }
+charliebot-mock-home = { path = "crates/app/mock-home" }
 charliebot-openai-compatible = { path = "crates/backends/openai_compatible" }
 charliebot-opencode = { path = "crates/backends/opencode" }
 charliebot-packages = { path = "crates/app/packages" }
 charliebot-html = { path = "crates/infra/html" }
+charliebot-inline-js = { path = "crates/runtime/inline-js" }
 charliebot-registry = { path = "crates/runtime/registry" }
 charliebot-run-log-compaction = { path = "crates/features/run_log_compaction" }
 charliebot-slack = { path = "crates/features/slack" }

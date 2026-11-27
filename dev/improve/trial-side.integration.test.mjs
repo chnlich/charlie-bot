@@ -10,7 +10,7 @@ import { once } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { after, test } from 'node:test';
+import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const IMPROVE_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -18,10 +18,6 @@ const TRIAL_SIDE = path.join(IMPROVE_DIR, 'trial-side.sh');
 const LOCK = path.join(path.dirname(IMPROVE_DIR), 'poor-network', 'lock.sh');
 const LOCK_FILE = 'pn-runs/.bench.lock';
 const REAL_GREP = execFileSync('bash', ['-c', 'command -v grep'], { encoding: 'utf8' }).trim();
-// The round direction these sides name. Its marker root is this run's own /tmp/improve-<direction>.
-const DIRECTION = `trialsidetest_${process.pid}`;
-const MARKER_ROOT = `/tmp/improve-${DIRECTION}`;
-after(() => fs.rmSync(MARKER_ROOT, { recursive: true, force: true }));
 
 function scratch(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));

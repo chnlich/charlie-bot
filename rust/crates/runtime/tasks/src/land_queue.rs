@@ -311,17 +311,32 @@ impl Site {
         continue;
       }
       let mut beats = Vec::with_capacity(refs.len());
+      let mut changed = false;
       for (sha, refname) in refs {
-        beats.push(self.beat_of(&sha, &refname).await?);
+        let Some(beat) = self.beat_of(&sha, &refname).await? else {
+          last_error = format!("{refname} moved after it was listed at {sha}");
+          changed = true;
+          break;
+        };
+        beats.push(beat);
+      }
+      if changed {
+        continue;
       }
       return Ok(beats);
     }
     anyhow::bail!("the landing queue kept changing while it was read in {}: {last_error}", self.worktree.display())
   }
 
-  async fn beat_of(&self, sha: &str, refname: &str) -> anyhow::Result<Beat> {
-    let shown =
-      git_ok(&self.worktree, &["show", "-s", "--format=%ct%x09%P%x09%s", sha], GIT_TIMEOUT, "git show").await?;
+  async fn beat_of(&self, sha: &str, refname: &str) -> anyhow::Result<Option<Beat>> {
+    let (ok, shown, err) =
+      git::git_stdout(&self.worktree, &["show", "-s", "--format=%ct%x09%P%x09%s", sha], GIT_TIMEOUT, "git show").await;
+    if !ok {
+      if err == format!("fatal: bad object {sha}") {
+        return Ok(None);
+      }
+      anyhow::bail!("git show failed in {}: {err}", self.worktree.display());
+    }
     let fields: Vec<&str> = shown.splitn(3, '\t').collect();
     let (beat_at, parents, holder) = match fields.as_slice() {
       [beat_at, parents, holder] => (*beat_at, *parents, *holder),
@@ -331,13 +346,13 @@ impl Site {
       .split_whitespace()
       .next()
       .ok_or_else(|| anyhow::anyhow!("{refname} points at {sha}, a heartbeat without a parent"))?;
-    Ok(Beat {
+    Ok(Some(Beat {
       refname: refname.to_string(),
       sha: sha.to_string(),
       parent: parent.to_string(),
       beat_at: beat_at.parse().with_context(|| format!("{sha} has no commit time"))?,
       holder: holder.to_string(),
-    })
+    }))
   }
 
   async fn prune(&self, beat: &Beat, now: i64) -> anyhow::Result<()> {

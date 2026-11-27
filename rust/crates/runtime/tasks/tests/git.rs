@@ -20,6 +20,7 @@ use charliebot_tasks::git::{
   BaseBranchResolutionError, BaseResolution, git_create_worktree, git_current_branch,
   git_remote_default_branch_and_tip, git_verify_commit_landed, git_worktree_dir_name, git_worktree_remove,
 };
+use charliebot_tasks::land_queue::{Change, EntryName, Pushed, Site, claim_of_entry};
 
 static GIT_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -265,6 +266,98 @@ impl Drop for FakeGit {
 
 fn worktree_head(wt_path: &Path) -> String {
   git_out(wt_path, &["rev-parse", "HEAD"])
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn queue_read_retries_when_a_heartbeat_moves_between_listing_and_fetch() {
+  let _guard = GIT_TEST_LOCK.lock().await;
+  let repo = RepoFixture::create();
+  let writer = Site { worktree: repo.main_checkout.clone() };
+  let parent = worktree_head(&repo.main_checkout);
+  let name = EntryName::new(1_700_000_000_000, 41, "fixtureowner");
+  let old_stamp = std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH)
+    .expect("system time follows the epoch")
+    .as_secs()
+    - 30;
+  let output = Command::new("git")
+    .arg("-C")
+    .arg(&repo.main_checkout)
+    .args([
+      "-c",
+      "commit.gpgsign=false",
+      "commit-tree",
+      "--no-gpg-sign",
+      "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+      "-p",
+      &parent,
+      "-m",
+      &name.refname(),
+    ])
+    .env("GIT_AUTHOR_NAME", "charliebot land queue")
+    .env("GIT_AUTHOR_EMAIL", "land-queue@charliebot.invalid")
+    .env("GIT_COMMITTER_NAME", "charliebot land queue")
+    .env("GIT_COMMITTER_EMAIL", "land-queue@charliebot.invalid")
+    .env("GIT_AUTHOR_DATE", format!("@{old_stamp} +0000"))
+    .env("GIT_COMMITTER_DATE", format!("@{old_stamp} +0000"))
+    .output()
+    .expect("git commit-tree runs");
+  assert!(output.status.success(), "git commit-tree failed: {}", String::from_utf8_lossy(&output.stderr));
+  let first = String::from_utf8(output.stdout).expect("the heartbeat sha is UTF-8").trim().to_string();
+  assert_eq!(
+    writer
+      .push(&[Change::Create { refname: name.refname(), new: first.clone() }])
+      .await
+      .expect("the first heartbeat pushes"),
+    Pushed::Done
+  );
+  let mut claim = claim_of_entry(&writer, &name.owner, name.pr).await.expect("the writer reads its entry");
+  assert_eq!(claim.beat(&parent).await.expect("the heartbeat moves"), Pushed::Done);
+  let second = writer.read().await.expect("the second heartbeat reads").entries[0].1.sha.clone();
+  assert_ne!(first, second, "the heartbeat moved to a new commit");
+
+  let origin = repo.tmp().join("origin.git");
+  git(&origin, &["update-ref", &name.refname(), &first]);
+  let missing = run_git(&repo.seed, &["cat-file", "-e", &format!("{first}^{{commit}}")]);
+  assert!(!missing.status.success(), "the reader has not fetched the listed heartbeat");
+
+  let marker = repo.tmp().join("heartbeat-moved");
+  let listing = repo.tmp().join("listed-refs");
+  let script = format!(
+    r#"#!/bin/sh
+real=/usr/bin/git
+if [ "$1" = "ls-remote" ] && [ "$(pwd -P)" = '{reader}' ] && [ ! -e '{marker}' ]; then
+  "$real" "$@" > '{listing}'
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    cat '{listing}'
+    exit "$status"
+  fi
+  "$real" --git-dir='{origin}' update-ref '{refname}' '{second}' || exit $?
+  : > '{marker}'
+  cat '{listing}'
+  exit 0
+fi
+exec "$real" "$@"
+"#,
+    reader = repo.seed.display(),
+    marker = marker.display(),
+    listing = listing.display(),
+    origin = origin.display(),
+    refname = name.refname(),
+    second = second,
+  );
+  let script_path = repo.tmp().join("interleave-git.sh");
+  fs::write(&script_path, script).expect("the git interleaver is written");
+  charliebot_tasks::git::set_git_program_override("/bin/sh", &[&script_path.display().to_string()]);
+  let result = Site { worktree: repo.seed.clone() }.read().await;
+  charliebot_tasks::git::clear_git_program_override();
+
+  assert!(marker.exists(), "the remote heartbeat moved after ls-remote returned");
+  let view = result.expect("the queue retries after its listed heartbeat is missing");
+  assert_eq!(view.entries.len(), 1);
+  assert_eq!(view.entries[0].1.sha, second, "the read returns the fetched heartbeat");
 }
 
 // --- base-branch resolution matrix -----------------------------------------------------------

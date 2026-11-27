@@ -421,6 +421,8 @@ The checks run cargo through `$IMPROVE_KIT_DIR/dev/improve/round-cargo.sh`, whic
   target directory, `~/.cache/improve-target/<direction>`, which the write boundary allows.
 The helper refuses a working directory outside the round clone, so the round builds only in its clone and the clone's
   products carry over to the next round.
+The helper refuses `clean` in any position, because cargo clean would remove the pinned target directory; the runner
+  alone trims that cache, before the round's agent starts.
 A build from another checkout would write products that name that checkout's path, and the clone's next build would
   reuse them.
 The round runs `round-cargo.sh check` for the workspace and `round-cargo.sh test` for each crate that the change

@@ -738,8 +738,8 @@ fn a_round_trims_its_cache_only_after_its_started_marker() {
   assert!(log.lines().all(|line| line.ends_with(" started")), "the trim ran before the started marker:\n{log}");
 }
 
-/// The agent-reachable `round-cargo.sh` never trims: neither its `prepare-target` argument nor a build reads the
-/// cache's size or the free space, and a cache over its cap and below the floor stays whole.
+/// The agent-reachable `round-cargo.sh` never removes the cache: a `clean` exits 2 before cargo runs, and a build reads
+/// neither the cache's size nor the free space, so a cache over its cap and below the floor stays whole.
 #[test]
 #[ignore = "integration"]
 fn the_agent_reachable_round_cargo_never_trims_the_target() {
@@ -772,11 +772,15 @@ fn the_agent_reachable_round_cargo_never_trims_the_target() {
   env.insert("FAKE_STARTED_MARKER".to_string(), world.sandbox.root().join("no-marker").display().to_string());
   env.insert("FAKE_DU_MIB".to_string(), "131073,131073".to_string());
   env.insert("FAKE_DF_MIB".to_string(), "1000".to_string());
-  for args in [vec!["prepare-target"], vec!["check", "--workspace", "--locked"]] {
-    let mut command = harness::command(&helper, &env);
-    command.current_dir(&clone).args(&args);
-    let _ = harness::run(&mut command);
-  }
+  let mut clean = harness::command(&helper, &env);
+  clean.current_dir(&clone).arg("clean");
+  let refused = harness::run(&mut clean);
+  assert_eq!(refused.code, 2, "round-cargo clean did not exit 2: {}", refused.stderr);
+  assert!(refused.stderr.contains("refuses cargo clean"), "round-cargo clean named no reason: {}", refused.stderr);
+  assert!(!cargo_env.exists(), "round-cargo clean started cargo");
+  let mut build = harness::command(&helper, &env);
+  build.current_dir(&clone).args(["check", "--workspace", "--locked"]);
+  let _ = harness::run(&mut build);
   assert!(!trim_dir.join("du-calls").exists(), "a round-cargo call read the cache's size");
   assert!(!trim_dir.join("df-calls").exists(), "a round-cargo call read the free space");
   assert!(target.join("debug/incremental/session.o").is_file(), "a round-cargo call removed incremental data");

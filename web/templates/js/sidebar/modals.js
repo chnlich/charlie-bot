@@ -16,10 +16,10 @@
 // so these registrations run before the first transcript paints.
 // The filter strip's four pills end 294 px from the sidebar's left edge. With
 // the strip's 12 px right padding, the sidebar needs 306 px for them. Below
-// that width the Archive pill paints over the chat column and the label reads
-// "N…", so a drag and a restored width both stop at 310 px. The New Session
-// button keeps its whole label at every width in this range: it holds its own
-// width and the backend selector beside it takes what is left.
+// that width the Archive pill paints over the chat column, so a drag and a
+// restored width both stop at 310 px. The New Session button keeps its whole
+// label at every width in this range: it holds its own width and the backend
+// selector beside it takes what is left.
 const MIN_SIDEBAR_WIDTH = 310;
 const MAX_SIDEBAR_WIDTH = 600;
 

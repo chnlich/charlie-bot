@@ -11,12 +11,10 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use charliebot_cli_common::args::with_infer_long_args;
-use charliebot_cli_common::exit::{self, CliExit};
+use charliebot_cli_common::exit::{self, CliExit, charliebot_home_or_exit};
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::resolve;
 use clap::{Arg, Command};
-
-use crate::commands::session::home_dir;
 
 const ABOUT: &str = "Land an implement task: rebase, push the task branch, keep one draft PR, move the base \
      branch only after CI passed on the head sha, and leave no PR of the task branch open";
@@ -76,7 +74,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   }
   let task = matches.get_one::<String>("task").map(String::as_str);
   let session_id = resolve::resolve_from_env(task)?;
-  let home = home_dir()?;
+  let home = charliebot_home_or_exit()?;
   let registry = charliebot_packages::registry().map_err(|error| CliExit::error(format!("{error:#}")))?;
   let runtime = tokio::runtime::Builder::new_current_thread()
     .enable_all()

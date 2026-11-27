@@ -282,10 +282,6 @@ fn send_source_group(command: clap::Command) -> clap::Command {
   command
 }
 
-pub(crate) fn home_dir() -> Result<std::path::PathBuf, CliExit> {
-  charliebot_home_or_exit()
-}
-
 fn parse_json(flag_name: &str, text: &str) -> Result<Value, CliExit> {
   serde_json::from_str(text).map_err(|error| CliExit::error(format!("{flag_name}: {error}")))
 }
@@ -379,7 +375,7 @@ fn archive(args: &ArchiveArgs) -> Result<(), CliExit> {
     .unwrap_or_else(control_events::new_request_id);
   body.insert("request_id".to_string(), json!(request_id));
 
-  let home = home_dir()?;
+  let home = charliebot_home_or_exit()?;
   let task_id = args.session_id.clone();
   let readback = move || find_local_task_close(&home, &task_id, &request_id);
   let result = client::post(
@@ -417,7 +413,7 @@ fn cancel(args: &CancelArgs) -> Result<(), CliExit> {
   let request_id = args.request_id.clone().unwrap_or_else(control_events::new_request_id);
   let payload = json!({ "request_id": request_id, "reason": args.reason });
 
-  let home = home_dir()?;
+  let home = charliebot_home_or_exit()?;
   let task_id = args.session_id.clone();
   let readback = move || find_local_task_close(&home, &task_id, &request_id);
   let result = client::post(
@@ -479,7 +475,7 @@ fn set_approver(args: &SetApproverArgs) -> Result<(), CliExit> {
 }
 
 fn reparent(args: &ReparentArgs) -> Result<(), CliExit> {
-  let home = home_dir()?;
+  let home = charliebot_home_or_exit()?;
   let task_id = args.session_id.clone();
   let parent_id = args.parent.clone();
   let caller_session_id = std::env::var(SESSION_ID_ENV).ok().filter(|value| !value.is_empty());
@@ -767,7 +763,7 @@ fn is_user_or_summon(message: &Value) -> bool {
 }
 
 fn conclusion(args: &ConclusionArgs) -> Result<(), CliExit> {
-  let home = home_dir()?;
+  let home = charliebot_home_or_exit()?;
   let text = conclusion_in_home(&home, args)?;
   print_conclusion(&text);
   Ok(())

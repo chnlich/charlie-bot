@@ -654,6 +654,9 @@ fn run_trim(world: &World, launch_id: &str, cache_mib: &str, free_mib: &str) -> 
   )
 }
 
+/// Writes a direction's cache: the debug and release profiles of the direction's own target tree, and a second target
+/// tree one level down, as the perf direction keeps one per side under its cache. Returns the direction's cache
+/// directory.
 fn write_target_cache(world: &World, direction: &str) -> PathBuf {
   let target = cache_root(world).join(direction);
   if target.exists() {
@@ -662,9 +665,13 @@ fn write_target_cache(world: &World, direction: &str) -> PathBuf {
   fs::create_dir_all(target.join("debug/incremental")).expect("the incremental cache");
   fs::create_dir_all(target.join("debug/deps")).expect("the debug dependencies");
   fs::create_dir_all(target.join("release/deps")).expect("the release dependencies");
+  fs::create_dir_all(target.join("after/debug/incremental")).expect("the nested tree's incremental cache");
+  fs::create_dir_all(target.join("after/debug/deps")).expect("the nested tree's dependencies");
   fs::write(target.join("debug/incremental/session.o"), "incremental").expect("the incremental object");
   fs::write(target.join("debug/deps/libcached.rlib"), "debug").expect("the debug product");
   fs::write(target.join("release/deps/libcached.rlib"), "release").expect("the release product");
+  fs::write(target.join("after/debug/incremental/session.o"), "incremental").expect("the nested incremental object");
+  fs::write(target.join("after/debug/deps/libcached.rlib"), "after").expect("the nested tree's product");
   target
 }
 
@@ -685,6 +692,7 @@ fn a_round_cache_stays_under_its_cap_and_discards_incremental_data_before_the_ta
   );
   assert!(target.join("debug/incremental/session.o").is_file(), "{}", under_cap.describe());
   assert!(target.join("debug/deps/libcached.rlib").is_file(), "{}", under_cap.describe());
+  assert!(target.join("after/debug/incremental/session.o").is_file(), "{}", under_cap.describe());
 
   let target = write_target_cache(&world, TRIM_DIRECTION);
   let incremental_only = run_trim(&world, "20261127T090000Z-1-402", "131073,100000", "1048576");
@@ -696,8 +704,10 @@ fn a_round_cache_stays_under_its_cap_and_discards_incremental_data_before_the_ta
     incremental_only.describe()
   );
   assert!(!target.join("debug/incremental").exists(), "{}", incremental_only.describe());
+  assert!(!target.join("after/debug/incremental").exists(), "{}", incremental_only.describe());
   assert!(target.join("debug/deps/libcached.rlib").is_file(), "{}", incremental_only.describe());
   assert!(target.join("release/deps/libcached.rlib").is_file(), "{}", incremental_only.describe());
+  assert!(target.join("after/debug/deps/libcached.rlib").is_file(), "{}", incremental_only.describe());
 
   let target = write_target_cache(&world, TRIM_DIRECTION);
   let whole_target = run_trim(&world, "20261127T090000Z-1-403", "131073,131073", "1048576");
@@ -723,6 +733,7 @@ fn a_round_above_the_free_space_floor_removes_nothing_from_its_cache() {
   assert!(!stderr(&run).contains("target floor"), "{}", run.describe());
   assert!(target.join("debug/incremental/session.o").is_file(), "{}", run.describe());
   assert!(target.join("debug/deps/libcached.rlib").is_file(), "{}", run.describe());
+  assert!(target.join("after/debug/incremental/session.o").is_file(), "{}", run.describe());
   assert!(
     world.sandbox.root().join("scope-env.txt").is_file(),
     "the round did not start its agent: {}",
@@ -730,8 +741,8 @@ fn a_round_above_the_free_space_floor_removes_nothing_from_its_cache() {
   );
 }
 
-/// Below the floor, the round removes its own incremental data first and re-reads the free space: here that brings the
-/// filesystem above the floor, so the target stays.
+/// Below the floor, the round removes its own incremental data first, the nested tree's included, and re-reads the free
+/// space: here that brings the filesystem above the floor, so the target stays.
 #[test]
 #[ignore = "integration"]
 fn a_round_below_the_free_space_floor_removes_its_incremental_data_first() {
@@ -747,8 +758,10 @@ fn a_round_below_the_free_space_floor_removes_its_incremental_data_first() {
   );
   assert!(!stderr(&run).contains("removed the target directory"), "{}", run.describe());
   assert!(!target.join("debug/incremental").exists(), "{}", run.describe());
+  assert!(!target.join("after/debug/incremental").exists(), "{}", run.describe());
   assert!(target.join("debug/deps/libcached.rlib").is_file(), "{}", run.describe());
   assert!(target.join("release/deps/libcached.rlib").is_file(), "{}", run.describe());
+  assert!(target.join("after/debug/deps/libcached.rlib").is_file(), "{}", run.describe());
   assert!(
     world.sandbox.root().join("scope-env.txt").is_file(),
     "the round did not start its agent: {}",
@@ -801,6 +814,7 @@ fn a_round_trims_its_cache_only_after_its_started_marker() {
   let run = run_trim(&world, launch_id, "131073,100000", "153600,256000");
   assert_eq!(run.code, 0, "{}", run.describe());
   assert!(!target.join("debug/incremental").exists(), "{}", run.describe());
+  assert!(!target.join("after/debug/incremental").exists(), "{}", run.describe());
   let log = fs::read_to_string(trim_log(&world, launch_id)).expect("the trim's log");
   assert!(log.lines().count() >= 3, "the trim read too little:\n{log}");
   assert!(log.lines().all(|line| line.ends_with(" started")), "the trim ran before the started marker:\n{log}");
@@ -852,8 +866,10 @@ fn the_agent_reachable_round_cargo_never_trims_the_target() {
   assert!(!trim_dir.join("du-calls").exists(), "a round-cargo call read the cache's size");
   assert!(!trim_dir.join("df-calls").exists(), "a round-cargo call read the free space");
   assert!(target.join("debug/incremental/session.o").is_file(), "a round-cargo call removed incremental data");
+  assert!(target.join("after/debug/incremental/session.o").is_file(), "a round-cargo call removed incremental data");
   assert!(target.join("debug/deps/libcached.rlib").is_file(), "a round-cargo call removed the cache");
   assert!(target.join("release/deps/libcached.rlib").is_file(), "a round-cargo call removed the cache");
+  assert!(target.join("after/debug/deps/libcached.rlib").is_file(), "a round-cargo call removed the cache");
   assert!(cargo_log.is_file(), "the build did not run cargo");
 }
 

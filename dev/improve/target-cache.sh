@@ -34,10 +34,13 @@ target_free_mib() {
   printf '%s\n' $((available / 1024))
 }
 
-# remove_incremental_data <target directory>: removes the incremental data of each profile in the target, only that.
+# remove_incremental_data <target directory>: removes the incremental data of every target tree in the directory, only
+# that. A round can keep a target tree below the direction's cache instead of at it: the perf direction's dirs on host3
+# are <cache>/<name>/<profile>/incremental, one level deeper than <cache>/<profile>/incremental. A two-level match leaves
+# that data, frees nothing, and lets the next step delete the whole cache.
 remove_incremental_data() {
   [[ -d $1 ]] || return 0
-  find "$1" -mindepth 2 -maxdepth 2 -type d -name incremental -prune -exec rm -rf -- {} +
+  find "$1" -mindepth 2 -type d -name incremental -prune -exec rm -rf -- {} +
 }
 
 # trim_target_cache <home directory> <direction>: bounds the direction's pinned target cache. It removes only this

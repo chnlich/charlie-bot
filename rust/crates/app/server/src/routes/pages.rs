@@ -1798,7 +1798,11 @@ mod tests {
     }
   }
 
+  /// An unlocked browser's chat page embeds the open session, and the events viewer answers. The first render of a
+  /// process reads the checkout's templates, the chat page's script tail and its static tree, and runs git for the
+  /// version, so the test takes disk and process time the unit-test time bound does not fit. It runs in Integration.
   #[tokio::test]
+  #[ignore = "integration"]
   async fn an_unlocked_browser_gets_the_chat_page_and_its_session() {
     let home = tempfile::tempdir().expect("a temporary home");
     let (app, session_id) = gated_app_with_session(&home).await;

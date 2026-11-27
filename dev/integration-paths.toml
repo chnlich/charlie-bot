@@ -28,6 +28,12 @@ rust = "binary_id(charliebot-script-tests::release) + binary_id(charliebot-scrip
 paths = ["rust/crates/app/server/**"]
 rust = "binary_id(charliebot-script-tests::release)"
 
+# The chat page test renders the checkout's templates, script tail and static tree, so a change to the server or to the
+# templating crate or to those files selects the server binary's integration tests.
+[[entry]]
+paths = ["rust/crates/app/server/**", "rust/crates/runtime/registry/**", "web/templates/**", "web/static/**"]
+rust = "binary_id(charliebot-server::bin/charliebot-server)"
+
 [[entry]]
 paths = ["rust/crates/app/mock-home/**"]
 rust = "binary_id(charliebot-script-tests::improve) + binary_id(charliebot-script-tests::release)"

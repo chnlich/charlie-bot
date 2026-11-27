@@ -443,6 +443,12 @@ if ! STAND_IN_OPTIONS=$("$TRIAL_CLI" release-helper stand-in-options "$REPO_ROOT
 fi
 STAND_IN_OPTION_LINES=$(sed 's/^/    /' <<<"$STAND_IN_OPTIONS")
 
+# The mock home's sessions name the backend mock-backend. The trial configures it as a pool whose label has the live pool
+# label's length and shape (group, tool, model, id in parentheses), so the pages show a live-length label. It is a pool,
+# not an option: the startup check refuses an option whose id lacks its type's usage prefix. No backends.calls target
+# names mock-backend, so the entry adds no call. Its one member is the release-refuse option at the end of the options,
+# which holds no credential and points at 127.0.0.1:9, so a launch that a trial page triggers on mock-backend fails at
+# once in every trial context, whatever probe credential the trial carries.
 # backends.calls.new_session names the trial's first option, the target new sessions took before the key was required.
 # Without it the server refuses to start.
 cat >"$TRIAL_CB_HOME/config.yaml" <<EOF
@@ -469,6 +475,11 @@ backends:
       rule: rotate
       members:
         - charlie-code-release-trial
+    - id: mock-backend
+      label: Synthetic test group · Mock CLI · Mock model 10.5 (mock-backend)
+      rule: rotate
+      members:
+        - charlie-code-release-refuse
   calls:
     new_session: charlie-code-release-trial
     worker: pool
@@ -484,6 +495,11 @@ backends:
   options:
 $(trial_probe_option charlie-code-release-trial "Release trial" "$TRIAL_MODEL")
 $STAND_IN_OPTION_LINES
+    - id: charlie-code-release-refuse
+      label: Release refusing endpoint
+      type: charlie-code
+      model: refuse-stub
+      api_base: http://127.0.0.1:9/v1
 EOF
 chmod 600 "$TRIAL_CB_HOME/config.yaml"
 

@@ -6,6 +6,8 @@
 # Print one `path<TAB>branch` line per claimed path: open pull request files, and the
 # committed and uncommitted paths of each worktree branch with a live claimant. A claimed
 # path that origin/main has no object at carries a third field, `absent-on-origin-main`.
+# Uncommitted work on a path origin/main has carries the third field `uncommitted`, because
+# no commit holds it and the claim check cannot merge-test it (dev/improve/claim-check.sh).
 # The branch is the one that carries the path: uncommitted work prints with the branch of
 # its dirty worktree, a path that an unmerged commit changes prints with that commit's
 # branch, and an open pull request's files print with its head branch. A path whose
@@ -67,13 +69,19 @@ read_main_patch_ids() {
 # The third field of a claim whose path origin/main has no object at. A claim without it names a path origin/main has.
 readonly ABSENT_ON_MAIN_FIELD=absent-on-origin-main
 
-# Print one claim as `path<TAB>branch`, with the absent field when origin/main has no object at the path. The lookup
-# runs in the repository at root, any checkout of it, because main_ref lives in the refs that all checkouts share. An
-# unreadable repository stops the script. A missing path is no error: git answers it with the object name and `missing`.
+# The third field of a claim on a path that origin/main has, carried by uncommitted work. No commit holds that work, so
+# the claim check cannot merge-test it (dev/improve/claim-check.sh reads this field).
+readonly UNCOMMITTED_FIELD=uncommitted
+
+# Print one claim as `path<TAB>branch`, with the absent field when origin/main has no object at the path, or the
+# uncommitted field when the claim is uncommitted work (dirty=yes) on a path origin/main has. The lookup runs in the
+# repository at root, any checkout of it, because main_ref lives in the refs that all checkouts share. An unreadable
+# repository stops the script. A missing path is no error: git answers it with the object name and `missing`.
 print_claim() {
   local root=$1
   local path=$2
   local branch=$3
+  local dirty=${4:-no}
   local answer
   if ! answer=$(git -C "$root" cat-file --batch-check='%(objecttype)' <<<"$main_ref:$path"); then
     printf 'cannot read %s:%s in %s\n' "$main_ref" "$path" "$root" >&2
@@ -81,6 +89,8 @@ print_claim() {
   fi
   if [[ $answer == "$main_ref:$path missing" ]]; then
     printf '%s\t%s\t%s\n' "$path" "$branch" "$ABSENT_ON_MAIN_FIELD"
+  elif [[ $dirty == yes ]]; then
+    printf '%s\t%s\t%s\n' "$path" "$branch" "$UNCOMMITTED_FIELD"
   else
     printf '%s\t%s\n' "$path" "$branch"
   fi
@@ -157,7 +167,7 @@ list_dirty_paths() {
   listing=$(dirty_paths "$worktree") || exit 1
   while IFS= read -r path; do
     [[ -n $path ]] || continue
-    print_claim "$worktree" "$path" "$branch"
+    print_claim "$worktree" "$path" "$branch" yes
   done <<<"$listing"
 }
 

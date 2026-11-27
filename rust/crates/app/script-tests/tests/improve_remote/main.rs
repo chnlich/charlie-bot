@@ -2954,10 +2954,11 @@ fn a_running_rounds_clone_adds_its_checked_out_branchs_files_to_the_list() {
   let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
   // Every path the running ux round's clone holds prints with its branch: the committed paths
   // carry unmerged commits, and the uncommitted and untracked paths are uncommitted work. The paths
-  // that origin/main lacks carry the absent field; base.md is on origin/main.
+  // that origin/main lacks carry the absent field; base.md is on origin/main, so its uncommitted change
+  // carries the uncommitted field.
   for carried in [
     format!("committed.md\timprove/{OTHER_DIRECTION}/topic\tabsent-on-origin-main"),
-    format!("base.md\timprove/{OTHER_DIRECTION}/topic"),
+    format!("base.md\timprove/{OTHER_DIRECTION}/topic\tuncommitted"),
     format!("dropped.md\timprove/{OTHER_DIRECTION}/topic\tabsent-on-origin-main"),
     format!("untracked.md\timprove/{OTHER_DIRECTION}/topic\tabsent-on-origin-main"),
   ] {
@@ -3779,7 +3780,8 @@ fn an_unowned_worktree_keeps_a_path_that_main_deleted() {
   // Each path prints with the branch that carries it. An unmerged commit's branch carries its file. The
   // dirty worktree's branch carries its uncommitted paths. An open pull request's head branch carries its file.
   // main deleted old.md and the fixture has no pr-only.md or fresh.md, so their claims carry the absent field;
-  // live.md is on main, so its claim stays unmarked.
+  // live.md is on main, so its committed claim stays unmarked, and its uncommitted change carries the uncommitted
+  // field.
   let mut listed: Vec<&str> = run.stdout.lines().collect();
   listed.sort_unstable();
   assert_eq!(
@@ -3787,6 +3789,7 @@ fn an_unowned_worktree_keeps_a_path_that_main_deleted() {
     [
       "fresh.md\tcharliebot/renamed\tabsent-on-origin-main",
       "live.md\tcharliebot/renamed",
+      "live.md\tcharliebot/renamed\tuncommitted",
       "old.md\tcharliebot/renamed\tabsent-on-origin-main",
       "pr-only.md\tcharliebot/task-open\tabsent-on-origin-main"
     ],
@@ -3980,9 +3983,10 @@ fn a_worktree_without_a_task_name_keeps_its_uncommitted_paths_and_drops_its_land
 
   assert_eq!(run.code, 0, "{}", run.describe());
   // The topic commit is patch-equivalent on main, so its committed path names nothing. The same path's
-  // uncommitted change, the staged path and the untracked path print with the branch that carries them.
+  // uncommitted change, the staged path and the untracked path print with the branch that carries them. main has
+  // topic.md, so its uncommitted change carries the uncommitted field.
   for listed in [
-    "topic.md\tcharliebot/no-task",
+    "topic.md\tcharliebot/no-task\tuncommitted",
     "staged.md\tcharliebot/no-task\tabsent-on-origin-main",
     "untracked.md\tcharliebot/no-task\tabsent-on-origin-main",
   ] {
@@ -4241,7 +4245,9 @@ fn a_no_record_worktree_with_one_edit_from_the_last_day_claims_all_its_paths() {
   let run = run_inflight_list(&world);
 
   assert_eq!(run.code, 0, "{}", run.describe());
-  for listed in ["tracked.md\tcharliebot/recent-edit", "untracked.md\tcharliebot/recent-edit\tabsent-on-origin-main"] {
+  for listed in
+    ["tracked.md\tcharliebot/recent-edit\tuncommitted", "untracked.md\tcharliebot/recent-edit\tabsent-on-origin-main"]
+  {
     assert!(
       run.stdout.lines().any(|line| line == listed),
       "the in-flight list drops {listed} although one of the worktree's changes is a day old:\n{}",

@@ -2491,11 +2491,27 @@ impl TaskExecutionAdapter {
     Ok(format!("run {} failed without a reportable output", run.id))
   }
 
+  /// Whether a run of this session other than `run` works in `worktree_path` and has no terminal outcome yet.
+  fn worktree_has_live_run(&self, session_id: &str, run: &RunRecord, worktree_path: &str) -> anyhow::Result<bool> {
+    for other in self.features.store.list_run_records_sync(session_id)? {
+      if other.id != run.id
+        && other.worktree_path.as_deref() == Some(worktree_path)
+        && !self.features.store.run_has_terminal_outcome(session_id, &other.id)?
+      {
+        return Ok(true);
+      }
+    }
+    Ok(false)
+  }
+
   async fn cleanup_worktree_if_delivered(&self, session_id: &str, run: &RunRecord) -> anyhow::Result<()> {
     let Some(meta) = self.features.store.load_meta(session_id).await? else { return Ok(()) };
     if meta.task.as_ref().is_some_and(|task| task.keep_worktree) {
-      // The worktree stays for the process that needs it; its branch is released so other checkouts can use it.
-      if let Some(worktree_path) = run.worktree_path.as_deref() {
+      // The worktree stays for the process that needs it. Its branch is released once no other run of the task still
+      // works in it: a run that a restart re-attached is live until it ends, and its checkout keeps the branch.
+      if let Some(worktree_path) = run.worktree_path.as_deref()
+        && !self.worktree_has_live_run(session_id, run, worktree_path)?
+      {
         git::git_detach_kept_worktree(Path::new(worktree_path), &run.id).await;
       }
       return Ok(());

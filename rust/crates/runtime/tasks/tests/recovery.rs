@@ -518,6 +518,69 @@ async fn restart_after_launch_reattaches_live_process() -> anyhow::Result<()> {
   Ok(())
 }
 
+/// The branch a worktree has checked out, or `HEAD` once its HEAD is detached.
+fn checked_out_branch(worktree: &Path) -> anyhow::Result<String> {
+  let output = Command::new("git").arg("-C").arg(worktree).args(["rev-parse", "--abbrev-ref", "HEAD"]).output()?;
+  anyhow::ensure!(output.status.success(), "git rev-parse failed in {}", worktree.display());
+  Ok(String::from_utf8(output.stdout)?.trim().to_string())
+}
+
+/// A kept worktree keeps its task branch while a re-attached review of its work run is live. The restart replays the
+/// delivery of an earlier successful review of that work run, and the replay reaches the worktree's release. The
+/// release waits for the live review, which lands from the same checkout. When the live review ends, the release runs.
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_restart_replay_keeps_a_kept_worktree_on_its_branch_under_a_reattached_review() -> anyhow::Result<()> {
+  let guard = ProcessGroupGuard::new();
+  let repo = SyntheticRepo::create()?;
+  let stack = Stack::start("exit 0").await?;
+  test_access_key(&stack)?;
+  stack.dispatch.set_executor(None);
+  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+  let task = TaskSpec { keep_worktree: true, ..implement_spec(&repo.repo) };
+  let worker = stack.node("worker", Some(&manager.id), TaskProfile::Worker, Some(task)).await?;
+  let (branch, worktree) = worktree(&repo, &stack, &worker.id, "run-work")?;
+  finished_work_run(&stack, &worker.id, "run-work", &repo, &branch, &worktree, None).await?;
+  // A review run records the work run's worktree, as the live review does.
+  let review = |run_id: &str| RunRecord {
+    repo_path: Some(repo.repo.to_string_lossy().into_owned()),
+    base_branch: Some("main".to_string()),
+    branch_name: Some(branch.clone()),
+    worktree_path: Some(worktree.to_string_lossy().into_owned()),
+    review_of_run_id: Some("run-work".to_string()),
+    ..queued_run(&worker.id, run_id, RunKind::Review)
+  };
+  stack.register(review("review-done")).await?;
+  stack.finish(&worker.id, "review-done", RunOutcomeKind::Success).await?;
+
+  let live_dir = stack.store().run_dir(&worker.id, "review-live");
+  std::fs::create_dir_all(&live_dir)?;
+  let assistant =
+    json!({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "landing"}]}});
+  std::fs::write(live_dir.join(RAW_LOG_NAME), format!("{assistant}\n"))?;
+  stack.register(review("review-live")).await?;
+  let mut live = Command::new("/bin/sleep").arg("30").process_group(0).spawn()?;
+  guard.track(live.id());
+  let pid_start = identity::pin_process_identity(live.id()).pid_start.expect("the live process has a stat line");
+  stack.launch(&worker.id, "review-live", live.id(), &pid_start).await?;
+  assert_eq!(checked_out_branch(&worktree)?, branch, "the branch is checked out before the restart");
+
+  stack.node_pass(&worker.id).await?;
+
+  let replayed = child_reports(&stack, &manager.id)?;
+  assert_eq!(replayed.len(), 1, "the restart replayed review-done's delivery: {replayed:?}");
+  assert_eq!(checked_out_branch(&worktree)?, branch, "the replay released the worktree under the live review");
+
+  let mut raw = std::fs::read_to_string(live_dir.join(RAW_LOG_NAME))?;
+  raw.push_str("{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"landed\"}\n");
+  std::fs::write(live_dir.join(RAW_LOG_NAME), raw)?;
+  live.kill()?;
+  live.wait()?;
+  assert_eq!(wait_for_run(&stack, &guard, &worker.id, "review-live").await?, RunOutcomeKind::Success);
+  settle_until(|| Ok(checked_out_branch(&worktree)? == "HEAD")).await?;
+  Ok(())
+}
+
 /// The logins a reattach hold took, as the recovered processes' environments name them, and how many holds are still
 /// alive. The lifecycle stands in for the Claude account pool's `/proc/<pid>/environ` reservation.
 static REATTACH_LOGINS: Mutex<Vec<String>> = Mutex::new(Vec::new());

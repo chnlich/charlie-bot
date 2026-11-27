@@ -134,7 +134,7 @@ async fn create_task(
     };
     body.insert("session_id".to_string(), Value::String(session.id));
   }
-  if let Err(error) = std::fs::create_dir_all(loader::cron_dir(&cfg)) {
+  if let Err(error) = loader::ensure_cron_dir(&cfg) {
     return responses::internal_error("OSError", error.to_string());
   }
   if let Err(error) = write_yaml(&path, &Value::Object(body.clone())) {

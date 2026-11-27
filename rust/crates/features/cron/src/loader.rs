@@ -65,6 +65,11 @@ pub fn cron_dir(cfg: &CharlieBotConfig) -> PathBuf {
   cron_dir_for_home(&cfg.charliebot_home)
 }
 
+/// Create the profile's cron task directory when it is absent.
+pub fn ensure_cron_dir(cfg: &CharlieBotConfig) -> std::io::Result<()> {
+  std::fs::create_dir_all(cron_dir(cfg))
+}
+
 /// One task's config file path under a profile home.
 pub fn cron_path_for_home(home: &Path, name: &str) -> PathBuf {
   cron_dir_for_home(home).join(format!("{name}.yaml"))

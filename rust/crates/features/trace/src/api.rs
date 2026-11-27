@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use axum::Router;
 use axum::extract::State;
@@ -13,7 +13,9 @@ use charliebot_compat::mimetypes::MimeTypes;
 use charliebot_compat::mimetypes_table::APPLICATION_GZIP;
 use charliebot_compat::responses::Failure;
 use charliebot_compat::routing::get_only;
+use charliebot_compat::static_files::StaticDirectory;
 use charliebot_compat::urlquote::encode_pairs;
+use charliebot_compat::validation::Source;
 use charliebot_compat::{responses, static_files, validation};
 use charliebot_registry::FeatureContext;
 use charliebot_registry::templating::Templating;
@@ -27,18 +29,18 @@ const DEFAULT_PATTERN: &str = "*.json";
 
 static MIME_TYPES: OnceLock<MimeTypes> = OnceLock::new();
 
-pub(super) fn router(features: &std::sync::Arc<FeatureContext>) -> Router {
+pub(super) fn router(features: &Arc<FeatureContext>) -> Router {
   Router::new()
     .route(VIEWER_PATH, get_only(perfetto_viewer))
     .route(MERGED_PATH, get_only(perfetto_merged))
-    .with_state(std::sync::Arc::clone(features))
+    .with_state(Arc::clone(features))
 }
 
 pub(super) fn matches(path: &str) -> bool {
   path == VIEWER_PATH || path == MERGED_PATH
 }
 
-async fn perfetto_viewer(State(features): State<std::sync::Arc<FeatureContext>>, uri: Uri, request: Parts) -> Response {
+async fn perfetto_viewer(State(features): State<Arc<FeatureContext>>, uri: Uri, request: Parts) -> Response {
   let query = query_pairs(uri.query());
   let traces: Vec<String> =
     query.iter().filter(|(name, value)| name == "trace" && !value.is_empty()).map(|(_, value)| value.clone()).collect();
@@ -46,7 +48,7 @@ async fn perfetto_viewer(State(features): State<std::sync::Arc<FeatureContext>>,
   let pattern = last_value(&query, "pattern").unwrap_or(DEFAULT_PATTERN).to_string();
   let title = last_value(&query, "title").map(str::to_string);
   let slim = match last_value(&query, "slim") {
-    Some(value) => match validation::parse_bool(validation::Source::Query, "slim", value) {
+    Some(value) => match validation::parse_bool(Source::Query, "slim", value) {
       Ok(value) => Some(value),
       Err(error) => return validation::response(&[*error]),
     },
@@ -113,18 +115,14 @@ async fn perfetto_viewer(State(features): State<std::sync::Arc<FeatureContext>>,
   }
 }
 
-async fn perfetto_merged(
-  State(features): State<std::sync::Arc<FeatureContext>>,
-  uri: Uri,
-  headers: HeaderMap,
-) -> Response {
+async fn perfetto_merged(State(features): State<Arc<FeatureContext>>, uri: Uri, headers: HeaderMap) -> Response {
   let query = query_pairs(uri.query());
   let traces: Vec<PathBuf> =
     query.iter().filter(|(name, _)| name == "trace").map(|(_, value)| PathBuf::from(value)).collect();
   let dir = last_value(&query, "dir").map(str::to_string);
   let pattern = last_value(&query, "pattern").unwrap_or(DEFAULT_PATTERN).to_string();
   let shape = match last_value(&query, "slim") {
-    Some(value) => match validation::parse_bool(validation::Source::Query, "slim", value) {
+    Some(value) => match validation::parse_bool(Source::Query, "slim", value) {
       Ok(value) => ArtifactShape::from(value),
       Err(error) => return validation::response(&[*error]),
     },
@@ -171,7 +169,7 @@ async fn perfetto_merged(
 fn serve_cached_trace(cache_path: &Path, headers: &HeaderMap) -> Response {
   let directory = cache_path.parent().expect("the cache artifact has a parent directory");
   let name = cache_path.file_name().expect("the cache artifact has a file name").to_string_lossy();
-  let served = static_files::StaticDirectory::new(directory.to_path_buf());
+  let served = StaticDirectory::new(directory.to_path_buf());
   let mut response =
     static_files::serve(&served, MIME_TYPES.get_or_init(MimeTypes::load), &format!("/{name}"), &Method::GET, headers);
   if response.status() == StatusCode::OK || response.status() == StatusCode::PARTIAL_CONTENT {

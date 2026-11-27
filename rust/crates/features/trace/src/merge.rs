@@ -15,12 +15,14 @@ use charliebot_core::timefmt;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::wiring::{Phase, Service, ServiceContext};
 use flate2::{Compression, GzBuilder};
+use futures_util::future::BoxFuture;
 use memchr::{memchr, memchr_iter, memchr2, memrchr};
 use serde::Serialize;
 use serde_json::ser::Formatter;
-use serde_json::{Map, Number, Value};
+use serde_json::{Map, Number, Serializer, Value};
 use sha2::{Digest, Sha256};
 use tempfile::Builder;
+use tokio::sync::watch::Receiver;
 use tokio::sync::{Mutex, Semaphore, watch};
 
 const MERGE_CACHE_LIMIT: usize = 24;
@@ -82,7 +84,7 @@ type FlightResult = Result<PathBuf, BuildFailure>;
 
 struct MergeRuntime {
   gate: Arc<Semaphore>,
-  flights: Mutex<HashMap<String, watch::Receiver<Option<FlightResult>>>>,
+  flights: Mutex<HashMap<String, Receiver<Option<FlightResult>>>>,
 }
 
 #[derive(Clone)]
@@ -107,11 +109,11 @@ impl Service for MergePool {
     Phase::Ready
   }
 
-  fn start<'a>(&'a self, _ctx: ServiceContext) -> futures_util::future::BoxFuture<'a, anyhow::Result<()>> {
+  fn start<'a>(&'a self, _ctx: ServiceContext) -> BoxFuture<'a, anyhow::Result<()>> {
     Box::pin(async { Ok(()) })
   }
 
-  fn stop<'a>(&'a self) -> futures_util::future::BoxFuture<'a, anyhow::Result<()>> {
+  fn stop<'a>(&'a self) -> BoxFuture<'a, anyhow::Result<()>> {
     Box::pin(async { Ok(()) })
   }
 }
@@ -179,7 +181,7 @@ pub(super) async fn cached_build(
   await_flight(receiver).await
 }
 
-async fn await_flight(mut receiver: watch::Receiver<Option<FlightResult>>) -> FlightResult {
+async fn await_flight(mut receiver: Receiver<Option<FlightResult>>) -> FlightResult {
   loop {
     if let Some(result) = receiver.borrow().clone() {
       return result;
@@ -231,7 +233,7 @@ fn merge_cache_key(paths: &[PathBuf], shape: ArtifactShape, mode: &str) -> Resul
   }
   let payload = CacheKeyPayload { paths: path_rows, slim: shape.is_slim(), mode };
   let mut encoded = Vec::new();
-  let mut serializer = serde_json::Serializer::with_formatter(&mut encoded, AsciiFormatter);
+  let mut serializer = Serializer::with_formatter(&mut encoded, AsciiFormatter);
   payload.serialize(&mut serializer).map_err(|error| BuildFailure::Failed(error.to_string()))?;
   Ok(format!("{:x}", Sha256::digest(encoded)))
 }

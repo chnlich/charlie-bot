@@ -27,6 +27,7 @@ use charliebot_tasks::execution::TaskExecutionAdapter;
 use charliebot_tasks::recovery;
 use serde_json::{Map, Value, json};
 
+use crate::LOG_TARGET;
 use crate::command::{self, ImproveLoopAlreadyRunningError, ImproveState, LoopStatus, Reservation};
 use crate::sequence::{self, LoopSpec, run_improve_sequence};
 use crate::wire;
@@ -210,7 +211,7 @@ async fn start_improve_sequence(features: &Arc<FeatureContext>, req: ImproveRequ
   }
 
   tracing::info!(
-    target: "charliebot_improve",
+    target: LOG_TARGET,
     session = req.session_id.as_str(),
     loop_id,
     child = child.id.as_str(),
@@ -297,7 +298,7 @@ async fn stop_improve(State(features): State<Arc<FeatureContext>>, request: axum
   };
   match command::stop_improve_loop(&cfg, &session_id) {
     Ok(true) => {
-      tracing::info!(target: "charliebot_improve", session = session_id.as_str(), "improve_loop_stopped");
+      tracing::info!(target: LOG_TARGET, session = session_id.as_str(), "improve_loop_stopped");
       responses::json(StatusCode::OK, &json!({ (wire::STATUS): "stopped", (wire::SESSION_ID): session_id }))
     }
     Ok(false) => responses::json(StatusCode::CONFLICT, &json!({ "detail": "No active improve loop in this session" })),

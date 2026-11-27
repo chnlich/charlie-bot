@@ -6,6 +6,7 @@ use charliebot_store::metadata::BASE_BRANCH_FIELD;
 use charliebot_tasks::git;
 use serde_json::{Value, json};
 
+use crate::LOG_TARGET;
 use crate::wire;
 
 /// The tip after an iteration and the commits it added over `tip_before`. A failed count leaves the commit count at
@@ -59,7 +60,7 @@ pub async fn land_work_branch_after_loop(
       };
     }
     tracing::warn!(
-      target: "charliebot_improve",
+      target: LOG_TARGET,
       session = session_id,
       error = push_err.as_str(),
       "improve_loop_landing_ff_push_failed"
@@ -72,7 +73,7 @@ pub async fn land_work_branch_after_loop(
       )
     } else {
       tracing::warn!(
-        target: "charliebot_improve",
+        target: LOG_TARGET,
         session = session_id,
         error = push_branch_err.as_str(),
         "improve_loop_work_branch_push_failed"
@@ -94,7 +95,7 @@ pub async fn land_work_branch_after_loop(
   }
   let (ok, push_err) = git::git_push_branch(resolved_repo, work_branch).await;
   if !ok {
-    tracing::warn!(target: "charliebot_improve", session = session_id, error = push_err.as_str(), "improve_loop_push_failed");
+    tracing::warn!(target: LOG_TARGET, session = session_id, error = push_err.as_str(), "improve_loop_push_failed");
     return Landing {
       merge_result: None,
       end_error: Some(format!("Pushing the work branch to origin failed ({push_err}).")),

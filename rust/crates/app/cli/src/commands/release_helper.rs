@@ -497,7 +497,7 @@ fn child_workers(args: &[String]) -> Result<i32, String> {
     if metadata.get(metadata::TASK_PARENT_ID_FIELD).and_then(Value::as_str) != Some(parent_id) {
       continue;
     }
-    if metadata.get("profile").and_then(Value::as_str) != Some("worker") {
+    if metadata.get("profile").and_then(Value::as_str) != Some(metadata::TaskProfile::Worker.as_str()) {
       continue;
     }
     let task = metadata.get("task").filter(|value| text_repr::is_truthy(value)).cloned().unwrap_or_else(|| json!({}));

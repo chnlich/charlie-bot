@@ -18,7 +18,8 @@ use charliebot_cli_common::fields::SESSION_ID;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::{paths, timefmt};
 use charliebot_store::metadata::{
-  COLD_READ_FIELD, COLD_READ_GENRE_FIELD, COLD_READ_PAGE_PATH_FIELD, COLD_READ_TRIGGER_FIELD, TASK_TYPE_FIELD, TaskType,
+  COLD_READ_FIELD, COLD_READ_GENRE_FIELD, COLD_READ_PAGE_PATH_FIELD, COLD_READ_TRIGGER_FIELD, TASK_TYPE_FIELD,
+  TaskProfile, TaskType,
 };
 use charliebot_store::run_identity::SESSION_METADATA_NAME;
 use charliebot_tasks::cold_read;
@@ -205,7 +206,7 @@ fn check_with_host(
       Ok(profile) => profile,
       Err(exit) => return Ok(CheckOutcome::Failed { stdout, exit }),
     };
-    if profile == "manager" {
+    if profile == TaskProfile::Manager.as_str() {
       return match delegate_cold_read(args, artifact, &session_id, inputs) {
         Ok(line) => {
           stdout.push_str(&line);

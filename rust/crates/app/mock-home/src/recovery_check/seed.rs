@@ -16,7 +16,7 @@ use charliebot_store::layout;
 use charliebot_store::metadata::{
   ACCEPTANCE_FIELD, BASE_BRANCH_FIELD, COLD_READ_FIELD, CONTEXT_REFS_FIELD, CREATED_AT_FIELD, EXIT_CODE_FIELD,
   HAS_UNREAD, KEEP_WORKTREE_FIELD, REPO_PATH_FIELD, SCHEMA_VERSION_FIELD, TASK_PARENT_ID_FIELD, TASK_TYPE_FIELD,
-  UPDATED_AT_FIELD,
+  TaskProfile, UPDATED_AT_FIELD,
 };
 use charliebot_store::run_records::{
   ENDED_AT_FIELD, OBSERVATION_BASE_BRANCH, OBSERVATION_BRANCH_NAME, OBSERVATION_EVENTS_REF, OBSERVATION_MODEL,
@@ -36,12 +36,6 @@ const DEAD_PID: usize = 4_194_304 + 900_000;
 const LIVE_PLACEHOLDER_PID: usize = 1;
 
 #[derive(Clone, Copy, PartialEq)]
-enum Profile {
-  Worker,
-  Manager,
-}
-
-#[derive(Clone, Copy, PartialEq)]
 enum RunState {
   /// A process holds the run when the server starts.
   Live,
@@ -53,7 +47,7 @@ enum RunState {
 
 struct Case {
   label: &'static str,
-  profile: Profile,
+  profile: TaskProfile,
   state: RunState,
   /// The run's raw log ends with a result.
   finished: bool,
@@ -64,57 +58,63 @@ struct Case {
 const CASES: [Case; 9] = [
   Case {
     label: "worker-live-finishes",
-    profile: Profile::Worker,
+    profile: TaskProfile::Worker,
     state: RunState::Live,
     finished: true,
     closed: false,
   },
   Case {
     label: "worker-live-crashes",
-    profile: Profile::Worker,
+    profile: TaskProfile::Worker,
     state: RunState::Live,
     finished: false,
     closed: false,
   },
   Case {
     label: "worker-dead-finished",
-    profile: Profile::Worker,
+    profile: TaskProfile::Worker,
     state: RunState::Dead,
     finished: true,
     closed: false,
   },
   Case {
     label: "worker-dead-mid-run",
-    profile: Profile::Worker,
+    profile: TaskProfile::Worker,
     state: RunState::Dead,
     finished: false,
     closed: false,
   },
   Case {
     label: "worker-landed-no-end",
-    profile: Profile::Worker,
+    profile: TaskProfile::Worker,
     state: RunState::Landed,
     finished: true,
     closed: false,
   },
-  Case { label: "worker-closed-live", profile: Profile::Worker, state: RunState::Live, finished: true, closed: true },
+  Case {
+    label: "worker-closed-live",
+    profile: TaskProfile::Worker,
+    state: RunState::Live,
+    finished: true,
+    closed: true,
+  },
   Case {
     label: "manager-live-finishes",
-    profile: Profile::Manager,
+    profile: TaskProfile::Manager,
     state: RunState::Live,
     finished: true,
     closed: false,
   },
   Case {
     label: "manager-dead-finished",
-    profile: Profile::Manager,
+    profile: TaskProfile::Manager,
     state: RunState::Dead,
     finished: true,
     closed: false,
   },
   Case {
     label: "manager-dead-mid-run",
-    profile: Profile::Manager,
+    profile: TaskProfile::Manager,
     state: RunState::Dead,
     finished: false,
     closed: false,
@@ -147,12 +147,12 @@ fn write_lines(path: &Path, values: &[Value]) -> Result<()> {
 }
 
 fn session_meta(session_id: &str, case: &Case, index: usize) -> Value {
-  let worker = case.profile == Profile::Worker;
+  let worker = case.profile == TaskProfile::Worker;
   json!({
     "id": session_id,
     "name": case.label,
     "status": "active",
-    "profile": if worker { "worker" } else { "manager" },
+    "profile": case.profile.as_str(),
     "backend": BACKEND,
     (CREATED_AT_FIELD): format!("{}.000000Z", stamp(index, 0)),
     (UPDATED_AT_FIELD): format!("{}.000000Z", stamp(index, 9)),
@@ -248,7 +248,7 @@ pub fn seed(sessions: &Path, live_runs: &Path) -> Result<()> {
       bail!("{} exists; the seed already holds the check sessions", session_dir.display());
     }
     write_json(&layout::metadata_path(&session_dir), &session_meta(&session_id, case, index))?;
-    let actor = if case.profile == Profile::Manager { "user" } else { "agent" };
+    let actor = if case.profile == TaskProfile::Manager { "user" } else { "agent" };
     let mut events = vec![control(
       &format!("{label}/created"),
       TASK_CREATED,
@@ -263,7 +263,7 @@ pub fn seed(sessions: &Path, live_runs: &Path) -> Result<()> {
     )];
     let runs_dir = layout::runs_dir(&session_dir);
     let (run_id, kind) = match case.profile {
-      Profile::Manager => {
+      TaskProfile::Manager => {
         // A finished first turn confirms the user's input, so the open manager has no input waiting for a launch.
         let message_id = uid(&format!("{label}/message"));
         events.push(json!({
@@ -294,7 +294,7 @@ pub fn seed(sessions: &Path, live_runs: &Path) -> Result<()> {
         write_lines(&runs_dir.join(&first_run).join(RAW_LOG_NAME), &raw_log(&format!("{label}/turn-1"), true))?;
         (uid(&format!("{label}/turn-2")), RunKind::ManagerTurn)
       }
-      Profile::Worker => (uid(&format!("{label}/work")), RunKind::Work),
+      TaskProfile::Worker => (uid(&format!("{label}/work")), RunKind::Work),
     };
     if case.state == RunState::Landed {
       events.push(control(

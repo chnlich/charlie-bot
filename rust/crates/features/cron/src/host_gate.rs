@@ -75,9 +75,9 @@ async fn derived_rows(features: &FeatureContext) -> anyhow::Result<Vec<OpenWaiti
     let Some(login) = logins.iter().find(|login| login.alias == alias).filter(|login| login.awaits_approval) else {
       continue;
     };
-    let (holder_id, holder_name) = holder_of(features, bound).await?;
+    let holder_id = holder_of(features, bound).await?;
     if seen.insert((holder_id.clone(), alias)) {
-      rows.push(wait_row(holder_id, holder_name, login)?);
+      rows.push(wait_row(holder_id, login)?);
     }
   }
   Ok(rows)
@@ -85,24 +85,23 @@ async fn derived_rows(features: &FeatureContext) -> anyhow::Result<Vec<OpenWaiti
 
 /// The session that holds a bound task's waits: the bound session's parent while that parent is open, else the bound
 /// session itself. A session that cron auto-binds has no parent.
-async fn holder_of(features: &FeatureContext, bound: &str) -> anyhow::Result<(String, String)> {
+async fn holder_of(features: &FeatureContext, bound: &str) -> anyhow::Result<String> {
   let meta = features.store.load_meta(bound).await?.with_context(|| format!("bound session {bound} does not exist"))?;
   if let Some(parent_id) = meta.task_parent_id.as_deref()
     && features.store.task_state(parent_id)? == "open"
   {
     let parent =
       features.store.load_meta(parent_id).await?.with_context(|| format!("task parent {parent_id} does not exist"))?;
-    return Ok((parent.id, parent.name));
+    return Ok(parent.id);
   }
-  Ok((meta.id, meta.name))
+  Ok(meta.id)
 }
 
 /// The derived item of one host for the session that holds it. Its context is the probe's first line, and its start
 /// time is the moment the host's verdict last changed.
-fn wait_row(holder_id: String, holder_name: String, login: &HostLogin) -> anyhow::Result<OpenWaitingRow> {
+fn wait_row(holder_id: String, login: &HostLogin) -> anyhow::Result<OpenWaitingRow> {
   Ok(OpenWaitingRow {
     session_id: holder_id,
-    session_name: holder_name,
     text: format!("Approve the ssh login to {} on {HOST_AUTH_LINK}", login.alias),
     context: Some(login.detail.lines().next().unwrap_or_default().to_string()),
     link: Some(HOST_AUTH_LINK.to_string()),
@@ -193,6 +192,22 @@ mod tests {
     archive_task(&features, &root.id).await;
     let rows = derived_waiting_rows(&features).await.unwrap();
     assert_eq!(rows.iter().map(|row| row.session_id.as_str()).collect::<Vec<_>>(), [node.id.as_str()], "{rows:?}");
+  }
+
+  #[tokio::test]
+  async fn an_open_parent_without_its_session_record_still_errors() {
+    let (_home, features) = feature_context_with_login_hosts(&["synthetic-login-host"]);
+    let home = features.config.get().unwrap().charliebot_home.clone();
+    let root = manager(&features, "missing-parent-record-root").await.unwrap();
+    let node = child_manager(&features, &root.id, "missing-parent-record-node").await.unwrap();
+    write_prompted_task(&home, "missing-parent-record", &task(&node.id, "synthetic-login-host", true));
+    set_host_login(&home, verdict("synthetic-login-host", "needs-interactive-auth", SINCE));
+
+    std::fs::remove_file(features.store.metadata_path(&root.id)).expect("the parent session record is removed");
+    features.store.invalidate_cache(&root.id);
+
+    let error = derived_waiting_rows(&features).await.unwrap_err();
+    assert!(format!("{error:#}").contains(&format!("task parent {} does not exist", root.id)), "{error:#}");
   }
 
   #[tokio::test]

@@ -1031,7 +1031,6 @@ async fn derived_items(
       .filter(|row| holders.is_none_or(|holders| holders.contains(&row.session_id)))
       .map(|row| OpenWaitingItem {
         session_id: row.session_id,
-        session_name: row.session_name,
         text: row.text,
         context: row.context,
         link: row.link,
@@ -1133,7 +1132,6 @@ fn payload_of(status: &WebStatus) -> Value {
 #[derive(Clone, Debug, Serialize)]
 pub struct OpenWaitingItem {
   pub session_id: String,
-  pub session_name: String,
   pub text: String,
   pub context: Option<String>,
   pub link: Option<String>,
@@ -3108,7 +3106,6 @@ mod tests {
   fn derived_row(session_id: &str) -> OpenWaitingRow {
     OpenWaitingRow {
       session_id: session_id.to_string(),
-      session_name: "Synthetic holder".to_string(),
       text: "Approve the ssh login to synthetic-login-host on /host-auth".to_string(),
       context: Some("Synthetic login check".to_string()),
       link: Some("/host-auth".to_string()),

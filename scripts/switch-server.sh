@@ -159,6 +159,8 @@ export CHARLIEBOT_REPO_ROOT="$REPO_ROOT"
 # The host release lock comes from scripts/release/lock.sh, the one definition: the detached run below takes the
 # lock, and a sourced copy reaches none of it.
 . "$SCRIPT_DIR/release/lock.sh"
+# The prior switch's record and the server log its stop led to: check A reads them through these two functions.
+. "$SCRIPT_DIR/switch/prior-record.sh"
 # The slice-unit install this switch calls. switch_forward points this at a copy outside the checkout, because the
 # clone moves to a switch-back target whose checkout may predate the owner.
 SLICE_INSTALL="$SCRIPT_DIR/install-slice-units.sh"
@@ -1570,32 +1572,6 @@ prior_switch_log() {
   return 1
 }
 
-# prior_stop_line LOG: the record's last server stop, as its timestamped line. A stop is either the `stopping the old
-# server` line of a stop that signalled the server, or the `no server listens` line of a stop step that found none.
-# Prints nothing when the record holds neither, which means the switch stopped no server.
-prior_stop_line() {
-  local pattern='^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3} switch: '
-  pattern+='(stopping the old server, |no server listens on port )'
-  grep -E "$pattern" "$1" | tail -n 1
-}
-
-# new_server_log STAMP: the first server log launched at or after STAMP and no later than now. STAMP and the log names
-# carry the same local clock, as YYYYMMDDHHMMSS. Prints nothing when no server launched in that span.
-new_server_log() {
-  local start=$1 end server stamp
-  end="$(date '+%Y%m%d%H%M%S')"
-  while IFS= read -r server; do
-    stamp="${server##*/server_}"
-    stamp="${stamp%.log}"
-    stamp="${stamp//_/}"
-    if [ "$stamp" -ge "$start" ] && [ "$stamp" -le "$end" ]; then
-      echo "$server"
-      return 0
-    fi
-  done < <(find "$LOG_DIR" -maxdepth 1 -name 'server_*.log' | sort)
-  return 0
-}
-
 # reattached_in_log LOG RUN: LOG holds a task_recovery_resume record for RUN, and after the last such resume RUN has no
 # task_run_launch_refused record and no task_run_error record, except a task_run_error that directly follows RUN's
 # task_run_quota_exhausted record (the header states the rule). A record's words are the runs of characters a run id
@@ -1650,7 +1626,7 @@ check_prior_switch() {
       gap="the prior switch stopped no server, so none of its runs was reattached on a server it started"
     else
       stop_stamp="$(cut -c1-19 <<<"$stop" | tr -dc '0-9')"
-      server="$(new_server_log "$stop_stamp")"
+      server="$(new_server_log "$LOG_DIR" "$stop_stamp")"
       if [ -z "$server" ]; then
         gap="no server log in $LOG_DIR started after the prior switch's last server stop at ${stop:0:23}"
       fi

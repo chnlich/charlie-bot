@@ -162,6 +162,9 @@ impl World {
     // The switch sources the host release lock from beside itself.
     fs::create_dir(scripts.join("release")).expect("the release scripts directory");
     copy_repo_file("scripts/release/lock.sh", &scripts.join("release/lock.sh"));
+    // The switch sources the prior switch's record reader from beside itself, as it does the lock.
+    fs::create_dir(scripts.join("switch")).expect("the switch scripts directory");
+    copy_repo_file("scripts/switch/prior-record.sh", &scripts.join("switch/prior-record.sh"));
     // The launcher's preflight reads its expected limits from this directory.
     let systemd = scripts.join("systemd");
     fs::create_dir_all(&systemd).expect("the systemd directory");

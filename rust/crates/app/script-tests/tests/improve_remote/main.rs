@@ -565,27 +565,29 @@ fn a_review_builds_under_the_round_tmpdir_and_round_cargo_refuses_a_build_outsid
   fs::remove_dir_all(&scratch).expect("the review's scratch directory");
 }
 
-/// Runs round-cargo's startup cache preparation with controlled sizes, so the test does not need a 128 GiB fixture.
-fn prepare_target_cache(world: &World, du_stub: &Path, before_mib: u64, after_incremental_mib: u64) -> harness::Run {
-  let helper = harness::repo_root().join("dev/improve/round-cargo.sh");
-  let du_calls = world.sandbox.root().join("target-cache-du-calls");
-  if du_calls.exists() {
-    fs::remove_file(&du_calls).expect("reset the size stub call count");
-  }
-  let mut env = world.env();
-  env.insert("HOME".to_string(), world.remote_home.display().to_string());
-  env.insert("IMPROVE_DIRECTION".to_string(), DIRECTION.to_string());
-  env.insert("PATH".to_string(), format!("{}:/usr/local/bin:/usr/bin:/bin", du_stub.parent().unwrap().display()));
-  env.insert("FAKE_DU_CALLS".to_string(), du_calls.display().to_string());
-  env.insert("FAKE_DU_FIRST_SIZE".to_string(), before_mib.to_string());
-  env.insert("FAKE_DU_SECOND_SIZE".to_string(), after_incremental_mib.to_string());
-  let mut command = harness::command(&helper, &env);
-  command.args(["prepare-target"]).current_dir(world.sandbox.root());
-  harness::run(&mut command)
+/// The log of one round's cache trim: each `du` and `df` call, ending in `started` or `unstarted`.
+fn trim_log(world: &World, launch_id: &str) -> PathBuf {
+  world.sandbox.root().join("trim").join(launch_id).join("log")
 }
 
-fn write_target_cache(world: &World) -> PathBuf {
-  let target = world.remote_home.join(".cache/improve-target").join(DIRECTION);
+fn cache_root(world: &World) -> PathBuf {
+  world.remote_home.join(".cache/improve-target")
+}
+
+/// The runner's in-scope trim for a round of `TRIM_DIRECTION`, with the cache's sizes and the free space that the stubs
+/// report, as comma-separated lists of calls.
+fn run_trim(world: &World, launch_id: &str, cache_mib: &str, free_mib: &str) -> harness::Run {
+  run_in_scope_for(
+    world,
+    launch_id,
+    TRIM_DIRECTION,
+    "claude",
+    &[("FAKE_DU_MIB", cache_mib.to_string()), ("FAKE_DF_MIB", free_mib.to_string())],
+  )
+}
+
+fn write_target_cache(world: &World, direction: &str) -> PathBuf {
+  let target = cache_root(world).join(direction);
   if target.exists() {
     fs::remove_dir_all(&target).expect("remove the previous target fixture");
   }
@@ -598,50 +600,30 @@ fn write_target_cache(world: &World) -> PathBuf {
   target
 }
 
+/// The round's cache trim keeps the cache under its cap: the incremental data goes first, and the whole target only
+/// when the incremental data does not bring it under.
 #[test]
 #[ignore = "integration"]
 fn a_round_cache_stays_under_its_cap_and_discards_incremental_data_before_the_target() {
   let world = World::new();
-  let bin = world.sandbox.dir("target-cache-bin");
-  let du_stub = bin.join("du");
-  harness::write_executable(
-    &du_stub,
-    r##"#!/usr/bin/env bash
-set -euo pipefail
-count=0
-if [[ -f $FAKE_DU_CALLS ]]; then
-  count=$(<"$FAKE_DU_CALLS")
-fi
-((count += 1))
-printf '%s\n' "$count" >"$FAKE_DU_CALLS"
-if (( count == 1 )); then
-  size=$FAKE_DU_FIRST_SIZE
-else
-  size=$FAKE_DU_SECOND_SIZE
-fi
-printf '%s\t%s\n' "$size" "${@: -1}"
-"##,
-  );
-
-  let target = write_target_cache(&world);
-  let under_cap = prepare_target_cache(&world, &du_stub, 100_000, 100_000);
+  let target = write_target_cache(&world, TRIM_DIRECTION);
+  let under_cap = run_trim(&world, "20261127T090000Z-1-401", "100000", "1048576");
   assert_eq!(under_cap.code, 0, "{}", under_cap.describe());
-  assert!(under_cap.stdout.is_empty(), "the cache report reached the round event stream: {}", under_cap.describe());
-  assert_eq!(under_cap.stderr.lines().count(), 1, "{}", under_cap.describe());
   assert!(
-    under_cap.stderr.contains("before=100000MiB action=none after=100000MiB cap=131072MiB"),
+    stderr(&under_cap)
+      .contains("improve runner: target cache: before=100000MiB action=none after=100000MiB cap=131072MiB"),
     "{}",
     under_cap.describe()
   );
   assert!(target.join("debug/incremental/session.o").is_file(), "{}", under_cap.describe());
   assert!(target.join("debug/deps/libcached.rlib").is_file(), "{}", under_cap.describe());
 
-  let _ = write_target_cache(&world);
-  let incremental_only = prepare_target_cache(&world, &du_stub, 131_073, 100_000);
+  let target = write_target_cache(&world, TRIM_DIRECTION);
+  let incremental_only = run_trim(&world, "20261127T090000Z-1-402", "131073,100000", "1048576");
   assert_eq!(incremental_only.code, 0, "{}", incremental_only.describe());
-  assert_eq!(incremental_only.stderr.lines().count(), 1, "{}", incremental_only.describe());
   assert!(
-    incremental_only.stderr.contains("before=131073MiB action=incremental after=100000MiB cap=131072MiB"),
+    stderr(&incremental_only)
+      .contains("improve runner: target cache: before=131073MiB action=incremental after=100000MiB cap=131072MiB"),
     "{}",
     incremental_only.describe()
   );
@@ -649,16 +631,158 @@ printf '%s\t%s\n' "$size" "${@: -1}"
   assert!(target.join("debug/deps/libcached.rlib").is_file(), "{}", incremental_only.describe());
   assert!(target.join("release/deps/libcached.rlib").is_file(), "{}", incremental_only.describe());
 
-  let _ = write_target_cache(&world);
-  let whole_target = prepare_target_cache(&world, &du_stub, 131_073, 131_073);
+  let target = write_target_cache(&world, TRIM_DIRECTION);
+  let whole_target = run_trim(&world, "20261127T090000Z-1-403", "131073,131073", "1048576");
   assert_eq!(whole_target.code, 0, "{}", whole_target.describe());
-  assert_eq!(whole_target.stderr.lines().count(), 1, "{}", whole_target.describe());
   assert!(
-    whole_target.stderr.contains("before=131073MiB action=incremental+directory after=0MiB cap=131072MiB"),
+    stderr(&whole_target)
+      .contains("improve runner: target cache: before=131073MiB action=incremental+directory after=0MiB cap=131072MiB"),
     "{}",
     whole_target.describe()
   );
   assert!(!target.exists(), "{}", whole_target.describe());
+}
+
+/// Free space above the floor leaves the round's cache alone, and the round starts its agent.
+#[test]
+#[ignore = "integration"]
+fn a_round_above_the_free_space_floor_removes_nothing_from_its_cache() {
+  let world = World::new();
+  let target = write_target_cache(&world, TRIM_DIRECTION);
+  // 300 GiB free, above the 200 GiB floor.
+  let run = run_trim(&world, "20261127T090000Z-1-411", "1000", "307200");
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(!stderr(&run).contains("target floor"), "{}", run.describe());
+  assert!(target.join("debug/incremental/session.o").is_file(), "{}", run.describe());
+  assert!(target.join("debug/deps/libcached.rlib").is_file(), "{}", run.describe());
+  assert!(
+    world.sandbox.root().join("scope-env.txt").is_file(),
+    "the round did not start its agent: {}",
+    run.describe()
+  );
+}
+
+/// Below the floor, the round removes its own incremental data first and re-reads the free space: here that brings the
+/// filesystem above the floor, so the target stays.
+#[test]
+#[ignore = "integration"]
+fn a_round_below_the_free_space_floor_removes_its_incremental_data_first() {
+  let world = World::new();
+  let target = write_target_cache(&world, TRIM_DIRECTION);
+  // 150 GiB free, then 250 GiB after the incremental data goes.
+  let run = run_trim(&world, "20261127T090000Z-1-412", "1000", "153600,256000");
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(
+    stderr(&run).contains("improve runner: target floor: removed the incremental data: free=256000MiB floor=204800MiB"),
+    "{}",
+    run.describe()
+  );
+  assert!(!stderr(&run).contains("removed the target directory"), "{}", run.describe());
+  assert!(!target.join("debug/incremental").exists(), "{}", run.describe());
+  assert!(target.join("debug/deps/libcached.rlib").is_file(), "{}", run.describe());
+  assert!(target.join("release/deps/libcached.rlib").is_file(), "{}", run.describe());
+  assert!(
+    world.sandbox.root().join("scope-env.txt").is_file(),
+    "the round did not start its agent: {}",
+    run.describe()
+  );
+}
+
+/// Below the floor after the incremental data goes, the round removes its whole target, names the free space and the
+/// floor, and stops before any build. Another direction's cache stays.
+#[test]
+#[ignore = "integration"]
+fn a_round_below_the_floor_after_its_incremental_data_removes_its_target_and_stops_before_any_build() {
+  let world = World::new();
+  let target = write_target_cache(&world, TRIM_DIRECTION);
+  let neighbor = write_target_cache(&world, NEIGHBOR_DIRECTION);
+  // 150 GiB free, 156.25 GiB after the incremental data goes, 166.02 GiB after the target goes: still below the floor.
+  let run = run_trim(&world, "20261127T090000Z-1-413", "1000", "153600,160000,170000");
+  assert_eq!(run.code, 1, "{}", run.describe());
+  let text = stderr(&run);
+  assert!(
+    text.contains("improve runner: target floor: removed the incremental data: free=160000MiB floor=204800MiB"),
+    "{}",
+    run.describe()
+  );
+  assert!(
+    text.contains("improve runner: target floor: removed the target directory: free=170000MiB floor=204800MiB"),
+    "{}",
+    run.describe()
+  );
+  let stop = format!(
+    "the round stops before any build: free space on {} is 170000MiB, below the floor of 204800MiB, after {} \
+     is removed",
+    cache_root(&world).display(),
+    target.display()
+  );
+  assert!(text.contains(&stop), "the stop does not name the free space and the floor: {}", run.describe());
+  assert!(!target.exists(), "{}", run.describe());
+  assert!(neighbor.join("debug/deps/libcached.rlib").is_file(), "another direction's cache went: {}", run.describe());
+  assert!(!world.sandbox.root().join("scope-env.txt").exists(), "the round started its agent: {}", run.describe());
+}
+
+/// The trim reads the cache and the free space only after the round's `started` marker, so a signal during the trim
+/// ends the round's scope as it does during the round.
+#[test]
+#[ignore = "integration"]
+fn a_round_trims_its_cache_only_after_its_started_marker() {
+  let world = World::new();
+  let launch_id = "20261127T090000Z-1-414";
+  let target = write_target_cache(&world, TRIM_DIRECTION);
+  let run = run_trim(&world, launch_id, "131073,100000", "153600,256000");
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(!target.join("debug/incremental").exists(), "{}", run.describe());
+  let log = fs::read_to_string(trim_log(&world, launch_id)).expect("the trim's log");
+  assert!(log.lines().count() >= 3, "the trim read too little:\n{log}");
+  assert!(log.lines().all(|line| line.ends_with(" started")), "the trim ran before the started marker:\n{log}");
+}
+
+/// The agent-reachable `round-cargo.sh` never trims: neither its `prepare-target` argument nor a build reads the
+/// cache's size or the free space, and a cache over its cap and below the floor stays whole.
+#[test]
+#[ignore = "integration"]
+fn the_agent_reachable_round_cargo_never_trims_the_target() {
+  let world = World::new();
+  let clone = world.remote_home.join("improve").join(TRIM_DIRECTION).join("charlie-bot");
+  fs::create_dir_all(&clone).expect("the round clone");
+  world.git(&clone, &["init", "-q"]);
+  let target = write_target_cache(&world, TRIM_DIRECTION);
+  // The stubs record their calls here, so a call that reaches them leaves a count behind.
+  let trim_dir = world.sandbox.dir("trim/agent");
+  let cargo_log = world.sandbox.root().join("agent-cargo-builds.log");
+  let cargo_env = world.sandbox.root().join("agent-cargo-env.txt");
+  let helper = harness::repo_root().join("dev/improve/round-cargo.sh");
+  let mut env = world.env();
+  env.insert("HOME".to_string(), world.remote_home.display().to_string());
+  env.insert("IMPROVE_DIRECTION".to_string(), TRIM_DIRECTION.to_string());
+  env.insert(
+    "PATH".to_string(),
+    format!(
+      "{}:{}:/usr/local/bin:/usr/bin:/bin",
+      world.trim_bin().display(),
+      world.remote_home.join(".local/bin").display()
+    ),
+  );
+  env.insert("FAKE_CARGO_LOG".to_string(), cargo_log.display().to_string());
+  env.insert("FAKE_CARGO_ENV".to_string(), cargo_env.display().to_string());
+  env.insert("FAKE_DU_CALLS".to_string(), trim_dir.join("du-calls").display().to_string());
+  env.insert("FAKE_DF_CALLS".to_string(), trim_dir.join("df-calls").display().to_string());
+  env.insert("FAKE_TRIM_LOG".to_string(), trim_dir.join("log").display().to_string());
+  env.insert("FAKE_STARTED_MARKER".to_string(), world.sandbox.root().join("no-marker").display().to_string());
+  env.insert("FAKE_DU_MIB".to_string(), "131073,131073".to_string());
+  env.insert("FAKE_DF_MIB".to_string(), "1000".to_string());
+  for args in [vec!["prepare-target"], vec!["check", "--workspace", "--locked"]] {
+    let mut command = harness::command(&helper, &env);
+    command.current_dir(&clone).args(&args);
+    let _ = harness::run(&mut command);
+  }
+  assert!(!trim_dir.join("du-calls").exists(), "a round-cargo call read the cache's size");
+  assert!(!trim_dir.join("df-calls").exists(), "a round-cargo call read the free space");
+  assert!(target.join("debug/incremental/session.o").is_file(), "a round-cargo call removed incremental data");
+  assert!(target.join("debug/deps/libcached.rlib").is_file(), "a round-cargo call removed the cache");
+  assert!(target.join("release/deps/libcached.rlib").is_file(), "a round-cargo call removed the cache");
+  assert!(cargo_log.is_file(), "the build did not run cargo");
 }
 
 #[test]
@@ -831,6 +955,9 @@ const FOCUS_DIRECTION: &str = "focused";
 const SYMLINK_DIRECTION: &str = "symlink_review";
 const SCOPE_TMPDIR_DIRECTION: &str = "scope_tmpdir";
 const OTHER_DIRECTION: &str = "test_ux";
+/// The direction of the cache trim tests, and a neighbour whose cache the trim must leave alone.
+const TRIM_DIRECTION: &str = "target_trim";
+const NEIGHBOR_DIRECTION: &str = "target_neighbor";
 
 /// The run of the runner's `--in-scope` form alone, with the stub improve-sandbox that records the scope's variables and
 /// the Codex home. The scope writes the review's login into the launch's review directory, and the round's credentials
@@ -877,9 +1004,18 @@ fn run_in_scope_for(
   env.insert("CHARLIEBOT_HOME".to_string(), world.remote_home.join("improve/home").display().to_string());
   // The start stamp names the round's evidence directory, so each start in one world names its own by its launch id.
   env.insert("IMPROVE_ROUND_START".to_string(), launch_id.to_string());
+  // The runner's cache trim reads through the `du` and `df` stubs of the world. They log to this launch's trim directory,
+  // and they come first on PATH, ahead of whatever PATH a test sets, so the test keeps its own stubs.
+  let trim = world.sandbox.dir(&format!("trim/{launch_id}"));
+  env.insert("FAKE_DU_CALLS".to_string(), trim.join("du-calls").display().to_string());
+  env.insert("FAKE_DF_CALLS".to_string(), trim.join("df-calls").display().to_string());
+  env.insert("FAKE_TRIM_LOG".to_string(), trim.join("log").display().to_string());
+  env.insert("FAKE_STARTED_MARKER".to_string(), launch.join("started").display().to_string());
   for (name, value) in extra {
     env.insert((*name).to_string(), value.clone());
   }
+  let path = env.get("PATH").expect("the in-scope PATH").clone();
+  env.insert("PATH".to_string(), format!("{}:{path}", world.trim_bin().display()));
   let mut command = harness::command("bash", &env);
   command.arg(harness::repo_root().join("dev/improve/remote-runner.sh")).args([
     "--in-scope",
@@ -3345,7 +3481,11 @@ fn two_concurrent_runners_build_tools_once_and_preserve_one_shared_mock_home() {
     env.insert("HOME".to_string(), world.remote_home.display().to_string());
     env.insert(
       "PATH".to_string(),
-      format!("{}:/usr/local/bin:/usr/bin:/bin", world.remote_home.join(".local/bin").display()),
+      format!(
+        "{}:{}:/usr/local/bin:/usr/bin:/bin",
+        world.trim_bin().display(),
+        world.remote_home.join(".local/bin").display()
+      ),
     );
     env.insert("FAKE_CLAUDE_ARGV".to_string(), records.join("claude-argv.txt").display().to_string());
     env.insert("FAKE_CLAUDE_ENV".to_string(), records.join("claude-env.txt").display().to_string());

@@ -15,6 +15,16 @@ use tempfile::TempDir;
 mod stand_in;
 
 const GH_STUB: &str = include_str!("fixtures/land/gh");
+/// The URL a GitHub venue's repository names for origin. Its pushes go to the venue's bare origin through an
+/// `insteadOf` rewrite, so the host the landing reads is GitHub while the bare repository stays local.
+const GITHUB_ORIGIN: &str = "https://github.com/owner/repo.git";
+/// The URL of a venue whose origin is a Gitee repository, the host of the Deep-Learning-Framework origin.
+const GITEE_ORIGIN: &str = "git@gitee.com:owner/repo.git";
+/// A `gh` stand-in that records each call in the venue's state and fails it.
+const FAILING_GH_STUB: &str = r#"#!/bin/sh
+printf '%s\n' "$*" >>"$GH_STUB_STATE/calls"
+exit 1
+"#;
 /// The `charliebot` stand-in on the venue's `PATH`. A landing registers its wake with `charliebot session trigger`, and
 /// the venue has no server: the stand-in appends that call's arguments to the trigger log and exits 0. Every other verb
 /// runs the built binary, which the registered command reaches.
@@ -120,6 +130,11 @@ impl Venue {
 
   /// *file* is the one file the task branch's commit changes, so a test sets the diff the landing gates.
   fn with_feature_message(with_ci: bool, file: &str, subject: &str, body: &str) -> Venue {
+    Self::with_origin(GITHUB_ORIGIN, with_ci, file, subject, body)
+  }
+
+  /// *origin_url* is the URL the repository names for origin; the bare origin stands in for its host.
+  fn with_origin(origin_url: &str, with_ci: bool, file: &str, subject: &str, body: &str) -> Venue {
     let root = tempfile::tempdir().expect("a temporary directory");
     let origin = root.path().join("owner").join("repo.git");
     fs::create_dir_all(&origin).expect("the origin directory is created");
@@ -137,7 +152,8 @@ impl Venue {
       git(&repo, &["add", ".github"]);
     }
     commit(&repo, "base.txt");
-    git(&repo, &["remote", "add", "origin", &format!("file://{}", origin.display())]);
+    git(&repo, &["remote", "add", "origin", origin_url]);
+    git(&repo, &["config", &format!("url.file://{}.insteadOf", origin.display()), origin_url]);
     git(&repo, &["push", "-q", "origin", "main"]);
 
     let worktree = root.path().join("worktree");
@@ -699,6 +715,24 @@ fn a_rebased_landing_closes_the_pr_whose_head_it_never_pushed() {
   assert_eq!(venue.pr_state(), "CLOSED");
   let comment = fs::read_to_string(venue.gh_state.join("prs/1/comment")).expect("the close leaves a comment");
   assert!(comment.contains(&landed), "the closing comment names the landed sha: {comment}");
+}
+
+/// A Gitee origin that holds the task branch has no PR to close: the landing lands, and the `gh` stand-in, which fails
+/// every call, is never reached.
+#[test]
+#[ignore = "integration"]
+fn a_landing_on_a_non_github_origin_lands_and_calls_no_gh() {
+  let venue = Venue::with_origin(GITEE_ORIGIN, false, "feature.txt", "feature.txt", "");
+  fs::write(venue.stub_bin.join("gh"), FAILING_GH_STUB).expect("the failing gh stand-in is written");
+  git(&venue.worktree, &["push", "-q", "origin", TASK_BRANCH]);
+
+  let (code, record) = venue.land();
+
+  assert_eq!(code, 0, "record: {record}");
+  assert_eq!(record["state"], "landed-no-ci");
+  let landed = record["sha"].as_str().expect("the record names the landed sha");
+  assert_eq!(venue.origin_tip("main"), landed);
+  assert_eq!(venue.gh_calls(), "", "a non-GitHub origin has no PR cleanup, so no gh runs");
 }
 
 /// Under the gate, main moves between the task-branch push and the base push. The landing rebases, pushes the task

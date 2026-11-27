@@ -212,6 +212,8 @@ impl TryFrom<&str> for LandState {
 pub(crate) struct TaskLanding {
   session_id: String,
   repo: String,
+  /// Whether origin is a GitHub repository. Only a GitHub origin has PRs to close after a landing.
+  origin_on_github: bool,
   worktree: PathBuf,
   repo_path: PathBuf,
   base_branch: String,
@@ -285,17 +287,26 @@ impl TaskLanding {
     if !Path::new(&worktree).is_dir() {
       anyhow::bail!("worktree {worktree} of task {task_session_id} does not exist");
     }
-    let (ok, url, err) =
-      git::git_stdout(Path::new(&repo_path), &["remote", "get-url", "origin"], GIT_READ_TIMEOUT, "git remote get-url")
-        .await;
+    // The URL that origin names, not the `insteadOf`-rewritten URL that `get-url` prints: a rewrite changes where git
+    // connects, while the configured URL names the host the repository lives on.
+    let (ok, configured, err) = git::git_stdout(
+      Path::new(&repo_path),
+      &["config", "--get-all", "remote.origin.url"],
+      GIT_READ_TIMEOUT,
+      "git config remote.origin.url",
+    )
+    .await;
     if !ok {
-      anyhow::bail!("git remote get-url origin failed in {repo_path}: {err}");
+      anyhow::bail!("git config remote.origin.url failed in {repo_path}: {err}");
     }
+    let url =
+      configured.lines().next().ok_or_else(|| anyhow::anyhow!("origin of {repo_path} names no URL"))?.to_string();
     let repo = git::repo_from_remote_url(&url)
       .ok_or_else(|| anyhow::anyhow!("origin's URL {url} in {repo_path} names no owner/repo path"))?;
     Ok(Self {
       session_id: task_session_id.to_string(),
       repo,
+      origin_on_github: git::remote_url_is_github(&url),
       worktree: PathBuf::from(worktree),
       repo_path: PathBuf::from(repo_path),
       base_branch,
@@ -2171,7 +2182,11 @@ struct OpenPr {
 /// with a comment naming the landed sha. GitHub's own merge mark can overtake a close and refuse
 /// it, so the read-back after the closes is the verdict. A task branch absent from origin has no
 /// open PR, because GitHub closes a PR whose head branch is deleted, so that landing calls no `gh`.
+/// An origin that is not on GitHub has no PR to close, so that landing calls no `gh` either.
 async fn close_task_prs(ctx: &TaskLanding, published: &str, sha: &str) -> anyhow::Result<()> {
+  if !ctx.origin_on_github {
+    return Ok(());
+  }
   if !origin_has_branch(ctx, &ctx.branch_name).await? {
     return Ok(());
   }
@@ -2825,6 +2840,7 @@ mod synthetic_repo_tests {
     TaskLanding {
       session_id: "synthetic-task".to_string(),
       repo: "synthetic/synthetic".to_string(),
+      origin_on_github: true,
       worktree: worktree.to_path_buf(),
       repo_path: worktree.to_path_buf(),
       base_branch: "main".to_string(),

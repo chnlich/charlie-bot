@@ -13,7 +13,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use charliebot_core::event_types;
-use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_store::chat_events::{self, LineRule};
 use charliebot_store::{layout, metadata};
 use serde_json::{Map, Value, json};
@@ -180,7 +179,7 @@ fn reference_key(reference: &SourceRef) -> String {
 
 /// True when the session's metadata names the manager profile. A missing metadata file names no session profile.
 fn is_manager_session(session_dir: &Path) -> anyhow::Result<bool> {
-  let path = session_dir.join(METADATA_FILE_NAME);
+  let path = layout::metadata_path(session_dir);
   if !path.is_file() {
     return Ok(false);
   }
@@ -190,7 +189,7 @@ fn is_manager_session(session_dir: &Path) -> anyhow::Result<bool> {
 
 /// The session's round ratings: each rated event id with its thumbs-down flag.
 fn round_ratings(session_dir: &Path) -> anyhow::Result<Vec<Rating>> {
-  let path = session_dir.join(METADATA_FILE_NAME);
+  let path = layout::metadata_path(session_dir);
   if !path.is_file() {
     return Ok(Vec::new());
   }

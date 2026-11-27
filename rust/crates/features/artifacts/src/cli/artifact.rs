@@ -17,11 +17,11 @@ use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::fields::SESSION_ID;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::{paths, timefmt};
+use charliebot_store::layout;
 use charliebot_store::metadata::{
   COLD_READ_FIELD, COLD_READ_GENRE_FIELD, COLD_READ_PAGE_PATH_FIELD, COLD_READ_TRIGGER_FIELD, TASK_TYPE_FIELD,
   TaskProfile, TaskType,
 };
-use charliebot_store::run_identity::SESSION_METADATA_NAME;
 use charliebot_tasks::cold_read;
 use charliebot_tasks::routes as task_routes;
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
@@ -260,7 +260,7 @@ fn session_identity(config: &CharlieBotConfig, inputs: &CheckInputs) -> Option<S
 
 /// The requesting session's `profile` from its metadata.
 fn session_profile(config: &CharlieBotConfig, session_id: &str) -> Result<String, CliExit> {
-  let path = config.sessions_dir().join(session_id).join(SESSION_METADATA_NAME);
+  let path = layout::metadata_path(&config.sessions_dir().join(session_id));
   let unreadable = |detail: String| {
     CliExit::error(format!("cannot read the requesting session's profile from {}: {detail}", paths::display(&path)))
   };
@@ -480,7 +480,7 @@ mod tests {
     let home = tempfile::tempdir().unwrap();
     let session = home.path().join("sessions").join("sess-1");
     std::fs::create_dir_all(&session).unwrap();
-    std::fs::write(session.join(SESSION_METADATA_NAME), json!({ "id": "sess-1", "profile": "manager" }).to_string())
+    std::fs::write(layout::metadata_path(&session), json!({ "id": "sess-1", "profile": "manager" }).to_string())
       .unwrap();
     let host = test_host(home.path(), &repo_root());
     assert_eq!(session_profile(&host.cfg, "sess-1").unwrap(), "manager");

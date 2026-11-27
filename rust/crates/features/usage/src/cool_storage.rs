@@ -24,10 +24,10 @@ use charliebot_registry::usage::{
 };
 use charliebot_registry::usage_sweep::SweepCounter;
 use charliebot_registry::{FeatureContext, Registry};
+use charliebot_store::layout;
 use charliebot_store::metadata::{
   CC_SESSION_ID_FIELD, STATUS_FIELD, SessionStatus, UPDATED_AT_FIELD, UtcDateTime, read_metadata,
 };
-use charliebot_store::run_identity::SESSION_METADATA_NAME;
 use charliebot_store::run_records::{
   CURSOR_NAME, DATA_DIR_NAME, LEGACY_STDERR_LOG_NAME, MASTER_RUNS_DIR_NAME, OBSERVATION_EVENTS_REF,
   OBSERVATION_RAW_LOG_REF, OBSERVATION_RESULT_REF, RAW_LOG_NAME, RUN_METADATA_NAME, RUNS_DIR_NAME, STDERR_LOG_NAME,
@@ -147,7 +147,7 @@ fn scan_sessions(sessions_dir: &Path, now: UtcDateTime) -> anyhow::Result<HashMa
       continue;
     }
     let id = session_dir.file_name().expect("a directory entry has a name").to_string_lossy().into_owned();
-    let Some(meta) = read_metadata(&session_dir.join(SESSION_METADATA_NAME), "storage_cool_meta_read_failed")? else {
+    let Some(meta) = read_metadata(&layout::metadata_path(&session_dir), "storage_cool_meta_read_failed")? else {
       continue;
     };
     let Value::Object(meta) = meta else {

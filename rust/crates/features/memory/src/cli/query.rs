@@ -128,7 +128,7 @@ fn run_scoped_audience(home_dir: &Path, token: &str) -> Result<String, CliExit> 
   if let Some(refusal) = run_identity::run_identity_refusal(Some(&run), &events) {
     exit_error(&format!("error: {refusal}"));
   }
-  let metadata = load_json_metadata(&sessions_root.join(&claims.session_id).join(run_identity::SESSION_METADATA_NAME))?;
+  let metadata = load_json_metadata(&layout::metadata_path(&session_dir))?;
   let profile = metadata.as_ref().and_then(|value| value.get("profile")).and_then(Value::as_str);
   match profile {
     Some(name) if name == metadata::TaskProfile::Manager.as_str() => Ok("master".to_string()),

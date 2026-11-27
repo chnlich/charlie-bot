@@ -394,15 +394,15 @@ A clean merge passes, and the check names it on stderr as `claim passed`.
 A conflict refuses, and the refusal names the claimed path, the claimant branch and that the merge conflicts.
 Three other cases refuse, each named in the refusal, and none passes on an unknown result.
 A generated lock file listed in `CLAIM_PATH_LEVEL_FILES` (`rust/Cargo.lock` and the other lock files there) refuses on its path alone, whatever the merge says.
-Uncommitted work refuses, because no commit holds it for the merge to test.
+Work that origin does not carry (`local-only`) refuses, because no merge on origin can test it: uncommitted work, and a branch's commits when origin's copy of the branch is not at the commit this checkout holds.
 A claim whose merge cannot be computed refuses with its cause, when its branch is not on origin or git fails.
 The check covers the final diff, not only the topic's planned files.
 Pick a topic, then run `dev/improve/claim-check.sh <branch> "$IMPROVE_LAUNCH_DIR/inflight-files.txt"` on its committed head before `pr-create`: it names each refused claim, and the round keeps the conflicting paths out of its diff rather than sending past a refusal.
 Each refusal names the claimed path and its claimant, and nothing is sent or merged.
 The list is the launch's snapshot, so a claim made after the launch is not in it.
-A path whose only changes are landed commits is not listed. Every listed path prints as `path<TAB>branch`, naming the branch that carries it, with a third field in two cases: `absent-on-origin-main` when origin/main has no object at the path, and `uncommitted` when the claim is uncommitted work on a path origin/main has. Other claims have no third field:
-- uncommitted work, with the branch of its dirty worktree;
-- an unmerged commit's path, with that commit's branch;
+A path whose only changes are landed commits is not listed. Every listed path prints as `path<TAB>branch`, naming the branch that carries it, with a third field in two cases: `absent-on-origin-main` when origin/main has no object at the path, and `local-only` when origin does not carry the claim's work on a path origin/main has. Other claims have no third field:
+- uncommitted work, with the branch of its dirty worktree (`local-only`);
+- an unmerged commit's path, with that commit's branch, which is `local-only` when origin's copy of the branch is not at the commit the worktree holds;
 - an open pull request's file, with its head branch.
 
 A claim on a path absent from origin/main does not block a topic; the list marks it `absent-on-origin-main`.

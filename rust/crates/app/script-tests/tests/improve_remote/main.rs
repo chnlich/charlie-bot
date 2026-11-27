@@ -2955,10 +2955,10 @@ fn a_running_rounds_clone_adds_its_checked_out_branchs_files_to_the_list() {
   // Every path the running ux round's clone holds prints with its branch: the committed paths
   // carry unmerged commits, and the uncommitted and untracked paths are uncommitted work. The paths
   // that origin/main lacks carry the absent field; base.md is on origin/main, so its uncommitted change
-  // carries the uncommitted field.
+  // carries the local-only field.
   for carried in [
     format!("committed.md\timprove/{OTHER_DIRECTION}/topic\tabsent-on-origin-main"),
-    format!("base.md\timprove/{OTHER_DIRECTION}/topic\tuncommitted"),
+    format!("base.md\timprove/{OTHER_DIRECTION}/topic\tlocal-only"),
     format!("dropped.md\timprove/{OTHER_DIRECTION}/topic\tabsent-on-origin-main"),
     format!("untracked.md\timprove/{OTHER_DIRECTION}/topic\tabsent-on-origin-main"),
   ] {
@@ -3062,7 +3062,7 @@ fn an_unlanded_branch_names_its_file_even_when_origin_main_has_changed_it() {
   assert_eq!(run.code, 0, "{}", run.describe());
   let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
   assert!(
-    list.lines().any(|line| line == "shared.md\tcharliebot/unlanded"),
+    list.lines().any(|line| line == "shared.md\tcharliebot/unlanded\tlocal-only"),
     "the in-flight list misses an unlanded branch's file that origin/main changed:\n{list}"
   );
 }
@@ -3135,8 +3135,8 @@ fn an_unowned_worktree_branch_keeps_all_changed_paths() {
   assert_eq!(
     listed,
     [
-      "base.md\tcharliebot/partial",
-      "landed.md\tcharliebot/partial",
+      "base.md\tcharliebot/partial\tlocal-only",
+      "landed.md\tcharliebot/partial\tlocal-only",
       "together.md\tcharliebot/partial\tabsent-on-origin-main",
       "unlanded.md\tcharliebot/partial\tabsent-on-origin-main"
     ],
@@ -3170,7 +3170,7 @@ fn an_unowned_rebased_branch_keeps_its_committed_path() {
   // Main's resolved commit is not the branch's patch, so the branch still carries an unmerged
   // commit for the path, and the path prints with that branch.
   assert!(
-    list.lines().any(|line| line == "rebased.md\tcharliebot/rebased"),
+    list.lines().any(|line| line == "rebased.md\tcharliebot/rebased\tlocal-only"),
     "the unowned worktree drops its committed path:\n{list}"
   );
 }
@@ -3242,8 +3242,8 @@ fn a_running_rounds_clone_keeps_all_changed_paths() {
   assert_eq!(
     listed,
     [
-      format!("base.md\timprove/{OTHER_DIRECTION}/partial"),
-      format!("landed.md\timprove/{OTHER_DIRECTION}/partial"),
+      format!("base.md\timprove/{OTHER_DIRECTION}/partial\tlocal-only"),
+      format!("landed.md\timprove/{OTHER_DIRECTION}/partial\tlocal-only"),
       format!("unlanded.md\timprove/{OTHER_DIRECTION}/partial\tabsent-on-origin-main"),
     ],
     "the live clone loses a changed path:\n{list}"
@@ -3777,19 +3777,17 @@ fn an_unowned_worktree_keeps_a_path_that_main_deleted() {
 
   assert_eq!(run.code, 0, "{}", run.describe());
   // No task names this worktree, so its committed and dirty paths stay alongside the open pull request's file.
-  // Each path prints with the branch that carries it. An unmerged commit's branch carries its file. The
-  // dirty worktree's branch carries its uncommitted paths. An open pull request's head branch carries its file.
-  // main deleted old.md and the fixture has no pr-only.md or fresh.md, so their claims carry the absent field;
-  // live.md is on main, so its committed claim stays unmarked, and its uncommitted change carries the uncommitted
-  // field.
+  // Each path prints with the branch that carries it. An unmerged commit's branch carries its file, and origin lacks
+  // that branch, so the file is local-only. The dirty worktree's uncommitted paths are local-only too, so live.md's
+  // two claims print as one line. An open pull request's head branch carries its file.
+  // main deleted old.md and the fixture has no pr-only.md or fresh.md, so their claims carry the absent field.
   let mut listed: Vec<&str> = run.stdout.lines().collect();
   listed.sort_unstable();
   assert_eq!(
     listed,
     [
       "fresh.md\tcharliebot/renamed\tabsent-on-origin-main",
-      "live.md\tcharliebot/renamed",
-      "live.md\tcharliebot/renamed\tuncommitted",
+      "live.md\tcharliebot/renamed\tlocal-only",
       "old.md\tcharliebot/renamed\tabsent-on-origin-main",
       "pr-only.md\tcharliebot/task-open\tabsent-on-origin-main"
     ],
@@ -3839,6 +3837,37 @@ fn write_task_record(world: &World, owner_id: &str, thread_id: &str, worktree: &
     "worktree_path": worktree.display().to_string(),
   });
   fs::write(record_dir.join("metadata.json"), format!("{record:#}\n")).expect("the task record");
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_branch_whose_commit_origin_does_not_carry_names_its_claim_local_only() {
+  let world = World::new();
+  // shared.md is on origin/main, and each branch changes it. origin carries the pushed branch at its commit and lacks
+  // the other branch, so only the other's claim is work that no merge on origin can test.
+  fs::write(world.repo.join("shared.md"), "main\n").expect("the shared file on main");
+  world.git(&world.repo, &["add", "-A"]);
+  world.git(&world.repo, &["commit", "-q", "-m", "add the shared file on main"]);
+  world.git(&world.repo, &["push", "-q", "origin", "main"]);
+  let pushed = world.sandbox.root().join("pushed");
+  let unpushed = world.sandbox.root().join("unpushed");
+  for (checkout, name) in [(&pushed, "pushed"), (&unpushed, "unpushed")] {
+    world.git(
+      &world.repo,
+      &["worktree", "add", "-q", &checkout.display().to_string(), "-b", &format!("charliebot/{name}")],
+    );
+    fs::write(checkout.join("shared.md"), format!("{name} edit\n")).expect("the branch's edit");
+    world.git(checkout, &["add", "-A"]);
+    world.git(checkout, &["commit", "-q", "-m", &format!("synthetic {name} edit")]);
+  }
+  world.git(&pushed, &["push", "-q", "origin", "charliebot/pushed"]);
+
+  let run = run_inflight_list(&world);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  for listed in ["shared.md\tcharliebot/pushed", "shared.md\tcharliebot/unpushed\tlocal-only"] {
+    assert!(run.stdout.lines().any(|line| line == listed), "the in-flight list misses {listed}:\n{}", run.describe());
+  }
 }
 
 /// One landed branch with dirty, staged and untracked paths, as a task worktree can hold after its commits land.
@@ -3984,9 +4013,9 @@ fn a_worktree_without_a_task_name_keeps_its_uncommitted_paths_and_drops_its_land
   assert_eq!(run.code, 0, "{}", run.describe());
   // The topic commit is patch-equivalent on main, so its committed path names nothing. The same path's
   // uncommitted change, the staged path and the untracked path print with the branch that carries them. main has
-  // topic.md, so its uncommitted change carries the uncommitted field.
+  // topic.md, so its uncommitted change carries the local-only field.
   for listed in [
-    "topic.md\tcharliebot/no-task\tuncommitted",
+    "topic.md\tcharliebot/no-task\tlocal-only",
     "staged.md\tcharliebot/no-task\tabsent-on-origin-main",
     "untracked.md\tcharliebot/no-task\tabsent-on-origin-main",
   ] {
@@ -4246,7 +4275,7 @@ fn a_no_record_worktree_with_one_edit_from_the_last_day_claims_all_its_paths() {
 
   assert_eq!(run.code, 0, "{}", run.describe());
   for listed in
-    ["tracked.md\tcharliebot/recent-edit\tuncommitted", "untracked.md\tcharliebot/recent-edit\tabsent-on-origin-main"]
+    ["tracked.md\tcharliebot/recent-edit\tlocal-only", "untracked.md\tcharliebot/recent-edit\tabsent-on-origin-main"]
   {
     assert!(
       run.stdout.lines().any(|line| line == listed),

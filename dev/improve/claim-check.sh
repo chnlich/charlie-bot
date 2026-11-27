@@ -8,7 +8,7 @@
 # claimant branch's tip on origin (git merge-tree --write-tree) conflicts on the path. A clean merge passes, and stderr
 # names it as `claim passed:`. Two claims refuse without a merge test:
 #   - a path in CLAIM_PATH_LEVEL_FILES, a generated lock file, whose merge does not show what the claimant changed;
-#   - a claim the list marks `uncommitted`: its work is in no commit, so no merge can test it.
+#   - a claim the list marks `local-only`: its work is not on origin, so no merge on origin can test it.
 # A claim also refuses, with its cause named, when the merge cannot be computed: the claimant branch is not on origin,
 # or git fails. An unknown result never passes.
 #
@@ -113,8 +113,9 @@ check_inflight_claims() {
       found=1
       continue
     fi
-    if [[ $marker == uncommitted ]]; then
-      printf 'claimed path %s, claimed by %s: its uncommitted work cannot be merge-tested\n' "$claimed" "$branch" >&2
+    if [[ $marker == local-only ]]; then
+      printf 'claimed path %s, claimed by %s: its work is not on origin, so no merge can test it\n' \
+        "$claimed" "$branch" >&2
       found=1
       continue
     fi

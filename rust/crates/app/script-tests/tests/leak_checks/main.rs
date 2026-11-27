@@ -485,12 +485,12 @@ fn a_pr_create_refuses_a_claimed_lock_file_on_its_path_alone_when_the_merge_is_c
 
 #[test]
 #[ignore = "integration"]
-fn a_pr_create_refuses_uncommitted_work_on_a_claimed_path_even_when_the_claimant_branch_merges_clean() {
+fn a_pr_create_refuses_work_origin_does_not_carry_even_when_the_claimant_branch_merges_clean() {
   let sandbox = Sandbox::new();
   let (env, gh_log, _home) = post(&sandbox);
   let clone = claim_repo(&sandbox, &env, "seed.txt", 1, 10);
   let body = body_file(&sandbox, "body.md", CLEAN_BODY);
-  write_inflight_list_lines(&env, &[format!("seed.txt\t{OTHER_CLAIMANT}\tuncommitted")]);
+  write_inflight_list_lines(&env, &[format!("seed.txt\t{OTHER_CLAIMANT}\tlocal-only")]);
 
   let run = pr_create(&env, &clone, &body);
 
@@ -499,8 +499,8 @@ fn a_pr_create_refuses_uncommitted_work_on_a_claimed_path_even_when_the_claimant
     run
       .stderr
       .lines()
-      .any(|line| { line.contains("seed.txt") && line.contains(OTHER_CLAIMANT) && line.contains("uncommitted") }),
-    "the refusal names the path, the claimant and the uncommitted work: {}",
+      .any(|line| { line.contains("seed.txt") && line.contains(OTHER_CLAIMANT) && line.contains("not on origin") }),
+    "the refusal names the path, the claimant and that origin lacks the work: {}",
     run.stderr
   );
   assert!(gh_log_lines(&gh_log).is_empty(), "no pull request was created");

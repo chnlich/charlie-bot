@@ -30,7 +30,8 @@ Source code: the server and the `charliebot` CLI are `rust/crates/`.
    accepts these values and leaves them unused, except that a diff that changes a web page checks its body as below. When the base is the default branch and declares a
    `pull_request` workflow, the command moves the base only when its CI gate passes on the landed commit. When that
    gate does not apply, the landing does not wait for CI and reports `landed-no-ci`. `landed` and `landed-no-ci` exit
-   0 and leave the task branch's PR merged or closed. Every other state leaves the change unlanded and names what
+   0 and leave the task branch's PR merged or closed. `waiting` (exit 8) means the queued command owns the rest of the
+   landing and wakes the session with its result. Every other state leaves the change unlanded and names what
    holds it. Before any push, a diff that changes a web page (a file that a CharlieBot page serves, or a page template
    directly under `prompts/`) is refused unless its PR body names the approved demo on a `Demo:` line, a `View:` line
    with the full URL that opens the changed state, and a screenshot at each CSS window size `charliebot land --help`

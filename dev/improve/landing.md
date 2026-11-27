@@ -394,14 +394,19 @@ The checks reach no other host, so the round uses neither the remote-run runner 
   connection.
 The round's profile home, `~/improve/home`, leaves `remote_run.host` unset by design.
 Finding it unset is expected, and the round runs its checks directly in the clone.
-The checks use the direction's pinned target directory, `~/.cache/improve-target/<direction>`, which the write
-  boundary allows.
-The round runs `cargo check` for the workspace and `cargo test` for each crate that the change touches.
+The checks run cargo through `$IMPROVE_KIT_DIR/dev/improve/round-cargo.sh`, which builds into the direction's pinned
+  target directory, `~/.cache/improve-target/<direction>`, which the write boundary allows.
+The helper refuses a working directory outside the round clone, so the round builds only in its clone and the clone's
+  products carry over to the next round.
+A build from another checkout would write products that name that checkout's path, and the clone's next build would
+  reuse them.
+The round runs `round-cargo.sh check` for the workspace and `round-cargo.sh test` for each crate that the change
+  touches.
 The round limits its tests to those crates, because CI runs the full suite.
 A test that fails inside the write boundary because the boundary refuses a path is reported as not run, with the refused
 path named. The pull request's CI result decides for that test; the round reports it neither as passed nor as a round
 defect.
-The builds run with four build jobs at nice level 19, so the host's CPU stays with the other owners' builds.
+The helper runs the builds with four build jobs at nice level 19, so the host's CPU stays with the other owners' builds.
 
 ## Step 5: write the evidence and open the pull request
 

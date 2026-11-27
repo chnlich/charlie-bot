@@ -34,6 +34,11 @@ rust = "binary_id(charliebot-script-tests::release)"
 paths = ["rust/crates/app/server/**", "rust/crates/runtime/registry/**", "web/templates/**", "web/static/**"]
 rust = "binary_id(charliebot-server::bin/charliebot-server)"
 
+# The check's wait test is an integration test in the switch tests' binary, so a change to those tests selects it.
+[[entry]]
+paths = ["rust/crates/app/script-tests/tests/switch_server/**"]
+rust = "binary_id(charliebot-script-tests::switch_server)"
+
 [[entry]]
 paths = ["rust/crates/app/mock-home/**"]
 rust = "binary_id(charliebot-script-tests::improve) + binary_id(charliebot-script-tests::release)"

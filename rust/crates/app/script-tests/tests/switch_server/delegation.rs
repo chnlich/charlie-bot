@@ -272,7 +272,11 @@ done"#,
   }
 }
 
+/// The check's read waits for a dispatch error that lands after its run finished: the first read finds no error,
+/// the stub writes one, and the next read, after the script's real poll sleep, finds it. The wait is a real sleep,
+/// and each read starts its log readers as processes, so the test runs in Integration.
 #[test]
+#[ignore = "integration"]
 fn test_check_note_model_error_waits_for_dispatch_error_after_run_finishes() {
   let sandbox = Sandbox::new();
   let home = sandbox.dir("home");

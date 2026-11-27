@@ -52,11 +52,28 @@ that belongs to one machine. The runner reads the CharlieBot `config.yaml` on ea
 | `remote_run.host` | the CharlieBot `config.yaml`; no default | The ssh alias of the build host, as `~/.ssh/config` names it. Until it is set, the runner stops with exit 2 and names the key. |
 | `remote_run.remote_base` | the CharlieBot `config.yaml`; default `scripts/remote-run` | The runner's state directory on the build host, relative to its `$HOME`. A host with runner state installed elsewhere sets this. |
 | `REMOTE_RUN_CONNECT_TIMEOUT` | the environment; default `60` | The connectivity check's time limit in seconds, for tests. |
+| `REMOTE_RUN_TREE_RETENTION_DAYS` | the environment; default `3` | The number of days since the runner last synced or ran in a tree, after which the sweep removes the tree. The tree must pass the sweep's checks (see step 3). A positive whole number; the dry run uses the same setting. |
 | `server.public_url` | the CharlieBot `config.yaml`, read with `charliebot config get server.public_url` | The address a person reaches the CharlieBot server at. Exit 86 links its `/host-auth` page. It has no default; the host sets it. |
+
+Preview the sweep without running a project command:
+
+```sh
+dev/remote-run/run.sh --dry-run
+```
+
+The output lists each selected tree with its allocated bytes, then a total count and size. Set the retention age for
+one invocation with `REMOTE_RUN_TREE_RETENTION_DAYS`, for example:
+
+```sh
+REMOTE_RUN_TREE_RETENTION_DAYS=45 dev/remote-run/run.sh --dry-run
+```
 
 The build host's state layout, under its `$HOME` and the remote base: `trees/<tree name>` for the
 synced trees, `tree-owners/<tree name>` for `host=<caller hostname>` and `root=<local absolute path>`,
-`tree-owners.lock` for the lock that serializes every owner record and tree change, `slots/` for the four
+`tree-last-use/<tree name>` for the epoch second of the tree's last sync or run, `tree-owners.lock` for the lock
+that serializes every owner record and tree change, `tree-locks/<tree name>.lock` for activity in each tree
+(these small lock files remain after tree removal so a waiting process cannot acquire a different lock file for
+the same name), `slots/` for the four
 build slot locks, `slot-waits.log` for the slot wait record, `cargo/` and
 `rustup/` for the toolchain,
 `bin/` for uv and sccache, `node/` for Node, `python/` and `cache/` for the uv and sccache
@@ -68,19 +85,29 @@ executes the copy named for its own checkout's content hash.
 1. The connectivity check: `ssh <host> true`, limited to 60 seconds. See "Exit codes".
 2. Preflights: the build host has node, npm, cargo, uv, rsync, git, flock, nice, perl, and
    rustc; a project with `pyproject.toml` has a matching CPython patch release on the build host.
-3. The sweep: it checks local roots only for records whose caller hostname matches this machine.
-   Records for other hosts stay untouched. A path-only record from an older runner has no host and
-   stays untouched; a same-name legacy tree refuses the sync because its owner cannot be proved.
-   A record of this host whose tree is missing is dropped, and the output names it, whether or not its
-   local root still exists; the next sync of that root claims the tree again. A tree whose recorded local
-   root is gone is removed. Before removing an owned tree or replacing its contents, `remote-exec.pl`
-   sends TERM to every same-owner process whose cwd or executable path is inside the tree, waits two
-   seconds, then sends KILL to survivors. It reports the stopped pids and removes or syncs the tree only
-   after no matching process remains. A process inspection, stop, or removal error leaves the tree in
-   place and fails the run.
-4. The claim: `remote-exec.pl` writes the tree's owner record and then creates the tree, under the owner
-   lock. A claim whose tree cannot be created removes its record again, so a record and its tree are
-   written together and a record outlives a stopped claim only until the next sweep drops it.
+3. The sweep: current-format records are considered only when their caller hostname matches this machine.
+   A tree whose current record names a local root that is gone is removed at once, as before. Every other tree
+   is removed once its last use is `REMOTE_RUN_TREE_RETENTION_DAYS` days old: a tree whose local root is live, a
+   path-only legacy record (which proves no owner, so it never takes the gone-root removal), or no record at all.
+   A tree's last use is the epoch second in its `tree-last-use` record. The sync writes that record at its claim,
+   and a run writes it at its start and its end. A tree without the record takes its newest entry's modification
+   time once, and a real sweep saves that time as the record, so later sweeps read the record and do not walk the
+   tree. The sync reads every last-use record in one call and keeps a live-root tree whose record is younger than the
+   retention age without a build-host call; every other tree gets its own sweep call. A record whose tree is
+   missing is dropped. Before any removal, the sweep checks the tree's activity lock,
+   then every live process whose cwd, executable, open fd or command line is inside or names the tree. A held lock
+   or such a process keeps the tree. Dirty applies only to a tree that has `.git`. Runner trees are uploaded
+   without `.git`, so their source of truth is the local worktree. The sync then creates a synthetic repository in
+   each tree for release tests that read history, and the dirty check reads that repository. It therefore reports
+   changes that a run made after the last sync, and the next sync commits them. The sweep never stops a process. `--dry-run` runs the
+   same checks and prints the same selection with each tree's allocated bytes, and it deletes no tree, record or
+   last-use file.
+4. The stop and the claim: before a sync replaces an owned tree, `remote-exec.pl` sends TERM to same-owner processes
+   whose cwd or executable path is inside the tree, waits two seconds, then sends KILL to survivors. It reports the
+   stopped pids. A process inspection, stop or removal error leaves the tree in place and fails the run. The claim
+   then writes the tree's owner record and creates the tree under the owner lock, and writes the tree's last-use
+   record under its activity lock. A claim whose tree cannot be created removes its record again, so a record and
+   its tree are written together and a record outlives a stopped claim only until the next sweep drops it.
 5. The upload: rsync with the tree's `.gitignore` as filters, excluding `.git`, `.venv`,
    `__pycache__`, and `rust/target`. A remote path the local tree ignores is protected from the
    sync's delete. After a cargo upload, the local `rust/target` is deleted: the build host owns
@@ -104,8 +131,8 @@ executes the copy named for its own checkout's content hash.
 tmux servers included, are adopted instead of reparented away. It stops every descendant when the
 command exits or receives a signal, and treats a closed SSH output channel as a caller disconnect.
 Stopping sends SIGTERM, then SIGKILL two seconds later; any process still alive after eight seconds
-is named in the error output. Its tree-stop and tree-removal modes check process cwd and executable
-paths before syncing an owned tree or deleting a stale tree. Its TMPDIR directories under `/dev/shm`
+is named in the error output. Its tree-stop mode checks process cwd and executable paths before a sync
+replaces an owned tree. The sweep stops no process. Its TMPDIR directories under `/dev/shm`
 carry the owning process id and start time, and a later run reclaims the ones no process holds.
 
 ## Exit codes

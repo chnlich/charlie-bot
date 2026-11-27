@@ -14,20 +14,24 @@
 #
 # A command run makes this process a child subreaper, so tmux servers and other daemons are adopted
 # instead of reparented away. It stops descendants when the command exits, receives a signal, or
-# loses its SSH output channel. Tree stop and removal check cwd and executable paths before changing files.
+# loses its SSH output channel. The sync's tree stop checks cwd and executable paths before it replaces a tree.
+# The sweep never stops a process: it keeps a tree that its activity lock or a process (cwd, exe, open fd or
+# command line) holds.
 # A shell cannot make itself a child subreaper, which is why this program is perl.
 #
 # A tree's owner record and the tree change together under the tree owner lock: a claim writes the record and
-# then creates the tree, and a sweep drops a record whose tree is missing or removes the tree and then its record.
-# The sweep therefore never sees a claim half done.
+# then creates the tree, and a sweep drops a record whose tree is missing or removes the tree and then its records.
+# The sweep therefore never sees a claim half done. A tree's last-use record is written as the runner syncs or runs
+# in the tree, and the sweep reads it without walking the tree.
 
 use strict;
 use warnings;
 
 use Fcntl qw(:flock O_RDWR O_WRONLY O_CREAT O_TRUNC O_APPEND);
 use Cwd qw(abs_path);
-use Errno qw(EACCES EINTR ENOENT ESRCH);
+use Errno qw(EACCES EINTR ENOENT ESRCH EWOULDBLOCK EAGAIN);
 use File::Path qw(rmtree remove_tree);
+use File::Find qw(find);
 use IO::Poll qw(POLLERR POLLHUP POLLNVAL POLLOUT);
 use MIME::Base64 qw(decode_base64);
 use POSIX qw(uname strftime WNOHANG);
@@ -74,6 +78,11 @@ sub prctl_or_die {
 
 sub monotonic {
   return clock_gettime(CLOCK_MONOTONIC());
+}
+
+# The current time in whole epoch seconds, the unit of a tree's last-use record.
+sub now_seconds {
+  return int(time());
 }
 
 sub which {
@@ -240,6 +249,194 @@ sub path_is_inside_tree {
   return $path eq $tree || index($path, "$tree/") == 0;
 }
 
+sub tree_activity_lock_path {
+  my ($name) = @_;
+  # Keep this lock file after tree removal: processes may already hold its inode open.
+  return "$base/tree-locks/$name.lock";
+}
+
+sub lock_tree_activity {
+  my ($name) = @_;
+  my $lock_dir = "$base/tree-locks";
+  if (!-d $lock_dir) {
+    mkdir $lock_dir, 0700 or fail(2, "cannot create tree activity lock directory $lock_dir: $!");
+  }
+  my $path = tree_activity_lock_path($name);
+  sysopen my $handle, $path, O_RDWR | O_CREAT, 0600 or fail(2, "cannot open tree activity lock $path: $!");
+  flock $handle, LOCK_EX or fail(2, "cannot lock build host tree $name: $!");
+  return $handle;
+}
+
+# Returns a held handle when the lock is free, 'locked' when another run holds it, or undef when
+# this tree predates per-tree activity locks.
+sub try_lock_tree_activity {
+  my ($name, $create) = @_;
+  my $lock_dir = "$base/tree-locks";
+  if ($create && !-d $lock_dir) {
+    mkdir $lock_dir, 0700 or fail(2, "cannot create tree activity lock directory $lock_dir: $!");
+  }
+  my $path = tree_activity_lock_path($name);
+  return unless -e $path || -l $path;
+  fail(2, "tree activity lock is not a regular file: $path") unless -f $path && !-l $path;
+  sysopen my $handle, $path, O_RDWR or fail(2, "cannot open tree activity lock $path: $!");
+  if (flock $handle, LOCK_EX | LOCK_NB) {
+    return $handle;
+  }
+  return 'locked' if $!{EWOULDBLOCK} || $!{EAGAIN};
+  fail(2, "cannot check tree activity lock $path: $!");
+}
+
+# The newest mtime and allocated bytes across the tree, including ignored build output and .git.
+sub tree_metrics {
+  my ($tree) = @_;
+  my ($latest_mtime, $allocated_bytes) = (undef, 0);
+  my %seen_inodes;
+  my $find_warning = '';
+  {
+    local $SIG{__WARN__} = sub { $find_warning .= $_[0] };
+    find(
+      {
+        no_chdir => 1,
+        wanted => sub {
+          my $path = $File::Find::name;
+          my @stat = lstat $path;
+          fail(2, "cannot inspect build host tree entry $path: $!") unless @stat;
+          $latest_mtime = $stat[9] if !defined($latest_mtime) || $stat[9] > $latest_mtime;
+          my $inode = "$stat[0]:$stat[1]";
+          if (!$seen_inodes{$inode}++) {
+            fail(2, "cannot inspect allocated size of build host tree entry $path") unless defined $stat[12];
+            $allocated_bytes += $stat[12] * 512;
+          }
+        },
+      },
+      $tree,
+    );
+  }
+  fail(2, "cannot scan build host tree $tree: $find_warning") if $find_warning ne '';
+  fail(2, "cannot determine build host tree age: $tree has no entries") unless defined $latest_mtime;
+  return ($latest_mtime, $allocated_bytes);
+}
+
+# A tree's last use is the epoch second when the runner last synced or ran in it. The sweep reads this record instead
+# of walking the tree, so a sweep costs one small read per tree.
+sub last_use_path {
+  my ($name) = @_;
+  return "$base/tree-last-use/$name";
+}
+
+# The recorded last use, or undef when the tree has no last-use record.
+sub read_last_use {
+  my ($name) = @_;
+  my $path = last_use_path($name);
+  return unless -e $path || -l $path;
+  fail(2, "tree last-use record is not a regular file: $path") unless -f $path && !-l $path;
+  open my $file, '<', $path or fail(2, "cannot read tree last-use record $path: $!");
+  my $text = <$file>;
+  close $file or fail(2, "cannot close tree last-use record $path: $!");
+  fail(2, "tree last-use record is invalid: $path") unless defined $text && $text =~ /\A([0-9]+)\n\z/;
+  return 0 + $1;
+}
+
+# Replaces the tree's last-use record in one rename, so a concurrent sweep reads either the old record or the new one.
+sub write_last_use {
+  my ($name, $epoch) = @_;
+  my $dir = "$base/tree-last-use";
+  mkdir $dir, 0700 or -d $dir or fail(2, "cannot create tree last-use directory $dir: $!");
+  my $path = last_use_path($name);
+  my $temp = "$path.tmp.$$";
+  sysopen my $file, $temp, O_WRONLY | O_CREAT | O_TRUNC, 0600
+    or fail(2, "cannot write tree last-use record $temp: $!");
+  my $written = print {$file} "$epoch\n";
+  close($file) && $written or fail(2, "cannot write tree last-use record $temp: $!");
+  rename $temp, $path or fail(2, "cannot move tree last-use record into place at $path: $!");
+}
+
+# The tree's last use. A tree without a last-use record takes its content age once. A real sweep records that age,
+# so the next sweep reads the record instead of walking the tree.
+sub tree_last_use {
+  my ($name, $tree, $dry_run) = @_;
+  my $recorded = read_last_use($name);
+  return $recorded if defined $recorded;
+  my ($content_mtime) = tree_metrics($tree);
+  write_last_use($name, $content_mtime) unless $dry_run;
+  return $content_mtime;
+}
+
+# Removes a tree's owner record and last-use record, each when present.
+sub forget_tree_records {
+  my ($name, $owner_path) = @_;
+  for my $path ($owner_path, last_use_path($name)) {
+    next unless -e $path || -l $path;
+    unlink $path or fail(2, "cannot remove $path: $!");
+  }
+}
+
+sub tree_is_dirty {
+  my ($tree) = @_;
+  return 0 unless -e "$tree/.git" || -l "$tree/.git";
+  local $ENV{GIT_OPTIONAL_LOCKS} = 0;
+  open my $git, '-|', 'git', '-C', $tree, 'status', '--porcelain', '--untracked-files=all'
+    or fail(2, "cannot check Git status in build host tree $tree: $!");
+  local $/;
+  my $status = <$git> // '';
+  close $git or fail(2, "Git status failed in build host tree $tree: $!");
+  return $status ne '';
+}
+
+sub process_uses_tree {
+  my ($tree, $ignored_cmdline_pids) = @_;
+  local $! = 0;
+  opendir my $proc, '/proc' or fail(2, "cannot list /proc while checking $tree: $!");
+  my @entries = readdir $proc;
+  fail(2, "cannot read /proc while checking $tree: $!") if $!;
+  for my $entry (grep { /\A[0-9]+\z/ } @entries) {
+    my $pid = 0 + $entry;
+    my @proc_stat = stat "/proc/$pid";
+    if (!@proc_stat) {
+      next if $!{ENOENT} || $!{ESRCH} || $!{EACCES};
+      fail(2, "cannot inspect process $pid while checking $tree: $!");
+    }
+    for my $name (qw(cwd exe)) {
+      my $path = readlink "/proc/$pid/$name";
+      if (!defined $path) {
+        next if $!{ENOENT} || $!{ESRCH} || $!{EACCES};
+        fail(2, "cannot inspect process $pid $name while checking $tree: $!");
+      }
+      return { pid => $pid, kind => $name } if path_is_inside_tree($path, $tree);
+    }
+    local $! = 0;
+    if (opendir my $fds, "/proc/$pid/fd") {
+      $! = 0;
+      my @fd_entries = grep { /\A[0-9]+\z/ } readdir $fds;
+      if ($!) {
+        next if $!{ENOENT} || $!{ESRCH};
+        fail(2, "cannot read process $pid file descriptors while checking $tree: $!");
+      }
+      for my $fd (@fd_entries) {
+        my $path = readlink "/proc/$pid/fd/$fd";
+        if (!defined $path) {
+          next if $!{ENOENT} || $!{ESRCH} || $!{EACCES};
+          fail(2, "cannot inspect process $pid file descriptor $fd while checking $tree: $!");
+        }
+        return { pid => $pid, kind => "fd/$fd" } if path_is_inside_tree($path, $tree);
+      }
+    } elsif (!$!{ENOENT} && !$!{ESRCH} && !$!{EACCES}) {
+      fail(2, "cannot inspect process $pid file descriptors while checking $tree: $!");
+    }
+    next if $ignored_cmdline_pids->{$pid};
+    if (open my $cmdline, '<', "/proc/$pid/cmdline") {
+      local $/;
+      my $command = <$cmdline> // '';
+      # The driver receives the absolute --run-tree path; a home-relative suffix can name another checkout.
+      return { pid => $pid, kind => 'cmdline' } if index($command, $tree) >= 0;
+    } else {
+      next if $!{ENOENT} || $!{ESRCH} || $!{EACCES};
+      fail(2, "cannot read process $pid command line while checking $tree: $!");
+    }
+  }
+  return;
+}
+
 # The mode-0700 base prevents non-root processes with another uid from entering a tree. Scan every
 # process owned by the tree owner, and fail if /proc cannot identify one of those processes.
 sub processes_in_tree {
@@ -360,7 +557,7 @@ sub tree_request {
   return ($name, $base_stat[4]);
 }
 
-# The record's caller host and local root. A missing, symlinked, unreadable or path-only record is an error.
+# The record's caller host, local root, and format. A path-only record is the legacy format.
 sub read_owner_record {
   my ($owner_path) = @_;
   fail(2, "tree owner record is missing or is a symlink: $owner_path") unless -f $owner_path && !-l $owner_path;
@@ -371,16 +568,12 @@ sub read_owner_record {
     $owner = <$owner_file> // '';
   }
   $owner =~ s/\n\z//;
+  if ($owner =~ /\A(\/[^\n]*)\z/) {
+    return (undef, $1, 'legacy');
+  }
   my ($recorded_host, $root) = $owner =~ /\Ahost=([A-Za-z0-9._-]+)\nroot=(\/[^\n]*)\z/;
-  fail(2, "tree owner record is invalid or has no caller host: $owner_path") unless defined $recorded_host;
-  return ($recorded_host, $root);
-}
-
-sub check_owner_host {
-  my ($caller_host, $name) = @_;
-  my ($recorded_host) = read_owner_record("$base/tree-owners/$name");
-  fail(2, "tree $name belongs to caller host $recorded_host, not $caller_host")
-    unless $recorded_host eq $caller_host;
+  fail(2, "tree owner record is invalid: $owner_path") unless defined $recorded_host;
+  return ($recorded_host, $root, 'current');
 }
 
 # The tree at $requested_tree, or nothing when no entry is there. A symlink, a non-directory, or a tree the state
@@ -418,52 +611,85 @@ sub fail_claim {
 }
 
 sub stop_build_tree {
-  my ($caller_host, $requested_tree) = @_;
+  my ($caller_host, $requested_tree, $encoded_root) = @_;
   my ($name, $base_uid) = tree_request($caller_host, $requested_tree);
-  check_owner_host($caller_host, $name);
+  my ($recorded_host, $recorded_root, $format) = read_owner_record("$base/tree-owners/$name");
+  if ($format eq 'legacy') {
+    my $root = decode_base64($encoded_root // '');
+    fail(2, "tree $name has a legacy owner record for a different local directory") unless $root eq $recorded_root;
+  } else {
+    fail(2, "tree $name belongs to caller host $recorded_host, not $caller_host") unless $recorded_host eq $caller_host;
+  }
   my ($tree, $tree_uid) = present_tree($requested_tree, $name, $base_uid);
   return 0 unless defined $tree;
   stop_tree_processes($tree, $tree_uid);
   return 0;
 }
 
-# Stops the processes in $tree, removes it, then removes its record. A failed removal leaves both in place.
+# Removes the tree, then its owner record and last-use record. A failed removal leaves all of them in place.
 sub remove_tree_and_record {
-  my ($tree, $tree_uid, $owner_path) = @_;
-  stop_tree_processes($tree, $tree_uid);
+  my ($name, $tree, $owner_path) = @_;
   my $errors = [];
   remove_tree($tree, { error => \$errors });
   if (@$errors || -e $tree) {
     my @details = map { my ($path, $message) = %$_; "$path: $message" } @$errors;
     push @details, "$tree still exists" if -e $tree;
-    fail(2, "cannot remove build host tree $tree after stopping its processes: " . join('; ', @details));
+    fail(2, "cannot remove build host tree $tree: " . join('; ', @details));
   }
-  unlink $owner_path or fail(2, "cannot remove tree owner record $owner_path after removing $tree: $!");
+  forget_tree_records($name, $owner_path);
 }
 
-# One own-host record's sweep, decided under the owner lock. $root_state is the caller's view of the recorded local
-# directory, which only the caller can check: a live directory keeps its tree, and a gone one has its tree removed.
-# A missing tree drops its record whatever the root state, because no tree is then shared. Prints the outcome:
-# dropped, kept, removed, or absent (the record was gone before the lock).
+# One owner record's sweep, decided under the owner lock. A tree whose current owner record names a local root that is
+# gone is removed at once. Every other tree is removed once its last use is older than the retention age: a tree with a
+# live root, a legacy record, or no record. Each removal passes the activity lock and the process check first, and this
+# sweep never stops a process. A missing tree drops its record whatever the root state, because no tree is then shared.
 sub sweep_build_tree {
-  my ($caller_host, $requested_tree, $root_state) = @_;
+  my ($caller_host, $requested_tree, $root_state, $retention_days, $dry_run) = @_;
   fail(2, "the recorded local directory must be live or gone: $root_state") unless $root_state =~ /\A(?:live|gone)\z/;
+  fail(2, "tree retention age must be a positive whole number of days: $retention_days")
+    unless $retention_days =~ /\A[1-9][0-9]*\z/;
+  $dry_run = 0 unless defined $dry_run;
+  fail(2, "dry-run must be 0 or 1: $dry_run") unless $dry_run =~ /\A[01]\z/;
   my ($name, $base_uid) = tree_request($caller_host, $requested_tree);
   my $lock = lock_tree_owners();
   my $owner_path = "$base/tree-owners/$name";
-  if (!-e $owner_path && !-l $owner_path) {
-    fail(2, "build host tree $name exists without an owner record") if -e $requested_tree || -l $requested_tree;
-    return 'absent';
+  my $owner_format = 'none';
+  if (-e $owner_path || -l $owner_path) {
+    my ($recorded_host, undef, $format) = read_owner_record($owner_path);
+    return 'kept-foreign' if $format eq 'current' && $recorded_host ne $caller_host;
+    $owner_format = $format;
   }
-  check_owner_host($caller_host, $name);
   my ($tree, $tree_uid) = present_tree($requested_tree, $name, $base_uid);
   if (!defined $tree) {
-    unlink $owner_path or fail(2, "cannot remove tree owner record $owner_path for the missing tree: $!");
+    return 'absent' if $owner_format eq 'none';
+    return 'would-drop' if $dry_run;
+    forget_tree_records($name, $owner_path);
     return 'dropped';
   }
-  return 'kept' if $root_state eq 'live';
-  remove_tree_and_record($tree, $tree_uid, $owner_path);
-  return 'removed';
+  my $activity_lock = try_lock_tree_activity($name, !$dry_run);
+  return 'kept-locked' if defined($activity_lock) && !ref($activity_lock);
+  my $ignored_cmdline_pids = { $$ => 1, getppid() => 1 };
+
+  if ($owner_format eq 'current' && $root_state eq 'gone') {
+    my $process = process_uses_tree($tree, $ignored_cmdline_pids);
+    return "kept-in-use:$process->{pid}:$process->{kind}" if defined $process;
+    if ($dry_run) {
+      my (undef, $bytes) = tree_metrics($tree);
+      return "would-remove-gone:$bytes";
+    }
+    remove_tree_and_record($name, $tree, $owner_path);
+    return 'removed-gone';
+  }
+
+  my $last_use = tree_last_use($name, $tree, $dry_run);
+  return 'kept-young' if time() - $last_use < $retention_days * 86400;
+  return 'kept-dirty' if tree_is_dirty($tree);
+  my $process = process_uses_tree($tree, $ignored_cmdline_pids);
+  return "kept-in-use:$process->{pid}:$process->{kind}" if defined $process;
+  my (undef, $bytes) = tree_metrics($tree);
+  return "would-remove-age:$bytes" if $dry_run;
+  remove_tree_and_record($name, $tree, $owner_path);
+  return "removed-age:$bytes";
 }
 
 # A caller host's claim on $requested_tree for its local root, under the owner lock. The record is written before the
@@ -477,20 +703,29 @@ sub claim_build_tree {
   my $lock = lock_tree_owners();
   my $owner_path = "$base/tree-owners/$name";
   my $recorded = -e $owner_path || -l $owner_path;
+  my $upgrade_legacy = 0;
   if ($recorded) {
-    my ($recorded_host, $recorded_root) = read_owner_record($owner_path);
-    fail(2, "tree $name belongs to caller host $recorded_host at $recorded_root; "
-        . "this claim is caller host $caller_host at $root")
-      unless $recorded_host eq $caller_host && $recorded_root eq $root;
+    my ($recorded_host, $recorded_root, $format) = read_owner_record($owner_path);
+    if ($format eq 'legacy') {
+      fail(2, "tree $name belongs to legacy local directory $recorded_root; this claim is local directory $root")
+        unless $recorded_root eq $root;
+      $upgrade_legacy = 1;
+    } else {
+      fail(2, "tree $name belongs to caller host $recorded_host at $recorded_root; "
+          . "this claim is caller host $caller_host at $root")
+        unless $recorded_host eq $caller_host && $recorded_root eq $root;
+    }
   }
+  my $activity_lock = lock_tree_activity($name);
   my ($tree) = present_tree($requested_tree, $name, $base_uid);
   if (defined $tree) {
     fail(2, "build host tree $name exists without an owner record") unless $recorded;
-    return;
+    write_owner_record($owner_path, $caller_host, $root) if $upgrade_legacy;
+  } else {
+    write_owner_record($owner_path, $caller_host, $root) if !$recorded || $upgrade_legacy;
+    mkdir $requested_tree, 0777 or fail_claim($owner_path, "cannot create build host tree $requested_tree: $!");
   }
-  write_owner_record($owner_path, $caller_host, $root);
-  return if mkdir $requested_tree, 0777;
-  fail_claim($owner_path, "cannot create build host tree $requested_tree: $!");
+  write_last_use($name, now_seconds());
 }
 
 sub caller_output_channel_closed {
@@ -719,14 +954,15 @@ sub cargo_capable {
 
 sub main {
   if (@ARGV && $ARGV[0] eq '--stop-tree') {
-    fail(2, 'usage: remote-exec --stop-tree <caller host> <tree path>') unless @ARGV == 3;
+    fail(2, 'usage: remote-exec --stop-tree <caller host> <tree path> <base64 local root>') unless @ARGV == 4;
     shift @ARGV;
     install_signal_handlers();
     $base = resolve_base();
     return stop_build_tree(@ARGV);
   }
   if (@ARGV && $ARGV[0] eq '--sweep-tree') {
-    fail(2, 'usage: remote-exec --sweep-tree <caller host> <tree path> <live|gone>') unless @ARGV == 4;
+    fail(2, 'usage: remote-exec --sweep-tree <caller host> <tree path> <live|gone> <retention days> <dry-run 0|1>')
+      unless @ARGV == 6;
     shift @ARGV;
     install_signal_handlers();
     $base = resolve_base();
@@ -742,7 +978,11 @@ sub main {
     claim_build_tree(@ARGV);
     return 0;
   }
-  fail(2, 'usage: remote-exec <base64 command payload>') unless @ARGV == 1;
+  fail(2, 'usage: remote-exec --run-tree <tree path> <base64 command payload>')
+    unless @ARGV == 3 && $ARGV[0] eq '--run-tree';
+  shift @ARGV;
+  my $requested_tree = shift @ARGV;
+  my $payload = shift @ARGV;
   install_signal_handlers();
   my $parent_pid = getppid();
   prctl_or_die($PR_SET_CHILD_SUBREAPER, 1);
@@ -750,8 +990,21 @@ sub main {
   # The parent died between the fork and the prctl call: take the signal now.
   $shutdown_signal = $SIGTERM_NUMBER if getppid() != $parent_pid;
   $base = resolve_base();
-  my ($tree, $relative_dir, $python_version, $argv) = decode_payload($ARGV[0]);
+  my ($tree, $relative_dir, $python_version, $argv) = decode_payload($payload);
+  $requested_tree =~ s{\A~}{$ENV{HOME}};
+  fail(2, "visible tree path does not match the command payload: $requested_tree != $tree")
+    unless $requested_tree eq $tree;
+  my ($name) = tree_request('driver', $requested_tree);
+  my $activity_lock = lock_tree_activity($name);
+  write_last_use($name, now_seconds());
+  my $status = run_command_in_tree($tree, $relative_dir, $python_version, $argv);
+  write_last_use($name, now_seconds());
+  return $status;
+}
 
+# Runs the command in its tree and returns its exit status. The caller holds the tree's activity lock for the run.
+sub run_command_in_tree {
+  my ($tree, $relative_dir, $python_version, $argv) = @_;
   my $cwd = $relative_dir eq '.' ? $tree : "$tree/$relative_dir";
   fail(2, "command directory does not exist: $cwd") unless -d $cwd;
   return 128 + $SIGTERM_NUMBER if caller_output_channel_closed();

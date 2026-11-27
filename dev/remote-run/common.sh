@@ -106,16 +106,20 @@ remote_run_read_caller_host() {
 # Owner records are `host=<caller hostname>` followed by `root=<local absolute path>`. A path-only
 # record is the old format and does not prove which caller host owns the tree.
 remote_run_parse_owner_record() {
-  local record=$1 host_line root_line
+  local record=$1 host_line root_line legacy_path
   REMOTE_RUN_OWNER_HOST=''
   REMOTE_RUN_OWNER_ROOT=''
   REMOTE_RUN_OWNER_FORMAT=''
-  if [[ "$record" != *$'\n'* ]]; then
-    if [[ "$record" != /* ]]; then
+  legacy_path=$record
+  if [[ "$legacy_path" == *$'\n' ]]; then
+    legacy_path=${legacy_path%$'\n'}
+  fi
+  if [[ "$legacy_path" != *$'\n'* ]]; then
+    if [[ "$legacy_path" != /* ]]; then
       return 2
     fi
     REMOTE_RUN_OWNER_FORMAT=legacy
-    REMOTE_RUN_OWNER_ROOT=$record
+    REMOTE_RUN_OWNER_ROOT=$legacy_path
     return 0
   fi
   host_line=${record%%$'\n'*}
@@ -393,10 +397,10 @@ remote_run_remote_payload() {
 }
 
 remote_run_remote_command() {
-  local payload=$1
+  local payload=$1 tree_path=$2
   # The base travels in the command: ssh does not forward the local environment.
-  printf 'REMOTE_RUN_REMOTE_BASE="%s" exec "%s/%s" "%s"' \
-    "$REMOTE_RUN_REMOTE_BASE" "$(remote_run_base_path)" "$REMOTE_RUN_EXEC_NAME" "$payload"
+  printf 'REMOTE_RUN_REMOTE_BASE="%s" exec "%s/%s" --run-tree "%s" "%s"' \
+    "$REMOTE_RUN_REMOTE_BASE" "$(remote_run_base_path)" "$REMOTE_RUN_EXEC_NAME" "$tree_path" "$payload"
 }
 
 remote_run_owner_record_query() {
@@ -408,12 +412,13 @@ else printf "__NO_LOCAL_ROOT_RECORD__"; fi' \
     "$owner_path" "$owner_path" "$owner_path" "$owner_path" "$owner_path"
 }
 
-# The root state is live or gone: whether the caller host still has the recorded local directory.
+# The root state is live or gone: whether the caller host still has the recorded local directory. remote-exec.pl applies
+# the gone rule only to a current record, so a tree without a record passes live and gets the age rule alone.
 remote_run_sweep_tree_command() {
-  local caller_host=$1 tree_path=$2 root_state=$3
-  printf 'REMOTE_RUN_REMOTE_BASE="%s" exec "%s/%s" --sweep-tree "%s" "%s" "%s"' \
+  local caller_host=$1 tree_path=$2 root_state=$3 retention_days=$4 dry_run=$5
+  printf 'REMOTE_RUN_REMOTE_BASE="%s" exec "%s/%s" --sweep-tree "%s" "%s" "%s" "%s" "%s"' \
     "$REMOTE_RUN_REMOTE_BASE" "$(remote_run_base_path)" "$REMOTE_RUN_EXEC_NAME" \
-    "$caller_host" "$tree_path" "$root_state"
+    "$caller_host" "$tree_path" "$root_state" "$retention_days" "$dry_run"
 }
 
 # The local root travels base64-encoded, so no path character reaches the remote shell's quoting.
@@ -425,7 +430,8 @@ remote_run_claim_tree_command() {
 }
 
 remote_run_stop_tree_command() {
-  local caller_host=$1 tree_path=$2
-  printf 'REMOTE_RUN_REMOTE_BASE="%s" exec "%s/%s" --stop-tree "%s" "%s"' \
-    "$REMOTE_RUN_REMOTE_BASE" "$(remote_run_base_path)" "$REMOTE_RUN_EXEC_NAME" "$caller_host" "$tree_path"
+  local caller_host=$1 tree_path=$2 encoded_root=$3
+  printf 'REMOTE_RUN_REMOTE_BASE="%s" exec "%s/%s" --stop-tree "%s" "%s" "%s"' \
+    "$REMOTE_RUN_REMOTE_BASE" "$(remote_run_base_path)" "$REMOTE_RUN_EXEC_NAME" \
+    "$caller_host" "$tree_path" "$encoded_root"
 }

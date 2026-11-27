@@ -2,6 +2,7 @@
 //! applies that check to a follow-timer wake, and refuses agent-work requests that a colleague-started run makes in a
 //! thread a colleague posted in.
 
+use std::fmt::Display;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -184,13 +185,13 @@ async fn notify_read_failure(
   check: &str,
   channel: &str,
   thread_ts: &str,
-  colleague_user_id: Option<&str>,
+  slack_user_id: Option<&str>,
   session_id: Option<&str>,
-  error: &anyhow::Error,
+  error: &impl Display,
 ) {
-  let colleague_user_id = colleague_user_id.unwrap_or("unavailable");
+  let slack_user_id = slack_user_id.unwrap_or("unavailable");
   let mut text = format!(
-    "CharlieBot Slack colleague check failed: {check}\nChannel: {channel}\nThread ts: {thread_ts}\nColleague Slack user: {colleague_user_id}\n",
+    "CharlieBot Slack check failed: {check}\nChannel: {channel}\nThread ts: {thread_ts}\nSlack user: {slack_user_id}\n",
   );
   if let Some(session_id) = session_id
     && let Some(link) = session_link(features, session_id).await
@@ -207,6 +208,24 @@ async fn notify_read_failure(
     Ok(ts) => tracing::info!(ts = %ts, check, "slack_colleague_failure_dm_sent"),
     Err(error) => tracing::warn!(error = %error, check, "slack_colleague_failure_dm_failed"),
   }
+}
+
+/// The owner DM for a summon or follow handler that failed for a listed sender. The DM names the check, the event's
+/// channel and thread, the sender and the error. An event without a channel or thread ts names it as "unavailable".
+pub(crate) async fn notify_handler_failure(
+  features: &FeatureContext,
+  check: &str,
+  event: &Value,
+  sender: &str,
+  error: &impl Display,
+) {
+  let channel = event.get("channel").and_then(Value::as_str).unwrap_or("unavailable");
+  let thread_ts = event
+    .get("thread_ts")
+    .and_then(Value::as_str)
+    .or_else(|| event.get("ts").and_then(Value::as_str))
+    .unwrap_or("unavailable");
+  notify_read_failure(features, check, channel, thread_ts, Some(sender), None, error).await;
 }
 
 /// Whether the request of run `run_id` must be refused: its inputs are not all the operator's, its session is a Slack

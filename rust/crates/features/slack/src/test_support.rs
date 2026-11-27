@@ -143,6 +143,8 @@ impl Home {
       "slack:\n  bot_token: synthetic-bot\n  app_token: synthetic-app\n",
     )
     .expect("the synthetic credentials write");
+    // A running home has its sessions directory from server start; the thread backfill reads it on every connect.
+    std::fs::create_dir_all(dir.path().join("sessions")).expect("the synthetic sessions directory exists");
 
     let mut registry = charliebot_registry::Registry::new();
     registry.register_package("features.slack", register_for_test).expect("the Slack package registers");
@@ -253,6 +255,8 @@ impl Home {
 pub(crate) enum SocketPlan {
   Disconnect,
   Drop,
+  /// Sends one Socket Mode frame after hello, then holds the connection.
+  Deliver(&'static str),
   Hold,
 }
 
@@ -527,6 +531,10 @@ async fn socket(State(state): State<Arc<FakeState>>, upgrade: WebSocketUpgrade) 
           while websocket.recv().await.is_some() {}
         }
         SocketPlan::Drop => drop(websocket),
+        SocketPlan::Deliver(frame) => {
+          websocket.send(AxumMessage::Text(frame.into())).await.expect("the event frame sends");
+          while websocket.recv().await.is_some() {}
+        }
         SocketPlan::Hold => while websocket.recv().await.is_some() {},
       }
     })

@@ -16,29 +16,33 @@ use charliebot_core::text_repr::is_truthy;
 use charliebot_registry::FeatureContext;
 use charliebot_triggers::triggers::TriggerManager;
 use futures_util::future::BoxFuture;
+use http::StatusCode;
 use serde_json::{Map, Value, json};
 
-use crate::colleague::{SENDER_USER_ID, colleague_admitted, sent_by};
+use crate::colleague::{SENDER_USER_ID, colleague_admitted, notify_handler_failure, sent_by};
 use crate::config::SlackConfig;
 pub use crate::slack_client::SlackClient;
 use crate::thread_contract::SLACK;
 
 const ACCEPTANCE_REACTION: &str = "eyes";
+const APP_MENTION_CHECK: &str = "app_mention handler";
+const THREAD_MESSAGE_CHECK: &str = "thread message handler";
 
 /// The deterministic session id for a Slack thread.
 pub fn summon_session_id(team_id: &str, channel_id: &str, thread_ts: &str) -> String {
   summon::summon_session_id(SLACK_NAMESPACE, &SLACK, &[team_id, channel_id, thread_ts])
 }
 
-/// The acceptance of one allowed `app_mention`, which persists the summon and starts its round.
+/// The acceptance of one allowed `app_mention`, which persists the summon and starts its round. `team_id` is the
+/// envelope's top-level `team_id`. A failure for a listed sender sends the owner one DM.
 pub async fn handle_app_mention(
   event: &Value,
+  team_id: Option<&str>,
   features: &Arc<FeatureContext>,
   client: Arc<SlackClient>,
 ) -> Result<Option<String>, ThreadReplyError> {
   let config = features.config.get().map_err(ThreadReplyError::failure)?;
   let slack_config = config.section::<SlackConfig>("slack");
-  let channel_id = event.get("channel");
   let thread_ts = truthy_text(event.get("thread_ts")).or_else(|| truthy_text(event.get("ts")));
   let user = event.get("user").and_then(Value::as_str);
   let is_operator = user.is_some_and(|user| slack_config.allowed_user_ids.iter().any(|allowed| allowed == user));
@@ -47,23 +51,38 @@ pub async fn handle_app_mention(
   if event.get("type").and_then(Value::as_str) != Some("app_mention") || !(is_operator || is_colleague) {
     tracing::debug!(
       event = "slack_mention_dropped",
-      channel = ?channel_id,
+      channel = ?event.get("channel"),
       thread_ts = ?thread_ts,
       slack_user = ?user,
     );
     return Ok(None);
   }
   let user = user.expect("a listed mention has a user");
+  let result = accept_app_mention(event, team_id, features, &client, slack_config, user, is_colleague).await;
+  if let Err(error) = &result {
+    notify_handler_failure(features, APP_MENTION_CHECK, event, user, error).await;
+  }
+  result
+}
 
+async fn accept_app_mention(
+  event: &Value,
+  team_id: Option<&str>,
+  features: &Arc<FeatureContext>,
+  client: &Arc<SlackClient>,
+  slack_config: &SlackConfig,
+  user: &str,
+  is_colleague: bool,
+) -> Result<Option<String>, ThreadReplyError> {
   let channel_id = required_text(event, "channel")?;
-  let thread_ts = thread_ts.ok_or_else(|| ThreadReplyError::failure("Slack app_mention has no ts"))?;
+  let thread_ts = truthy_text(event.get("thread_ts"))
+    .or_else(|| truthy_text(event.get("ts")))
+    .ok_or_else(|| ThreadReplyError::failure("Slack app_mention has no ts"))?;
   let mention_ts = required_text(event, "ts")?;
-  let team_id = truthy_text(event.get("team"))
-    .or_else(|| truthy_text(event.get("team_id")))
-    .ok_or_else(|| ThreadReplyError::failure("Slack app_mention has no team id"))?;
+  let team_id = required_team_id(team_id)?;
   let session_id = summon_session_id(team_id, channel_id, thread_ts);
   if is_colleague
-    && !colleague_admitted(features, &client, slack_config, channel_id, thread_ts, user, Some(&session_id)).await
+    && !colleague_admitted(features, client, slack_config, channel_id, thread_ts, user, Some(&session_id)).await
   {
     return Ok(None);
   }
@@ -76,7 +95,8 @@ pub async fn handle_app_mention(
     (SENDER_USER_ID): user,
   });
   let content = thread_entry::summon_content(&SLACK, event.get("text").and_then(Value::as_str));
-  let adapter: Arc<dyn ThreadAdapter> = Arc::new(SlackThreadAdapter::with_client(Arc::clone(features), client));
+  let adapter: Arc<dyn ThreadAdapter> =
+    Arc::new(SlackThreadAdapter::with_client(Arc::clone(features), Arc::clone(client)));
   let result = thread_entry::accept_summon(
     &adapter,
     features,
@@ -94,9 +114,11 @@ pub async fn handle_app_mention(
 }
 
 /// The acceptance of one thread message, which arms its followed session when the message is eligible. A colleague's
-/// message arms it only when the admission check passes.
+/// message arms it only when the admission check passes. `team_id` is the envelope's top-level `team_id`. A failure
+/// for a listed sender sends the owner one DM.
 pub async fn handle_thread_message(
   event: &Value,
+  team_id: Option<&str>,
   features: &Arc<FeatureContext>,
   client: Arc<SlackClient>,
 ) -> Result<Option<String>, ThreadReplyError> {
@@ -113,24 +135,46 @@ pub async fn handle_thread_message(
   if !is_operator && !is_colleague {
     return Ok(None);
   }
+  let sender = event.get("user").and_then(Value::as_str).expect("a listed message has a user");
+  let result = accept_thread_message(event, thread_ts, team_id, features, &client, slack_config, is_colleague).await;
+  if let Err(error) = &result {
+    notify_handler_failure(features, THREAD_MESSAGE_CHECK, event, sender, error).await;
+  }
+  result
+}
+
+async fn accept_thread_message(
+  event: &Value,
+  thread_ts: &str,
+  team_id: Option<&str>,
+  features: &Arc<FeatureContext>,
+  client: &Arc<SlackClient>,
+  slack_config: &SlackConfig,
+  is_colleague: bool,
+) -> Result<Option<String>, ThreadReplyError> {
   let channel_id = required_text(event, "channel")?;
   let message_ts = required_text(event, "ts")?;
-  let team_id = truthy_text(event.get("team"))
-    .or_else(|| truthy_text(event.get("team_id")))
-    .ok_or_else(|| ThreadReplyError::failure("Slack message has no team id"))?;
+  let team_id = required_team_id(team_id)?;
   let session_id = summon_session_id(team_id, channel_id, thread_ts);
   if is_colleague {
     let sender = required_text(event, "user")?;
-    if !colleague_admitted(features, &client, slack_config, channel_id, thread_ts, sender, Some(&session_id)).await {
+    if !colleague_admitted(features, client, slack_config, channel_id, thread_ts, sender, Some(&session_id)).await {
       return Ok(None);
     }
   }
-  let adapter: Arc<dyn ThreadAdapter> = Arc::new(SlackThreadAdapter::with_client(Arc::clone(features), client));
+  let adapter: Arc<dyn ThreadAdapter> =
+    Arc::new(SlackThreadAdapter::with_client(Arc::clone(features), Arc::clone(client)));
   let channel_id = channel_id.to_string();
   thread_entry::follow_message(&adapter, features, &session_id, message_ts, move |origin| {
     origin.get("channel_id").and_then(Value::as_str) == Some(&channel_id)
   })
   .await
+}
+
+/// The workspace id of an envelope. The listener reads it only from the envelope's top-level `team_id`.
+fn required_team_id(team_id: Option<&str>) -> Result<&str, ThreadReplyError> {
+  team_id
+    .ok_or_else(|| ThreadReplyError::refused(StatusCode::INTERNAL_SERVER_ERROR, "Slack event envelope has no team_id"))
 }
 
 /// Backfill unread messages for every followed Slack thread on a socket connection.
@@ -248,12 +292,14 @@ async fn serve_socket_mode(
     let Some(inner) = inner.filter(|event| is_truthy(event)) else {
       continue;
     };
+    // The workspace id is the payload's top-level `team_id`: Slack documents it as the workspace the event occurred in.
+    let team_id = envelope.get("payload").and_then(|payload| truthy_text(payload.get("team_id")));
     match inner.get("type").and_then(Value::as_str) {
       Some("app_mention") => {
         let channel = inner.get("channel");
         let thread_ts = truthy_text(inner.get("thread_ts")).or_else(|| truthy_text(inner.get("ts")));
         let slack_user = inner.get("user");
-        match handle_app_mention(inner, features, Arc::clone(&client)).await {
+        match handle_app_mention(inner, team_id, features, Arc::clone(&client)).await {
           Ok(session) => tracing::info!(
             event = "slack_listener_app_mention_handled",
             channel = ?channel,
@@ -271,7 +317,7 @@ async fn serve_socket_mode(
         }
       }
       Some("message") => {
-        if let Err(error) = handle_thread_message(inner, features, Arc::clone(&client)).await {
+        if let Err(error) = handle_thread_message(inner, team_id, features, Arc::clone(&client)).await {
           tracing::error!(
             event = "slack_listener_message_handle_failed",
             channel = ?inner.get("channel"),
@@ -496,9 +542,11 @@ mod tests {
   use charliebot_registry::colleague_gate::ColleagueGate;
 
   const TS: &str = "1700000000.000100";
+  /// The envelope's top-level `team_id` in these tests. The inner events carry no team field, as Slack sends them.
+  const TEAM: &str = "T_TEST";
 
   fn mention() -> Value {
-    json!({"type": "app_mention", "user": "U_ALLOWED", "team": "T_TEST", "channel": "C_TEST", "ts": TS})
+    json!({"type": "app_mention", "user": "U_ALLOWED", "channel": "C_TEST", "ts": TS})
   }
 
   async fn wait_until(mut predicate: impl FnMut() -> bool) {
@@ -546,7 +594,7 @@ mod tests {
     let expected_id = summon_session_id("T_TEST", "C_TEST", TS);
     assert_eq!(expected_id, "43570b06-d31a-5613-a2ae-7ba251bdef29");
 
-    let accepted = handle_app_mention(&event, &home.features, Arc::clone(&api.client)).await.unwrap();
+    let accepted = handle_app_mention(&event, Some(TEAM), &home.features, Arc::clone(&api.client)).await.unwrap();
     assert_eq!(accepted.as_deref(), Some(expected_id.as_str()));
     wait_until(|| home.launches().len() == 1 && api.calls().iter().any(|call| call.1 == "/api/reactions.add")).await;
 
@@ -597,9 +645,10 @@ mod tests {
     let home = Home::new();
     let api = FakeApi::start(&[]).await;
     let event = mention();
-    let first = handle_app_mention(&event, &home.features, Arc::clone(&api.client)).await.unwrap().unwrap();
+    let first = handle_app_mention(&event, Some(TEAM), &home.features, Arc::clone(&api.client)).await.unwrap().unwrap();
     wait_until(|| home.launches().len() == 1 && api.calls().iter().any(|call| call.1 == "/api/reactions.add")).await;
-    let second = handle_app_mention(&event, &home.features, Arc::clone(&api.client)).await.unwrap().unwrap();
+    let second =
+      handle_app_mention(&event, Some(TEAM), &home.features, Arc::clone(&api.client)).await.unwrap().unwrap();
 
     assert_eq!(first, second);
     assert_eq!(home.features.store.list_sessions_readonly(SessionStatus::Active).unwrap().len(), 1,);
@@ -729,7 +778,7 @@ mod tests {
   const LATER_TS: &str = "1700000000.000200";
 
   fn colleague_mention() -> Value {
-    json!({"type": "app_mention", "user": COLLEAGUE, "team": "T_TEST", "channel": "C_TEST", "ts": TS})
+    json!({"type": "app_mention", "user": COLLEAGUE, "channel": "C_TEST", "ts": TS})
   }
 
   #[tokio::test]
@@ -740,7 +789,8 @@ mod tests {
     api.set_thread_messages(vec![json!({"ts": TS, "user": COLLEAGUE, "text": "<@U_ALLOWED> help"})]);
     let expected_id = summon_session_id("T_TEST", "C_TEST", TS);
 
-    let accepted = handle_app_mention(&colleague_mention(), &home.features, Arc::clone(&api.client)).await.unwrap();
+    let accepted =
+      handle_app_mention(&colleague_mention(), Some(TEAM), &home.features, Arc::clone(&api.client)).await.unwrap();
 
     assert_eq!(accepted.as_deref(), Some(expected_id.as_str()));
     wait_until(|| home.launches().len() == 1).await;
@@ -763,7 +813,8 @@ mod tests {
     api.set_member_pages(&[&["U_OTHER"]]);
     api.set_thread_messages(vec![json!({"ts": TS, "user": COLLEAGUE, "text": "<@U_ALLOWED> help"})]);
 
-    let accepted = handle_app_mention(&colleague_mention(), &home.features, Arc::clone(&api.client)).await.unwrap();
+    let accepted =
+      handle_app_mention(&colleague_mention(), Some(TEAM), &home.features, Arc::clone(&api.client)).await.unwrap();
 
     assert_eq!(accepted, None);
     assert!(home.features.store.get_session(&summon_session_id("T_TEST", "C_TEST", TS)).await.unwrap().is_none());
@@ -776,7 +827,8 @@ mod tests {
     let api = FakeApi::start(&[]).await;
     api.set_members_error(json!({"ok": false, "error": "missing_scope", "needed": "mpim:read"}));
 
-    let accepted = handle_app_mention(&colleague_mention(), &home.features, Arc::clone(&api.client)).await.unwrap();
+    let accepted =
+      handle_app_mention(&colleague_mention(), Some(TEAM), &home.features, Arc::clone(&api.client)).await.unwrap();
 
     assert_eq!(accepted, None);
     assert!(home.features.store.get_session(&summon_session_id("T_TEST", "C_TEST", TS)).await.unwrap().is_none());
@@ -797,14 +849,13 @@ mod tests {
     home.thread_session(&session_id, TS).await;
     let event = json!({
       "type": "message",
-      "team": "T_TEST",
       "channel": "C_TEST",
       "user": COLLEAGUE,
       "thread_ts": TS,
       "ts": LATER_TS,
     });
 
-    let armed = handle_thread_message(&event, &home.features, Arc::clone(&api.client)).await.unwrap();
+    let armed = handle_thread_message(&event, Some(TEAM), &home.features, Arc::clone(&api.client)).await.unwrap();
 
     assert_eq!(armed, None);
     let triggers = home.features.startup.require::<Arc<TriggerManager>>().unwrap();
@@ -869,12 +920,12 @@ mod tests {
   #[tokio::test]
   async fn unhandled_event_drops_with_no_side_effects() {
     for event in [
-      json!({"type": "app_mention", "user": "U_OTHER", "team": "T_TEST", "channel": "C_TEST", "ts": TS}),
-      json!({"type": "message", "user": "U_ALLOWED", "team": "T_TEST", "channel": "C_TEST", "ts": TS}),
+      json!({"type": "app_mention", "user": "U_OTHER", "channel": "C_TEST", "ts": TS}),
+      json!({"type": "message", "user": "U_ALLOWED", "channel": "C_TEST", "ts": TS}),
     ] {
       let home = Home::new();
       let api = FakeApi::start(&[]).await;
-      assert_eq!(handle_app_mention(&event, &home.features, Arc::clone(&api.client)).await.unwrap(), None);
+      assert_eq!(handle_app_mention(&event, Some(TEAM), &home.features, Arc::clone(&api.client)).await.unwrap(), None);
       assert!(api.calls().is_empty());
       assert!(home.features.store.get_session(&summon_session_id("T_TEST", "C_TEST", TS)).await.unwrap().is_none());
     }
@@ -924,14 +975,13 @@ mod tests {
       }
       let event = json!({
         "type": "message",
-        "team": "T_TEST",
         "channel": "C_TEST",
         "user": "U_ALLOWED",
         "thread_ts": thread_ts,
         "ts": message_ts,
       });
 
-      let armed = handle_thread_message(&event, &home.features, Arc::clone(&client)).await.unwrap();
+      let armed = handle_thread_message(&event, Some(TEAM), &home.features, Arc::clone(&client)).await.unwrap();
 
       assert_eq!(armed.as_deref(), Some(session_id.as_str()));
       let triggers = home.features.startup.require::<Arc<TriggerManager>>().unwrap();
@@ -1006,14 +1056,17 @@ mod tests {
       .unwrap()
       .expect("the Slack session remains present");
     for event in [
-      json!({"type": "message", "subtype": "message_changed", "user": "U_ALLOWED", "team": "T_TEST", "channel": "C_TEST", "thread_ts": TS, "ts": "1700000000.000200"}),
-      json!({"type": "message", "subtype": "message_deleted", "user": "U_ALLOWED", "team": "T_TEST", "channel": "C_TEST", "thread_ts": TS, "ts": "1700000000.000200"}),
-      json!({"type": "message", "bot_id": "B_TEST", "team": "T_TEST", "channel": "C_TEST", "thread_ts": TS, "ts": "1700000000.000200"}),
-      json!({"type": "message", "user": "U_OTHER", "team": "T_TEST", "channel": "C_TEST", "thread_ts": TS, "ts": "1700000000.000200"}),
-      json!({"type": "message", "user": "U_ALLOWED", "team": "T_TEST", "channel": "C_TEST", "thread_ts": TS, "ts": TS}),
-      json!({"type": "message", "user": "U_ALLOWED", "team": "T_TEST", "channel": "C_TEST", "thread_ts": TS, "ts": "1700000000.000040"}),
+      json!({"type": "message", "subtype": "message_changed", "user": "U_ALLOWED", "channel": "C_TEST", "thread_ts": TS, "ts": "1700000000.000200"}),
+      json!({"type": "message", "subtype": "message_deleted", "user": "U_ALLOWED", "channel": "C_TEST", "thread_ts": TS, "ts": "1700000000.000200"}),
+      json!({"type": "message", "bot_id": "B_TEST", "channel": "C_TEST", "thread_ts": TS, "ts": "1700000000.000200"}),
+      json!({"type": "message", "user": "U_OTHER", "channel": "C_TEST", "thread_ts": TS, "ts": "1700000000.000200"}),
+      json!({"type": "message", "user": "U_ALLOWED", "channel": "C_TEST", "thread_ts": TS, "ts": TS}),
+      json!({"type": "message", "user": "U_ALLOWED", "channel": "C_TEST", "thread_ts": TS, "ts": "1700000000.000040"}),
     ] {
-      assert_eq!(handle_thread_message(&event, &home.features, Arc::clone(&api.client)).await.unwrap(), None);
+      assert_eq!(
+        handle_thread_message(&event, Some(TEAM), &home.features, Arc::clone(&api.client)).await.unwrap(),
+        None
+      );
     }
     let triggers = home.features.startup.require::<Arc<TriggerManager>>().unwrap();
     assert!(triggers.list_triggers(&session_id).await.unwrap().is_empty());
@@ -1053,6 +1106,87 @@ mod tests {
     assert_eq!(detail["new_messages"][0]["ts"], "1700000000.000110");
     assert!(api.posts().is_empty());
     assert_eq!(home.features.store.load_chat_events_sync(&session.id).unwrap(), events_before);
+  }
+
+  #[tokio::test]
+  async fn envelope_team_id_admits_a_mention_whose_inner_event_has_no_team() {
+    let home = Home::new();
+    let frame = concat!(
+      r#"{"type":"events_api","envelope_id":"env-1","payload":{"team_id":"T_TEST","event":"#,
+      r#"{"type":"app_mention","user":"U_ALLOWED","channel":"C_TEST","ts":"1700000000.000100","text":"hi"}}}"#,
+    );
+    let api = FakeApi::start(&[SocketPlan::Deliver(frame)]).await;
+    let task = tokio::spawn(run_listener_loop_with_initial_backoff(
+      Arc::clone(&home.features),
+      Arc::clone(&api.client),
+      ws_client::Settings::default(),
+      Duration::ZERO,
+    ));
+    let expected_id = summon_session_id("T_TEST", "C_TEST", TS);
+    wait_until(|| home.launches().len() == 1).await;
+
+    let metadata = home.features.store.get_session(&expected_id).await.unwrap().unwrap();
+    let origin = crate::metadata::slack_origin(&metadata).unwrap().unwrap();
+    assert_eq!(
+      (origin.team_id.as_str(), origin.channel_id.as_str(), origin.thread_ts.as_str()),
+      ("T_TEST", "C_TEST", TS)
+    );
+    assert!(home.owner_dms().is_empty());
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+  }
+
+  #[tokio::test]
+  async fn a_listed_mention_without_an_envelope_team_sends_one_owner_dm_and_starts_no_summon() {
+    let home = Home::new();
+    let api = FakeApi::start(&[]).await;
+
+    let error = handle_app_mention(&mention(), None, &home.features, Arc::clone(&api.client)).await.unwrap_err();
+    assert_eq!(error.to_string(), "Slack event envelope has no team_id");
+    let dms = home.owner_dms();
+    assert_eq!(dms.len(), 1, "{dms:?}");
+    for expected in ["app_mention handler", "C_TEST", TS, "U_ALLOWED", "Slack event envelope has no team_id"] {
+      assert!(dms[0].contains(expected), "{}", dms[0]);
+    }
+    assert!(home.launches().is_empty());
+  }
+
+  #[tokio::test]
+  async fn a_colleague_mention_without_an_envelope_team_sends_one_owner_dm() {
+    let home = Home::new();
+    let api = FakeApi::start(&[]).await;
+
+    let result = handle_app_mention(&colleague_mention(), None, &home.features, Arc::clone(&api.client)).await;
+    assert!(result.is_err());
+    let dms = home.owner_dms();
+    assert_eq!(dms.len(), 1, "{dms:?}");
+    assert!(dms[0].contains("app_mention handler") && dms[0].contains(COLLEAGUE), "{}", dms[0]);
+  }
+
+  #[tokio::test]
+  async fn a_listed_thread_message_without_an_envelope_team_sends_one_owner_dm() {
+    let home = Home::new();
+    let api = FakeApi::start(&[]).await;
+    let event =
+      json!({"type": "message", "user": "U_ALLOWED", "channel": "C_TEST", "thread_ts": TS, "ts": "1700000000.000200"});
+
+    let result = handle_thread_message(&event, None, &home.features, Arc::clone(&api.client)).await;
+    assert!(result.is_err());
+    let dms = home.owner_dms();
+    assert_eq!(dms.len(), 1, "{dms:?}");
+    for expected in ["thread message handler", "C_TEST", TS, "U_ALLOWED", "Slack event envelope has no team_id"] {
+      assert!(dms[0].contains(expected), "{}", dms[0]);
+    }
+  }
+
+  #[tokio::test]
+  async fn an_unlisted_mention_without_an_envelope_team_is_dropped_without_a_dm() {
+    let home = Home::new();
+    let api = FakeApi::start(&[]).await;
+    let event = json!({"type": "app_mention", "user": "U_STRANGER", "channel": "C_TEST", "ts": TS});
+
+    assert_eq!(handle_app_mention(&event, None, &home.features, Arc::clone(&api.client)).await.unwrap(), None);
+    assert!(home.owner_dms().is_empty());
   }
 
   #[tokio::test]

@@ -25,9 +25,13 @@
 //! (`charliebot land queue run --sha`, `land_queue`) with the head's CI pass time, so the record reads
 //! `waiting`. That command waits for CI, enters the queue, and, once it holds the turn, rebases onto the
 //! base, pushes the task branch, waits for CI on the rebased head, and writes `<sha>:<base>` in one
-//! atomic push that also releases the turn and the entry. Only a commit that passed CI on itself
-//! reaches the base branch. Both clocks — the 10-minute not-started clock and the 90-minute timeout —
-//! run per head sha from the time that sha was pushed to the task branch, so a rebase starts both again
+//! atomic push that also releases the turn and the entry. The command works in a scratch worktree of
+//! its own, detached at the queued commit and removed when it ends, so the session's worktree takes no
+//! part: its checkout, edits and commits cannot stop a queued landing. The session's landing record names
+//! the head that is current, and a newer `land` call of the task replaces the record before it arms
+//! its own command. Only a commit that passed CI on itself reaches the base branch. Both clocks — the
+//! 10-minute not-started clock and the 90-minute timeout — run per head sha from the time that sha was
+//! pushed to the task branch, so a rebase starts both again
 //! and a busy main costs `rebase_retries`, never a timeout. Main is never pushed on any state other than
 //! a pass, and no state falls back to a direct push.
 //!
@@ -62,10 +66,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
+use tokio::signal::unix::{SignalKind, signal};
+use uuid::Uuid;
 
 use crate::git;
 use crate::github_api::{RestOutcome, rest_get, run_gh};
 use crate::land_queue::{self, Cadence};
+use crate::landing_worktree::{self, LandingWorktree};
 use crate::review_text;
 use crate::web_screenshots;
 
@@ -208,7 +215,9 @@ impl TryFrom<&str> for LandState {
   }
 }
 
-/// The repo, base, branch, worktree and session directory one landing acts on, all from the task record.
+/// The repo, base, branch, worktree and session directory one landing acts on, all from the task record. The worktree
+/// is where the landing's git runs: the session's own, or a queued command's scratch worktree.
+#[derive(Clone)]
 pub(crate) struct TaskLanding {
   session_id: String,
   repo: String,
@@ -1119,6 +1128,8 @@ struct Lane<'a> {
   prev: &'a LandingRecord,
   gated: bool,
   cadence: Cadence,
+  /// The head sha the command was queued for, which the session's landing record must keep naming.
+  queued: &'a str,
 }
 
 /// One head sha the turn holder works on: the sha, when its branch was pushed, its rebase retries and its CI read.
@@ -1129,8 +1140,33 @@ struct Round {
   snapshot: Option<CiSnapshot>,
 }
 
-/// The queued landing of one task, over the remote `R`.
+/// The queued landing of one task, over the remote `R`, in a scratch worktree of its own at `start_sha`. A SIGTERM or
+/// SIGINT ends it with an error. The scratch worktree is removed when this returns, on every exit path.
 async fn queued_landing<R: LandRemote>(
+  ctx: &TaskLanding,
+  registry: &Registry,
+  home: &Path,
+  start_sha: &str,
+  remote: &R,
+  cadence: Cadence,
+  ci_wait: Duration,
+) -> anyhow::Result<QueueEnd> {
+  // The listeners exist before the worktree does, so a stop that arrives while it is made is still seen.
+  let mut terminate = signal(SignalKind::terminate()).context("could not listen for SIGTERM")?;
+  let mut interrupt = signal(SignalKind::interrupt()).context("could not listen for SIGINT")?;
+  let scratch = LandingWorktree::add(&ctx.repo_path, &landing_worktree::root_in(home), start_sha).await?;
+  let scratch_ctx = TaskLanding { worktree: scratch.path().to_path_buf(), ..ctx.clone() };
+  let end = tokio::select! {
+    end = queued_landing_in(&scratch_ctx, registry, home, start_sha, remote, cadence, ci_wait) => end,
+    _ = terminate.recv() => Err(anyhow::anyhow!("the queued landing of {start_sha} was stopped by SIGTERM")),
+    _ = interrupt.recv() => Err(anyhow::anyhow!("the queued landing of {start_sha} was stopped by SIGINT")),
+  };
+  drop(scratch);
+  end
+}
+
+/// The body of a queued landing, which runs in `ctx.worktree`: the scratch worktree that `queued_landing` made.
+async fn queued_landing_in<R: LandRemote>(
   ctx: &TaskLanding,
   registry: &Registry,
   home: &Path,
@@ -1151,7 +1187,7 @@ async fn queued_landing<R: LandRemote>(
     None => 0,
   };
   let gated = matches!(gate_applicability(&ctx.repo_path, &published).await?, GateApplicability::Applies);
-  let lane = Lane { ctx, registry, home, prev: &prev, gated, cadence };
+  let lane = Lane { ctx, registry, home, prev: &prev, gated, cadence, queued: start_sha };
   let site = ctx.queue_site();
   let owner = ctx.queue_owner();
   let mut round = Round {
@@ -1163,7 +1199,7 @@ async fn queued_landing<R: LandRemote>(
 
   if gated {
     loop {
-      if head_sha(&ctx.worktree).await? != round.sha {
+      if superseded(ctx, start_sha)? {
         return Ok(QueueEnd::Superseded);
       }
       let read = remote.ci_snapshot(ctx, &round.sha, round.head_pushed_at.as_deref()).await?;
@@ -1181,7 +1217,9 @@ async fn queued_landing<R: LandRemote>(
         CiVerdict::Timeout => STATE_CI_TIMEOUT,
       };
       let record = stopped_record(&lane, &round, state, &read);
-      write_landing_record(&ctx.session_dir, &record)?;
+      if !write_queued_record(ctx, start_sha, &record)? {
+        return Ok(QueueEnd::Superseded);
+      }
       return Ok(QueueEnd::Record(Box::new(record)));
     }
   }
@@ -1195,19 +1233,26 @@ async fn queued_landing<R: LandRemote>(
   let read = round.snapshot.take().unwrap_or_else(CiSnapshot::unread);
   let mut waiting = stopped_record(&lane, &round, STATE_WAITING, &read);
   waiting.queue_ref = Some(claim.holder.clone());
-  if let Err(error) = write_landing_record(&ctx.session_dir, &waiting) {
-    claim.release().await?;
-    return Err(error);
+  match write_queued_record(ctx, start_sha, &waiting) {
+    Ok(true) => {}
+    Ok(false) => {
+      claim.release().await?;
+      return Ok(QueueEnd::Superseded);
+    }
+    Err(error) => {
+      claim.release().await?;
+      return Err(error);
+    }
   }
   round.snapshot = Some(read);
 
   loop {
-    match head_sha(&ctx.worktree).await {
-      Ok(head) if head != round.sha => {
+    match superseded(ctx, start_sha) {
+      Ok(false) => {}
+      Ok(true) => {
         claim.release().await?;
         return Ok(QueueEnd::Superseded);
       }
-      Ok(_) => {}
       Err(error) => {
         claim.release().await?;
         return Err(error);
@@ -1217,9 +1262,9 @@ async fn queued_landing<R: LandRemote>(
       Ok(land_queue::Step::Held) => break,
       Ok(land_queue::Step::Waiting) => tokio::time::sleep(cadence.poll).await,
       Err(error) => {
-        // A newer landing call may have replaced the entry between the head check and the heartbeat.
+        // A newer landing call may have replaced the entry between the record check and the heartbeat.
         let released = claim.release().await;
-        if head_sha(&ctx.worktree).await? != round.sha {
+        if superseded(ctx, start_sha)? {
           return Ok(QueueEnd::Superseded);
         }
         released?;
@@ -1270,7 +1315,7 @@ async fn hold_and_publish<R: LandRemote>(
   let base_ref = format!("origin/{published}");
   let site = ctx.queue_site();
   for _ in 0..MAX_LANDING_ROUNDS {
-    if head_sha(&ctx.worktree).await? != round.sha {
+    if superseded(ctx, lane.queued)? {
       claim.release().await?;
       return Ok(QueueEnd::Superseded);
     }
@@ -1280,7 +1325,9 @@ async fn hold_and_publish<R: LandRemote>(
         abort_rebase(&ctx.worktree).await;
         claim.release().await?;
         let record = stopped_record(lane, round, STATE_REBASE_CONFLICT, &CiSnapshot::unread());
-        write_landing_record(&ctx.session_dir, &record)?;
+        if !write_queued_record(ctx, lane.queued, &record)? {
+          return Ok(QueueEnd::Superseded);
+        }
         return Ok(QueueEnd::Record(Box::new(record)));
       }
       RebaseStep::UpToDate => {}
@@ -1307,11 +1354,11 @@ async fn hold_and_publish<R: LandRemote>(
     if lane.gated {
       let started = Instant::now();
       let read = loop {
-        if head_sha(&ctx.worktree).await? != round.sha {
+        if superseded(ctx, lane.queued)? {
           claim.release().await?;
           return Ok(QueueEnd::Superseded);
         }
-        if let Some(end) = keep_turn_alive(ctx, claim, &round.sha, lane.cadence).await? {
+        if let Some(end) = keep_turn_alive(lane, claim, &round.sha).await? {
           return Ok(end);
         }
         if started.elapsed() >= ci_wait {
@@ -1335,7 +1382,9 @@ async fn hold_and_publish<R: LandRemote>(
         };
         claim.release().await?;
         let record = stopped_record(lane, round, state, &read);
-        write_landing_record(&ctx.session_dir, &record)?;
+        if !write_queued_record(ctx, lane.queued, &record)? {
+          return Ok(QueueEnd::Superseded);
+        }
         return Ok(QueueEnd::Record(Box::new(record)));
       };
       round.snapshot = Some(read);
@@ -1348,7 +1397,8 @@ async fn hold_and_publish<R: LandRemote>(
         claim.landed();
         let state = if lane.gated { STATE_LANDED } else { STATE_LANDED_NO_CI };
         let record = LandingRecord { pushed_at: Some(now_rfc3339()), ..stopped_record(lane, round, state, &read) };
-        write_landing_record(&ctx.session_dir, &record)?;
+        // main holds the commit whether or not a newer call replaced the record, which that call keeps.
+        write_queued_record(ctx, lane.queued, &record)?;
         remote.close_task_prs(ctx, &published, &record.sha).await.map_err(|error| {
           anyhow::anyhow!("{published} holds {} and landing.json reads {}, but {error:#}", record.sha, record.state)
         })?;
@@ -1358,7 +1408,9 @@ async fn hold_and_publish<R: LandRemote>(
         if push_rejection_kind(&err) == PushRejection::RepositoryRules {
           claim.release().await?;
           let record = stopped_record(lane, round, STATE_PR_MERGE_REQUIRED, &read);
-          write_landing_record(&ctx.session_dir, &record)?;
+          if !write_queued_record(ctx, lane.queued, &record)? {
+            return Ok(QueueEnd::Superseded);
+          }
           return Ok(QueueEnd::Record(Box::new(record)));
         }
         let tip = remote_main_tip(&ctx.worktree, &published).await?;
@@ -1376,15 +1428,15 @@ async fn hold_and_publish<R: LandRemote>(
   )
 }
 
-/// Renews the turn's heartbeat when it is due. A refused renewal ends the holder: when the head moved on, the landing
-/// is superseded and the turn is released; otherwise the refs were removed under the holder and that is an error.
+/// Renews the turn's heartbeat when it is due. A refused renewal ends the holder: when a newer landing call replaced
+/// the queued landing, the landing is superseded and the turn is released; otherwise the refs were removed under the
+/// holder and that is an error.
 async fn keep_turn_alive(
-  ctx: &TaskLanding,
+  lane: &Lane<'_>,
   claim: &mut land_queue::Claim,
   sha: &str,
-  cadence: Cadence,
 ) -> anyhow::Result<Option<QueueEnd>> {
-  if !claim.beat_due(cadence) {
+  if !claim.beat_due(lane.cadence) {
     return Ok(None);
   }
   let parent = claim.parent.clone();
@@ -1392,10 +1444,29 @@ async fn keep_turn_alive(
     return Ok(None);
   };
   claim.release().await?;
-  if head_sha(&ctx.worktree).await? != sha {
+  if superseded(lane.ctx, lane.queued)? {
     return Ok(Some(QueueEnd::Superseded));
   }
   anyhow::bail!("the landing queue refs of {} were removed while {sha} held the turn: {err}", claim.holder)
+}
+
+/// Whether a newer `land` call of the task replaced the landing that `queued` serves. `land` writes the session's
+/// landing record for each head before it arms that head's command, so the record names the current head. The check
+/// reads the record and never the session's worktree, which may hold any checkout or commit.
+fn superseded(ctx: &TaskLanding, queued: &str) -> anyhow::Result<bool> {
+  let record = read_landing_record(&ctx.session_dir)?
+    .ok_or_else(|| anyhow::anyhow!("{} holds no landing record", ctx.session_dir.display()))?;
+  Ok(record.sha != queued)
+}
+
+/// Writes `record`, a state of the queued landing of `queued`, only while the session's record still names `queued`, so
+/// a command that a newer call superseded never overwrites that call's record. Returns whether the record was written.
+fn write_queued_record(ctx: &TaskLanding, queued: &str, record: &LandingRecord) -> anyhow::Result<bool> {
+  if superseded(ctx, queued)? {
+    return Ok(false);
+  }
+  write_landing_record(&ctx.session_dir, record)?;
+  Ok(true)
 }
 
 /// The sha that `refs/heads/<published>` holds on origin.
@@ -1534,7 +1605,9 @@ enum RebaseStep {
   Conflict,
 }
 
-/// The task branch push under `--force-with-lease`, so a rebase never clobbers another push.
+/// The task branch push under `--force-with-lease`, so a rebase never clobbers another push. It pushes the worktree's
+/// HEAD, not the local branch: a queued landing rebases in its scratch worktree, which leaves the session's local
+/// branch where it was.
 ///
 /// With the branch on origin, the push fetches it first and leases against the fetched tip. Without it
 /// — a merged branch GitHub deleted — the push leases against an explicitly absent ref,
@@ -1552,8 +1625,10 @@ async fn push_task_branch(ctx: &TaskLanding, branch: &str) -> anyhow::Result<()>
   } else {
     format!("--force-with-lease=refs/heads/{branch}:")
   };
+  let refspec = format!("HEAD:refs/heads/{branch}");
   let (ok, _, err) =
-    git::git_stdout(&ctx.worktree, &["push", &lease, "origin", branch], GIT_PUSH_TIMEOUT, "git push task branch").await;
+    git::git_stdout(&ctx.worktree, &["push", &lease, "origin", &refspec], GIT_PUSH_TIMEOUT, "git push task branch")
+      .await;
   if !ok {
     anyhow::bail!("pushing task branch {branch} failed: {err}");
   }
@@ -1985,10 +2060,14 @@ pub fn read_landing_record(session_dir: &Path) -> anyhow::Result<Option<LandingR
   serde_json::from_str(&text).map(Some).map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))
 }
 
+/// Writes the landing record whole: a queued command reads it while `land` may write it, so the text is staged under a
+/// fresh name and renamed over the record in one step.
 fn write_landing_record(session_dir: &Path, record: &LandingRecord) -> anyhow::Result<()> {
   let path = session_dir.join(LANDING_FILE_NAME);
   let text = serde_json::to_string_pretty(record).expect("the landing record serializes") + "\n";
-  std::fs::write(&path, text).map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))
+  let staged = session_dir.join(format!("{LANDING_FILE_NAME}.{}.tmp", Uuid::new_v4()));
+  std::fs::write(&staged, text).map_err(|error| anyhow::anyhow!("{}: {error}", staged.display()))?;
+  std::fs::rename(&staged, &path).map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))
 }
 
 async fn gh_json(workdir: &Path, args: &[&str]) -> anyhow::Result<Value> {
@@ -2732,6 +2811,7 @@ mod tests {
 #[cfg(test)]
 mod synthetic_repo_tests {
   use std::fs;
+  use std::os::unix::process::CommandExt as _;
   use std::path::Path;
   use std::process::Command;
 
@@ -3631,6 +3711,8 @@ mod synthetic_repo_tests {
     passed_at: Mutex<HashMap<String, String>>,
     reads: Mutex<HashMap<String, usize>>,
     seen: Mutex<Vec<(String, CiVerdict)>>,
+    /// The worktree that each CI read ran in: the landing's own git, read from the task venue it was given.
+    worktrees: Mutex<Vec<PathBuf>>,
     moved: Mutex<Vec<String>>,
     work: PathBuf,
     default_passed_at: String,
@@ -3649,6 +3731,7 @@ mod synthetic_repo_tests {
         passed_at: Mutex::new(times),
         reads: Mutex::new(HashMap::new()),
         seen: Mutex::new(Vec::new()),
+        worktrees: Mutex::new(Vec::new()),
         moved: Mutex::new(Vec::new()),
         work: work.to_path_buf(),
         default_passed_at: default_passed_at.to_string(),
@@ -3678,7 +3761,7 @@ mod synthetic_repo_tests {
   impl LandRemote for QueueRemote {
     async fn ci_snapshot(
       &self,
-      _ctx: &TaskLanding,
+      ctx: &TaskLanding,
       sha: &str,
       _head_pushed_at: Option<&str>,
     ) -> anyhow::Result<CiSnapshot> {
@@ -3690,6 +3773,7 @@ mod synthetic_repo_tests {
         .and_then(|answers| answers.pop_front())
         .unwrap_or(CiVerdict::Pass);
       self.seen.lock().expect("the seen lock").push((sha.to_string(), verdict.clone()));
+      self.worktrees.lock().expect("the worktrees lock").push(ctx.worktree.clone());
       let count = {
         let mut reads = self.reads.lock().expect("the reads lock");
         let count = reads.entry(sha.to_string()).or_insert(0);
@@ -3912,6 +3996,16 @@ printf '%s\n' "$input" | '{scanner}'
   const SESSION_REPLACEMENT: &str = "00000000-0000-4000-8000-000000000010";
   const SESSION_REFUSED: &str = "00000000-0000-4000-8000-000000000011";
   const SESSION_REPEAT: &str = "00000000-0000-4000-8000-000000000012";
+  const SESSION_EDIT: &str = "00000000-0000-4000-8000-000000000013";
+  const SESSION_NEW_COMMIT: &str = "00000000-0000-4000-8000-000000000014";
+  const SESSION_CI_FAILED: &str = "00000000-0000-4000-8000-000000000015";
+  const SESSION_SIGNAL: &str = "00000000-0000-4000-8000-000000000016";
+  /// The environment that hands `queued_landing_child` its paths: the profile home, the queued sha, the remote's work
+  /// clone, and the file the child writes its outcome to.
+  const CHILD_HOME_ENV: &str = "CHARLIEBOT_LAND_TEST_CHILD_HOME";
+  const CHILD_SHA_ENV: &str = "CHARLIEBOT_LAND_TEST_CHILD_SHA";
+  const CHILD_REMOTE_ENV: &str = "CHARLIEBOT_LAND_TEST_CHILD_REMOTE";
+  const CHILD_RESULT_ENV: &str = "CHARLIEBOT_LAND_TEST_CHILD_RESULT";
 
   #[tokio::test]
   #[ignore = "integration"]
@@ -4075,9 +4169,11 @@ printf '%s\n' "$input" | '{scanner}'
     );
     let registered = fs::read_to_string(&log).expect("the program log reads");
     assert_eq!(registered.matches("session trigger").count(), 1, "no second trigger was registered: {registered}");
-    // A new head replaces the old entry and registers the new head's command.
+    // A new head replaces the old entry and registers the new head's command. `land` writes the new head's record
+    // before it arms the command, and the old command reads that record to see that it was superseded.
     commit(&work, "two.txt", "two\n");
     let new_sha = head(&work);
+    write_landing_record(&ctx.session_dir, &queue_record(301, &new_sha)).expect("the new landing record is written");
     assert_eq!(
       land_queue::arm_landing(&site, &owner, 301, &new_sha).await.expect("the new head registers"),
       land_queue::Armed::Registered
@@ -4097,6 +4193,8 @@ printf '%s\n' "$input" | '{scanner}'
     let origin_url = format!("file://{}", root.path().join("origin.git").display());
     git_ok(&repo, &["remote", "set-url", "origin", &origin_url]);
     let work = task_clone(root.path(), "task");
+    // The repository a worktree is cut from holds the task's commits, so the queued landing reads the head from it.
+    git_ok(&repo, &["fetch", "-q", "origin", "task"]);
     let holder_work = task_clone(root.path(), "holder");
     let outside = task_clone(root.path(), "outside");
     // The profile home is the root: its `sessions` directory holds the task session and the stub owner's session.
@@ -4143,6 +4241,235 @@ printf '%s\n' "$input" | '{scanner}'
     let (released, end) = tokio::join!(holder.release(), run);
     released.expect("the holder releases the turn");
     assert_eq!(landed_record(end, "the queued landing").state, STATE_LANDED_NO_CI);
+  }
+
+  /// A queued command's record is written only while the session's record still names its head, so a stale command never
+  /// overwrites the record of the newer call that replaced it.
+  #[test]
+  fn a_queued_record_never_overwrites_a_newer_calls_record() {
+    let session = tempfile::tempdir().expect("temporary directory is available");
+    let mut ctx = landing_ctx(session.path(), "task");
+    ctx.session_dir = session.path().to_path_buf();
+    write_landing_record(&ctx.session_dir, &queue_record(801, "newer-sha")).expect("the newer record is written");
+    assert!(
+      !write_queued_record(&ctx, "queued-sha", &queue_record(801, "queued-sha")).expect("the stale write reads"),
+      "a stale command's record is not written"
+    );
+    let kept = read_landing_record(&ctx.session_dir).expect("the record reads").expect("the record exists");
+    assert_eq!(kept.sha, "newer-sha", "the newer call's record stays");
+    assert!(
+      write_queued_record(&ctx, "newer-sha", &queue_record(801, "newer-sha")).expect("the current write reads"),
+      "the current command's record is written"
+    );
+  }
+
+  /// The scratch worktrees the home holds: one entry per worktree directory that a queued landing has not removed.
+  fn scratch_worktrees(home: &Path) -> Vec<PathBuf> {
+    let root = landing_worktree::root_in(home);
+    match fs::read_dir(&root) {
+      Ok(entries) => entries.map(|entry| entry.expect("the scratch entry reads").path()).collect(),
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+      Err(error) => panic!("{} cannot be read: {error}", root.display()),
+    }
+  }
+
+  /// A gated task whose one pushed commit sits in the session worktree `work`, with the commit's waiting record in
+  /// the session's landing record. The task's repository fetches the commit, as the repository that a production
+  /// worktree is cut from holds it. Returns the profile home, the session worktree and the queued sha.
+  async fn queued_task(root: &Path, session_id: &str) -> (PathBuf, PathBuf, String) {
+    let repo = gated_repo(root, "main");
+    let origin_url = format!("file://{}", root.join("origin.git").display());
+    git_ok(&repo, &["remote", "set-url", "origin", &origin_url]);
+    let work = task_clone(root, "task");
+    git_ok(&repo, &["fetch", "-q", "origin", "task"]);
+    let home = root.join("home");
+    fs::create_dir_all(&home).expect("the home is created");
+    write_task_session(&home, session_id, &repo, &work, "task");
+    let ctx = TaskLanding::load(&home, session_id).await.expect("the task session loads");
+    let sha = head(&work);
+    write_landing_record(&ctx.session_dir, &queue_record(701, &sha)).expect("the landing record is written");
+    (home, work, sha)
+  }
+
+  /// A queued landing takes its turn and publishes its commit rebased onto the main that moved while it waited,
+  /// although `change` alters the session's worktree first. The holder keeps the turn until the change and the move
+  /// are made.
+  async fn queued_landing_publishes_past_a_session_worktree_change(session_id: &str, change: impl FnOnce(&Path)) {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    let (home, work, sha) = queued_task(root.path(), session_id).await;
+    let ctx = TaskLanding::load(&home, session_id).await.expect("the task session loads");
+    let holder_work = task_clone(root.path(), "holder");
+    let outside = task_clone(root.path(), "outside");
+    let site = land_queue::Site { worktree: work.clone() };
+    let owner_key = land_queue::owner_token(session_id).expect("the session id names a token");
+    let holder_site = land_queue::Site { worktree: holder_work.clone() };
+    let main_tip = git_async(&holder_work, &["rev-parse", "origin/main"]).await.expect("the main tip reads");
+    let mut holder = land_queue::Claim::direct(&holder_site, 700, &main_tip);
+    assert_eq!(holder.take_turn().await.expect("the holder takes the turn"), land_queue::Take::Taken);
+    let remote = QueueRemote::new(&outside, &[(&sha, "2026-11-27T00:00:01Z")], "2026-11-27T00:00:09Z");
+    let registry = Registry::new();
+    let mut run = Box::pin(queued_landing(&ctx, &registry, &home, &sha, &remote, CADENCE, Duration::from_secs(60)));
+    wait_for_entry(&site, &owner_key, 701, &mut run).await;
+    change(&work);
+    let session_head = head(&work);
+    let session_status = git_async(&work, &["status", "--porcelain"]).await.expect("the status reads");
+    let moved = push_main_commit(&outside).await.expect("the other landing moves main");
+
+    let (released, end) = tokio::join!(holder.release(), run);
+    released.expect("the holder releases the turn");
+    let record = landed_record(end, "the queued landing");
+    assert_eq!(record.state, STATE_LANDED);
+    assert_ne!(record.sha, sha, "the commit is published rebased onto the moved main");
+    let main = git_async(&outside, &["ls-remote", "origin", "refs/heads/main"]).await.expect("main reads");
+    assert_eq!(main.split_whitespace().next(), Some(record.sha.as_str()), "the landed commit is main's tip");
+    let subjects = main_subjects(&work).await;
+    assert!(subjects.contains(&"task.txt".to_string()), "{subjects:?}");
+    let ancestry = Command::new("git")
+      .arg("-C")
+      .arg(&work)
+      .args(["merge-base", "--is-ancestor", &moved, &record.sha])
+      .status()
+      .expect("git runs");
+    assert!(ancestry.success(), "the outside commit stays under the landing");
+    let branch = git_async(&work, &["ls-remote", "origin", "refs/heads/task"]).await.expect("the branch reads");
+    assert_eq!(
+      branch.split_whitespace().next(),
+      Some(record.sha.as_str()),
+      "origin's task branch holds the landed commit"
+    );
+    let view = site.read().await.expect("the queue reads");
+    assert!(view.turn.is_none() && view.entries.is_empty(), "the publish removed the turn and the entry");
+    assert_eq!(head(&work), session_head, "the session's worktree keeps its head");
+    assert_eq!(git_async(&work, &["status", "--porcelain"]).await.expect("the status reads"), session_status);
+    assert!(scratch_worktrees(&home).is_empty(), "the scratch worktree is removed: {:?}", scratch_worktrees(&home));
+    let reads = remote.worktrees.lock().expect("the worktrees lock").clone();
+    assert!(!reads.is_empty(), "the CI read ran");
+    for read in reads {
+      assert!(
+        read.starts_with(landing_worktree::root_in(&home)),
+        "CI ran in {}, not a scratch worktree",
+        read.display()
+      );
+    }
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_queued_landing_publishes_past_uncommitted_edits_in_the_session_worktree() {
+    queued_landing_publishes_past_a_session_worktree_change(SESSION_EDIT, |work| {
+      fs::write(work.join("task.txt"), "an uncommitted edit\n").expect("the edit is written");
+    })
+    .await;
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_queued_landing_publishes_past_a_new_commit_in_the_session_worktree() {
+    queued_landing_publishes_past_a_session_worktree_change(SESSION_NEW_COMMIT, |work| {
+      commit(work, "two.txt", "two\n");
+    })
+    .await;
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_queued_landing_removes_its_scratch_worktree_after_a_failed_ci() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    let (home, work, sha) = queued_task(root.path(), SESSION_CI_FAILED).await;
+    let ctx = TaskLanding::load(&home, SESSION_CI_FAILED).await.expect("the task session loads");
+    let outside = task_clone(root.path(), "outside");
+    let remote = QueueRemote::new(&outside, &[], "2026-11-27T00:00:09Z");
+    remote.answer(&sha, vec![CiVerdict::Failed { failing: Vec::new() }]);
+    let end = queued_landing(&ctx, &Registry::new(), &home, &sha, &remote, CADENCE, Duration::from_secs(60)).await;
+    assert_eq!(landed_record(end, "the queued landing").state, STATE_CI_FAILED);
+    assert!(scratch_worktrees(&home).is_empty(), "the scratch worktree is removed: {:?}", scratch_worktrees(&home));
+    let reads = remote.worktrees.lock().expect("the worktrees lock").clone();
+    assert!(!reads.is_empty(), "the CI read ran");
+    for read in reads {
+      assert!(
+        read.starts_with(landing_worktree::root_in(&home)),
+        "CI ran in {}, not a scratch worktree",
+        read.display()
+      );
+    }
+    assert_eq!(head(&work), sha, "the session's worktree keeps its head");
+  }
+
+  /// The child process of `a_stop_signal_ends_a_queued_landing_and_removes_its_scratch_worktree`: runs one queued
+  /// landing over the paths the environment names and writes how it ended to the result file. Without that
+  /// environment the test does nothing, so only the parent starts it.
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn queued_landing_child() {
+    let Some(home) = std::env::var_os(CHILD_HOME_ENV) else {
+      return;
+    };
+    let home = PathBuf::from(home);
+    let sha = std::env::var(CHILD_SHA_ENV).expect("the child receives the queued sha");
+    let remote_work = PathBuf::from(std::env::var_os(CHILD_REMOTE_ENV).expect("the child receives the remote's clone"));
+    let result = PathBuf::from(std::env::var_os(CHILD_RESULT_ENV).expect("the child receives its result file"));
+    let ctx = TaskLanding::load(&home, SESSION_SIGNAL).await.expect("the task session loads");
+    let remote = QueueRemote::new(&remote_work, &[], "2026-11-27T00:00:09Z");
+    let outcome =
+      match queued_landing(&ctx, &Registry::new(), &home, &sha, &remote, CADENCE, Duration::from_secs(60)).await {
+        Ok(QueueEnd::Record(record)) => format!("record {}", record.state),
+        Ok(QueueEnd::Superseded) => "superseded".to_string(),
+        Err(error) => format!("error: {error:#}"),
+      };
+    fs::write(&result, outcome).expect("the child writes its outcome");
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_stop_signal_ends_a_queued_landing_and_removes_its_scratch_worktree() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    let (home, work, sha) = queued_task(root.path(), SESSION_SIGNAL).await;
+    let holder_work = task_clone(root.path(), "holder");
+    let outside = task_clone(root.path(), "outside");
+    let holder_site = land_queue::Site { worktree: holder_work.clone() };
+    let main_tip = git_async(&holder_work, &["rev-parse", "origin/main"]).await.expect("the main tip reads");
+    let mut holder = land_queue::Claim::direct(&holder_site, 700, &main_tip);
+    assert_eq!(holder.take_turn().await.expect("the holder takes the turn"), land_queue::Take::Taken);
+
+    // The child waits behind the holder in its own process group, so the signal reaches it alone.
+    let result = root.path().join("child-result.txt");
+    let mut child = std::process::Command::new(std::env::current_exe().expect("the test binary path reads"))
+      .args(["land::synthetic_repo_tests::queued_landing_child", "--exact", "--ignored", "--nocapture"])
+      .env(CHILD_HOME_ENV, &home)
+      .env(CHILD_SHA_ENV, &sha)
+      .env(CHILD_REMOTE_ENV, &outside)
+      .env(CHILD_RESULT_ENV, &result)
+      .process_group(0)
+      .spawn()
+      .expect("the child starts");
+    let site = land_queue::Site { worktree: work.clone() };
+    let owner_key = land_queue::owner_token(SESSION_SIGNAL).expect("the session id names a token");
+    tokio::time::timeout(Duration::from_secs(60), async {
+      while site.read().await.expect("the queue reads").entry_of(701, &owner_key).is_none() {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+      }
+    })
+    .await
+    .expect("the child queued within 60 s");
+    assert_eq!(scratch_worktrees(&home).len(), 1, "the child's scratch worktree exists while it waits");
+
+    let group = libc::pid_t::try_from(child.id()).expect("a pid fits pid_t");
+    // SAFETY: `group` is the child's pid, and the child leads its own process group, so the negative pid names only it
+    // and the children it runs.
+    let sent = unsafe { libc::kill(-group, libc::SIGTERM) };
+    assert_eq!(sent, 0, "the stop signal is sent to the child's group");
+    let status =
+      tokio::task::spawn_blocking(move || child.wait()).await.expect("the wait task ends").expect("the child exits");
+    assert!(status.success(), "the child writes its outcome and exits: {status}");
+    let outcome = fs::read_to_string(&result).expect("the child wrote its outcome");
+    assert!(outcome.contains("stopped by SIGTERM"), "the child ended by the signal: {outcome}");
+    assert!(
+      scratch_worktrees(&home).is_empty(),
+      "the signal removed the scratch worktree: {:?}",
+      scratch_worktrees(&home)
+    );
+    assert_eq!(head(&work), sha, "the session's worktree keeps its head");
+    holder.release().await.expect("the holder releases the turn");
   }
 
   #[tokio::test]

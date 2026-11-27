@@ -140,6 +140,12 @@ pub fn worktree_add_existing_branch_args<'a>(path: &'a str, branch: &'a str) -> 
   ["worktree", "add", path, branch]
 }
 
+/// The arguments that add a detached worktree at `path`, checked out at `commit`: `git worktree add --detach <path>
+/// <commit>`. No branch is checked out in it, so it never collides with a branch another worktree holds.
+pub fn worktree_add_detached_args<'a>(path: &'a str, commit: &'a str) -> [&'a str; 5] {
+  ["worktree", "add", "--detach", path, commit]
+}
+
 /// The arguments that remove the worktree at `path`: `git worktree remove <path>`. Without `--force`, git refuses a
 /// worktree with modified tracked files or untracked files, and it makes that check at the moment of the removal.
 pub fn worktree_remove_args(path: &str) -> [&str; 3] {

@@ -601,8 +601,9 @@ Main's CI state is the newest CI run on `main`:
 
 `--workflow` takes the workflow's file name: `ci.yml` resolves, and the display name `CI` does not.
 
-When that run is in progress, wait for it with `gh run watch <run-id> --interval 120`.
-Each poll of `gh run watch` makes three REST reads, and its default interval of 3 seconds spends the host's shared REST quota.
+When that run is in progress, wait for it by re-checking in calls of 60 seconds or less.
+Each call reads the run once with `gh run view <run-id> --json status,conclusion`.
+The round's guard refuses `gh run watch` and `gh pr checks --watch`: a watch waits past the round's 60-second limit, and each of its polls spends the host's shared REST quota.
 
 When that run failed, repair `main` before this round continues.
 A red main turns every direction's checks red, so the repair comes first.
@@ -651,7 +652,7 @@ These steps return `main` to green and resume the step that needed it.
    An emptied repair has nothing to merge, so close it through the posting script with `--delete-branch` and a comment file that reads `improve-abandoned: main repair — nothing left to merge`, then return to the sending step.
 6. Review the repair pull request with Step 6, act on its findings, and merge it as Step 7 states once it is green and its merge head carries a clean verdict.
    A repair lands on `main` as well, so it gets the same review as a topic.
-   Wait for the merge's main run with `gh run watch --interval 120`, then return to the sending step.
+   Wait for the merge's main run in calls of 60 seconds or less, as the main-CI wait above does, then return to the sending step.
 7. When the failure names no fix, or the repair pull request is abandoned,
    return to the sending step with main still failed.
 

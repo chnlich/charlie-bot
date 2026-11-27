@@ -15,6 +15,17 @@ use tempfile::TempDir;
 mod stand_in;
 
 const GH_STUB: &str = include_str!("fixtures/land/gh");
+/// The `charliebot` stand-in on the venue's `PATH`. A landing registers its wake with `charliebot session trigger`, and
+/// the venue has no server: the stand-in appends that call's arguments to the trigger log and exits 0. Every other verb
+/// runs the built binary, which the registered command reaches.
+const TRIGGER_STUB: &str = r#"#!/bin/sh
+if [ "$1" = session ] && [ "$2" = trigger ]; then
+  for arg in "$@"; do printf '%s\n' "$arg"; done >> 'TRIGGER_LOG'
+  printf '%s\n' '--end--' >> 'TRIGGER_LOG'
+  exit 0
+fi
+exec 'BUILT_BINARY' "$@"
+"#;
 const TASK_SESSION: &str = "5f0c2a8e-1b2c-4d3e-8f40-516273849500";
 const TASK_RUN: &str = "9a8b7c6d-1b2c-4d3e-8f40-516273849500";
 const TASK_BRANCH: &str = "charliebot/task-1794400000-9a8b7c6d";
@@ -98,6 +109,7 @@ struct Venue {
   home: PathBuf,
   stub_bin: PathBuf,
   gh_state: PathBuf,
+  trigger_log: PathBuf,
 }
 
 impl Venue {
@@ -158,10 +170,17 @@ impl Venue {
     fs::create_dir(&stub_bin).expect("the stub directory is created");
     fs::write(stub_bin.join("gh"), GH_STUB).expect("the gh stand-in is written");
     fs::set_permissions(stub_bin.join("gh"), fs::Permissions::from_mode(0o755)).expect("the gh stand-in is executable");
+    let trigger_log = root.path().join("trigger-log");
+    let charliebot_stub = TRIGGER_STUB
+      .replace("TRIGGER_LOG", &trigger_log.display().to_string())
+      .replace("BUILT_BINARY", env!("CARGO_BIN_EXE_charliebot"));
+    fs::write(stub_bin.join("charliebot"), charliebot_stub).expect("the charliebot stand-in is written");
+    fs::set_permissions(stub_bin.join("charliebot"), fs::Permissions::from_mode(0o755))
+      .expect("the charliebot stand-in is executable");
     let gh_state = root.path().join("gh-state");
     fs::create_dir(&gh_state).expect("the gh state directory is created");
 
-    Venue { _root: root, origin, repo, worktree, home, stub_bin, gh_state }
+    Venue { _root: root, origin, repo, worktree, home, stub_bin, gh_state, trigger_log }
   }
 
   fn path_with_stub(&self) -> String {
@@ -262,8 +281,10 @@ impl Venue {
       .expect("the credentials are written");
   }
 
+  /// Runs `charliebot land --task`. A landing that registers its wake returns `waiting`; the wake then runs the
+  /// registered command, as the trigger does, and its output is the landing's result.
   fn land_output_with_args(&self, extra_args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_charliebot"))
+    let output = Command::new(env!("CARGO_BIN_EXE_charliebot"))
       .args(["land", "--task", TASK_SESSION])
       .args(extra_args)
       .current_dir(&self.worktree)
@@ -275,7 +296,40 @@ impl Venue {
       .env("GIT_CONFIG_GLOBAL", "/dev/null")
       .env("GIT_CONFIG_NOSYSTEM", "1")
       .output()
-      .expect("charliebot land runs")
+      .expect("charliebot land runs");
+    let waiting = serde_json::from_slice::<Value>(&output.stdout).is_ok_and(|record| record["state"] == "waiting");
+    if !waiting {
+      return output;
+    }
+    self.run_wake()
+  }
+
+  /// Runs the command the waiting landing registered, in the task worktree under the run's session id, as the trigger
+  /// runs it. The trigger log holds the registrations of that one call; the call registers exactly one command.
+  fn run_wake(&self) -> std::process::Output {
+    let log = fs::read_to_string(&self.trigger_log).expect("the landing registered its wake");
+    fs::remove_file(&self.trigger_log).expect("the trigger log is cleared for the next call");
+    let commands: Vec<&str> = log
+      .split("--end--\n")
+      .filter_map(|record| {
+        let args: Vec<&str> = record.lines().collect();
+        args.iter().position(|arg| *arg == "--cmd").map(|at| args[at + 1])
+      })
+      .collect();
+    assert_eq!(commands.len(), 1, "the landing registers one wake command: {log}");
+    Command::new("sh")
+      .arg("-c")
+      .arg(commands[0])
+      .current_dir(&self.worktree)
+      .env("CHARLIEBOT_HOME", &self.home)
+      .env("CHARLIEBOT_SESSION_ID", TASK_SESSION)
+      .env("PATH", self.path_with_stub())
+      .env("GH_STUB_STATE", &self.gh_state)
+      .env("GH_STUB_ORIGIN", &self.origin)
+      .env("GIT_CONFIG_GLOBAL", "/dev/null")
+      .env("GIT_CONFIG_NOSYSTEM", "1")
+      .output()
+      .expect("the registered wake runs")
   }
 
   /// Run `charliebot land --task` from the task worktree; returns the exit code and the printed landing record.
@@ -681,8 +735,8 @@ fn a_hook_refused_base_push_fails_on_the_first_round_with_the_hooks_message() {
   let hook = venue.repo.join(".git/hooks/pre-push");
   let script = [
     "#!/usr/bin/env bash",
-    &format!("echo call >>{}", hook_calls.display()),
     "while read -r _local_ref _local_sha remote_ref _remote_sha; do",
+    &format!("  echo \"$remote_ref\" >>{}", hook_calls.display()),
     "  if [ \"$remote_ref\" = refs/heads/main ]; then",
     "    echo 'pre-push: push to main is restricted; use merge_to_main.sh <branch>' >&2",
     "    exit 1",
@@ -703,8 +757,10 @@ fn a_hook_refused_base_push_fails_on_the_first_round_with_the_hooks_message() {
     .to_string();
   assert!(error.contains("push to main is restricted"), "error: {error}");
   assert!(!error.contains("kept moving"), "error: {error}");
-  let calls = fs::read_to_string(&hook_calls).expect("the hook recorded the push");
-  assert_eq!(calls.lines().count(), 1, "the hook ran on the landing's only push: {calls}");
+  // The queue pushes its turn and entry refs through the same hook; the refusal is for main, which is pushed once.
+  let calls = fs::read_to_string(&hook_calls).expect("the hook recorded the pushes");
+  let main_pushes = calls.lines().filter(|remote_ref| *remote_ref == "refs/heads/main").count();
+  assert_eq!(main_pushes, 1, "the landing pushes main once, and the refusal is not retried: {calls}");
 }
 
 #[test]

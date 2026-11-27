@@ -1169,7 +1169,7 @@ async fn queued_landing<R: LandRemote>(
     Some(at) => rfc3339_millis(at)?,
     None => u64::try_from(OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000)?,
   };
-  let name = land_queue::EntryName::new(ci_passed_ms, pr, &owner.session_id);
+  let name = land_queue::EntryName::new(ci_passed_ms, pr, &owner.token()?);
   let mut claim = land_queue::Claim::enter_or_resume(&site, &name, &round.sha).await?;
   let read = round.snapshot.take().unwrap_or_else(CiSnapshot::unread);
   let mut waiting = stopped_record(&lane, &round, STATE_WAITING, &read);
@@ -2715,6 +2715,7 @@ mod synthetic_repo_tests {
   use std::process::Command;
 
   use super::*;
+  use std::io::Write;
 
   /// One synthetic repository with a bare `origin.git` beside it, on branch *branch*.
   fn synthetic_repo(root: &Path, branch: &str) -> std::path::PathBuf {
@@ -3943,7 +3944,8 @@ exit 0
       land_queue::Armed::Registered
     );
     let view = site.read().await.expect("the queue reads");
-    assert!(view.entry_of(301, "session-c").is_none(), "the replaced head's entry was removed");
+    let session_c = land_queue::owner_token("session-c").expect("the session id names a token");
+    assert!(view.entry_of(301, &session_c).is_none(), "the replaced head's entry was removed");
     assert!(matches!(run.await.expect("the old command ends"), QueueEnd::Superseded), "the moved head supersedes it");
   }
 
@@ -4087,7 +4089,8 @@ exit 0
       .expect("the gate answers");
     assert_eq!(gate, land_queue::MergeGate::Queued);
     let view = site.read().await.expect("the queue reads");
-    let (entry, _) = view.entry_of(601, "queued-session").expect("the queued merge entered the queue").clone();
+    let queued_key = land_queue::owner_token("queued-session").expect("the session id names a token");
+    let (entry, _) = view.entry_of(601, &queued_key).expect("the queued merge entered the queue").clone();
     let mut runner = Box::pin(land_queue::run_pr_merge_queued(&site, &queued_owner, 601, &queued_cmd, CADENCE));
     tokio::select! {
       result = &mut runner => panic!("the merge ran before the turn was free: {:?}", result.err().map(|error| format!("{error:#}"))),
@@ -4098,6 +4101,180 @@ exit 0
     assert_eq!(fs::read_to_string(&queued_marker).expect("the marker reads"), entry.refname());
     let view = site.read().await.expect("the queue reads");
     assert!(view.turn.is_none() && view.entries.is_empty(), "the queued merge released the turn and its entry");
+  }
+
+  /// The file that a clone's pre-push wrapper appends each push's ref lines to, as git gives them to the hook.
+  fn push_log(root: &Path, name: &str) -> PathBuf {
+    root.join(format!("{name}-pushes.log"))
+  }
+
+  /// A file of the repository, by its path from the repository root.
+  fn repo_file(relative: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+      .join("../../../..")
+      .join(relative)
+      .canonicalize()
+      .expect("the repository file exists")
+  }
+
+  /// A task clone whose pushes run the repository's real pre-push hook. The wrapper records each push's ref lines,
+  /// names the pattern file and empty credential homes, and then runs `dev/git-hooks/pre-push`, so the hook's scanner
+  /// is the one that the repository ships.
+  fn hooked_clone(root: &Path, name: &str, patterns: &Path) -> PathBuf {
+    let work = task_clone(root, name);
+    let hooks = root.join(format!("{name}-hooks"));
+    fs::create_dir_all(&hooks).expect("the hooks directory is created");
+    let real = repo_file("dev/git-hooks/pre-push");
+    let wrapper = hooks.join("pre-push");
+    fs::write(
+      &wrapper,
+      format!(
+        "#!/bin/sh\n\
+         tee -a '{}' | EXTRA_PATTERNS_FILE='{}' CHARLIEBOT_HOME='{}' \
+         CLAUDE_CONFIG_DIR='{}' CODEX_HOME='{}' bash '{}' \"$@\"\n",
+        push_log(root, name).display(),
+        patterns.display(),
+        root.join("no-profile-home").display(),
+        root.join("no-claude-config").display(),
+        root.join("no-codex-home").display(),
+        real.display()
+      ),
+    )
+    .expect("the hook wrapper is written");
+    let mut permissions = fs::metadata(&wrapper).expect("the hook wrapper exists").permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&wrapper, permissions).expect("the hook wrapper is executable");
+    git_ok(&work, &["config", "core.hooksPath", hooks.to_str().expect("the hooks path is UTF-8")]);
+    work
+  }
+
+  /// The texts that the pushes in `log` carried, each from the clone at `repo`: every pushed ref name, and the message
+  /// of every pushed commit. A deletion pushes its ref name alone.
+  fn pushed_texts(log: &Path, repo: &Path) -> Vec<String> {
+    let mut texts = Vec::new();
+    for line in fs::read_to_string(log).expect("the push log reads").lines() {
+      let fields: Vec<&str> = line.split(' ').collect();
+      let (local_sha, remote_ref) = match fields.as_slice() {
+        [_, local_sha, remote_ref, _] => (*local_sha, *remote_ref),
+        _ => panic!("a pushed line names four fields: {line}"),
+      };
+      texts.push(remote_ref.to_string());
+      if !local_sha.bytes().all(|byte| byte == b'0') {
+        let shown = Command::new("git")
+          .arg("-C")
+          .arg(repo)
+          .args(["show", "-s", "--format=%B", local_sha])
+          .output()
+          .expect("git runs");
+        assert!(shown.status.success(), "the pushed commit {local_sha} reads");
+        texts.push(String::from_utf8_lossy(&shown.stdout).into_owned());
+      }
+    }
+    texts
+  }
+
+  /// Whether the repository's leak scanner passes `text`: its built-in rules and the pattern file at `patterns`.
+  fn leak_scan_passes(text: &str, patterns: &Path) -> bool {
+    let mut scanner = Command::new("bash")
+      .arg(repo_file("dev/check-skills-host-leak.sh"))
+      .arg("--stdin")
+      .env("EXTRA_PATTERNS_FILE", patterns)
+      .stdin(std::process::Stdio::piped())
+      .stdout(std::process::Stdio::null())
+      .spawn()
+      .expect("the leak scanner starts");
+    scanner
+      .stdin
+      .take()
+      .expect("the scanner's stdin is piped")
+      .write_all(text.as_bytes())
+      .expect("the text reaches the scanner");
+    scanner.wait().expect("the scanner finishes").success()
+  }
+
+  /// A full cycle of the landing queue pushes only text that the repository's leak scan passes. The land path enqueues,
+  /// takes the turn, beats and publishes main; the pr-merge path queues behind that turn and then merges from its own
+  /// entry, and a free queue merges directly; a round acquires and releases with its launch id. Every push runs the
+  /// real pre-push hook, which refuses a session id in a heartbeat message, so the cycle completes only when its
+  /// messages carry none. The hook applies its built-in rules to commit messages but not to ref names, so the test then
+  /// scans each pushed ref name and each pushed commit message with the scanner itself.
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_full_queue_cycle_pushes_only_text_the_leak_scan_passes() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    synthetic_repo(root.path(), "main");
+    let patterns = root.path().join("patterns.txt");
+    fs::write(&patterns, "# the local leak patterns\nfictionalmarker\n").expect("the pattern file is written");
+    let land = hooked_clone(root.path(), "task-a", &patterns);
+    let merge = hooked_clone(root.path(), "merge-work", &patterns);
+    let site_land = land_queue::Site { worktree: land.clone() };
+    let site_merge = land_queue::Site { worktree: merge.clone() };
+    let base = git_async(&land, &["rev-parse", "origin/main"]).await.expect("origin's main reads");
+    let sha_land = head(&land);
+    let sha_merge = head(&merge);
+    let (owner_land, _) = stub_owner(root.path(), &land, "5e551011-6f0a-4c1d-9b2e-0a1b2c3d4e5f");
+    let (owner_merge, _) = stub_owner(root.path(), &merge, "0d0e1e2a-7b3c-4d4e-8f5a-6b7c8d9e0f1a");
+    let ms = 1_795_000_000_000;
+
+    // The land path: the entry joins the queue under the session's token, which takes the turn.
+    let land_name = land_queue::EntryName::new(ms, 101, &owner_land.token().expect("the session names a token"));
+    let mut land_claim =
+      land_queue::Claim::enter_or_resume(&site_land, &land_name, &sha_land).await.expect("the land path enqueues");
+    assert_eq!(land_claim.take_turn().await.expect("the turn is taken"), land_queue::Take::Taken);
+
+    // The pr-merge path queues behind the held turn, and its wake carries no session id.
+    let gate =
+      land_queue::pr_merge_gate(&site_merge, Some(&owner_merge), 104, &sha_merge, Some("true"), None, CADENCE, ms + 1)
+        .await
+        .expect("the merge gate queues");
+    assert_eq!(gate, land_queue::MergeGate::Queued, "the held turn queues the merge");
+
+    // The landing beats, publishes main with its turn and entry removed, and the queued merge runs from the turn.
+    assert_eq!(land_claim.beat(&sha_land).await.expect("the heartbeat pushes"), land_queue::Pushed::Done);
+    let publish = land_claim.publish_changes("refs/heads/main", &base, &sha_land);
+    assert_eq!(site_land.push(&publish).await.expect("the publish pushes"), land_queue::Pushed::Done);
+    land_claim.landed();
+    let merged = land_queue::run_pr_merge_queued(&site_merge, &owner_merge, 104, "true", CADENCE)
+      .await
+      .expect("the queued merge runs");
+    assert_eq!(merged, 0, "the queued merge exits 0");
+
+    // A free queue merges directly, and a round acquires and releases under its launch id.
+    let direct =
+      land_queue::pr_merge_gate(&site_merge, Some(&owner_merge), 105, &sha_merge, Some("true"), None, CADENCE, 1)
+        .await
+        .expect("the direct merge runs");
+    assert_eq!(direct, land_queue::MergeGate::Ran(0));
+    let round = land_queue::acquire(
+      &site_merge,
+      "20261127T083000Z-12345-23456",
+      106,
+      &sha_merge,
+      ms,
+      Duration::from_secs(60),
+      CADENCE,
+    )
+    .await
+    .expect("the round acquires the turn");
+    assert_eq!(round, land_queue::Acquired::Held);
+    land_queue::release(&site_merge, "20261127T083000Z-12345-23456", 106).await.expect("the round releases");
+
+    // Every ref name and every pushed commit message of the cycle goes through the leak scanner.
+    let mut texts = pushed_texts(&push_log(root.path(), "task-a"), &land);
+    texts.extend(pushed_texts(&push_log(root.path(), "merge-work"), &merge));
+    assert!(texts.len() > 10, "the cycle pushed its ref names and heartbeats: {texts:?}");
+    for text in &texts {
+      assert!(leak_scan_passes(text, &patterns), "the leak scan refuses a text the queue pushed: {text}");
+    }
+    // The scanner is live: a ref name carrying the session id, which the queue no longer writes, is refused.
+    let session = owner_land.session_id.clone();
+    assert!(
+      !leak_scan_passes(&format!("refs/land-queue/{ms:013}-101-{session}"), &patterns),
+      "the scanner refuses a ref name with a session id"
+    );
+    assert!(site_land.read().await.expect("the queue reads").turn.is_none(), "the cycle released the turn");
+    let main = git_async(&land, &["ls-remote", "origin", "refs/heads/main"]).await.expect("main reads");
+    assert!(main.starts_with(&sha_land), "the landing published main: {main}");
   }
 
   #[tokio::test]

@@ -109,7 +109,10 @@ impl WarmRenderer {
   fn render_once(&mut self, probe_uri: &str) -> Result<i32, RenderFailure> {
     self.pending.clear();
     self.command("Page.enable", Map::new())?;
-    self.command("Page.navigate", json!({"url": probe_uri}).as_object().cloned().unwrap())?;
+    self.command(
+      "Page.navigate",
+      json!({"url": probe_uri}).as_object().cloned().expect("Page.navigate params use an object literal"),
+    )?;
     self.wait_load()?;
     let params = json!({
       "expression": "document.getElementById('page-height')?.textContent ?? null",
@@ -117,7 +120,7 @@ impl WarmRenderer {
     })
     .as_object()
     .cloned()
-    .unwrap();
+    .expect("Runtime.evaluate params use an object literal");
     loop {
       let reply = self.command("Runtime.evaluate", params.clone())?;
       let value = reply.get("result").and_then(|result| result.get("result")).and_then(|result| result.get("value"));
@@ -202,7 +205,10 @@ impl WarmRenderer {
       Ok((socket, _response)) => Some(socket),
       Err(error) => return Err(self.launch_failure(error.to_string())?),
     };
-    let target = self.command("Target.createTarget", json!({"url": "about:blank"}).as_object().cloned().unwrap())?;
+    let target = self.command(
+      "Target.createTarget",
+      json!({"url": "about:blank"}).as_object().cloned().expect("Target.createTarget params use an object literal"),
+    )?;
     let target_id = target
       .get("result")
       .and_then(|result| result.get("targetId"))
@@ -210,7 +216,10 @@ impl WarmRenderer {
       .ok_or_else(|| RenderFailure::Other("Target.createTarget returned no targetId".to_owned()))?;
     let attach = self.command(
       "Target.attachToTarget",
-      json!({"targetId": target_id, "flatten": true}).as_object().cloned().unwrap(),
+      json!({"targetId": target_id, "flatten": true})
+        .as_object()
+        .cloned()
+        .expect("Target.attachToTarget params use an object literal"),
     )?;
     self.session = Some(
       attach

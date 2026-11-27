@@ -1782,6 +1782,7 @@ async fn commit_on_neither_base_ref_reports_blocked_with_the_git_reason() -> any
   let worktree = Path::new(&stack.cfg.paths.worktree_dir).join(&worker.id);
   repo.add_worktree(&worktree, branch)?;
   git(&worktree, &["commit", "--allow-empty", "-m", "synthetic unlanded commit"])?;
+  let unlanded_commit = git(&worktree, &["rev-parse", "HEAD"])?;
   let work = RunRecord {
     backend: Some("fake".to_string()),
     model: Some("fake-model".to_string()),
@@ -1809,7 +1810,12 @@ async fn commit_on_neither_base_ref_reports_blocked_with_the_git_reason() -> any
   let summary = report["summary"].as_str().context("blocked report has a summary")?;
   let (head, verdict) = summary.split_once("\n\nReview verdict:\n").context("blocked report quotes the verdict")?;
   assert!(head.starts_with("review run review-run ended without landing work run run-work on main: "), "{head}");
-  assert!(head.contains("ancestry check failed") && head.contains("(origin/main)"), "{head}");
+  assert!(
+    head.contains(&unlanded_commit)
+      && head.contains("has no ancestor or patch-equivalent commit")
+      && head.contains("on origin/main"),
+    "{head}"
+  );
   // The reviewer's closing words, whole, are the verdict the manager reads.
   assert_eq!(verdict, "review ok");
   assert!(worktree.exists(), "an unproven landing keeps the worktree for recovery");
@@ -2053,6 +2059,7 @@ async fn blocked_child_report_carries_landing_summary_to_parent_history() -> any
   let worktree = Path::new(&stack.cfg.paths.worktree_dir).join(&child.id);
   repo.add_worktree(&worktree, branch)?;
   git(&worktree, &["commit", "--allow-empty", "-m", "synthetic unlanded commit"])?;
+  let unlanded_commit = git(&worktree, &["rev-parse", "HEAD"])?;
   let work = RunRecord {
     backend: Some("fake".to_string()),
     model: Some("fake-model".to_string()),
@@ -2079,7 +2086,12 @@ async fn blocked_child_report_carries_landing_summary_to_parent_history() -> any
   let reports = child_reports(&stack, &parent.id)?;
   assert_eq!(reports.len(), 1);
   let summary = reports[0]["summary"].as_str().context("blocked report has a summary")?;
-  assert!(summary.contains("ancestry check failed"), "{summary}");
+  assert!(
+    summary.contains(&unlanded_commit)
+      && summary.contains("has no ancestor or patch-equivalent commit")
+      && summary.contains("on origin/main"),
+    "{summary}"
+  );
   assert!(prompt.contains(&format!("[Report from task {} | outcome blocked] {summary}", child.id)), "{prompt}");
   Ok(())
 }

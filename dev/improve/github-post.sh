@@ -594,6 +594,11 @@ case "$subcommand" in
       printf 'PR %s changes a path that live work claims; nothing was merged.\n' "$pr_selector" >&2
       exit 2
     }
+    # pr-create's pre-review record passes the screenshot check's read rule with no review behind it, so a merge refuses
+    # it and needs the review's own record.
+    if [[ -n "$review_record" ]]; then
+      web_evidence_refuse_pre_review "$review_record" || exit 2
+    fi
     # `charliebot` is the round's own build (dev/improve/remote-runner.sh builds it), so it carries
     # the window sizes this check reads.
     check_args=(screenshots check --pr-body "$tmp_dir/pr-body")
@@ -610,6 +615,11 @@ case "$subcommand" in
       else
         printf 'PR %s did not pass the screenshot check; nothing was merged.\n' "$pr_selector" >&2
       fi
+      exit 2
+    fi
+    # The merge sends this body, so the layout is checked here too: pr-edit can change the body after pr-create.
+    if [[ -n "$web_change" ]] && ! web_evidence_layout "$evidence_dir" "$tmp_dir/pr-body" "$tmp_dir"; then
+      printf 'PR %s: the evidence directory does not match its body; nothing was merged.\n' "$pr_selector" >&2
       exit 2
     fi
     # A round reads each skill file from its skills directory. The round's event log and the review record must hold no

@@ -1118,6 +1118,22 @@ fn charliebot_stub(sandbox: &Sandbox) {
   sandbox.stub("charliebot", &format!("exec '{binary}' \"$@\"\n"));
 }
 
+/// The `charliebot` stand-in of a pr-create run that copies each review record it is given to `$RECORD_COPY` before the
+/// built binary runs. pr-create deletes its pre-review record when it exits, so the copy is the record it built.
+fn charliebot_recording_review_record(sandbox: &Sandbox) {
+  let binary = harness::built_binary("charliebot").display().to_string();
+  assert!(!binary.contains('\''), "the binary path carries no quote: {binary}");
+  let copy = [
+    "previous=",
+    "for argument in \"$@\"; do",
+    "  if [ \"$previous\" = --review-record ]; then cp -- \"$argument\" \"$RECORD_COPY\"; fi",
+    "  previous=$argument",
+    "done",
+  ]
+  .join("\n");
+  sandbox.stub("charliebot", &format!("{copy}\nexec '{binary}' \"$@\"\n"));
+}
+
 /// Writes a PNG whose IHDR chunk carries `width` and `height`, as a round's capture writes one.
 fn write_png(path: &Path, width: u32, height: u32) {
   let mut bytes = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
@@ -1126,6 +1142,15 @@ fn write_png(path: &Path, width: u32, height: u32) {
   bytes.extend_from_slice(&width.to_be_bytes());
   bytes.extend_from_slice(&height.to_be_bytes());
   std::fs::write(path, bytes).unwrap();
+}
+
+/// Writes `count` PNGs at each window size into `dir`, named as `shot_names(count)` names them.
+fn write_window_shots(dir: &Path, count: usize) {
+  for (width, height) in charliebot_tasks::web_screenshots::WINDOW_SIZES {
+    for copy in 0..count {
+      write_png(&dir.join(format!("shot-{width}-{height}-{copy}.png")), width, height);
+    }
+  }
 }
 
 /// Writes a before and an after screenshot at each window size into `dir`, as a round's driver does, and returns
@@ -1575,17 +1600,7 @@ impl MergeWorld {
 
   /// Writes `count` PNGs at each window size into the evidence directory.
   fn write_screenshots(&self, count: usize) {
-    for (width, height) in charliebot_tasks::web_screenshots::WINDOW_SIZES {
-      for copy in 0..count {
-        let name = format!("shot-{width}-{height}-{copy}.png");
-        let mut bytes = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
-        bytes.extend_from_slice(&13u32.to_be_bytes());
-        bytes.extend_from_slice(b"IHDR");
-        bytes.extend_from_slice(&width.to_be_bytes());
-        bytes.extend_from_slice(&height.to_be_bytes());
-        std::fs::write(self.evidence.join(name), bytes).unwrap();
-      }
-    }
+    write_window_shots(&self.evidence, count);
   }
 
   /// Writes the review record of a review that read each of `reads`, as `charliebot backend run` writes its
@@ -1864,6 +1879,69 @@ fn a_pr_merge_refuses_a_web_page_change_without_a_review_record() {
   assert_eq!(run.code, 2, "{}", run.describe());
   assert!(run.stderr.contains("--review-record"), "{}", run.describe());
   assert!(world.merge_calls().is_empty(), "nothing may merge: {}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_refuses_the_pre_review_record_that_pr_create_built_and_takes_the_review_record() {
+  let names = shot_names(2);
+  let body = body_naming(&names, "\nView: /?session=abc\n");
+  // pr-create checks the round's screenshots against the pre-review record it builds, and deletes it when it exits.
+  let creating = Sandbox::new();
+  let (mut env, _gh_log, _home) = post(&creating);
+  let clone = web_push_repo(&creating, &env);
+  let evidence = creating.dir("evidence");
+  write_window_shots(&evidence, 2);
+  let body_path = body_file(&creating, "body.md", &body);
+  charliebot_recording_review_record(&creating);
+  let copy = creating.root().join("pre-review-record.ndjson");
+  env.insert("RECORD_COPY".to_string(), copy.display().to_string());
+  let created = pr_create_with_evidence(&env, &clone, &body_path, &evidence);
+  assert_eq!(created.code, 0, "{}", created.describe());
+
+  // Its reads match the body, so the screenshot check alone would pass it: pr-merge refuses it by its first line.
+  let world = MergeWorld::new("web/static/ui.js\n", &body);
+  world.write_screenshots(2);
+  let pre_review = world.sandbox.root().join("pre-review-record.ndjson");
+  std::fs::copy(&copy, &pre_review).expect("the pre-review record is copied");
+  let evidence_arg = world.evidence.to_str().unwrap();
+  let refused = world.merge(&["--evidence-dir", evidence_arg, "--review-record", pre_review.to_str().unwrap(), "5046"]);
+
+  assert_eq!(refused.code, 2, "{}", refused.describe());
+  assert!(refused.stderr.contains("is a pre-review record that pr-create wrote"), "{}", refused.describe());
+  assert!(world.merge_calls().is_empty(), "nothing may merge: {}", refused.describe());
+  assert!(!world.merge_body.exists(), "no squash message was written");
+
+  // The review's own record of the same reads passes in the same world, so the refusal is the record's line alone.
+  let review = world.review_record(&names);
+  let merged = world.merge(&["--evidence-dir", evidence_arg, "--review-record", review.to_str().unwrap(), "5046"]);
+
+  assert_eq!(merged.code, 0, "{}", merged.describe());
+  assert_eq!(world.merge_calls().len(), 1, "{}", merged.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_refuses_a_web_page_change_whose_top_level_holds_a_screenshot_the_body_does_not_name() {
+  let names = shot_names(2);
+  let world = MergeWorld::new("web/static/ui.js\n", &body_naming(&names, "\nView: /?session=abc\n"));
+  world.write_screenshots(2);
+  // A side shot left at a window size beside the pair: the merge's check accepts it, but the layout does not.
+  write_png(&world.evidence.join("after-tray-1536-900.png"), 1536, 900);
+  let record = world.review_record(&names);
+
+  let run = world.merge(&[
+    "--evidence-dir",
+    world.evidence.to_str().unwrap(),
+    "--review-record",
+    record.to_str().unwrap(),
+    "5046",
+  ]);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("after-tray-1536-900.png"), "{}", run.describe());
+  assert!(world.merge_calls().is_empty(), "nothing may merge: {}", run.describe());
+  assert!(!world.merge_body.exists(), "no squash message was written");
 }
 
 #[test]

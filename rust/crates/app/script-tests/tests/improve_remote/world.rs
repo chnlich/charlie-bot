@@ -373,9 +373,11 @@ fn sha256_file(path: &Path) -> String {
 /// The launching host's `charliebot`: `backend resolve --call improve_review` prints the answer that FAKE_RESOLVE_ANSWER
 /// names. Without that file the call class is unset, and the command fails as the CLI fails for an unset key.
 /// `release-helper endpoint-option` prints FAKE_PROBE_ANSWER, the endpoint member of `backends.calls.probe`, which the
-/// launch ships.
-const RESOLVE_CHARLIEBOT: &str = r#"# Fake charliebot on the launching host: answer the review resolve and the probe endpoint from their fixtures, or refuse
-# as an unset call class.
+/// launch ships. The live server is FAKE_LIVE_TREE_DIR: `session tree` prints its roots.json, or children-<parent>.json
+/// for a `--root`, and a directory that is missing stands for a server that cannot be reached. `screenshots resolve`
+/// answers 0 for each session that FAKE_LIVE_KNOWN lists, one per line, and refuses the others as the land check does.
+const RESOLVE_CHARLIEBOT: &str = r#"# Fake charliebot on the launching host: answer the review resolve, the probe endpoint and the live server from their
+# fixtures, or refuse as an unset call class.
 if [[ ${1-} == release-helper && ${2-} == endpoint-option ]]; then
   cat -- "$FAKE_PROBE_ANSWER"
   exit 0
@@ -386,6 +388,35 @@ if [[ ${1-} == backend && ${2-} == resolve && ${3-} == --call && ${4-} == improv
     exit 0
   fi
   printf 'backend resolve: backends.calls.improve_review is not set in config.yaml\n' >&2
+  exit 1
+fi
+if [[ ${1-} == session && ${2-} == tree ]]; then
+  if [[ ! -d $FAKE_LIVE_TREE_DIR ]]; then
+    printf '{"error": "cannot reach the live server"}\n' >&2
+    exit 1
+  fi
+  parent=
+  shift 2
+  while [[ $# -gt 0 ]]; do
+    if [[ $1 == --root ]]; then parent=$2; fi
+    shift
+  done
+  page=$FAKE_LIVE_TREE_DIR/roots.json
+  if [[ -n $parent ]]; then page=$FAKE_LIVE_TREE_DIR/children-$parent.json; fi
+  if [[ -r $page ]]; then
+    cat -- "$page"
+  else
+    printf '{"items": [], "next_cursor": null}\n'
+  fi
+  exit 0
+fi
+if [[ ${1-} == screenshots && ${2-} == resolve ]]; then
+  session=${3#'/?session='}
+  if grep -Fxq -- "$session" "$FAKE_LIVE_KNOWN"; then
+    exit 0
+  fi
+  printf '{"error": "the View line `%s` must name a view on the live server, but the live server does not know session %s"}\n' \
+    "$3" "$session" >&2
   exit 1
 fi
 printf 'the launcher ran an unexpected charliebot command: %s\n' "$*" >&2
@@ -727,6 +758,9 @@ pub struct World {
   pub resolve_answer: PathBuf,
   /// The answer that the launching host's fake `backend resolve --call probe` prints.
   pub probe_answer: PathBuf,
+  /// The launching host's fake live server: the pages of its active task tree, and the session ids it resolves.
+  pub live_tree: PathBuf,
+  pub live_known: PathBuf,
   /// Where the fake claude copies the probe answer that its round's environment names, inside the round's boundary.
   pub claude_probe: PathBuf,
   /// Where the fake codex writes its `CODEX_HOME` and its arguments: this host's records, outside the round's boundary.
@@ -781,6 +815,7 @@ impl World {
       "side-record.sh",
       "code-style-rules.sh",
       "moved-references.sh",
+      "live-sessions.sh",
       "skill-reads.sh",
     ] {
       harness::copy_file(&harness::repo_root().join("dev/improve").join(name), &scripts.join(name));
@@ -910,6 +945,8 @@ impl World {
       review_env: evidence.join("review-env.txt"),
       resolve_answer: sandbox.root().join("resolve-answer.json"),
       probe_answer: sandbox.root().join("probe-answer.json"),
+      live_tree: sandbox.dir("live-tree"),
+      live_known: sandbox.root().join("live-known.txt"),
       claude_probe: evidence.join("claude-probe.json"),
       codex_env: sandbox.root().join("codex-env.txt"),
       codex_argv: sandbox.root().join("codex-argv.txt"),
@@ -941,6 +978,9 @@ impl World {
     world.publish_member_cli("codex", LOCAL_CODEX_VERSION, LOCAL_CODEX_LINE);
     world.write_review_answer(GATEWAY_REVIEW_TYPE, 0);
     fs::write(&world.probe_answer, SYNTHETIC_PROBE_ANSWER).expect("the probe answer");
+    // The live server of a launch starts with no active session: its tree is empty and it resolves no session.
+    fs::write(world.live_tree.join("roots.json"), r#"{"items": [], "next_cursor": null}"#).expect("the live roots");
+    fs::write(&world.live_known, "").expect("the live sessions");
     world
   }
 
@@ -1148,6 +1188,8 @@ impl World {
     env.insert("IMPROVE_TOKEN_MIN_SECONDS".to_string(), TOKEN_MIN_SECONDS.to_string());
     env.insert("FAKE_RESOLVE_ANSWER".to_string(), self.resolve_answer.display().to_string());
     env.insert("FAKE_PROBE_ANSWER".to_string(), self.probe_answer.display().to_string());
+    env.insert("FAKE_LIVE_TREE_DIR".to_string(), self.live_tree.display().to_string());
+    env.insert("FAKE_LIVE_KNOWN".to_string(), self.live_known.display().to_string());
     env.insert("FAKE_CLAUDE_PROBE".to_string(), self.claude_probe.display().to_string());
     env.insert("FAKE_REVIEW_ARGV".to_string(), self.review_argv.display().to_string());
     env.insert("FAKE_REVIEW_CWD".to_string(), self.review_cwd.display().to_string());

@@ -137,6 +137,11 @@ fn gh_log_lines(gh_log: &Path) -> Vec<String> {
 /// A work clone with a bare repository as origin, one commit ahead of origin/main on
 /// `improve/perf/topic-slug`.
 fn push_repo(sandbox: &Sandbox, env: &Env) -> PathBuf {
+  push_repo_changing(sandbox, env, "change.txt")
+}
+
+/// `push_repo`, with the topic commit writing `path` instead of `change.txt`.
+fn push_repo_changing(sandbox: &Sandbox, env: &Env, path: &str) -> PathBuf {
   let origin = sandbox.dir("origin.git");
   let clone = sandbox.dir("clone");
   git(env, sandbox.root(), &["init", "--bare", "-q", origin.to_str().unwrap()]);
@@ -147,8 +152,9 @@ fn push_repo(sandbox: &Sandbox, env: &Env) -> PathBuf {
   git(env, &clone, &["commit", "-q", "-m", "seed commit"]);
   git(env, &clone, &["push", "-q", "origin", "main"]);
   git(env, &clone, &["switch", "-c", "improve/perf/topic-slug"]);
-  std::fs::write(clone.join("change.txt"), "change\n").unwrap();
-  git(env, &clone, &["add", "change.txt"]);
+  std::fs::create_dir_all(clone.join(path).parent().unwrap()).unwrap();
+  std::fs::write(clone.join(path), "change\n").unwrap();
+  git(env, &clone, &["add", path]);
   git(env, &clone, &["commit", "-q", "-m", "topic change"]);
   clone
 }
@@ -1554,6 +1560,8 @@ impl MergeWorld {
     let launch = PathBuf::from(env.get("IMPROVE_LAUNCH_DIR").expect("post_env sets IMPROVE_LAUNCH_DIR"));
     let round_events = launch.join("round-events.ndjson");
     std::fs::write(&round_events, "").unwrap();
+    // The fixture's pull requests name the session `abc` in their View lines, and the round's launch record lists it.
+    write_live_sessions(&launch, &["abc"]);
     env.insert("IMPROVE_SKILLS_DIR".to_string(), ROUND_SKILLS.to_string());
     let readback = sandbox.root().join("readback.json");
     env.insert("GH_READBACK".to_string(), readback.display().to_string());
@@ -3491,4 +3499,186 @@ fn a_push_with_a_lone_remote_checks_the_current_branch() {
   let run = run_in(&mut command, &clone);
   assert_eq!(run.code, 1, "{}", run.describe());
   assert!(!ls_remote(&env, &clone).contains("improve/perf/topic-slug"));
+}
+
+// -- github-post.sh: the View sessions of a web page PR, checked against the launch record --
+
+/// A session the live server knows, which the launch record lists.
+const LIVE_SESSION: &str = "8b58f33e-b5ee-58e7-8520-9a416d12096f";
+/// A session id the launch record does not list.
+const ABSENT_SESSION: &str = "00000000-0000-4000-8000-0000000000aa";
+/// The read time that each launch record in these tests names.
+const RECORD_READ_AT: &str = "2026-11-27T14:29:35Z";
+/// A changed path that alters a CharlieBot web page, and one that alters none.
+const WEB_PATH: &str = "web/templates/index.html";
+const PLAIN_PATH: &str = "docs/notes.md";
+
+/// Writes the live sessions record into `dir`: its read time, then one line per session the record lists.
+fn write_live_sessions(dir: &Path, sessions: &[&str]) {
+  let lines: String = sessions.iter().map(|session| format!("{session}\tsession name\n")).collect();
+  std::fs::write(dir.join("live-sessions.tsv"), format!("read_at\t{RECORD_READ_AT}\n{lines}")).unwrap();
+}
+
+/// Stubs `charliebot` as the built binary, so the session check's `screenshots check` runs the real verb.
+fn stub_charliebot(sandbox: &Sandbox) {
+  let binary = harness::built_binary("charliebot").display().to_string();
+  assert!(!binary.contains('\''), "the binary path carries no quote: {binary}");
+  sandbox.stub("charliebot", &format!("exec '{binary}' \"$@\"\n"));
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_web_pr_naming_a_session_the_launch_record_lists_is_sent_at_pr_create() {
+  let sandbox = Sandbox::new();
+  let (env, gh_log, _home) = post(&sandbox);
+  stub_charliebot(&sandbox);
+  write_live_sessions(Path::new(&env["IMPROVE_LAUNCH_DIR"]), &[LIVE_SESSION]);
+  let clone = push_repo_changing(&sandbox, &env, WEB_PATH);
+  let body = body_file(&sandbox, "body.md", &format!("## Evidence\nView: /?session={LIVE_SESSION}\n"));
+
+  let run = pr_create(&env, &clone, &body);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(gh_log_lines(&gh_log).iter().any(|line| line.contains("pr create")), "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_web_pr_naming_a_session_the_launch_record_lacks_is_refused_at_pr_create() {
+  let sandbox = Sandbox::new();
+  let (env, gh_log, _home) = post(&sandbox);
+  stub_charliebot(&sandbox);
+  write_live_sessions(Path::new(&env["IMPROVE_LAUNCH_DIR"]), &[LIVE_SESSION]);
+  let clone = push_repo_changing(&sandbox, &env, WEB_PATH);
+  let body = body_file(&sandbox, "body.md", &format!("## Evidence\nView: /?session={ABSENT_SESSION}\n"));
+
+  let run = pr_create(&env, &clone, &body);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains(ABSENT_SESSION), "the refusal names the session: {}", run.describe());
+  assert!(run.stderr.contains(RECORD_READ_AT), "the refusal names the record's read time: {}", run.describe());
+  assert!(gh_log_lines(&gh_log).is_empty(), "nothing may be sent: {}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_web_pr_naming_a_session_with_no_launch_record_stops_at_pr_create() {
+  let sandbox = Sandbox::new();
+  let (env, gh_log, _home) = post(&sandbox);
+  stub_charliebot(&sandbox);
+  let clone = push_repo_changing(&sandbox, &env, WEB_PATH);
+  let body = body_file(&sandbox, "body.md", &format!("## Evidence\nView: /?session={LIVE_SESSION}\n"));
+
+  let run = pr_create(&env, &clone, &body);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("no live sessions record"), "the stop is named: {}", run.describe());
+  assert!(gh_log_lines(&gh_log).is_empty(), "nothing may be sent: {}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_that_alters_no_web_page_is_sent_whatever_sessions_its_views_name() {
+  let sandbox = Sandbox::new();
+  let (env, gh_log, _home) = post(&sandbox);
+  stub_charliebot(&sandbox);
+  write_live_sessions(Path::new(&env["IMPROVE_LAUNCH_DIR"]), &[LIVE_SESSION]);
+  let clone = push_repo_changing(&sandbox, &env, PLAIN_PATH);
+  let body = body_file(&sandbox, "body.md", &format!("## Evidence\nView: /?session={ABSENT_SESSION}\n"));
+
+  let run = pr_create(&env, &clone, &body);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(gh_log_lines(&gh_log).iter().any(|line| line.contains("pr create")), "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_web_pr_whose_views_name_no_session_is_sent_without_a_launch_record() {
+  let sandbox = Sandbox::new();
+  let (env, gh_log, _home) = post(&sandbox);
+  stub_charliebot(&sandbox);
+  let clone = push_repo_changing(&sandbox, &env, WEB_PATH);
+  let body = body_file(&sandbox, "body.md", "## Evidence\nView: /plans\n");
+
+  let run = pr_create(&env, &clone, &body);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(gh_log_lines(&gh_log).iter().any(|line| line.contains("pr create")), "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_web_pr_naming_a_session_the_launch_record_lists_merges_at_pr_merge() {
+  let names = shot_names(2);
+  let body = body_naming(&names, &format!("\nView: /?session={LIVE_SESSION}\n"));
+  let world = MergeWorld::new("web/static/ui.js\n", &body);
+  world.write_screenshots(2);
+  write_live_sessions(Path::new(&world.env["IMPROVE_LAUNCH_DIR"]), &[LIVE_SESSION]);
+  let record = world.review_record(&names);
+
+  let run = world.merge(&[
+    "--evidence-dir",
+    world.evidence.to_str().unwrap(),
+    "--review-record",
+    record.to_str().unwrap(),
+    "5046",
+  ]);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert_eq!(world.merge_calls().len(), 1, "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_web_pr_naming_a_session_the_launch_record_lacks_is_refused_at_pr_merge() {
+  let world = MergeWorld::new("web/static/ui.js\n", &format!("View: /?session={ABSENT_SESSION}\n"));
+  write_live_sessions(Path::new(&world.env["IMPROVE_LAUNCH_DIR"]), &[LIVE_SESSION]);
+
+  let run = world.merge(&["--evidence-dir", world.evidence.to_str().unwrap(), "5046"]);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains(ABSENT_SESSION), "the refusal names the session: {}", run.describe());
+  assert!(run.stderr.contains(RECORD_READ_AT), "the refusal names the record's read time: {}", run.describe());
+  assert!(world.merge_calls().is_empty(), "nothing may merge: {}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_web_pr_naming_a_session_with_no_launch_record_stops_at_pr_merge() {
+  let world = MergeWorld::new("web/static/ui.js\n", &format!("View: /?session={LIVE_SESSION}\n"));
+  std::fs::remove_file(Path::new(&world.env["IMPROVE_LAUNCH_DIR"]).join("live-sessions.tsv")).unwrap();
+
+  let run = world.merge(&["--evidence-dir", world.evidence.to_str().unwrap(), "5046"]);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("no live sessions record"), "the stop is named: {}", run.describe());
+  assert!(world.merge_calls().is_empty(), "nothing may merge: {}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_non_web_pr_naming_a_session_the_launch_record_lacks_merges_at_pr_merge() {
+  let world =
+    MergeWorld::new("rust/crates/x/src/lib.rs\n", &format!("## Evidence\nView: /?session={ABSENT_SESSION}\n"));
+  write_live_sessions(Path::new(&world.env["IMPROVE_LAUNCH_DIR"]), &[LIVE_SESSION]);
+
+  let run = world.merge(&["5046"]);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert_eq!(world.merge_calls(), ["pr merge --squash 5046"], "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_outside_a_round_refuses_a_session_its_evidence_copy_lacks() {
+  let world = MergeWorld::outside_round("web/static/ui.js\n", &format!("View: /?session={ABSENT_SESSION}\n"));
+  write_live_sessions(&world.evidence, &[LIVE_SESSION]);
+
+  let run = world.merge_from_evidence(&["5046"]);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains(ABSENT_SESSION), "the refusal names the session: {}", run.describe());
+  assert!(run.stderr.contains(RECORD_READ_AT), "the refusal names the record's read time: {}", run.describe());
+  assert!(world.merge_calls().is_empty(), "nothing may merge: {}", run.describe());
 }

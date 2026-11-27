@@ -35,9 +35,10 @@
 # revision differs from the commit, as it does for the kit. The agent's stream-json is also written to the launch's
 # round-events.ndjson, which github-post.sh pr-merge reads for skill reads. The round's start stamp, IMPROVE_ROUND_START,
 # names its evidence directory, and the runner keeps there the round's facts that a merge outside the round reads: the
-# in-flight list, the event log at the round's end and the kit revision (keep_round_facts). A codex round's discovery
-# lists skills from the same directory only: codex-skill-roots.sh links its codex home to it and turns off the host's
-# skill roots, and the round's start refuses a round whose codex would still list another skill path.
+# in-flight list, the event log at the round's end, the kit revision and, when the launch sent one, the live sessions
+# record (keep_round_facts). A codex round's discovery lists skills from the same directory only: codex-skill-roots.sh
+# links its codex home to it and turns off the host's skill roots, and the round's start refuses a round whose codex
+# would still list another skill path.
 #
 # Exit codes: the agent's exit code; 1 a local failure, such as a missing input file or a refused
 # scope, or a round whose review still runs in the scope after its agent exited (stderr names the
@@ -1215,12 +1216,16 @@ end_round_scope() {
 
 # keep_round_facts: copy the round's facts from the launch directory into the round's evidence directory, which outlives
 # the launch directory. A merge outside the round reads these copies: the in-flight list as the round read it, the event
-# log as it stands at the round's end, and the kit revision, which names the round's skills.
+# log as it stands at the round's end, and the kit revision, which names the round's skills. The live sessions record is
+# kept when the launch sent one. A launch whose read failed sends none, and a web page PR of the round stops for it.
 keep_round_facts() {
   local fact
   for fact in inflight-files.txt round-events.ndjson kit-revision; do
     cp -- "$LAUNCH_DIR/$fact" "$(round_evidence_dir)/$fact" || return 1
   done
+  if [[ -e $LAUNCH_DIR/live-sessions.tsv ]]; then
+    cp -- "$LAUNCH_DIR/live-sessions.tsv" "$(round_evidence_dir)/live-sessions.tsv" || return 1
+  fi
 }
 
 # Whether this launch owns the round's Codex auth.json files, the member's and the review's. It turns on right before this

@@ -18,7 +18,8 @@
 # so branch updates use the REST endpoint. A merge goes through pr-merge, which
 # refuses a draft pull request, a diff that changes a claimed path, a web page change whose evidence directory fails
 # the screenshot check, whose body lacks a full-URL View line, or whose View value
-# does not start with `/`, and carries the View lines into the squash commit message.
+# does not start with `/`, and carries the View lines into the squash commit message. A web page change whose View line
+# names a session that the round's live sessions record does not list is refused too (dev/improve/live-sessions.sh).
 # For a web page change, the review record (--review-record: the review's events.ndjson, kept by landing.md Step 6
 # as review-events.ndjson in the round's evidence directory) must show a read of each screenshot the body names. A
 # pre-review record that pr-create wrote for its own check is refused, and a web page change's evidence layout is
@@ -88,6 +89,7 @@ source "$repo_root/dev/improve/side-record.sh"
 source "$repo_root/dev/improve/web-evidence.sh"
 source "$repo_root/dev/improve/code-style-rules.sh"
 source "$repo_root/dev/improve/moved-references.sh"
+source "$repo_root/dev/improve/live-sessions.sh"
 
 tmp_dir=$(mktemp -d)
 trap 'rm -rf "$tmp_dir"' EXIT
@@ -371,6 +373,10 @@ case "$subcommand" in
     }
     moved_references_check "$tmp_dir" "$pr_head" "$body_file" || exit 2
     web_evidence_check "$evidence_dir" "$body_file" "$tmp_dir/changed" "$tmp_dir" || exit 2
+    live_sessions_check "$body_file" "$IMPROVE_LAUNCH_DIR/live-sessions.tsv" "$tmp_dir/changed" || {
+      printf 'nothing was sent.\n' >&2
+      exit 2
+    }
     without_evidence_dir
     gh pr create "${gh_args[@]}"
     ;;
@@ -593,6 +599,11 @@ case "$subcommand" in
     }
     check_inflight_claims "$tmp_dir/changed" "$pr_head" "$facts_dir/inflight-files.txt" || {
       printf 'PR %s changes a path that live work claims; nothing was merged.\n' "$pr_selector" >&2
+      exit 2
+    }
+    # The session View lines are checked against the round's launch record, as pr-create checked them before it sent.
+    live_sessions_check "$tmp_dir/pr-body" "$facts_dir/live-sessions.tsv" "$tmp_dir/changed" || {
+      printf 'PR %s: nothing was merged.\n' "$pr_selector" >&2
       exit 2
     }
     # pr-create's pre-review record passes the screenshot check's read rule with no review behind it, so a merge refuses

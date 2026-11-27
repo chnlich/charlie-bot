@@ -26,6 +26,8 @@ use charliebot_store::run_records::{
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
+use crate::session;
+
 /// The namespace of every id that [`seed`] writes, so one seed gives the same ids on every run.
 const NAMESPACE: Uuid = Uuid::from_u128(0x6f1c2d3e_4b5a_4c7d_8e9f_0a1b2c3d4e5f);
 const BACKEND: &str = "charlie-code-release-trial";
@@ -127,13 +129,6 @@ fn uid(label: &str) -> String {
 
 fn stamp(index: usize, second: usize) -> String {
   format!("2026-11-01T10:{index:02}:{second:02}")
-}
-
-fn write_json(path: &Path, value: &Value) -> Result<()> {
-  fs::create_dir_all(path.parent().expect("a file path has a parent"))?;
-  let mut text = serde_json::to_string_pretty(value)?;
-  text.push('\n');
-  fs::write(path, text).with_context(|| format!("cannot write {}", path.display()))
 }
 
 fn write_lines(path: &Path, values: &[Value]) -> Result<()> {
@@ -247,7 +242,7 @@ pub fn seed(sessions: &Path, live_runs: &Path) -> Result<()> {
     if session_dir.exists() {
       bail!("{} exists; the seed already holds the check sessions", session_dir.display());
     }
-    write_json(&layout::metadata_path(&session_dir), &session_meta(&session_id, case, index))?;
+    session::write_json_with_newline(&layout::metadata_path(&session_dir), &session_meta(&session_id, case, index))?;
     let actor = if case.profile == TaskProfile::Manager { "user" } else { "agent" };
     let mut events = vec![control(
       &format!("{label}/created"),
@@ -290,7 +285,7 @@ pub fn seed(sessions: &Path, live_runs: &Path) -> Result<()> {
           started_at: stamp(index, 2),
           ended_at: Some(stamp(index, 3)),
         });
-        write_json(&runs_dir.join(&first_run).join(RUN_METADATA_NAME), &record)?;
+        session::write_json_with_newline(&runs_dir.join(&first_run).join(RUN_METADATA_NAME), &record)?;
         write_lines(&runs_dir.join(&first_run).join(RAW_LOG_NAME), &raw_log(&format!("{label}/turn-1"), true))?;
         (uid(&format!("{label}/turn-2")), RunKind::ManagerTurn)
       }
@@ -333,7 +328,7 @@ pub fn seed(sessions: &Path, live_runs: &Path) -> Result<()> {
       started_at: stamp(index, 5),
       ended_at: None,
     });
-    write_json(&runs_dir.join(&run_id).join(RUN_METADATA_NAME), &record)?;
+    session::write_json_with_newline(&runs_dir.join(&run_id).join(RUN_METADATA_NAME), &record)?;
     write_lines(&runs_dir.join(&run_id).join(RAW_LOG_NAME), &raw_log(label, case.finished))?;
     write_lines(&layout::chat_events_path(&session_dir), &events)?;
     if case.state == RunState::Live {
@@ -382,7 +377,7 @@ pub fn attach_live_run(sessions: &Path, session_id: &str, run_id: &str, pid: u32
   record["pid"] = json!(pid);
   record[PID_START_FIELD] = json!(pid_start);
   record[STARTED_AT_FIELD] = json!(chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string());
-  write_json(&path, &record)
+  session::write_json_with_newline(&path, &record)
 }
 
 /// The live runs in `live_runs` whose task is open and whose record in `sessions` has no `ended_at` yet. A closed

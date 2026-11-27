@@ -60,6 +60,13 @@ const COMMANDS: [&str; 40] = [
   "web",
 ];
 
+/// Commands that backend hooks and the transient guard call, rather than users.
+const INTERNAL_COMMANDS: [&str; 3] = ["foreground-call", "foreground-cap", "foreground-guard"];
+
+fn public_commands() -> impl Iterator<Item = &'static str> {
+  COMMANDS.iter().copied().filter(|command| !INTERNAL_COMMANDS.contains(command))
+}
+
 fn main() {
   let mut argv = std::env::args_os();
   let program = argv.next().map(|argv0| program_name(&argv0)).unwrap_or_else(|| "charliebot".to_string());
@@ -86,10 +93,11 @@ fn main() {
 
   let subcommand = args[0].to_string_lossy().into_owned();
   if !COMMANDS.contains(&subcommand.as_str()) {
+    let available = public_commands().collect::<Vec<_>>().join(", ");
     eprintln!(
       "{program}: unknown subcommand {}. Available subcommands: {}",
       charliebot_core::text_repr::str_repr(&subcommand),
-      COMMANDS.join(", ")
+      available
     );
     exit(2);
   }
@@ -178,7 +186,7 @@ fn print_help(program: &str) {
   println!("usage: {program} <subcommand> [args...]");
   println!();
   println!("Available subcommands:");
-  for command in COMMANDS {
+  for command in public_commands() {
     println!("  {command}");
   }
 }
@@ -189,6 +197,14 @@ mod tests {
   use std::sync::Mutex;
 
   use super::*;
+
+  #[test]
+  fn foreground_commands_are_registered_but_not_advertised_as_user_commands() {
+    for command in INTERNAL_COMMANDS {
+      assert!(COMMANDS.contains(&command));
+      assert!(!public_commands().any(|public| public == command));
+    }
+  }
 
   static ENVIRONMENT_LOCK: Mutex<()> = Mutex::new(());
 

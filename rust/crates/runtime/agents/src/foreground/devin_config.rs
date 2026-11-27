@@ -11,6 +11,8 @@ use super::hook::pre_tool_use_entry;
 
 /// The Devin tool that runs a shell command.
 const DEVIN_EXEC_MATCHER: &str = "exec";
+const RUNS_DIR_NAME: &str = "runs";
+const DATA_DIR_NAME: &str = "data";
 
 /// The user's Devin config file: `$XDG_CONFIG_HOME/devin/config.json`, or `~/.config/devin/config.json` when that is unset.
 pub fn user_devin_config_path() -> io::Result<PathBuf> {
@@ -24,6 +26,22 @@ pub fn user_devin_config_path() -> io::Result<PathBuf> {
     }
   };
   Ok(config_home.join("devin/config.json"))
+}
+
+/// The Devin config path in the CharlieBot session directory that owns `run_dir`.
+pub fn session_devin_config_path(run_dir: &Path) -> io::Result<PathBuf> {
+  let runs_dir = run_dir
+    .parent()
+    .filter(|path| path.file_name().is_some_and(|name| name == RUNS_DIR_NAME))
+    .ok_or_else(|| io::Error::other(format!("Devin run directory {} is not under data/runs", run_dir.display())))?;
+  let data_dir = runs_dir
+    .parent()
+    .filter(|path| path.file_name().is_some_and(|name| name == DATA_DIR_NAME))
+    .ok_or_else(|| io::Error::other(format!("Devin run directory {} is not under data/runs", run_dir.display())))?;
+  let session_dir = data_dir
+    .parent()
+    .ok_or_else(|| io::Error::other(format!("Devin run directory {} has no session directory", run_dir.display())))?;
+  Ok(session_dir.join("devin_config.json"))
 }
 
 /// Write the per-launch config to `target`: the user config at `user_config` (an absent file is an empty config, as Devin
@@ -88,5 +106,17 @@ mod tests {
     fs::write(&user, "not json").unwrap();
     let error = write_devin_config(&dir.path().join("out.json"), &user).unwrap_err();
     assert!(error.to_string().contains("is not JSON"));
+  }
+
+  #[test]
+  fn the_per_launch_config_lives_in_its_session_directory() {
+    let run_dir = Path::new("/profile/sessions/session-1/data/runs/run-1");
+    assert_eq!(session_devin_config_path(run_dir).unwrap(), Path::new("/profile/sessions/session-1/devin_config.json"));
+  }
+
+  #[test]
+  fn a_run_directory_outside_the_session_store_has_no_config_path() {
+    let error = session_devin_config_path(Path::new("/tmp/charliebot-run-1")).unwrap_err();
+    assert!(error.to_string().contains("not under data/runs"));
   }
 }

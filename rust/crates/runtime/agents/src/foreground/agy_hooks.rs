@@ -1,7 +1,7 @@
 //! The user-level agy hook file that carries the foreground cap. The agy backend ensures its entry before each launch:
 //! the merge keeps every other key, and the file is replaced atomically.
 
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
@@ -58,12 +58,15 @@ fn write_atomically(path: &Path, value: &Value) -> io::Result<()> {
   let parent = path.parent().ok_or_else(|| io::Error::other(format!("{} has no directory", path.display())))?;
   fs::create_dir_all(parent)?;
   let text = serde_json::to_string_pretty(value).map_err(io::Error::other)? + "\n";
+  let mut id = [0u8; 8];
+  getrandom::fill(&mut id).map_err(io::Error::other)?;
+  let id = id.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
   let temporary = parent.join(format!(
-    ".{}.tmp-{}",
+    ".{}.tmp-{}-{id}",
     path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
     std::process::id()
   ));
-  let mut file = fs::File::create(&temporary)?;
+  let mut file = OpenOptions::new().write(true).create_new(true).open(&temporary)?;
   file.write_all(text.as_bytes())?;
   file.sync_all()?;
   drop(file);
@@ -130,5 +133,22 @@ mod tests {
       .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
       .collect();
     assert_eq!(names, vec!["hooks.json".to_string()]);
+  }
+
+  #[test]
+  fn concurrent_launches_can_ensure_the_same_hook_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = hook_file(dir.path(), "{}");
+    let workers: Vec<_> = (0..16)
+      .map(|_| {
+        let path = path.clone();
+        std::thread::spawn(move || ensure_cap_hook(&path).unwrap())
+      })
+      .collect();
+    for worker in workers {
+      worker.join().unwrap();
+    }
+    let written: Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+    assert_eq!(written[AGY_HOOK_KEY], cap_entry());
   }
 }

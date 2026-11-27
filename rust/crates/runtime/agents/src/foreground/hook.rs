@@ -17,15 +17,14 @@ pub fn answer(event: &Value, session_cgroup_set: bool) -> Result<Option<Value>, 
   if let Some(tool_call) = event.get("toolCall") {
     return agy_answer(tool_call, session_cgroup_set).map(Some);
   }
-  Ok(rewrite_tool_input(event)?.map(|tool_input| {
-    json!({
-      "hookSpecificOutput": {
-        "hookEventName": "PreToolUse",
-        "permissionDecision": "allow",
-        "updatedInput": tool_input
-      }
-    })
-  }))
+  let tool_input = rewrite_tool_input(event)?;
+  Ok(Some(json!({
+    "hookSpecificOutput": {
+      "hookEventName": "PreToolUse",
+      "permissionDecision": "allow",
+      "updatedInput": tool_input
+    }
+  })))
 }
 
 /// The agy answer: the call with its `CommandLine` rewritten when the launch set the session cgroup, else the call
@@ -42,14 +41,19 @@ fn agy_answer(tool_call: &Value, session_cgroup_set: bool) -> Result<Value, Stri
   Ok(json!({"decision": "allow", "overwrite": {"CommandLine": call_command(command)}}))
 }
 
-/// The `tool_input` with its shell command rewritten, or `None` when the event carries no shell command. The command is
-/// a string (`command` or `cmd`) or an argv list; a list stays a list and runs as `sh -c` over its shell-quoted words.
-fn rewrite_tool_input(event: &Value) -> Result<Option<Value>, String> {
-  let Some(tool_input) = event.get("tool_input").and_then(Value::as_object) else {
-    return Ok(None);
-  };
-  let Some(key) = ["command", "cmd"].into_iter().find(|key| tool_input.contains_key(*key)) else {
-    return Ok(None);
+/// Rewrite the matched shell tool's command into the call entry. A string (`command` or `cmd`) stays a string; an argv
+/// list stays a list and runs as `sh -c` over its shell-quoted words. A matched event without a command is an error, so a
+/// changed hook payload cannot silently run outside the call entry.
+fn rewrite_tool_input(event: &Value) -> Result<Value, String> {
+  let tool_input = event
+    .get("tool_input")
+    .and_then(Value::as_object)
+    .ok_or_else(|| "the matched shell hook event carries no object tool_input".to_string())?;
+  let keys: Vec<&str> = ["command", "cmd"].into_iter().filter(|key| tool_input.contains_key(*key)).collect();
+  let key = match keys.as_slice() {
+    [key] => *key,
+    [] => return Err("the matched shell hook event carries neither command nor cmd".to_string()),
+    _ => return Err("the matched shell hook event carries both command and cmd".to_string()),
   };
   let replacement = match &tool_input[key] {
     Value::String(command) => Value::String(call_command(command)),
@@ -70,7 +74,7 @@ fn rewrite_tool_input(event: &Value) -> Result<Option<Value>, String> {
   };
   let mut updated = tool_input.clone();
   updated.insert(key.to_string(), replacement);
-  Ok(Some(Value::Object(updated)))
+  Ok(Value::Object(updated))
 }
 
 /// The `PreToolUse` hook entry that runs the cap for the tools that `matcher` names, in the shape a Claude or Devin
@@ -121,9 +125,15 @@ mod tests {
   }
 
   #[test]
-  fn an_event_without_a_shell_command_passes() {
-    let event = json!({"hook_event_name": "PreToolUse", "tool_name": "Read", "tool_input": {"file_path": "/x"}});
-    assert_eq!(answer(&event, true).unwrap(), None);
+  fn a_matched_shell_event_without_a_command_fails_closed() {
+    let no_input = json!({"hook_event_name": "PreToolUse", "tool_name": "Bash"});
+    assert!(answer(&no_input, true).unwrap_err().contains("no object tool_input"));
+
+    let no_command = bash_event(json!({"timeout": 120000}));
+    assert!(answer(&no_command, true).unwrap_err().contains("neither command nor cmd"));
+
+    let ambiguous = bash_event(json!({"command": "echo one", "cmd": "echo two"}));
+    assert!(answer(&ambiguous, true).unwrap_err().contains("both command and cmd"));
   }
 
   #[test]

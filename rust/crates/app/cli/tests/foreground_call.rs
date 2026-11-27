@@ -194,6 +194,25 @@ fn a_call_over_the_session_memory_cap_is_killed_with_rc_137() {
 
 #[test]
 #[ignore = "needs systemd --user and cgroup v2"]
+fn a_call_child_processes_stay_under_the_session_pids_cap() {
+  let session = TestSession::new("pidcap");
+  let count_file = session.scratch.path().join("fork-count");
+  let command = format!(
+    "python3 -c 'import os,time; started=0; refused=0\nwhile started+refused<100:\n try:\n  pid=os.fork()\n except OSError:\n  refused+=1\n  continue\n if pid==0:\n  time.sleep(60); os._exit(0)\n started+=1\nopen(\"{}\",\"w\").write(str(started)+\" \"+str(refused)+\"\\n\")\ntime.sleep(60)'",
+    count_file.display()
+  );
+  let output = run_call(&session, &command);
+  assert_eq!(output.status.code(), Some(143), "stderr: {}", stderr(&output));
+  let counts = fs::read_to_string(count_file).expect("the command records its fork attempts before waiting");
+  let mut counts = counts.split_whitespace().map(|count| count.parse::<usize>().unwrap());
+  let started = counts.next().unwrap();
+  let refused = counts.next().unwrap();
+  assert!(started < 100, "the session pids.max allows fewer than 100 children, got {started}");
+  assert!(refused > 0, "the session pids.max refuses forks after reaching its limit");
+}
+
+#[test]
+#[ignore = "needs systemd --user and cgroup v2"]
 fn a_job_moved_into_the_session_cgroup_survives_the_deadline() {
   let session = TestSession::new("detach");
   let pid_file = session.scratch.path().join("job.pid");

@@ -131,8 +131,8 @@ fn run_scoped_audience(home_dir: &Path, token: &str) -> Result<String, CliExit> 
   let metadata = load_json_metadata(&sessions_root.join(&claims.session_id).join(run_identity::SESSION_METADATA_NAME))?;
   let profile = metadata.as_ref().and_then(|value| value.get("profile")).and_then(Value::as_str);
   match profile {
-    Some("manager") => Ok("master".to_string()),
-    Some("worker") => Ok("worker".to_string()),
+    Some(name) if name == metadata::TaskProfile::Manager.as_str() => Ok("master".to_string()),
+    Some(name) if name == metadata::TaskProfile::Worker.as_str() => Ok("worker".to_string()),
     None | Some(_) => exit_error(&format!(
       "error: run token references session {}, which is not a task-tree node in this instance",
       claims.session_id

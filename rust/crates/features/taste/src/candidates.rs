@@ -185,7 +185,7 @@ fn is_manager_session(session_dir: &Path) -> anyhow::Result<bool> {
     return Ok(false);
   }
   let value = metadata::read_metadata_value(&path).map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))?;
-  Ok(value.get("profile").and_then(Value::as_str) == Some("manager"))
+  Ok(value.get("profile").and_then(Value::as_str) == Some(metadata::TaskProfile::Manager.as_str()))
 }
 
 /// The session's round ratings: each rated event id with its thumbs-down flag.

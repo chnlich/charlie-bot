@@ -8,6 +8,7 @@ pub mod config;
 pub mod delegate;
 pub mod disk_sweep;
 pub mod files;
+pub mod foreground;
 pub mod gc_trash;
 pub mod kill_check;
 pub mod kill_guard;

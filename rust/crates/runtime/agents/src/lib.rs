@@ -11,6 +11,7 @@ pub mod cli_host;
 mod entry;
 pub mod event_builders;
 pub mod fake_probe;
+pub mod foreground;
 pub mod gh_wrapper;
 pub mod launch_loop;
 pub mod local_work_guard;

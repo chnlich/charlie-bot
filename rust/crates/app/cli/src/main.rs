@@ -17,7 +17,7 @@ use charliebot_cli_common::json_out;
 
 /// The subcommand vocabulary, sorted: every registered command with a
 /// caller. A caller-less name is an unknown name here.
-const COMMANDS: [&str; 37] = [
+const COMMANDS: [&str; 40] = [
   "artifact",
   "backend",
   "backup",
@@ -28,6 +28,9 @@ const COMMANDS: [&str; 37] = [
   "disk-sweep",
   "feishu",
   "files",
+  "foreground-call",
+  "foreground-cap",
+  "foreground-guard",
   "gc-trash",
   "github",
   "google",
@@ -115,6 +118,18 @@ fn run_subcommand(
     "disk-sweep" => commands::disk_sweep::main(args, host),
     "feishu" => charliebot_feishu::cli::main(args),
     "files" => commands::files::main(args),
+    "foreground-call" => {
+      commands::foreground::call_main(args);
+      Ok(())
+    }
+    "foreground-cap" => {
+      commands::foreground::cap_main();
+      Ok(())
+    }
+    "foreground-guard" => {
+      commands::foreground::guard_main(args);
+      Ok(())
+    }
     "gc-trash" => commands::gc_trash::main(args, host),
     "github" => charliebot_github::cli::main(args),
     "google" => charliebot_google::cli::main(args),

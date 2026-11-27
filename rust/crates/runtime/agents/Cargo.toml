@@ -24,6 +24,7 @@ mime-db.workspace = true
 nix.workspace = true
 regex.workspace = true
 serde_json.workspace = true
+shlex.workspace = true
 serde.workspace = true
 time.workspace = true
 tokio.workspace = true

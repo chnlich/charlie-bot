@@ -713,6 +713,26 @@ fn tool_call(name: &str, input: Value) -> String {
   .to_string()
 }
 
+/// One stream-json line of a tool call whose id is `id`, so its outcome can pair with it.
+fn tool_call_with_id(id: &str, name: &str, input: Value) -> String {
+  json!({"type": "assistant", "message": {"content": [
+    {"type": "tool_use", "id": id, "name": name, "input": input}
+  ]}})
+  .to_string()
+}
+
+/// One stream-json line of the outcome of the call whose id is `id`. A failed outcome carries is_error true; a
+/// successful one carries no is_error, as the round's agent writes it.
+fn tool_result(id: &str, failed: bool) -> String {
+  let mut outcome = json!({"type": "user", "message": {"content": [
+    {"type": "tool_result", "tool_use_id": id}
+  ]}});
+  if failed {
+    outcome["message"]["content"][0]["is_error"] = json!(true);
+  }
+  outcome.to_string()
+}
+
 /// Writes `lines` as one event log in the sandbox and returns its path.
 fn write_event_log(world: &World, name: &str, lines: &[String]) -> PathBuf {
   let path = world.sandbox.root().join(name);
@@ -802,6 +822,50 @@ fn the_skill_check_passes_a_relative_citation_and_names_each_rooted_command_read
   ] {
     assert!(stderr(&run).contains(&format!("skill read outside {}: {token}", skills.display())), "{}", run.describe());
   }
+}
+
+/// A Read whose tool_result carries is_error true read nothing: only a failed result clears its own read target, so a
+/// call with no result or a result without is_error still counts.
+#[test]
+#[ignore = "integration"]
+fn the_skill_check_passes_a_failed_read_and_counts_an_unpaired_or_successful_one() {
+  let world = World::new();
+  let skills = round_skills_dir(&world);
+  let kit_rule = skills.join("writing-style/genres/code.md").display().to_string();
+  let outside = "/synthetic/checkout/skills/improve-worker/SKILL.md";
+  let failed_then_clean = write_event_log(
+    &world,
+    "failed-read.ndjson",
+    &[
+      tool_call_with_id("toolu_failed", "Read", json!({"file_path": outside})),
+      tool_result("toolu_failed", true),
+      tool_call_with_id("toolu_kit", "Read", json!({"file_path": kit_rule})),
+      tool_result("toolu_kit", false),
+    ],
+  );
+
+  let run = skill_check(&skills, &[&failed_then_clean]);
+
+  assert_eq!(run.code, 0, "a failed read outside the skills dir was refused:\n{}", run.describe());
+
+  // The same outside read with a result that carries no is_error is a hit, and so is an unpaired call.
+  let successful = write_event_log(
+    &world,
+    "successful-read.ndjson",
+    &[tool_call_with_id("toolu_read", "Read", json!({"file_path": outside})), tool_result("toolu_read", false)],
+  );
+  let run = skill_check(&skills, &[&successful]);
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(stderr(&run).contains(&format!("skill read outside {}: {outside}", skills.display())), "{}", run.describe());
+
+  let unpaired = write_event_log(
+    &world,
+    "unpaired-call.ndjson",
+    &[tool_call_with_id("toolu_unpaired", "Read", json!({"file_path": outside}))],
+  );
+  let run = skill_check(&skills, &[&unpaired]);
+  assert_eq!(run.code, 1, "an unpaired call passed:\n{}", run.describe());
+  assert!(stderr(&run).contains(outside), "{}", run.describe());
 }
 
 #[test]

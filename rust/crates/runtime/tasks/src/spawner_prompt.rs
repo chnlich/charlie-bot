@@ -69,6 +69,15 @@ impl TextReadError {
       Self::Decode(message) => message.clone(),
     }
   }
+
+  /// The error a feature reports for a failed read of `path`: an OS error keeps its own text, and a file that is not
+  /// UTF-8 names its path.
+  pub fn into_error(self, path: &Path) -> anyhow::Error {
+    match self {
+      Self::Io(error) => anyhow::Error::new(error),
+      Self::Decode(_) => anyhow::anyhow!("{} is not UTF-8", path.display()),
+    }
+  }
 }
 
 /// Reads a UTF-8 text file the way `Path.read_text(encoding="utf-8")` does: universal newlines turn `\r\n` and a lone

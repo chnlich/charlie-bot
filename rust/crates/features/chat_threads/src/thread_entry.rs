@@ -60,6 +60,7 @@ use charliebot_store::trigger_files::{PendingTrigger, TriggerStatus};
 use charliebot_store::{CompactValue, CreateTask, SharedChatEvent, Store, StoreError, StoreResult, TaskCaller};
 use charliebot_tasks::master_queue;
 use charliebot_tasks::master_trigger::{self, TriggerMasterRequest};
+use charliebot_tasks::spawner_prompt::{TextReadError, read_text};
 use charliebot_tasks::turn_hooks::received_receipts;
 use charliebot_triggers::triggers::{TriggerCreateError, TriggerManager};
 use chrono_tz::Tz;
@@ -369,16 +370,10 @@ impl From<anyhow::Error> for ThreadReplyError {
 /// A missing or unreadable doc fails with its name, its path and the likely cause.
 pub fn load_prompt_doc(repo: &RepoRoot, name: &str, likely_cause: &str) -> anyhow::Result<String> {
   let path = repo.path().join("prompts").join(name);
-  let bytes =
-    std::fs::read(&path).with_context(|| format!("{name} prompt not found at {} — {likely_cause}", path.display()))?;
-  prompt_doc_text(bytes, &path)
-}
-
-/// The text of one prompts doc's bytes, with universal newlines and both-sided whitespace trimmed. Bytes that are not
-/// UTF-8 fail with the doc's path.
-fn prompt_doc_text(bytes: Vec<u8>, path: &Path) -> anyhow::Result<String> {
-  let text = String::from_utf8(bytes).with_context(|| format!("{} is not UTF-8", path.display()))?;
-  Ok(str_methods::strip(&str_methods::universal_newlines(&text)).to_string())
+  let text = read_text(&path)
+    .map_err(|error| error.into_error(&path))
+    .with_context(|| format!("{name} prompt not found at {} — {likely_cause}", path.display()))?;
+  Ok(str_methods::strip(&text).to_string())
 }
 
 /// The platform's scope doc and the path it was read from (`load_scope_doc`). The path is the host file's absolute
@@ -389,10 +384,10 @@ fn load_scope_doc(
   platform: &ThreadPlatform,
 ) -> anyhow::Result<(String, String)> {
   let host_path = charliebot_home.join("prompts").join(platform.scope_doc);
-  match std::fs::read(&host_path) {
-    Ok(bytes) => Ok((prompt_doc_text(bytes, &host_path)?, host_path.display().to_string())),
+  match read_text(&host_path) {
+    Ok(text) => Ok((str_methods::strip(&text).to_string(), host_path.display().to_string())),
     // Only an absent host file falls back to the repo default. The same absence `host_supplement` treats as no file.
-    Err(error) if matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::NotADirectory) => {
+    Err(TextReadError::Io(error)) if matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::NotADirectory) => {
       let doc = load_prompt_doc(
         repo,
         platform.scope_doc,
@@ -400,10 +395,11 @@ fn load_scope_doc(
       )?;
       Ok((doc, format!("prompts/{}", platform.scope_doc)))
     }
-    Err(error) => {
+    Err(TextReadError::Io(error)) => {
       let what = format!("host scope doc is unreadable: {}", host_path.display());
       Err(anyhow::Error::new(error).context(what))
     }
+    Err(error) => Err(error.into_error(&host_path)),
   }
 }
 

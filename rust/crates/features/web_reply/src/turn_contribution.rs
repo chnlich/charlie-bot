@@ -2,7 +2,6 @@
 //! rules in a manager's runs, owns the web turn-end checks and notice delivery, renders the `web_reply`,
 //! `web_reply_notice` and `web_status` events as chat lines, and claims turn-end unread state for manager sessions.
 
-use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -19,6 +18,7 @@ use charliebot_registry::turn::{
   CheckResult, DELIVERY_FULL, EventRenderer, PromptSource, RuleSegment, SCOPE_BASE, TurnContribution, TurnInput,
 };
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
+use charliebot_tasks::spawner_prompt::read_text;
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 
@@ -117,8 +117,9 @@ impl TurnContribution for WebReplyTurnContribution {
 /// A prompts doc read as UTF-8 text: universal newlines, then both-sided whitespace trimmed. A
 /// missing or unreadable doc fails.
 fn rules_text(path: &Path) -> anyhow::Result<String> {
-  let text = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-  Ok(str_methods::strip(&str_methods::universal_newlines(&text)).to_string())
+  let text =
+    read_text(path).map_err(|error| error.into_error(path)).with_context(|| format!("read {}", path.display()))?;
+  Ok(str_methods::strip(&text).to_string())
 }
 
 /// The chat line of a `web_reply` event.
@@ -151,6 +152,7 @@ fn content(event: &Value) -> Value {
 #[cfg(test)]
 mod tests {
   use std::ffi::OsString;
+  use std::fs;
 
   use charliebot_core::test_support::synthetic_config;
   use charliebot_store::metadata::{SessionMetadata, TaskProfile};

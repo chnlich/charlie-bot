@@ -187,6 +187,11 @@ mod tests {
   }
 
   #[test]
+  fn refuses_name_based_kills_in_case_arms_to_preserve_fail_closed_parsing() {
+    assert!(refuses("case $x in a) pkill -P $$ -f x;; esac"));
+  }
+
+  #[test]
   fn passes_kills_by_pid_and_scoped_matches() {
     for command in [
       "kill 12345",

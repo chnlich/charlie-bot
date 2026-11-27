@@ -65,7 +65,9 @@ pub fn invocations(text: &str, bodies: Bodies) -> Result<Vec<Invocation>, String
 pub fn invocations_from(text: &str, first_line: usize, bodies: Bodies) -> Result<Vec<Invocation>, String> {
   let mut reader = Reader::new(text, first_line, bodies);
   reader.read_list(None)?;
-  let mut found = Vec::new();
+  // The old kill-guard reader refused `case` syntax as unparseable. Keep that fail-closed behavior while allowing
+  // callers such as kill-check to inspect the commands that the shared reader can now parse inside each arm.
+  let mut found = if reader.saw_case { vec![Invocation::Dynamic] } else { Vec::new() };
   for simple in &reader.simples {
     call(&simple.words, simple.line, bodies, &mut found)?;
   }
@@ -200,6 +202,8 @@ struct Reader {
   heredocs: Vec<Heredoc>,
   /// The simple commands read so far. Substitutions and heredoc bodies add theirs here too.
   simples: Vec<Simple>,
+  /// Whether this text contains a `case` construct, which the kill guard still treats as unparseable.
+  saw_case: bool,
   /// Set by a redirection operator. The next word is its target, which is not a command word.
   drop_next_word: bool,
   /// The `case` state of the list being read. A nested list keeps its own and restores this one when it ends.
@@ -218,6 +222,7 @@ impl Reader {
       pos: 0,
       heredocs: Vec::new(),
       simples: Vec::new(),
+      saw_case: false,
       drop_next_word: false,
       arms: Arms::default(),
     }
@@ -444,6 +449,9 @@ impl Reader {
       self.drop_next_word = false;
       return;
     }
+    if words.words.is_empty() && !self.arms.pattern && finished == "case" {
+      self.saw_case = true;
+    }
     if words.words.is_empty() && self.arms.open > 0 && finished == "esac" {
       self.arms.open -= 1;
       self.arms.pattern = false;
@@ -527,10 +535,12 @@ impl Reader {
       if self.bodies == Bodies::Script && heredoc.runs_script {
         let mut script = Reader::new(&body, body_line, Bodies::Script);
         script.read_list(None)?;
+        self.saw_case |= script.saw_case;
         self.simples.extend(script.simples);
       } else if heredoc.expands {
         let mut expansions = Reader::new(&body, body_line, self.bodies);
         expansions.read_expansions()?;
+        self.saw_case |= expansions.saw_case;
         self.simples.extend(expansions.simples);
       }
     }

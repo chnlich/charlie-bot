@@ -172,6 +172,9 @@ READY_WAIT_S="${CHARLIEBOT_SWITCH_READY_WAIT_S:-900}"
 # slow model call passes and a hung turn fails the check.
 PROBE_WAIT_S="${CHARLIEBOT_SWITCH_PROBE_WAIT_S:-30}"
 PROBE_CANCEL_WAIT_S="${CHARLIEBOT_SWITCH_PROBE_CANCEL_WAIT_S:-60}"
+# Dispatch persists a failed run before it appends the assistant_error event to the session. Give that event one second
+# to land before classifying a failure whose run log is empty.
+SESSION_ERROR_WAIT_S=1
 # The delegation check's wait for its run. It was 300 s, which held a switch on a hung check for five minutes. The
 # measured checks since 2026-10-30 took 9.3 s at the median, 13.4 s at p90 and 65.6 s at their longest (findings.md
 # §1); 80 s leaves the longest about 14 s of room. With the probe's bound, a release whose checks both hang is switched
@@ -583,7 +586,10 @@ check_log() {
 # to the server.
 check_note_model_error() {
   [ "$1" = failed ] || return 0
-  CHECK_ERROR="$(check_error "$CHECK_SESSION")"
+  CHECK_ERROR="$(check_error "$CHECK_SESSION")" || {
+    log "$CHECK_LABEL: could not read error text for run $CHECK_RUN"
+    return 1
+  }
   model_side_error "$CHECK_ERROR" && CHECK_MODEL_ERROR=1
   return 0
 }
@@ -649,7 +655,7 @@ probe_wait_output() {
     fi
     if run_ended "$CHECK_STATE"; then
       check_log "run ended $CHECK_STATE before its first output"
-      check_note_model_error "$CHECK_STATE"
+      check_note_model_error "$CHECK_STATE" || return 1
       return 1
     fi
     if [ "$(check_clock)" -ge "$end" ]; then
@@ -886,19 +892,26 @@ run_error() {
 }
 
 # session_error SESSION: the message of the session's last assistant_error chat event. The dispatch layer records a
-# turn-level failure only there — a run the pool refuses never launches, so its run event log holds nothing. Each line
-# of the chat log is one JSON object; a line that is not one yet, the line still being written, reads as no error.
-# Empty when the session holds no such event.
+# turn-level failure only there — a run the pool refuses never launches, so its run event log holds nothing. It marks
+# the run failed before appending assistant_error, so this read waits briefly for the event after a terminal run state.
+# Each line of the chat log is one JSON object; a line that is not one yet reads as no error. Empty when the session
+# holds no such event after the wait.
 session_error() {
-  local events="$HOME_DIR/sessions/$1/data/chat_events.jsonl" line
-  [ -f "$events" ] || return 0
-  tac "$events" > "$WORK/chat-events" || return 0
-  while IFS= read -r line; do
-    printf '%s\n' "$line" > "$WORK/chat-event"
-    [ "$(helper json-field "$WORK/chat-event" type 2> /dev/null)" = assistant_error ] || continue
-    helper json-field "$WORK/chat-event" content || return 1
-    return 0
-  done < "$WORK/chat-events"
+  local events="$HOME_DIR/sessions/$1/data/chat_events.jsonl" line end
+  end=$(($(check_clock) + SESSION_ERROR_WAIT_S * 1000000))
+  while :; do
+    if [ -f "$events" ]; then
+      tac "$events" > "$WORK/chat-events" || return 1
+      while IFS= read -r line; do
+        printf '%s\n' "$line" > "$WORK/chat-event"
+        [ "$(helper json-field "$WORK/chat-event" type 2> /dev/null)" = assistant_error ] || continue
+        helper json-field "$WORK/chat-event" content || return 1
+        return 0
+      done < "$WORK/chat-events"
+    fi
+    [ "$(check_clock)" -ge "$end" ] && return 0
+    sleep 0.05
+  done
 }
 
 # check_error SESSION: the failed run's error text for the classifier: the run's event log first, the session's chat
@@ -1022,8 +1035,15 @@ delegation_run() {
   fields="$(newest_run_fields worktree_path repo_path)" || return 1
   IFS=$'\x1f' read -r worktree repo <<<"$fields"
   if [ "$CHECK_STATE" != success ]; then
-    check_note_model_error "$CHECK_STATE"
-    error="$(check_error "$CHECK_SESSION")"
+    if [ "$CHECK_STATE" = failed ]; then
+      check_note_model_error "$CHECK_STATE" || return 1
+      error="$CHECK_ERROR"
+    else
+      error="$(check_error "$CHECK_SESSION")" || {
+        delegation_fail run "could not read error text for run $CHECK_RUN"
+        return 1
+      }
+    fi
     delegation_fail run "run $CHECK_RUN ended $CHECK_STATE; the server's error: ${error:-none recorded}"
     return 1
   fi

@@ -273,6 +273,65 @@ done"#,
 }
 
 #[test]
+fn test_check_note_model_error_waits_for_dispatch_error_after_run_finishes() {
+  let sandbox = Sandbox::new();
+  let home = sandbox.dir("home");
+  let work = sandbox.dir("work");
+  let data = home.join("sessions/session/data");
+  fs::create_dir_all(&data).expect("the session data directory");
+  let events = data.join("chat_events.jsonl");
+  fs::write(&events, "").expect("the initially empty session event log");
+  sandbox.stub(
+    "tac",
+    r#"
+/usr/bin/tac "$@"
+if [ ! -e "$WORK/chat-event-appended" ]; then
+  touch "$WORK/chat-event-appended"
+  printf '%s\n' '{"type":"assistant_error","content":"quota exhausted"}' >> "$1"
+fi
+"#,
+  );
+
+  let mut env = sandbox.env();
+  env.insert("CHARLIEBOT_HOME".to_string(), home.display().to_string());
+  env.insert("WORK".to_string(), work.display().to_string());
+  let script = harness::repo_root().join("scripts/switch-server.sh");
+  let mut command = harness::command("bash", &env);
+  command
+    .args([
+      "-c",
+      r#"source "$1" rust "$2" || exit
+helper() {
+  case "$1" in
+    run-error) return 0 ;;
+    json-field)
+      case "$3" in
+        type) cut -d '"' -f4 "$2" ;;
+        content) cut -d '"' -f8 "$2" ;;
+        *) return 1 ;;
+      esac
+      ;;
+    *) return 1 ;;
+  esac
+}
+CHECK_LABEL=probe_turn
+CHECK_SESSION=session
+CHECK_RUN=run
+CHECK_MODEL_ERROR=0
+check_note_model_error failed || exit
+printf '%s\n%s\n' "$CHECK_MODEL_ERROR" "$CHECK_ERROR""#,
+      "bash",
+    ])
+    .arg(&script)
+    .arg("a".repeat(40));
+
+  let run = harness::run(&mut command);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert_eq!(run.stdout, "1\nquota exhausted\n", "{}", run.describe());
+}
+
+#[test]
 #[ignore = "integration"]
 fn test_switch_keeps_the_new_release_and_exits_6_when_the_model_fails_the_delegation_twice() {
   // The delegation run ends failed with a gateway error: a model-side failure. The check is retried once, the retry

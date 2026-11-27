@@ -34,15 +34,22 @@ def skill_file: test("(^|[/:])skills/[^/]+");
 def rooted: test("^(/|~/|[$])") or contains(":skills/");
 def allowed: startswith($skills + "/") and (contains("/../") | not);
 def path_key: . == "file_path" or . == "notebook_path" or . == "path";
-[ $failed | scan("[^\n]+") ] as $failed
-| [ .. | objects | select(.type == "tool_use")
-    | . as $call | .input | to_entries[]
-    | select(.value | type == "string")
-    | if (.key | path_key) then
-        select(($failed | index($call.id)) == null) | .value
-      elif .key == "command" then (.value | scan("[^ \t\n\"'`;|&()<>=]+") | select(rooted))
-      else empty end
-    | select(skill_file and (allowed | not)) ]
+# Every string token of the document, read the way `..` reaches it. A path value under the `input` of a tool_use whose
+# id is in $ids is exempt when $exempt holds: the call's result is an error, so the call read nothing.
+def reads($ids; $exempt):
+  if type == "object" then
+    . as $call
+    | (to_entries[]
+        | select(.value | type == "string")
+        | if (.key | path_key) then (if $exempt then empty else .value end)
+          elif .key == "command" then (.value | scan("[^ \t\n\"'`;|&()<>=]+") | select(rooted))
+          else empty end),
+      (to_entries[] | .key as $key
+        | .value | reads($ids; $key == "input" and $call.type == "tool_use" and ($ids | index($call.id)) != null))
+  elif type == "array" then .[] | reads($ids; false)
+  else empty end;
+[ $failed | scan("[^\n]+") ] as $ids
+| [ reads($ids; false) | select(skill_file and (allowed | not)) ]
 | unique[]
 JQ
 

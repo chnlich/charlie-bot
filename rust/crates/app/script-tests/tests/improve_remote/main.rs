@@ -825,10 +825,10 @@ fn the_skill_check_passes_a_relative_citation_and_names_each_rooted_command_read
 }
 
 /// A Read whose tool_result carries is_error true read nothing: only a failed result clears its own read target, so a
-/// call with no result or a result without is_error still counts.
+/// call with no result, a result without is_error, and a failed Bash command's tokens still count.
 #[test]
 #[ignore = "integration"]
-fn the_skill_check_passes_a_failed_read_and_counts_an_unpaired_or_successful_one() {
+fn the_skill_check_passes_a_failed_read_and_counts_every_other_call() {
   let world = World::new();
   let skills = round_skills_dir(&world);
   let kit_rule = skills.join("writing-style/genres/code.md").display().to_string();
@@ -865,6 +865,19 @@ fn the_skill_check_passes_a_failed_read_and_counts_an_unpaired_or_successful_one
   );
   let run = skill_check(&skills, &[&unpaired]);
   assert_eq!(run.code, 1, "an unpaired call passed:\n{}", run.describe());
+  assert!(stderr(&run).contains(outside), "{}", run.describe());
+
+  // Only a failed Read clears its target: a failed Bash command still names its rooted skill token.
+  let failed_bash = write_event_log(
+    &world,
+    "failed-bash.ndjson",
+    &[
+      tool_call_with_id("toolu_bash", "Bash", json!({"command": format!("cat {outside}")})),
+      tool_result("toolu_bash", true),
+    ],
+  );
+  let run = skill_check(&skills, &[&failed_bash]);
+  assert_eq!(run.code, 1, "a failed Bash command's skill token passed:\n{}", run.describe());
   assert!(stderr(&run).contains(outside), "{}", run.describe());
 }
 

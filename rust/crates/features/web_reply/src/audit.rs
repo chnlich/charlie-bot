@@ -1,13 +1,13 @@
 //! The web session's turn-end checks: the web reply to each user message the turn received (`web-reply`), the status
-//! set or confirm that ends the turn (`web-status`), and the status set that rewrites the Waiting on you list after the
-//! turn's last input (`status-reread`).
+//! set or confirm that ends the turn (`web-status`), and the status sets that store the Waiting on you and Remaining
+//! lists after the turn's last input (`status-reread`).
 //!
 //! All three are names in the turn-end check list, and the web contribution answers each one in process from the
-//! shared input (`TurnInput`), so the checks read only the turn's events. A first miss blocks the turn with the reason. A
-//! second miss passes: `web-reply` then shows the user the no-reply notice, `web-status` passes quietly, and
-//! `status-reread` shows the Waiting on you items it left. A continuation that failed is a second miss too: `web-status`
-//! then shows its notice, so the failed turn never passes. A turn with a close request, and a turn that exits with an
-//! error other than a failed continuation, pass all three checks.
+//! shared input (`TurnInput`), so the checks read only the turn's events. A first miss blocks the turn with the reason.
+//! A second miss passes: `web-reply` then shows the user the no-reply notice, `web-status` passes quietly, and
+//! `status-reread` shows the lists it left. A continuation that failed is a second miss too: `web-status` then shows
+//! its notice, so the failed turn never passes. A turn with a close request, and a turn that exits with an error other
+//! than a failed continuation, pass all three checks.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -32,13 +32,14 @@ use crate::reply;
 pub const WEB_REPLY_ENTRY: &str = "web-reply";
 /// The entry that checks the turn ran a status set or confirm.
 pub const WEB_STATUS_ENTRY: &str = "web-status";
-/// The entry that checks a turn which received an input and holds Waiting on you items stored a status set after it.
+/// The entry that checks a turn which received an input stored a status set after it that names each non-empty
+/// Waiting on you or Remaining list.
 pub const STATUS_REREAD_ENTRY: &str = "status-reread";
 
 /// The status instruction that ends a status reminder.
 const STATUS_SENTENCES: &str = concat!(
   "Run `charliebot web status set` when Goal, Remaining, Now or Waiting on you differs from the state that turn ",
-  "read back, or when the turn received an input and Waiting on you holds items. ",
+  "read back, or when the turn received an input and Waiting on you or Remaining holds items. ",
   "Otherwise run `charliebot web status confirm`. The panel then shows the state the last turn read back."
 );
 
@@ -111,32 +112,57 @@ pub fn check_web_status(input: &TurnInput) -> CheckResult {
   CheckResult::Block(status_reminder_text())
 }
 
-/// The `status-reread` entry: a turn that received an input and holds Waiting on you items stores a status set after
-/// its last input, and that set names the Waiting on you list. A confirm, or a set stored before the last input, does
-/// not count. The first miss blocks with the reason; a miss after that passes with the notice of the items left. A
-/// parent-approved session always passes: its status set refuses a non-empty list, so the reason could not be met.
+/// The `status-reread` entry: a turn that received an input stores a status set after its last input that names each
+/// non-empty list of the stored status, Waiting on you and Remaining. A confirm, a set stored before the last input,
+/// and a set that printed its cold read and stored nothing do not count. The first miss blocks with the reason; a miss
+/// after that passes with the notice of the lists left. A parent-approved session's Waiting on you list is exempt: its
+/// status set refuses a non-empty list, so the reason could not be met.
 pub fn check_status_reread(input: &TurnInput) -> CheckResult {
-  if !web_turn_checks_apply(input) || input.parent_approved {
+  if !web_turn_checks_apply(input) {
     return CheckResult::Pass;
   }
   let Some(last) = last_received_index(&input.turn) else {
     return CheckResult::Pass;
   };
-  let items = waiting_texts(&input.status);
-  if items.is_empty() {
-    return CheckResult::Pass;
-  }
-  let rewritten = input.turn[last + 1..].iter().any(|event| {
-    event["type"] == WEB_STATUS
-      && event["web_status_changed"].as_array().is_some_and(|changed| changed.iter().any(|item| item == "waiting"))
-  });
-  if rewritten {
+  let after = &input.turn[last + 1..];
+  let unset: Vec<StatusList> = required_lists(input).into_iter().filter(|list| !names_list(after, list.key)).collect();
+  if unset.is_empty() {
     return CheckResult::Pass;
   }
   if blocked_before(&input.turn, STATUS_REREAD_ENTRY) {
-    return CheckResult::Notice(left_items_notice(&items));
+    return CheckResult::Notice(left_items_notice(&unset));
   }
-  CheckResult::Block(reread_reason(input, last, items.len()))
+  CheckResult::Block(reread_reason(input, last, &unset))
+}
+
+/// A non-empty list of the stored status that a turn with an input stores again after the input: its key in the status
+/// payload and in a set's `web_status_changed`, its label in the reason and the notice, and its item texts.
+struct StatusList {
+  key: &'static str,
+  label: &'static str,
+  items: Vec<String>,
+}
+
+/// The lists that a turn with an input must store: each non-empty list of the stored status. A parent-approved
+/// session's Waiting on you list is not one of them.
+fn required_lists(input: &TurnInput) -> Vec<StatusList> {
+  let mut lists = Vec::new();
+  if !input.parent_approved {
+    lists.push(StatusList { key: "waiting", label: "Waiting on you", items: waiting_texts(&input.status) });
+  }
+  lists.push(StatusList { key: "remaining", label: "Remaining", items: remaining_texts(&input.status) });
+  lists.retain(|list| !list.items.is_empty());
+  lists
+}
+
+/// Whether a set stored in `events` names the list `key` in its changed fields.
+fn names_list(events: &[Value], key: &str) -> bool {
+  events.iter().any(|event| {
+    event["type"] == WEB_STATUS
+      && event["web_status_changed"]
+        .as_array()
+        .is_some_and(|changed| changed.iter().any(|item| item.as_str() == Some(key)))
+  })
 }
 
 /// The text of each Waiting on you item of the stored status payload, in list order.
@@ -149,27 +175,55 @@ fn waiting_texts(status: &Value) -> Vec<String> {
     .collect()
 }
 
+/// The text of each Remaining milestone of the stored status payload, in list order.
+fn remaining_texts(status: &Value) -> Vec<String> {
+  status["remaining"]
+    .as_array()
+    .into_iter()
+    .flatten()
+    .map(|item| item.as_str().unwrap_or_default().to_string())
+    .collect()
+}
+
+/// The names of the unset lists as the reason and the notice write them: `the Remaining list`, or
+/// `the Waiting on you and Remaining lists`.
+fn list_names(unset: &[StatusList]) -> String {
+  let labels: Vec<&str> = unset.iter().map(|list| list.label).collect();
+  let noun = if unset.len() == 1 { "list" } else { "lists" };
+  format!("the {} {noun}", labels.join(" and "))
+}
+
 /// The reason the `status-reread` check blocks with: the receipt time of the turn's input at `last`, the opening of the
-/// text the prompt renders for it, and the item count.
-fn reread_reason(input: &TurnInput, last: usize, count: usize) -> String {
+/// text the prompt renders for it, and the item count of each list left unset.
+fn reread_reason(input: &TurnInput, last: usize, unset: &[StatusList]) -> String {
   let event = &input.turn[last];
   let received = event["received_at"].as_str().unwrap_or_default();
   let text = input_text(event, input.last_input_provenance.as_deref());
   let opening = reply::message_opening(&text);
-  let noun = if count == 1 { "item" } else { "items" };
+  let counts: Vec<String> = unset
+    .iter()
+    .map(|list| {
+      let noun = if list.items.len() == 1 { "item" } else { "items" };
+      format!("{} holds {} {noun}", list.label, list.items.len())
+    })
+    .collect();
+  let stands = if unset.len() == 1 { "as it stands" } else { "as they stand" };
   format!(
-    "Session status reminder: your last turn received an input at {received}, which begins \"{opening}\", and \
-     Waiting on you holds {count} {noun}. Run `charliebot web status show`, then run `charliebot web status set` \
-     with the whole Waiting on you list as it stands after that input."
+    "Session status reminder: your last turn received an input at {received}, which begins \"{opening}\", and {}. \
+     Run `charliebot web status show`, then run `charliebot web status set` with {} {stands} after that input.",
+    counts.join(" and "),
+    list_names(unset),
   )
 }
 
-/// The notice of a `status-reread` second miss: the Waiting on you items that the turn left as stored.
-fn left_items_notice(items: &[String]) -> String {
+/// The notice of a `status-reread` second miss: the lists the turn left unset, each with its items as stored.
+fn left_items_notice(unset: &[StatusList]) -> String {
+  let left: Vec<String> =
+    unset.iter().map(|list| format!("The {} items left as stored: {}.", list.label, list.items.join("; "))).collect();
   format!(
-    "Session status check: your last turn received an input and stored no status set after it. The Waiting on you \
-     items left as stored: {}.",
-    items.join("; ")
+    "Session status check: your last turn received an input and stored no status set after it that names {}. {}",
+    list_names(unset),
+    left.join(" ")
   )
 }
 
@@ -257,7 +311,7 @@ pub(crate) async fn close_request_pending(store: &Arc<Store>, session_id: &str) 
 
 #[cfg(test)]
 mod tests {
-  use charliebot_core::event_types::{CHILD_REPORT, SCHEDULED_TRIGGER};
+  use charliebot_core::event_types::{CHILD_REPORT, COLD_READ_CHECK, SCHEDULED_TRIGGER};
   use charliebot_tasks::task_input_prompt::child_report_text;
 
   use super::*;
@@ -405,8 +459,9 @@ mod tests {
     assert_eq!(check_web_reply(&input(false, 0, vec![summon])).unwrap(), CheckResult::Pass);
   }
 
-  /// A parent-approved session passes `status-reread` for an input turn that stores no set or an empty list. Its status
-  /// set refuses a non-empty list, so the reminder would ask for a list it cannot store.
+  /// A parent-approved session's legacy Waiting on you list is exempt: an input turn that holds only that list passes
+  /// with or without a set. Its status set refuses a non-empty Waiting on you list, so the reminder could not ask for
+  /// one.
   #[test]
   fn a_parent_approved_session_passes_status_reread_for_an_input_turn() {
     let legacy = json!({"goal": "g", "waiting": [{"text": "legacy item", "context": "c"}]});
@@ -438,6 +493,94 @@ mod tests {
     let noticed = TurnInput { status: legacy, ..input(false, 0, second) };
     let CheckResult::Notice(notice) = check_status_reread(&noticed) else { panic!("the second miss notices") };
     assert!(notice.contains("legacy item"), "{notice}");
+  }
+
+  /// A set that names `changed` in its changed fields.
+  fn status_set(changed: &[&str]) -> Value {
+    json!({"type": WEB_STATUS, "id": "s1", "web_status_changed": changed})
+  }
+
+  /// The stored status of a session whose Waiting on you list holds `waiting` and whose Remaining list holds
+  /// `remaining`.
+  fn stored_lists(waiting: &[&str], remaining: &[&str]) -> Value {
+    let items: Vec<Value> = waiting.iter().map(|text| json!({"text": text, "context": "c"})).collect();
+    json!({"goal": "g", "waiting": items, "remaining": remaining})
+  }
+
+  /// The turn of a user message received at 00:00:01 followed by `after`.
+  fn input_turn(after: Vec<Value>) -> Vec<Value> {
+    let mut turn = vec![user("u1", "q", "2026-01-01T00:00:01Z")];
+    turn.extend(after);
+    turn
+  }
+
+  #[test]
+  fn an_input_turn_with_remaining_needs_a_set_that_names_remaining_after_the_input() {
+    let status = stored_lists(&[], &["Land the list"]);
+    let turn = |after: Vec<Value>| TurnInput { status: status.clone(), ..input(false, 0, input_turn(after)) };
+
+    // A confirm alone blocks with the reason naming Remaining; the second miss notices the list left.
+    let confirm = json!({"type": WEB_STATUS_CONFIRMED, "id": "c1"});
+    let CheckResult::Block(reason) = check_status_reread(&turn(vec![confirm.clone()])) else {
+      panic!("the confirm blocks")
+    };
+    assert!(reason.contains("Remaining holds 1 item") && reason.contains("the Remaining list"), "{reason}");
+    let mut second = input_turn(vec![confirm]);
+    second.push(block_record(STATUS_REREAD_ENTRY));
+    let noticed = TurnInput { status: status.clone(), ..input(false, 0, second) };
+    let CheckResult::Notice(notice) = check_status_reread(&noticed) else { panic!("the second miss notices") };
+    assert!(notice.contains("The Remaining items left as stored: Land the list."), "{notice}");
+
+    // A set that names Remaining after the input passes.
+    assert_eq!(check_status_reread(&turn(vec![status_set(&["remaining"])])), CheckResult::Pass);
+
+    // A set that names only Now blocks.
+    assert!(matches!(check_status_reread(&turn(vec![status_set(&["now"])])), CheckResult::Block(_)));
+
+    // An exit-3 set prints its cold read and stores nothing: only the record of that read follows the input.
+    let record = json!({"type": COLD_READ_CHECK, "id": "k1", "name": "remaining"});
+    assert!(matches!(check_status_reread(&turn(vec![record.clone()])), CheckResult::Block(_)));
+    assert_eq!(check_status_reread(&turn(vec![record, status_set(&["remaining"])])), CheckResult::Pass);
+  }
+
+  #[test]
+  fn a_parent_approved_session_exempts_only_its_legacy_waiting_list() {
+    let status = stored_lists(&["legacy item"], &["Land the list"]);
+    let turn = |after: Vec<Value>| TurnInput {
+      parent_approved: true,
+      status: status.clone(),
+      ..input(false, 0, input_turn(after))
+    };
+
+    assert_eq!(check_status_reread(&turn(vec![status_set(&["remaining"])])), CheckResult::Pass);
+    let confirm = json!({"type": WEB_STATUS_CONFIRMED, "id": "c1"});
+    let CheckResult::Block(reason) = check_status_reread(&turn(vec![confirm])) else { panic!("the confirm blocks") };
+    assert!(reason.contains("Remaining holds 1 item"), "{reason}");
+    assert!(!reason.contains("Waiting on you"), "{reason}");
+  }
+
+  #[test]
+  fn an_input_turn_with_both_lists_names_each_list_its_set_leaves_out() {
+    let status = stored_lists(&["Choose the title"], &["Land the list"]);
+    let turn = |after: Vec<Value>| TurnInput { status: status.clone(), ..input(false, 0, input_turn(after)) };
+
+    let CheckResult::Block(reason) = check_status_reread(&turn(vec![status_set(&["waiting"])])) else {
+      panic!("the set without Remaining blocks")
+    };
+    assert!(reason.contains("Remaining holds 1 item") && !reason.contains("Waiting on you holds"), "{reason}");
+
+    let confirm = json!({"type": WEB_STATUS_CONFIRMED, "id": "c1"});
+    let CheckResult::Block(reason) = check_status_reread(&turn(vec![confirm])) else { panic!("the confirm blocks") };
+    assert!(reason.contains("Waiting on you holds 1 item and Remaining holds 1 item"), "{reason}");
+
+    assert_eq!(check_status_reread(&turn(vec![status_set(&["waiting", "remaining"])])), CheckResult::Pass);
+  }
+
+  #[test]
+  fn a_turn_without_an_input_passes_with_a_remaining_list() {
+    let status = stored_lists(&[], &["Land the list"]);
+    let no_input = TurnInput { status, ..input(false, 0, vec![json!({"type": WEB_STATUS_CONFIRMED, "id": "c1"})]) };
+    assert_eq!(check_status_reread(&no_input), CheckResult::Pass);
   }
 
   /// The report that task `child_id` delivers to its parent, received at `received_at`.

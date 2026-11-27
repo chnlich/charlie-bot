@@ -249,3 +249,11 @@ pub(crate) fn write_json<T: Serialize>(path: &Path, value: &T, indent: &[u8]) ->
   value.serialize(&mut serializer).with_context(|| format!("cannot encode {}", path.display()))?;
   fs::write(path, bytes).with_context(|| format!("cannot write {}", path.display()))
 }
+
+/// Writes pretty JSON followed by a newline, creating its parent directory when needed.
+pub(crate) fn write_json_with_newline<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+  fs::create_dir_all(path.parent().expect("a file path has a parent"))?;
+  let mut text = serde_json::to_string_pretty(value)?;
+  text.push('\n');
+  fs::write(path, text).with_context(|| format!("cannot write {}", path.display()))
+}

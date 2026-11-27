@@ -390,19 +390,20 @@ main > header > .header-controls { flex: 0 1 auto; min-width: 0; margin-left: au
   .sidebar-overlay.active { display: block; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 99; }
   .hamburger-btn { display: inline-flex !important; }
   /* Header on phones: the menu and the platform badge take the first row, where the demo's brand sits; the session
-     name, which wraps so its whole text shows, takes the second. The backend badge takes the third row's width, and
-     Compact wraps beneath it when the label fills that width. The tabs, the events link and the concurrency badge take
-     the row after, the concurrency badge at its right end. The controls group is display: contents, so its items lay
-     out as the header's own. The badge may paint up to the row's remaining width: an id the config does not hold
-     carries the "(not in config)" state, and that label paints whole instead of ellipsizing. The header's ::after item
-     holds a line of its own, so the tabs always start their row. */
+     name, which wraps so its whole text shows, takes the second. The backend badge and Compact share the third row:
+     the badge grows into the row's remaining width and ellipsizes a label wider than its box, so Compact keeps its
+     own box beside it instead of dropping to a row of its own. The badge's title holds the full label. The tabs, the
+     events link and the concurrency badge take the row after, the concurrency badge at its right end. The controls
+     group is display: contents, so its items lay out as the header's own. The header's ::after item holds a line of
+     its own, so the tabs always start their row. */
   main > header > .header-controls { display: contents; }
   main > header > .flex-1.min-w-0 { order: 1; flex-basis: 100%; }
   main > header > .flex-1.min-w-0 > h2 { white-space: normal; overflow: visible; text-overflow: clip; }
   main > header::after { content: ''; flex-basis: 100%; order: 98; }
   #backend-badge, #compact-btn { order: 1; }
   main > header .cb-slot { order: 101; }
-  #backend-badge { max-width: 100%; min-width: 0; flex: 0 1 auto; overflow: hidden; }
+  #backend-badge { max-width: 100%; min-width: 0; flex: 1 1 0; overflow: hidden; text-overflow: ellipsis; }
+  #backend-badge select { width: 100%; }
   #tab-buttons { width: auto; flex: 1 1 auto; overflow-x: auto; order: 99; -webkit-overflow-scrolling: touch; }
   #tab-buttons button { white-space: nowrap; }
   main > header a[title="View JSONL events"] { order: 100; align-self: center; }

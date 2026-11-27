@@ -5,8 +5,8 @@
 # round's own pushes are checked too.
 #
 # git gives one line per ref: <local ref> <local sha> <remote ref> <remote sha>. The commits that a push publishes are
-# those the remote does not hold yet: remote..local, or, for a new branch, every commit that no remote ref reaches. Each
-# such commit's message and diff are checked, because a later commit that removes a value still publishes it in history.
+# those reachable from local and from no remote ref (including the existing remote tip). Each such commit's message and
+# diff are checked, because a later commit that removes a value still publishes it in history.
 #
 # Credential checks run first: a credential hit prints the kind and the field, then exits 3; git's push then exits 1.
 # When CHARLIEBOT_CREDENTIAL_HIT_FILE names a file, the hit is also written there, so the caller of git push can pass
@@ -36,10 +36,10 @@ serial=0
 index=0
 
 list_shas() {  # <local ref> <local sha> <remote sha>
-  if [[ "$3" =~ ^0+$ ]]; then
+  if [[ "$3" =~ ^0+$ ]] || ! git cat-file -e "$3^{commit}" 2>/dev/null; then
     git rev-list "$2" --not --remotes
   else
-    git rev-list "$3..$2"
+    git rev-list "$2" --not "$3" --remotes
   fi
 }
 

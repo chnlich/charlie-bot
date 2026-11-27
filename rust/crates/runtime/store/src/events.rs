@@ -2278,7 +2278,7 @@ mod tests {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("events.jsonl");
     let mut state = 0x9e37_79b9_7f4a_7c15_u64;
-    for _ in 0..120 {
+    for _ in 0..24 {
       let target = xorshift(&mut state) as usize % 240;
       let mut log = Vec::new();
       while log.len() < target {

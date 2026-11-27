@@ -25,8 +25,8 @@ use crate::event_types::{FileIdentity, SharedChatEvent};
 use crate::events::LiveHistory;
 use crate::layout;
 use crate::metadata::{
-  EventRef, PARENT_SESSION_ID, PROMPT_RULES_FIELD, SUCCESSOR_SESSION_ID, SessionMetadata, SessionStatus,
-  TASK_SCHEDULE_SLOTS, TASK_STATE, TaskApprover, TaskProfile, TaskSpec, UtcDateTime, WORK_STATE,
+  EventRef, PARENT_SESSION_ID, PENDING_TRIGGER_COUNT, PROMPT_RULES_FIELD, SUCCESSOR_SESSION_ID, SessionMetadata,
+  SessionStatus, TASK_SCHEDULE_SLOTS, TASK_STATE, TaskApprover, TaskProfile, TaskSpec, UtcDateTime, WORK_STATE,
 };
 use crate::path_error;
 use crate::run_facts::{CachedRunFacts, RunFacts};
@@ -43,6 +43,7 @@ use crate::task_tree_state::{
   within_caller_subtree,
 };
 pub use crate::task_tree_state::{NodeFacts, TaskFacts, TaskState, TaskTreeActivity, TaskTreeRow};
+use crate::trigger_files;
 use crate::waiting_clicks::status_waiting_clicks;
 use crate::{ControlGuard, Store, StoreError, StoreResult};
 
@@ -2208,8 +2209,8 @@ impl Store {
 
   /// Build the session detail projection used by the session read and completion routes.
   ///
-  /// The session's own fields come from the metadata cache, which every save replaces under the session lock, so a
-  /// write reads back at once without any invalidation. The task-tree index serves the ancestors and the descendants.
+  /// The session metadata comes from the metadata cache; its pending-trigger count comes from the session's trigger
+  /// files. The task-tree index serves the ancestors and the descendants.
   pub fn session_detail(&self, session_id: &str) -> StoreResult<Value> {
     let index = self.tree_index()?;
     let meta = self
@@ -2218,6 +2219,9 @@ impl Store {
     let mut detail = self.session_metadata_value(meta.as_ref());
     let mut reads = NodeReads::new(self);
     let object = detail.as_object_mut().expect("session metadata serializes to an object");
+    let (pending_trigger_count, _) =
+      trigger_files::pending_trigger_state(layout::triggers_dir(&self.session_dir(session_id)));
+    object.insert(PENDING_TRIGGER_COUNT.to_string(), Value::from(pending_trigger_count));
     object.insert(TASK_STATE.to_string(), Value::String(reads.task_state(session_id)?));
     object.insert(WORK_STATE.to_string(), Value::String(reads.activity(session_id)?.work_state));
     object.insert("archived".to_string(), Value::Bool(reads.archived(&index, session_id, &mut HashMap::new())?));

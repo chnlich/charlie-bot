@@ -494,7 +494,7 @@ function renderSessionScheduleLine(s) {
     + `<span class="block truncate text-xs text-slate-400" title="${escapeHtmlAttr(s.schedule_cron)} (${escapeHtmlAttr(s.schedule_timezone || '')})">${escapeHtml(s.schedule_cron)} · ${escapeHtml(s.schedule_timezone || '')}</span>`;
   const backend = scheduledBackendText(s);
   if (backend) {
-    html += `<span class="session-backend block truncate text-xs text-slate-400" title="${escapeHtmlAttr(backend)}">${escapeHtml(backend)}</span>`;
+    html += `<span class="session-backend block text-xs text-slate-400" title="${escapeHtmlAttr(backend)}">${escapeHtml(backend)}</span>`;
   }
   if (slot.last_run_status) {
     const lastClass = slot.last_run_status === LAST_RUN_STATUS.SUCCESS ? 'text-green-400'

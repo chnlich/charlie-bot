@@ -37,6 +37,7 @@ test('a pool-session row puts its label on its own line below the date', () => {
   const model = modelSpan(html);
   assert.ok(model, 'row is missing a .session-backend span');
   assert.match(model[1], /\bblock\b/);
+  assert.doesNotMatch(model[1], /\btruncate\b/, 'a pool label wraps; it is not cut');
   assert.doesNotMatch(dateLineClass(html), /\bflex\b/);
   assert.ok(html.indexOf('session-time') < html.indexOf('session-backend'));
 });

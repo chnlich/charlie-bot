@@ -638,10 +638,11 @@ function renderSessionTimeLine(s, timeIso, timeHtml, staticTime = false) {
   if (label && label.pool) {
     // A pool row's label takes its own line under the date, the layout of the scheduled-task lines (cron.js). Beside
     // the date the 320px sidebar leaves a label about 67px wide, so the pool and member cannot both show. Both lines
-    // are block boxes, so the row is one line taller than a single-option row.
+    // are block boxes, so the row is one line taller than a single-option row. The label wraps rather than cutting:
+    // the whole label is the fact the row adds, and styles.css breaks it inside the row.
     return `<span class="block text-xs text-slate-400">`
       + `<span class="session-time block"${timeAttr}>${timeHtml}</span>`
-      + `<span class="session-backend block truncate" title="${escapeHtmlAttr(label.full)}">`
+      + `<span class="session-backend block" title="${escapeHtmlAttr(label.full)}">`
       + `${escapeHtml(label.display)}</span>`
       + `</span>`;
   }

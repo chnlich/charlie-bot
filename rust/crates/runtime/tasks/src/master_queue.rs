@@ -11,6 +11,7 @@ use charliebot_core::event_types;
 use charliebot_registry::backend::{BackendLifecycle, EmitFn, IdleArmContext, IdleStartGate, SessionContextStateFn};
 use charliebot_registry::context::FeatureContext;
 use charliebot_store::metadata::{HAS_RUNNING_TASKS, NATIVE_BACKEND, SessionMetadata, THINKING_SINCE, UtcDateTime};
+use charliebot_store::run_logs;
 use charliebot_usage::SessionUsage;
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
@@ -76,6 +77,11 @@ impl MasterQueue {
     let persist_and_broadcast = Arc::new(move |session_id: String, event: Value| {
       let features = Arc::clone(&persist_features);
       Box::pin(async move {
+        // The page renders no thinking-token frame, and no reader of the stored log uses the line, so the event is
+        // neither appended nor broadcast. The backend's raw run log still keeps it.
+        if run_logs::is_thinking_tokens_event(&event) {
+          return Ok(());
+        }
         features.store.persist_and_broadcast(&session_id, event).await?;
         Ok(())
       }) as BoxFuture<'static, anyhow::Result<()>>
@@ -839,7 +845,7 @@ mod tests {
   use charliebot_registry::store_hooks;
   use charliebot_registry::{Registry, RegistryError};
   use charliebot_store::metadata::TaskProfile;
-  use charliebot_store::{CreateTask, SIDEBAR_CHANNEL, SharedChatEvent, Store, TaskCaller};
+  use charliebot_store::{CreateTask, SIDEBAR_CHANNEL, SharedChatEvent, Store, TaskCaller, session_channel};
   use serde_json::Map;
 
   use super::*;
@@ -1143,6 +1149,41 @@ mod tests {
       })
     );
     assert!(tokio::time::timeout(Duration::from_millis(10), sidebar.recv()).await.is_err());
+  }
+
+  #[tokio::test]
+  async fn a_thinking_tokens_event_reaches_neither_the_session_log_nor_the_socket() {
+    let home = tempfile::tempdir().unwrap();
+    let features = context_features(home.path());
+    let queue = Arc::new(MasterQueue::new(test_pool()));
+    let callbacks = queue.session_callbacks(Arc::clone(&features), Arc::new(|_| Ok((false, String::new()))));
+    let session_id = "thinking-tokens";
+    let mut socket = features.store.subscribe(&session_channel(session_id));
+
+    let user = json!({"type": "user", "content": "think about it"});
+    let thinking = json!({"type": "system", "subtype": "thinking_tokens", "estimated_tokens": 50});
+    let assistant = json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "reply"}]}});
+    for event in [user, thinking, assistant] {
+      (callbacks.persist_and_broadcast)(session_id.to_string(), event).await.unwrap();
+    }
+
+    let log = std::fs::read_to_string(features.store.chat_events_path(session_id)).unwrap();
+    let stored: Vec<Value> = log.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+    let types: Vec<&str> = stored.iter().map(|event| event["type"].as_str().unwrap()).collect();
+    assert_eq!(types, ["user", "assistant"], "the progress event is not appended");
+
+    let mut frames = Vec::new();
+    while let Ok(Some(frame)) = tokio::time::timeout(Duration::from_millis(50), socket.recv()).await {
+      frames.push(serde_json::from_str::<Value>(&frame).unwrap());
+    }
+    assert!(
+      frames.iter().all(|frame| frame["type"] != event_types::SYSTEM),
+      "no progress frame is broadcast: {frames:?}"
+    );
+    assert!(
+      frames.iter().any(|frame| frame[event_types::EVENT_INDEX] == 1),
+      "the assistant frame keeps the log position it has without the progress line: {frames:?}"
+    );
   }
 
   /// A manager turn that starts no agent: its session pins no backend, so the queue refuses it.

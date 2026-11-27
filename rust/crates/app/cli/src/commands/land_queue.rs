@@ -16,6 +16,7 @@ use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::resolve;
 use charliebot_core::config;
+use charliebot_core::run_token::SESSION_ID_ENV;
 use charliebot_tasks::land::{LandState, QueueEnd};
 use charliebot_tasks::land_queue::{self, Cadence, Owner, Site};
 use clap::{Arg, ArgAction, Command};
@@ -80,7 +81,7 @@ fn owner_of(session_id: String, worktree: &Path) -> Result<Owner, CliExit> {
 
 /// `CHARLIEBOT_SESSION_ID` when the run carries one; an empty value is no session.
 fn env_session() -> Option<String> {
-  std::env::var("CHARLIEBOT_SESSION_ID").ok().filter(|value| !value.is_empty())
+  std::env::var(SESSION_ID_ENV).ok().filter(|value| !value.is_empty())
 }
 
 fn pr_arg(matches: &clap::ArgMatches) -> Result<u64, CliExit> {

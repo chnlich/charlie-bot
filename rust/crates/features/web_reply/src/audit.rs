@@ -14,8 +14,8 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use charliebot_core::event_types::{
-  CHILD_REPORT, INPUT_EVENT_ID, OWNER_RUN_ID, TASK_CLOSE_REQUESTED, TURN_HOOKS, WEB_REPLY, WEB_REPLY_NOTICE,
-  WEB_STATUS, WEB_STATUS_CONFIRMED,
+  AGENT_MESSAGE, CHILD_REPORT, FROM_SESSION, FROM_SESSION_NAME, INPUT_EVENT_ID, OWNER_RUN_ID, TASK_CLOSE_REQUESTED,
+  TURN_HOOKS, WEB_REPLY, WEB_REPLY_NOTICE, WEB_STATUS, WEB_STATUS_CONFIRMED,
 };
 use charliebot_registry::FeatureContext;
 use charliebot_registry::turn::{CheckResult, TurnInput};
@@ -119,8 +119,9 @@ pub fn check_web_status(input: &TurnInput) -> CheckResult {
 /// the notice of the lists left. A parent-approved session's Waiting on you list is exempt: its status set refuses a
 /// non-empty list, so the reason could not be met.
 ///
-/// This is stage 1 of a staged rollout. Remaining is required only when the turn received a user message or a child
-/// report; a turn whose inputs are only agent messages or scheduled triggers keeps the rule it had before Remaining.
+/// This is stage 1 of a staged rollout. Remaining is required only when the turn received a user message, an external-
+/// thread user input, or a child report; a turn whose inputs are only agent messages or scheduled triggers keeps the
+/// rule it had before Remaining.
 pub fn check_status_reread(input: &TurnInput) -> CheckResult {
   if !web_turn_checks_apply(input) {
     return CheckResult::Pass;
@@ -148,25 +149,37 @@ struct StatusList {
 }
 
 /// The lists that a turn with an input must store: each non-empty list of the stored status. A parent-approved
-/// session's Waiting on you list is not one of them, and Remaining is one only for a turn that received a user message
-/// or a child report.
+/// session's Waiting on you list is not one of them, and Remaining is one only for a turn that received a user message,
+/// an external-thread user input, or a child report.
 fn required_lists(input: &TurnInput) -> Vec<StatusList> {
   let mut lists = Vec::new();
   if !input.parent_approved {
     lists.push(StatusList { key: "waiting", label: "Waiting on you", items: waiting_texts(&input.status) });
   }
-  if received_user_or_report(&input.turn) {
+  if received_user_or_report(input) {
     lists.push(StatusList { key: "remaining", label: "Remaining", items: remaining_texts(&input.status) });
   }
   lists.retain(|list| !list.items.is_empty());
   lists
 }
 
-/// Whether the turn received a user message, as `reply::answered_user_id` classifies one, or a child report.
-fn received_user_or_report(turn: &[Value]) -> bool {
-  turn.iter().any(|event| {
-    event["received_at"].is_string() && (reply::answered_user_id(event).is_some() || event["type"] == CHILD_REPORT)
+/// Whether the turn received a user message, an external-thread input, or a child report. `reply::answered_user_id`
+/// identifies web messages and their reply nudges. `chat_threads` admits external-thread inputs as agent messages from
+/// the bound session itself, with a non-empty session name.
+fn received_user_or_report(input: &TurnInput) -> bool {
+  input.turn.iter().any(|event| {
+    event["received_at"].is_string()
+      && (reply::answered_user_id(event).is_some()
+        || external_thread_user_input(event, &input.session_id)
+        || event["type"] == CHILD_REPORT)
   })
+}
+
+/// Whether an agent message is an external-thread input admitted from this session's own channel binding.
+fn external_thread_user_input(event: &Value, session_id: &str) -> bool {
+  event["type"] == AGENT_MESSAGE
+    && event[FROM_SESSION].as_str() == Some(session_id)
+    && event[FROM_SESSION_NAME].as_str().is_some_and(|name| !name.is_empty())
 }
 
 /// Whether a set stored in `events` names the list `key` in its changed fields.
@@ -325,7 +338,7 @@ pub(crate) async fn close_request_pending(store: &Arc<Store>, session_id: &str) 
 
 #[cfg(test)]
 mod tests {
-  use charliebot_core::event_types::{AGENT_MESSAGE, COLD_READ_CHECK, SCHEDULED_TRIGGER};
+  use charliebot_core::event_types::{COLD_READ_CHECK, SCHEDULED_TRIGGER};
   use charliebot_tasks::task_input_prompt::child_report_text;
 
   use super::*;
@@ -595,6 +608,19 @@ mod tests {
     json!({"type": AGENT_MESSAGE, "id": "m1", "content": "a question", "received_at": "2026-01-01T00:00:01Z"})
   }
 
+  /// An external-thread user input admitted as an agent message from the destination session.
+  fn external_thread_input() -> Value {
+    json!({
+      "type": AGENT_MESSAGE,
+      "id": "m2",
+      "content": "a thread question",
+      "received_at": "2026-01-01T00:00:01Z",
+      "from_session": "web-session",
+      "from_session_name": "Slack",
+      "slack": {"channel_id": "C1", "thread_ts": "1.0", "mention_ts": "1.1"},
+    })
+  }
+
   /// A scheduled trigger that the turn received at 00:00:01.
   fn scheduled_trigger_input() -> Value {
     json!({"type": SCHEDULED_TRIGGER, "id": "t1", "content": "Nightly sweep", "received_at": "2026-01-01T00:00:01Z"})
@@ -612,6 +638,15 @@ mod tests {
     let turn = TurnInput { status: waiting, ..input(false, 0, vec![agent_message_input(), confirm]) };
     let CheckResult::Block(reason) = check_status_reread(&turn) else { panic!("the confirm blocks") };
     assert!(reason.contains("Waiting on you holds 1 item") && !reason.contains("Remaining"), "{reason}");
+  }
+
+  #[test]
+  fn an_external_thread_user_input_needs_remaining() {
+    let status = stored_lists(&[], &["Land the list"]);
+    let confirm = json!({"type": WEB_STATUS_CONFIRMED, "id": "c1"});
+    let turn = TurnInput { status, ..input(false, 0, vec![external_thread_input(), confirm]) };
+    let CheckResult::Block(reason) = check_status_reread(&turn) else { panic!("the confirm blocks") };
+    assert!(reason.contains("Remaining holds 1 item"), "{reason}");
   }
 
   #[test]

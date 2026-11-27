@@ -320,11 +320,16 @@ fn set_tree_old(tree: &Path) {
   }
 }
 
+/// A Git repository in `tree` with one commit of its files. Auto maintenance is off. Otherwise `git commit` starts
+/// `git maintenance run --auto`, and a Git that has `maintenance.autoDetach` (default true) runs it in a detached
+/// process. That process removes `.git/objects/maintenance.lock` after the commit returns, which sets the mtime of
+/// `.git/objects` to the present. A removal after `set_tree_old` makes the sweep judge the tree young.
 fn make_git_repo(tree: &Path) {
   for args in [
     vec!["init", "-q"],
     vec!["config", "user.name", "remote-run-test"],
     vec!["config", "user.email", "test@example.invalid"],
+    vec!["config", "maintenance.auto", "false"],
   ] {
     let result = Command::new("git").current_dir(tree).args(args).output().expect("run git setup");
     assert!(result.status.success(), "git setup failed: {}", String::from_utf8_lossy(&result.stderr));

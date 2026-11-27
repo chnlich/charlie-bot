@@ -2089,6 +2089,39 @@ fn an_in_round_pr_merge_that_reaches_its_bound_removes_its_entry_and_exits_75() 
 
 #[test]
 #[ignore = "integration"]
+fn a_signalled_in_round_pr_merge_removes_its_entry_on_exit() {
+  let world = MergeWorld::new("rust/crates/x/src/lib.rs\n", "## Evidence\nno screenshot needed.\n");
+  world.hold_turn("another writer");
+  // A cut tool call delivers its signal to the whole process group, the waiting merge included. The exit trap must
+  // remove the entry, so no stale entry waits out the 180 s heartbeat expiry in the queue's order.
+  let mut command = world.merge_command(&["5046"], &FAST_QUEUE);
+  use std::os::unix::process::CommandExt;
+  command.process_group(0);
+  let mut child = command.spawn().expect("pr-merge runs");
+  let (name, _) = wait_for_entry(&world, Duration::from_secs(20));
+  // The process group the shell leads, read from /proc, since the signal must reach the waiting shell and the
+  // `acquire` child it runs, as a cut tool call reaches them.
+  let stat = std::fs::read_to_string(format!("/proc/{}/stat", child.id())).expect("the shell runs");
+  let group: u32 =
+    stat.rsplit(") ").next().expect("the stat holds the state fields").split_whitespace().nth(2).expect("pgrp")
+      .parse()
+      .expect("pgrp is a number");
+  // SAFETY: the signal goes to the process group the signalled shell leads, the group a cut tool call signals.
+  let sent = unsafe { libc::kill(-(group as libc::pid_t), libc::SIGTERM) };
+  assert_eq!(sent, 0, "the signal reaches the process group {} of pid {}", group, child.id());
+  let status = child.wait().expect("the signalled pr-merge exits");
+  assert_eq!(status.code(), Some(143), "the shell exits through its TERM trap");
+  let start = Instant::now();
+  while !world.entry_refs().is_empty() {
+    assert!(start.elapsed() < Duration::from_secs(20), "the entry {name} outlived the signalled call");
+    std::thread::sleep(Duration::from_millis(50));
+  }
+  assert!(world.merge_calls().is_empty(), "nothing may merge: {:?}", world.merge_calls());
+  assert_eq!(world.turn_holder().as_deref(), Some("another writer"), "another writer's turn is untouched");
+}
+
+#[test]
+#[ignore = "integration"]
 fn an_in_round_pr_merge_reenters_at_an_existing_entrys_original_key() {
   let world = MergeWorld::new("rust/crates/x/src/lib.rs\n", "## Evidence\nno screenshot needed.\n");
   world.hold_turn("another writer");

@@ -669,13 +669,16 @@ case "$subcommand" in
           printf 'Refused pr-merge: IMPROVE_LAUNCH_DIR names no launch id; nothing was merged.\n' >&2
           exit 2
         }
-        turn_held=0
+        # The exit trap releases the entry and the turn on every exit, a signal that cuts the wait included: a cut
+        # call must leave no stale entry behind it, waiting out the 180 s heartbeat expiry in the queue's order.
+        holds_queue_refs=1
         release_turn() {
-          if [[ $turn_held -eq 1 ]]; then
+          if [[ $holds_queue_refs -eq 1 ]]; then
             charliebot land queue release --pr "$pr_number" --owner "$launch_id" || {
-              printf 'PR %s: releasing the landing queue turn failed; its heartbeat expires in 180 s.\n' "$pr_selector" >&2
+              printf 'PR %s: releasing the landing queue entry or turn failed; its heartbeat expires in 180 s.\n' \
+                "$pr_selector" >&2
             }
-            turn_held=0
+            holds_queue_refs=0
           fi
         }
         trap release_turn EXIT
@@ -686,6 +689,8 @@ case "$subcommand" in
         acquire_status=$?
         set -e
         if [[ $acquire_status -eq 75 ]]; then
+          # The verb removed the entry at the bound, so the exit trap has nothing to release.
+          holds_queue_refs=0
           printf 'PR %s: the landing queue turn did not come within the round wait; the entry was removed and nothing was merged. The pull request stays open with its clean verdict for the next adoption round.\n' \
             "$pr_selector" >&2
           exit 75
@@ -695,7 +700,6 @@ case "$subcommand" in
             "$pr_selector" "$acquire_status" >&2
           exit 2
         }
-        turn_held=1
       else
         # Outside a round a busy queue is left to a wake: the gate takes the turn and merges now when the queue is
         # free, and queues this merge with the facts of this call otherwise.

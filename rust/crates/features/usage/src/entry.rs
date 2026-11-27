@@ -7,9 +7,12 @@ use charliebot_registry::context::FeatureContext;
 use charliebot_registry::pages::HomeCard;
 use charliebot_registry::{Registry, RegistryError};
 use futures_util::FutureExt;
+use futures_util::future::BoxFuture;
+use serde_json::{Map, Value};
 
 use crate::capture::capture_into_default_ledger;
-use crate::{api, backend_ids, cool_storage, page, poller};
+use crate::poller::ExtUsagePoller;
+use crate::{api, backend_ids, cool_storage, page};
 
 /// `register`: the `/api` router of `ext_usage`, the page router, the `ext_usage`
 /// service in phase Ready, the home card, the `usage_ledger` and `cool_storage` scheduled handlers, then the
@@ -17,7 +20,7 @@ use crate::{api, backend_ids, cool_storage, page, poller};
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.router(api::routes, api::matches)?;
   registry.router(page::routes, page::matches)?;
-  registry.service(Arc::new(poller::ExtUsagePoller::default()))?;
+  registry.service(Arc::new(ExtUsagePoller::default()))?;
   registry.home_card(HomeCard {
     name: "Token usage by model",
     url: "/token-usage",
@@ -28,7 +31,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.startup_check("backend_ids", backend_ids::check_backend_ids)
 }
 
-fn run_usage_ledger(context: Arc<FeatureContext>) -> futures_util::future::BoxFuture<'static, anyhow::Result<String>> {
+fn run_usage_ledger(context: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Result<String>> {
   async move {
     let context_for_capture = Arc::clone(&context);
     let written = tokio::task::spawn_blocking(move || {
@@ -37,10 +40,7 @@ fn run_usage_ledger(context: Arc<FeatureContext>) -> futures_util::future::BoxFu
     })
     .await??;
     let summary = written.iter().map(|(source, count)| format!("{source} {count}")).collect::<Vec<_>>().join("; ");
-    let sources = written
-      .iter()
-      .map(|(source, count)| (source.clone(), serde_json::Value::from(*count)))
-      .collect::<serde_json::Map<_, _>>();
+    let sources = written.iter().map(|(source, count)| (source.clone(), Value::from(*count))).collect::<Map<_, _>>();
     tracing::info!(sources = ?sources, "usage_ledger_handler_done");
     Ok(summary)
   }

@@ -5,9 +5,10 @@ use std::time::Duration;
 
 use anyhow::{Context, anyhow, bail};
 use charliebot_registry::usage::{RecordKind, UsageRecord};
-use rusqlite::types::Value;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::types::{Type, Value};
+use rusqlite::{Connection, OptionalExtension, Params, Row, params};
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use crate::count::Count;
 use crate::pacific::{self, Week};
@@ -385,8 +386,7 @@ impl UsageLedger {
       .optional()?;
     value
       .map(|value| {
-        OffsetDateTime::parse(&value, &time::format_description::well_known::Rfc3339)
-          .map_err(|error| anyhow!("invalid ledger timestamp {value:?}: {error}"))
+        OffsetDateTime::parse(&value, &Rfc3339).map_err(|error| anyhow!("invalid ledger timestamp {value:?}: {error}"))
       })
       .transpose()
   }
@@ -566,7 +566,7 @@ impl UsageLedger {
   }
 
   /// One grouped read's rows.
-  fn group_rows(&self, query: &str, params: impl rusqlite::Params) -> anyhow::Result<Vec<GroupRow>> {
+  fn group_rows(&self, query: &str, params: impl Params) -> anyhow::Result<Vec<GroupRow>> {
     let mut statement = self.conn.prepare(query)?;
     let rows = statement.query_map(params, read_group_row)?;
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
@@ -625,12 +625,12 @@ fn triggers_match(conn: &Connection, expected: &[(&str, String)]) -> anyhow::Res
   Ok(expected.iter().all(|(name, sql)| stored.get(*name) == Some(sql)))
 }
 
-fn read_group_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<GroupRow> {
+fn read_group_row(row: &Row<'_>) -> rusqlite::Result<GroupRow> {
   let kind_text: String = row.get("kind")?;
   let kind = match kind_text.as_str() {
     "native" => RecordKind::Native,
     "fallback" => RecordKind::Fallback,
-    _ => return Err(rusqlite::Error::InvalidColumnType(3, "kind".to_string(), rusqlite::types::Type::Text)),
+    _ => return Err(rusqlite::Error::InvalidColumnType(3, "kind".to_string(), Type::Text)),
   };
   Ok(GroupRow {
     source: row.get("source")?,

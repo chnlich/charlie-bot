@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
+use std::fs::Metadata;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -25,7 +26,7 @@ use charliebot_store::run_records::{
   NATIVE_SESSION_ID_FIELD, RAW_LOG_NAME, RUN_EVENTS_NAME, RUN_METADATA_NAME, STARTED_AT_FIELD,
 };
 use rusqlite::types::Value as SqlValue;
-use serde_json::{Map, Value};
+use serde_json::{Map, Number, Value};
 
 use crate::count::Count;
 use crate::ledger::{StoredRecord, UsageLedger, default_ledger_path};
@@ -272,7 +273,7 @@ fn capture_source(
   Ok(written)
 }
 
-fn charliebot_logs(sessions_dir: &Path) -> anyhow::Result<Vec<(CharlieLogKind, PathBuf, fs::Metadata)>> {
+fn charliebot_logs(sessions_dir: &Path) -> anyhow::Result<Vec<(CharlieLogKind, PathBuf, Metadata)>> {
   let Some(sessions) = subdirs(sessions_dir)? else {
     return Ok(Vec::new());
   };
@@ -314,7 +315,7 @@ fn master_log(master_run: &Path) -> PathBuf {
   master_run.join(RAW_LOG_NAME)
 }
 
-fn run_logs(sessions_dir: &Path) -> anyhow::Result<Vec<(PathBuf, fs::Metadata)>> {
+fn run_logs(sessions_dir: &Path) -> anyhow::Result<Vec<(PathBuf, Metadata)>> {
   let Some(sessions) = subdirs(sessions_dir)? else {
     return Ok(Vec::new());
   };
@@ -837,7 +838,7 @@ fn usage_object(value: Option<&Value>) -> anyhow::Result<&Map<String, Value>> {
 }
 
 fn empty_object() -> &'static Map<String, Value> {
-  static EMPTY: std::sync::LazyLock<Map<String, Value>> = std::sync::LazyLock::new(Map::new);
+  static EMPTY: LazyLock<Map<String, Value>> = LazyLock::new(Map::new);
   &EMPTY
 }
 
@@ -856,7 +857,7 @@ fn count(object: &Map<String, Value>, key: &str) -> anyhow::Result<Count> {
 
 /// A JSON number as the ledger binds it: an integer within the signed 64-bit range, else a real.
 /// serde_json reads an integer literal past u64 as an f64, the value the ledger format stores for that literal.
-fn number_count(number: &serde_json::Number) -> anyhow::Result<Count> {
+fn number_count(number: &Number) -> anyhow::Result<Count> {
   if let Some(integer) = number.as_i64() {
     return Ok(Count::Int(integer));
   }

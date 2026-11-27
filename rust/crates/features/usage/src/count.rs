@@ -13,6 +13,7 @@ use std::cmp::Ordering;
 use anyhow::anyhow;
 use rusqlite::ToSql;
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, Value, ValueRef};
+use serde_json::Value as JsonValue;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Count {
@@ -107,11 +108,11 @@ impl From<Count> for Value {
   }
 }
 
-impl From<Count> for serde_json::Value {
+impl From<Count> for JsonValue {
   fn from(count: Count) -> Self {
     match count {
-      Count::Int(number) => serde_json::Value::from(number),
-      Count::Real(number) => serde_json::Value::from(number),
+      Count::Int(number) => JsonValue::from(number),
+      Count::Real(number) => JsonValue::from(number),
     }
   }
 }

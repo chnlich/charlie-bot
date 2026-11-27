@@ -7,11 +7,18 @@
 // features of Emulation.setEmulatedMedia, so no per-size call can set the desktop mode. Touch emulation does work per
 // size, and it overrides the launch default for the phone size.
 //
-// applyInputProfile(send, size) sets the size's viewport and its touch emulation. It sets both on each call, so a size
-// keeps nothing from the size before it. checkInputProfile(send, size) reads the loaded page's matchMedia answers for
-// the hover and pointer queries. It refuses, with an InputProfileRefused that names the size and both readings, when
-// the answers differ from the profile; a browser started without INPUT_BROWSER_ARGS refuses the desktop sizes. A driver
-// checks each size before its first capture there, and it captures only after the check returns.
+// On a loaded page, turning touch emulation off leaves the page's primary pointer at none, and only a new document
+// gives the launch default back: on the pinned build, Emulation.setTouchEmulationEnabled with enabled false followed by
+// Page.reload reads the desktop answers again, while the same call without the reload keeps the no-input answers. So a
+// desktop size after a phone size reloads the page. A desktop size on a page without touch emulation makes no touch
+// call, because that call alone would leave the page with no input.
+//
+// applyInputProfile(send, size) sets the size's viewport and touch emulation. For a desktop size on a page with touch
+// emulation, it reloads the page and resolves once the new document has loaded. checkInputProfile(send, size) reads
+// the loaded page's matchMedia answers for the hover and pointer queries. It refuses, with an InputProfileRefused that
+// names the size and both readings, when the answers differ from the profile; a browser started without
+// INPUT_BROWSER_ARGS refuses the desktop sizes. A driver checks each size before its first capture there, and it
+// captures only after the check returns.
 //
 // `send` is the CDP session's send(method, params), as dev/improve/ux-frame-guard.mjs takes it. The kit does not launch
 // the driver, so loading this module is the driver's duty. `node --test dev/improve/ux-input-profile.test.mjs` runs the
@@ -31,8 +38,17 @@ export const INPUT_BROWSER_ARGS = ['--blink-settings=primaryHoverType=2,primaryP
 
 const MAX_TOUCH_POINTS = 5;
 
+// Reads true while the page has touch emulation on, because a touch page's primary pointer is coarse.
+const TOUCH_ON_EXPRESSION = "matchMedia('(pointer: coarse)').matches";
+
+// A global that only the old document of a reload holds, so the reload's poll can tell the new document apart.
+const RELOAD_MARKER = '__inputProfileOldDocument';
+const RELOAD_WAIT_MS = 20000;
+
 // The media queries that the check reads, in the order of the readings it reports.
 const QUERIES = ['(hover: hover)', '(hover: none)', '(pointer: fine)', '(pointer: coarse)'];
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // A page that does not take the profile. Names the size and both readings, so the driver's record shows which size
 // failed and what the page answered.
@@ -83,7 +99,31 @@ function readQueries(queries) {
   return Object.fromEntries(queries.map((query) => [query, matchMedia(query).matches]));
 }
 
-// Sets the viewport and touch emulation of SIZE's device on the page of `send`.
+// Evaluates EXPRESSION on the page of `send` and returns its value. A page that throws fails the call with the thrown
+// text.
+async function evaluateOnPage(send, expression) {
+  const reply = await send('Runtime.evaluate', { expression, returnByValue: true });
+  if (reply.exceptionDetails) {
+    const thrown = reply.exceptionDetails.exception?.description ?? reply.exceptionDetails.text;
+    throw new Error(`the page threw during the input profile: ${thrown}`);
+  }
+  return reply.result.value;
+}
+
+// Reloads the page of `send` and resolves once the new document is complete. The marker lives only on the old document,
+// so the poll reads the new document's state.
+async function reloadPage(send) {
+  await evaluateOnPage(send, `globalThis.${RELOAD_MARKER} = true`);
+  await send('Page.reload', {});
+  const deadline = Date.now() + RELOAD_WAIT_MS;
+  while (!(await evaluateOnPage(send, `!globalThis.${RELOAD_MARKER} && document.readyState === 'complete'`))) {
+    if (Date.now() > deadline) throw new Error(`the page did not finish reloading within ${RELOAD_WAIT_MS} ms`);
+    await sleep(50);
+  }
+}
+
+// Sets the viewport and touch emulation of SIZE's device on the page of `send`. A desktop size on a page with touch
+// emulation turns the emulation off and reloads the page, so the call resolves on the reloaded page.
 export async function applyInputProfile(send, size) {
   const profile = profileOf(size);
   await send('Emulation.setDeviceMetricsOverride', {
@@ -92,22 +132,21 @@ export async function applyInputProfile(send, size) {
     deviceScaleFactor: 1,
     mobile: profile.touch,
   });
-  await send('Emulation.setTouchEmulationEnabled', { enabled: profile.touch, maxTouchPoints: MAX_TOUCH_POINTS });
+  if (profile.touch) {
+    await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: MAX_TOUCH_POINTS });
+    return;
+  }
+  const touchOn = await evaluateOnPage(send, TOUCH_ON_EXPRESSION);
+  if (!touchOn) return;
+  await send('Emulation.setTouchEmulationEnabled', { enabled: false, maxTouchPoints: MAX_TOUCH_POINTS });
+  await reloadPage(send);
 }
 
 // Reads the loaded page's matchMedia answers and checks them against SIZE's profile. Resolves to the readings, which
 // the driver records as evidence, when they match. Rejects with an InputProfileRefused when they do not.
 export async function checkInputProfile(send, size) {
   const profile = profileOf(size);
-  const reply = await send('Runtime.evaluate', {
-    expression: `(${readQueries})(${JSON.stringify(QUERIES)})`,
-    returnByValue: true,
-  });
-  if (reply.exceptionDetails) {
-    const thrown = reply.exceptionDetails.exception?.description ?? reply.exceptionDetails.text;
-    throw new Error(`the page threw while the input profile read its media queries: ${thrown}`);
-  }
-  const readings = reply.result.value;
+  const readings = await evaluateOnPage(send, `(${readQueries})(${JSON.stringify(QUERIES)})`);
   const expected = expectedReadings(profile.touch);
   if (QUERIES.some((query) => readings[query] !== expected[query])) {
     throw new InputProfileRefused(sizeName(size), expected, readings);

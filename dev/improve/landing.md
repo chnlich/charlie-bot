@@ -170,6 +170,9 @@ Every capture and click runs under the input profile of its window size, which `
 a desktop size reports a fine pointer that hovers, and the phone size reports touch with no hover. The driver's browser
 starts with `INPUT_BROWSER_ARGS` from that module, and the driver checks each size's profile on the loaded page before
 its first capture at that size. A page whose hover and pointer answers differ from the profile is not captured.
+A desktop size that follows the phone size reloads the page inside `applyInputProfile`, because only a reload restores
+the desktop pointer after the phone's touch emulation. That call resolves once the reloaded page has loaded, so the check
+and the capture at that size run on the new document, and the page state from earlier sizes is gone.
 
 Every click a driver makes goes through the click helper, `dev/improve/ux-click-target.mjs` (`clickTarget`). The helper
 resolves the control's selector at the moment of each click, so a click never lands on a position that an earlier load

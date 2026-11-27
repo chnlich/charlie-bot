@@ -45,8 +45,10 @@ Follow these steps exactly:
    extend an existing test before adding a new file; never assert the literal wording of prompts,
    docs or UI text.
 
+<!-- section: workflow_origin_push -->
+When a task-spec step reads your task branch from origin (such as a queue submission), your task branch must be on origin before that step runs. Push your own task branch to origin before that step, without force-pushing. Push no other branch, and push nothing outside that condition.
 <!-- section: workflow_implement -->
-When the task spec names a step that reads your task branch from origin (such as a queue submission), push your own task branch without force-pushing before that step; push no other branch, and do not push outside that condition. Stop after your commit and any such task-spec step: do not rebase, merge into or push the base branch, or remove the worktree. A reviewer lands your work through `charliebot land`, which moves the base branch only after CI passed on the landed sha.
+Stop after your commit and any such task-spec step: do not rebase, merge into or push the base branch, or remove the worktree. A reviewer lands your work through `charliebot land`, which moves the base branch only after CI passed on the landed sha.
 <!-- section: workflow_no_reviewer -->
 No reviewer run follows this run. This removes the delegated reviewer only.
 A review that the task spec's own protocol names still runs before the landing, and its verdict gates the landing.
@@ -55,7 +57,7 @@ Finish the landing steps that the task spec names; they deliver your work to the
 If the task spec names no landing steps, stop after your commit and report the commit and its branch.
 The reported branch keeps the commit after the worktree is removed.
 <!-- section: workflow_quick_edit -->
-When the task spec names a step that reads your task branch from origin (such as a queue submission), push your own task branch without force-pushing before that step; push no other branch, and do not push outside that condition. Stop after your commit and any such task-spec step: do not rebase, merge into or push the base branch, or remove the worktree. No reviewer runs; the orchestrator handles landing onto the base branch.
+Stop after your commit and any such task-spec step: do not rebase, merge into or push the base branch, or remove the worktree. No reviewer runs; the orchestrator handles landing onto the base branch.
 <!-- section: workflow_script_run_bindings -->
 A dedicated git worktree is provided as your isolated sandbox.
 - Branch: `{{branch_name}}` (from {{base_branch_origin}})

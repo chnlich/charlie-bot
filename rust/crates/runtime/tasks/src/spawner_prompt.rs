@@ -95,6 +95,11 @@ pub const WORKFLOW_NO_REVIEWER_SECTION: &str = "workflow_no_reviewer";
 /// The section that holds the iteration report contract the improve loop renders (`ITERATION_REPORTS_SECTION`).
 pub const ITERATION_REPORTS_SECTION: &str = "iteration_reports";
 
+/// The section that requires a work run to push its task branch before a task-spec step reads it from origin
+/// (`WORKFLOW_ORIGIN_PUSH_SECTION`). The repo workflows of implement, quick-edit and script-run render it, and so does
+/// the type-less implement that no reviewer follows; the repo-less workflows have no task branch and do not.
+pub const WORKFLOW_ORIGIN_PUSH_SECTION: &str = "workflow_origin_push";
+
 // The marker-section ids of `prompts/task_base.md` and `prompts/worker.md`. `load_worker_prompt_sections` merges the
 // two templates into one section namespace, and `required_worker_sections` lists what that merge must hold, so a
 // reader in `prompts` names a section here.
@@ -139,9 +144,13 @@ pub const USER_DECISIONS_SECTION: &str = "user_decisions";
 /// cold-read tasks have no workflow section.
 pub fn workflow_prompt_sections(task_type: TaskType) -> Option<&'static [&'static str]> {
   match task_type {
-    TaskType::Implement => Some(&["worktree_bindings", "workflow_steps", "workflow_implement"]),
-    TaskType::QuickEdit => Some(&["worktree_bindings", "workflow_steps", "workflow_quick_edit"]),
-    TaskType::ScriptRun => Some(&["workflow_script_run_bindings", "workflow_script_run"]),
+    TaskType::Implement => {
+      Some(&["worktree_bindings", "workflow_steps", WORKFLOW_ORIGIN_PUSH_SECTION, "workflow_implement"])
+    }
+    TaskType::QuickEdit => {
+      Some(&["worktree_bindings", "workflow_steps", WORKFLOW_ORIGIN_PUSH_SECTION, "workflow_quick_edit"])
+    }
+    TaskType::ScriptRun => Some(&["workflow_script_run_bindings", WORKFLOW_ORIGIN_PUSH_SECTION, "workflow_script_run"]),
     TaskType::Verify | TaskType::ColdRead => None,
   }
 }
@@ -160,7 +169,7 @@ pub fn reviewer_run_follows(task: Option<&TaskSpec>) -> bool {
 pub fn task_workflow_sections(task: Option<&TaskSpec>) -> Option<&'static [&'static str]> {
   let task_type = task.and_then(|task| task.task_type).unwrap_or(TaskType::Implement);
   if task_type == TaskType::Implement && !reviewer_run_follows(task) {
-    return Some(&["worktree_bindings", "workflow_steps", WORKFLOW_NO_REVIEWER_SECTION]);
+    return Some(&["worktree_bindings", "workflow_steps", WORKFLOW_ORIGIN_PUSH_SECTION, WORKFLOW_NO_REVIEWER_SECTION]);
   }
   workflow_prompt_sections(task_type)
 }
@@ -352,6 +361,31 @@ pub fn worktree_binding_tokens(
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn a_worker_prompt_without_the_origin_push_section_is_refused() {
+    let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).expect("repo root");
+    let repo = tempfile::tempdir().expect("temp repo");
+    fs::create_dir(repo.path().join("prompts")).expect("prompts dir");
+    fs::copy(checkout.join("prompts/task_base.md"), repo.path().join("prompts/task_base.md")).expect("task base");
+    let worker = fs::read_to_string(checkout.join(WORKER_PROMPT_PATH)).expect("worker prompt");
+    let marker = format!("<!-- section: {WORKFLOW_ORIGIN_PUSH_SECTION} -->");
+    let mut kept = String::new();
+    let mut skipping = false;
+    for line in worker.lines() {
+      if line.starts_with("<!-- section:") {
+        skipping = line == marker;
+      }
+      if !skipping {
+        kept.push_str(line);
+        kept.push('\n');
+      }
+    }
+    assert!(!kept.contains(&marker), "the fixture must drop the section");
+    fs::write(repo.path().join(WORKER_PROMPT_PATH), kept).expect("worker prompt without the section");
+    let error = load_worker_prompt_sections(repo.path()).expect_err("a worker prompt lacking the section fails");
+    assert!(error.to_string().contains(WORKFLOW_ORIGIN_PUSH_SECTION), "{error}");
+  }
 
   #[test]
   fn missing_worker_prompt_names_the_path_and_the_stale_checkout() {

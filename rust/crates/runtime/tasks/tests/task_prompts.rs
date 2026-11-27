@@ -501,6 +501,39 @@ async fn implement_work_harness_keeps_the_reviewer_stop_line() {
   assert!(!worker.contains(sections["workflow_no_reviewer"].trim()), "{worker}");
 }
 
+/// Every work contract that pushes its task branch carries the origin-push rule once: implement, quick-edit,
+/// script-run, and the type-less implement that no reviewer follows.
+#[test]
+fn origin_push_rule_renders_once_in_every_work_contract() {
+  let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).expect("repo root");
+  let sections = charliebot_tasks::spawner_prompt::load_worker_prompt_sections(checkout).expect("worker sections");
+  let rule = sections["workflow_origin_push"].trim();
+  assert!(!rule.is_empty());
+  let task = |task_type: Option<TaskType>| TaskSpec {
+    goal: "goal".to_string(),
+    repo_path: Some("/tmp/repo".to_string()),
+    base_branch: None,
+    task_type,
+    keep_worktree: false,
+    cold_read: None,
+    approver: TaskApprover::User,
+    improve_host: None,
+  };
+  let cases = [
+    ("implement", Some(task(Some(TaskType::Implement)))),
+    ("quick-edit", Some(task(Some(TaskType::QuickEdit)))),
+    ("script-run", Some(task(Some(TaskType::ScriptRun)))),
+    ("type-less implement without a reviewer", Some(task(None))),
+  ];
+  for (name, spec) in cases {
+    let ids = charliebot_tasks::spawner_prompt::task_workflow_sections(spec.as_ref())
+      .unwrap_or_else(|| panic!("{name} renders workflow sections"));
+    assert!(ids.contains(&"workflow_origin_push"), "{name}: {ids:?}");
+    let rendered: String = ids.iter().map(|id| sections[*id].as_str()).collect::<Vec<_>>().join("\n");
+    assert_eq!(rendered.matches(rule).count(), 1, "{name}");
+  }
+}
+
 /// The joined task_base and worker blocks are separate segments; the workflow contract lives in the worker block.
 fn worker_block(snapshot: &PromptSnapshot) -> &str {
   snapshot

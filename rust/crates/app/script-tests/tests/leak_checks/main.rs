@@ -2102,10 +2102,15 @@ fn a_signalled_in_round_pr_merge_removes_its_entry_on_exit() {
   // The process group the shell leads, read from /proc, since the signal must reach the waiting shell and the
   // `acquire` child it runs, as a cut tool call reaches them.
   let stat = std::fs::read_to_string(format!("/proc/{}/stat", child.id())).expect("the shell runs");
-  let group: u32 =
-    stat.rsplit(") ").next().expect("the stat holds the state fields").split_whitespace().nth(2).expect("pgrp")
-      .parse()
-      .expect("pgrp is a number");
+  let group: u32 = stat
+    .rsplit(") ")
+    .next()
+    .expect("the stat holds the state fields")
+    .split_whitespace()
+    .nth(2)
+    .expect("pgrp")
+    .parse()
+    .expect("pgrp is a number");
   // SAFETY: the signal goes to the process group the signalled shell leads, the group a cut tool call signals.
   let sent = unsafe { libc::kill(-(group as libc::pid_t), libc::SIGTERM) };
   assert_eq!(sent, 0, "the signal reaches the process group {} of pid {}", group, child.id());

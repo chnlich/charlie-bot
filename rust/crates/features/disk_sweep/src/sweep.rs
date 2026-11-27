@@ -6,7 +6,6 @@ use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use charliebot_core::config::CharlieBotConfig;
-use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_core::{event_types, paths};
 use charliebot_registry::worktree_removal::{WorktreeRemoval, WorktreeRemovalFn};
 use charliebot_store::chat_events::{self, LineRule, LogReadError};
@@ -522,7 +521,7 @@ fn worktree_rows(
 }
 
 fn task_keep_worktree(sessions_root: &Path, session_id: &str) -> Result<Option<bool>> {
-  let metadata_path = sessions_root.join(session_id).join(METADATA_FILE_NAME);
+  let metadata_path = layout::metadata_path(&sessions_root.join(session_id));
   if !metadata_path.is_file() {
     return Ok(None);
   }

@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use crate::chat_event_type::{ChatEventType, SystemSubtype, UnnamedPass};
 use crate::hooks::EventRenderer;
 use crate::message_events;
-use crate::metadata::{BASE_BRANCH_FIELD, TASK_STATE};
+use crate::metadata::{BASE_BRANCH_FIELD, PARENT_SESSION_ID, TASK_STATE};
 use crate::run_display_state::RunDisplayState;
 use crate::streaming::{APPEND, LENGTH, THINKING_APPEND, THINKING_LENGTH};
 use crate::tool_rows::{SubagentStatus, ToolRow, ToolRows, Usage, tool_preview};
@@ -800,7 +800,7 @@ fn render_builtin<E: EventFields>(
     ChatEventType::CloneStart => json!({
       "role": event_types::CLONE_START,
       "content": event.field("parent_session_name").map(EventFields::to_owned_value).unwrap_or_else(|| json!("Unknown session")),
-      "parent_session_id": event.field("parent_session_id").map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
+      (PARENT_SESSION_ID): event.field(PARENT_SESSION_ID).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
     }),
     ChatEventType::ScheduledTrigger => json!({
       "role": event_types::SCHEDULED_TRIGGER,

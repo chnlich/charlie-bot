@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use crate::control_events::{self, ACTOR_USER};
 use crate::layout;
-use crate::metadata::{EventRef, SessionMetadata, SessionStatus, TaskProfile, UtcDateTime};
+use crate::metadata::{EventRef, PARENT_SESSION_ID, SessionMetadata, SessionStatus, TaskProfile, UtcDateTime};
 use crate::sidebar_state;
 use crate::{ControlGuard, SESSION_NOT_FOUND_DETAIL, Store, StoreError, StoreHookFuture, StoreResult, ndjson};
 
@@ -298,7 +298,7 @@ impl Store {
 
     let clone_event = json!({
       "type": event_types::CLONE_START,
-      "parent_session_id": parent_id,
+      (PARENT_SESSION_ID): parent_id,
       "parent_session_name": parent.name,
       "timestamp": timefmt::utc_now_iso(),
     });

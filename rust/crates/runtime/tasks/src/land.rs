@@ -36,7 +36,7 @@
 //! past the pushed commit's base; every other refusal — a hook, a dead transport, a timeout, an
 //! auth error — ends the call at once with git's stderr verbatim.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::DirBuilder;
 use std::future::Future;
 use std::io::Read as _;
@@ -46,7 +46,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::Context as _;
-use charliebot_backend_check::{Vocabulary, gate};
+use charliebot_backend_check::{Hit, Vocabulary, gate};
 use charliebot_core::git::ancestry_args;
 use charliebot_core::home::CHARLIEBOT_HOME_ENV;
 use charliebot_core::text_repr::string_field;
@@ -702,22 +702,47 @@ fn crate_of(file: &Path, worktree: &Path) -> anyhow::Result<Option<PathBuf>> {
   Ok(None)
 }
 
-/// Refuses a landing whose `paths` hold a hardcoded backend choice that the check does not exempt, and names each site.
-/// The check reads the host's vocabulary: the registered packages and the profile's `config.yaml`.
-fn refuse_backend_literals(registry: &Registry, home: &Path, worktree: &Path, paths: &[PathBuf]) -> anyhow::Result<()> {
+/// The lines a landing adds, per file: the new-side line numbers that a diff marks as added, keyed by the path relative
+/// to the worktree.
+type AddedLines = BTreeMap<PathBuf, BTreeSet<usize>>;
+
+/// Refuses a landing whose `paths` hold a hardcoded backend choice that the check does not exempt on a line the landing
+/// adds, and names each site. `added` holds those lines. The check reads the host's vocabulary: the registered packages
+/// and the profile's `config.yaml`.
+fn refuse_backend_literals(
+  registry: &Registry,
+  home: &Path,
+  worktree: &Path,
+  paths: &[PathBuf],
+  added: &AddedLines,
+) -> anyhow::Result<()> {
   let roots = gate::roots(Some(worktree), home)?;
   let vocab = Vocabulary::load(registry, home, None)?;
-  let hits = gate::open_hits(&vocab, &roots, paths)?;
+  let hits = keep_added_sites(gate::open_hits(&vocab, &roots, paths)?, worktree, added)?;
   if hits.is_empty() {
     return Ok(());
   }
   anyhow::bail!(
-    "landing refused before any push or PR create: a hardcoded backend choice in the changed files:\n{}",
+    "landing refused before any push or PR create: a hardcoded backend choice on a line this landing adds:\n{}",
     gate::report(&hits, roots.repo.as_deref())
   )
 }
 
-/// The backend-literal check of a landing: the files the task branch changes against the base.
+/// The hits that sit on a line the landing adds. The scan canonicalizes the paths it reads, so each hit is matched
+/// under the canonical worktree; a hit outside the worktree is no line of the landing.
+fn keep_added_sites(hits: Vec<Hit>, worktree: &Path, added: &AddedLines) -> anyhow::Result<Vec<Hit>> {
+  let root =
+    std::fs::canonicalize(worktree).with_context(|| format!("cannot read the worktree {}", worktree.display()))?;
+  let is_added = |hit: &Hit| {
+    let lines = hit.path.strip_prefix(&root).ok().and_then(|relative| added.get(relative));
+    lines.is_some_and(|lines| lines.contains(&hit.line))
+  };
+  Ok(hits.into_iter().filter(is_added).collect())
+}
+
+/// The backend-literal check of a landing. It scans the files the task branch changes against the base, whole, and
+/// refuses only a literal on a line the landing adds: a line that the task base or the default branch already holds is
+/// not a site of this landing.
 async fn backend_literal_check(
   registry: &Registry,
   home: &Path,
@@ -725,7 +750,116 @@ async fn backend_literal_check(
   base_ref: &str,
 ) -> anyhow::Result<()> {
   let changed = changed_paths(worktree, base_ref).await?;
-  refuse_backend_literals(registry, home, worktree, &literal_check_paths(worktree, &changed)?)
+  let default_ref = default_branch_ref(worktree).await?;
+  let added = landing_added_lines(worktree, base_ref, &default_ref).await?;
+  refuse_backend_literals(registry, home, worktree, &literal_check_paths(worktree, &changed)?, &added)
+}
+
+/// The default branch's remote-tracking ref, fetched so that the comparison reads its current tip. A default branch
+/// that cannot be read, fetched or resolved is an error: the check never narrows to the task base alone.
+async fn default_branch_ref(worktree: &Path) -> anyhow::Result<String> {
+  let (branch, _) = git::git_remote_default_branch_and_tip(worktree)
+    .await
+    .map_err(|error| anyhow::anyhow!("cannot read the default branch of {}: {error}", worktree.display()))?;
+  fetch_base(worktree, &branch).await?;
+  let reference = format!("origin/{branch}");
+  git::git_rev_parse(worktree, &reference)
+    .await
+    .ok_or_else(|| anyhow::anyhow!("{reference} does not resolve in {}", worktree.display()))?;
+  Ok(reference)
+}
+
+/// The lines a landing adds: those that the three-dot diff against the task base and the three-dot diff against the
+/// default branch both mark as added. Each diff numbers the head's lines, so the two sets compare line for line.
+async fn landing_added_lines(worktree: &Path, base_ref: &str, default_ref: &str) -> anyhow::Result<AddedLines> {
+  let against_base = added_lines(worktree, &format!("{base_ref}...HEAD")).await?;
+  let against_default = added_lines(worktree, &format!("{default_ref}...HEAD")).await?;
+  let mut both = AddedLines::new();
+  for (path, lines) in against_base {
+    let Some(default_lines) = against_default.get(&path) else { continue };
+    let shared: BTreeSet<usize> = lines.intersection(default_lines).copied().collect();
+    if !shared.is_empty() {
+      both.insert(path, shared);
+    }
+  }
+  Ok(both)
+}
+
+/// The new-side lines that `git diff <range>` marks as added, per file. A rename reads as a delete and an add, so the
+/// renamed file keeps all its lines, and `--text` reads a file that git marks binary as text.
+async fn added_lines(worktree: &Path, range: &str) -> anyhow::Result<AddedLines> {
+  let (ok, out, err) = git::git_stdout(
+    worktree,
+    &[
+      "-c",
+      "core.quotePath=false",
+      "diff",
+      "--text",
+      "--no-renames",
+      "--no-color",
+      "--no-ext-diff",
+      "--no-textconv",
+      "--src-prefix=a/",
+      "--dst-prefix=b/",
+      "-U0",
+      range,
+    ],
+    GIT_READ_TIMEOUT,
+    "git diff",
+  )
+  .await;
+  if !ok {
+    anyhow::bail!("git diff {range} failed in {}: {err}", worktree.display());
+  }
+  parse_added_lines(&out).with_context(|| format!("reading git diff {range} in {}", worktree.display()))
+}
+
+/// Reads the added lines of a `-U0` diff text. A `diff --git` line opens a file's header, and the header's `+++` line
+/// names the file; a `@@` line opens a hunk, whose new-side range lists the added lines. A hunk's body lines begin with
+/// `+`, `-` or a space, so a body line never reads as a header.
+fn parse_added_lines(diff: &str) -> anyhow::Result<AddedLines> {
+  let mut added = AddedLines::new();
+  let mut file: Option<PathBuf> = None;
+  let mut in_header = false;
+  for line in diff.lines() {
+    if line.starts_with("diff --git ") {
+      file = None;
+      in_header = true;
+    } else if let Some(path) = line.strip_prefix("+++ ").filter(|_| in_header) {
+      file = header_path(path)?;
+    } else if let Some(hunk) = line.strip_prefix("@@ ") {
+      in_header = false;
+      let new_side = hunk
+        .split_whitespace()
+        .find_map(|token| token.strip_prefix('+'))
+        .ok_or_else(|| anyhow::anyhow!("a hunk header without a new-side range: {line}"))?;
+      let (start, count) = new_side.split_once(',').unwrap_or((new_side, "1"));
+      let start: usize = start.parse().with_context(|| format!("the hunk header {line}"))?;
+      let count: usize = count.parse().with_context(|| format!("the hunk header {line}"))?;
+      if count == 0 {
+        continue;
+      }
+      let path = file.as_ref().ok_or_else(|| anyhow::anyhow!("the hunk {line} has no file header"))?;
+      added.entry(path.clone()).or_default().extend(start..start + count);
+    }
+  }
+  Ok(added)
+}
+
+/// The path that a `+++` header names: `b/<path>`, or none for `/dev/null`, a deleted file. git quotes a path with
+/// unusual characters, and the check reads only plain paths, so a quoted one is an error.
+fn header_path(path: &str) -> anyhow::Result<Option<PathBuf>> {
+  if path == "/dev/null" {
+    return Ok(None);
+  }
+  // git ends a name that holds a space with a tab, so the tab is not part of the path.
+  let plain = path.trim_end_matches('\t');
+  anyhow::ensure!(
+    !plain.starts_with('"'),
+    "git quoted the diff path {plain}; the backend-literal check reads plain paths"
+  );
+  let relative = plain.strip_prefix("b/").ok_or_else(|| anyhow::anyhow!("the file header {path} has no b/ path"))?;
+  Ok(Some(PathBuf::from(relative)))
 }
 
 /// Run one landing: the whole flow, ending in a written `landing.json` and the record returned. The backend-literal
@@ -2667,12 +2801,16 @@ esac
     fs::create_dir_all(worktree.join("scripts")).unwrap();
     fs::write(worktree.join("scripts/run.sh"), "echo ok\nmodel=claude-opus-5-5\n").unwrap();
     let paths = [worktree.join("scripts/run.sh")];
-    let text =
-      format!("{:#}", refuse_backend_literals(&Registry::new(), &worktree.join("home"), worktree, &paths).unwrap_err());
+    let added = AddedLines::from([(PathBuf::from("scripts/run.sh"), BTreeSet::from([2]))]);
+    let text = format!(
+      "{:#}",
+      refuse_backend_literals(&Registry::new(), &worktree.join("home"), worktree, &paths, &added).unwrap_err()
+    );
     assert!(text.contains("scripts/run.sh:2") && text.contains("claude-opus-5-5"), "{text}");
 
     fs::write(worktree.join("scripts/run.sh"), "echo ok\n").unwrap();
-    refuse_backend_literals(&Registry::new(), &worktree.join("home"), worktree, &paths).expect("a clean file passes");
+    refuse_backend_literals(&Registry::new(), &worktree.join("home"), worktree, &paths, &added)
+      .expect("a clean file passes");
   }
 }
 
@@ -2981,6 +3119,87 @@ mod synthetic_repo_tests {
     let text = format!("{error:#}");
     assert!(text.contains("scripts/new.sh:1") && text.contains("claude-opus-5-5"), "{text}");
     assert!(!text.contains("old.sh"), "{text}");
+  }
+
+  /// A task branch on an older feature base, `origin/older`, that main has since passed. Main holds a model id in
+  /// `scripts/old.sh`; the task branch merged main into its own work, so that file reaches the branch with main's line.
+  fn merged_older_feature(root: &Path) -> std::path::PathBuf {
+    let repo = synthetic_repo(root, "main");
+    git_ok(&repo, &["switch", "-q", "-c", "older"]);
+    commit(&repo, "older.txt", "older\n");
+    git_ok(&repo, &["push", "-q", "-u", "origin", "older"]);
+    git_ok(&repo, &["switch", "-q", "main"]);
+    fs::create_dir(repo.join("scripts")).expect("the scripts directory is created");
+    commit(&repo, "scripts/old.sh", "model=claude-opus-5-5\n");
+    git_ok(&repo, &["push", "-q", "origin", "main"]);
+    git_ok(&repo, &["switch", "-q", "-c", "feature", "origin/older"]);
+    git_ok(&repo, &["merge", "-q", "--no-edit", "origin/main"]);
+    commit(&repo, "notes.txt", "clean\n");
+    repo
+  }
+
+  /// The literal main holds reaches the branch only through the merge, and the branch leaves that file as main has it:
+  /// the literal is no site of this landing, so the clean branch passes.
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_literal_the_default_branch_holds_is_no_site_of_a_merged_feature_landing() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    let repo = merged_older_feature(root.path());
+    backend_literal_check(&Registry::new(), &root.path().join("home"), &repo, "origin/older")
+      .await
+      .expect("main's literal is not a site of this landing");
+  }
+
+  /// A literal that the branch adds on a new line is refused on that line, and main's literal is not named.
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_literal_the_branch_adds_on_a_merged_feature_landing_is_refused_on_its_line() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    let repo = merged_older_feature(root.path());
+    commit(&repo, "scripts/new run.sh", "echo ok\nmodel=claude-opus-5-5\n");
+    let error = backend_literal_check(&Registry::new(), &root.path().join("home"), &repo, "origin/older")
+      .await
+      .expect_err("the branch adds a literal");
+    let text = format!("{error:#}");
+    assert!(text.contains("new run.sh:2") && text.contains("claude-opus-5-5"), "{text}");
+    assert!(!text.contains("old.sh"), "{text}");
+  }
+
+  /// The branch edits main's file without touching main's literal line, which passes. A second literal in that file is
+  /// refused on its own line only.
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_second_literal_in_a_file_main_holds_is_refused_on_its_own_line() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    let repo = merged_older_feature(root.path());
+    let home = root.path().join("home");
+    commit(&repo, "scripts/old.sh", "model=claude-opus-5-5\necho done\n");
+    backend_literal_check(&Registry::new(), &home, &repo, "origin/older")
+      .await
+      .expect("main's literal line is not a site of this landing");
+
+    commit(&repo, "scripts/old.sh", "model=claude-opus-5-5\necho done\nmodel=claude-haiku-5-5\n");
+    let error = backend_literal_check(&Registry::new(), &home, &repo, "origin/older")
+      .await
+      .expect_err("the branch adds a second literal");
+    let text = format!("{error:#}");
+    assert!(text.contains("old.sh:3") && text.contains("claude-haiku-5-5"), "{text}");
+    assert!(!text.contains("old.sh:1"), "{text}");
+  }
+
+  /// The comparison base is the remote's default branch, so a remote whose default branch cannot be read fails the
+  /// check instead of narrowing it to the task base.
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_backend_literal_check_whose_default_branch_cannot_be_read_fails() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    let repo = synthetic_repo(root.path(), "feature");
+    let missing = root.path().join("missing.git");
+    git_ok(&repo, &["remote", "set-url", "origin", missing.to_str().expect("the path is UTF-8")]);
+    let error = backend_literal_check(&Registry::new(), &root.path().join("home"), &repo, "origin/main")
+      .await
+      .expect_err("the default branch cannot be read");
+    assert!(format!("{error:#}").contains("default branch"), "{error:#}");
   }
 
   #[tokio::test]

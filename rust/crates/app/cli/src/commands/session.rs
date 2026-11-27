@@ -125,7 +125,7 @@ struct TreeArgs {
   /// Page size, 1..500
   #[arg(long, default_value_t = SESSION_PAGE_LIMIT_DEFAULT)]
   limit: i64,
-  /// next_cursor from the previous page
+  /// Next cursor from the previous page
   #[arg(long)]
   cursor: Option<String>,
 }

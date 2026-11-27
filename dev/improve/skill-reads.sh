@@ -8,7 +8,9 @@
 # token of a `command` value is a read only when it is rooted: absolute, `~/`, `$VAR/`, or git's `<ref>:skills/...`.
 # A relative `skills/<name>` in a command, such as a commit message or a heredoc body, reads nothing. A path is a skill
 # file when it has a `skills/<name>` component. A skill file is allowed only under <skills dir> and holds no `..` step.
-# Each other one is printed to stderr as `skill read outside <skills dir>: <path>`.
+# Each other one is printed to stderr as `skill read outside <skills dir>: <path>`. A read target whose tool_use pairs
+# with a tool_result carrying is_error true read nothing and is no hit. A tool_use with no result, a result without
+# is_error, and a command token count whatever their results say: only a failed result clears its own read target.
 #
 # Exit codes: 0 every skill read lies under the skills dir; 1 a skill read lies outside it, and each is printed;
 # 2 the arguments are wrong, or an event log is unreadable or not JSON, and stderr names it.
@@ -24,24 +26,43 @@ skills=${1%/}
 shift
 [[ -n $skills ]] || { printf 'skill-reads: the skills dir is empty\n' >&2; exit 2; }
 
+read -r -d '' failed_program <<'JQ' || true
+[ .. | objects | select(.type == "tool_result") | select(.is_error == true) | .tool_use_id ] | .[]
+JQ
 read -r -d '' program <<'JQ' || true
 def skill_file: test("(^|[/:])skills/[^/]+");
 def rooted: test("^(/|~/|[$])") or contains(":skills/");
 def allowed: startswith($skills + "/") and (contains("/../") | not);
 def path_key: . == "file_path" or . == "notebook_path" or . == "path";
-[ .. | objects | to_entries[]
-  | select(.value | type == "string")
-  | if (.key | path_key) then .value
-    elif .key == "command" then (.value | scan("[^ \t\n\"'`;|&()<>=]+") | select(rooted))
-    else empty end
-  | select(skill_file and (allowed | not)) ]
+# Every string token of the document, read the way `..` reaches it. A path value under the `input` of a tool_use whose
+# id is in $ids is exempt when $exempt holds: the call's result is an error, so the call read nothing.
+def reads($ids; $exempt):
+  if type == "object" then
+    . as $call
+    | (to_entries[]
+        | select(.value | type == "string")
+        | if (.key | path_key) then (if $exempt then empty else .value end)
+          elif .key == "command" then (.value | scan("[^ \t\n\"'`;|&()<>=]+") | select(rooted))
+          else empty end),
+      (to_entries[] | .key as $key
+        | .value | reads($ids; $key == "input" and $call.type == "tool_use" and ($ids | index($call.id)) != null))
+  elif type == "array" then .[] | reads($ids; false)
+  else empty end;
+[ $failed | scan("[^\n]+") ] as $ids
+| [ reads($ids; false) | select(skill_file and (allowed | not)) ]
 | unique[]
 JQ
 
 status=0
 for events in "$@"; do
   [[ -r $events ]] || { printf 'skill-reads: cannot read the event log: %s\n' "$events" >&2; exit 2; }
-  hits=$(jq -r --arg skills "$skills" "$program" "$events") || {
+  # The failed ids of the log, one per line: a result line pairs with its call by id, so the main pass, which runs one
+  # program per line, takes the ids it collected rather than looking for a result in the call's own line.
+  failed=$(jq -r "$failed_program" "$events") || {
+    printf 'skill-reads: the event log is not JSON: %s\n' "$events" >&2
+    exit 2
+  }
+  hits=$(jq -r --arg skills "$skills" --arg failed "$failed" "$program" "$events") || {
     printf 'skill-reads: the event log is not JSON: %s\n' "$events" >&2
     exit 2
   }

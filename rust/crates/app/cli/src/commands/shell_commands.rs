@@ -1,8 +1,10 @@
 //! Reads a shell command text into its command positions, for the kill guard, the kill-signal check and the wait guard.
 //!
 //! The reader follows POSIX word rules closely enough to tell a command word from an argument. Quotes and escapes are
-//! removed. A `$(...)` or backtick body is a command of its own. A `case` arm's pattern is no command, so the reader
-//! reads through the arm's `)`. A heredoc body is data, except that an unquoted delimiter runs the body's substitutions;
+//! removed. A `$(...)` or backtick body is a command of its own, and a `${...}` parameter expansion, nesting included,
+//! is part of the word that holds it, so a `)` or `(` in its pattern is no group or case-arm bracket. A `case` arm's
+//! pattern is no command, so the reader reads through the arm's `)`. A heredoc body is data, except that an unquoted
+//! delimiter runs the body's substitutions;
 //! `Bodies::Script` also reads the body of a heredoc that a shell or `ssh` runs as a script. A command word that holds a
 //! variable or a substitution has no known name, so it reads as `Invocation::Dynamic`. Each command reads with the line
 //! its first word is on. A wrapper such as `sudo` or `timeout` runs the command named by one of its arguments, so the
@@ -340,6 +342,10 @@ impl Reader {
           placeholder(&mut word);
           self.read_dollar_paren()?;
         }
+        '$' if self.peek() == Some('{') => {
+          placeholder(&mut word);
+          self.read_parameter_expansion()?;
+        }
         '<' | '>' => self.redirect(character, &mut word, &mut words),
         '#' if word.is_none() => self.skip_comment(),
         '\\' => match self.bump() {
@@ -372,6 +378,33 @@ impl Reader {
     self.read_list(Some(')'))
   }
 
+  /// Reads `${...}` starting with the `{` that `peek()` saw after `$`.
+  ///
+  /// Bash finds the expansion's closing `}` by skipping an escape's next character, a quoted region, and the
+  /// `${...}`, `$(...)` and backtick substitutions that the expansion nests. A `(` or `)` elsewhere in the expansion,
+  /// as in `${stat##*) }` or `${var%(*}`, is a pattern character, not a group bracket. A quote hides a `}` inside it
+  /// even when the expansion itself is inside a double-quoted string.
+  fn read_parameter_expansion(&mut self) -> Result<(), String> {
+    self.bump();
+    loop {
+      let Some(character) = self.bump() else {
+        return Err("the text ends before `}`".to_string());
+      };
+      match character {
+        '\\' => {
+          self.bump();
+        }
+        '\'' => self.read_single_quoted(&mut None)?,
+        '"' => self.read_double_quoted(&mut None)?,
+        '$' if self.peek() == Some('(') => self.read_dollar_paren()?,
+        '$' if self.peek() == Some('{') => self.read_parameter_expansion()?,
+        '`' => self.read_list(Some('`'))?,
+        '}' => return Ok(()),
+        _ => {}
+      }
+    }
+  }
+
   /// Scans an arithmetic expansion body after `$((` up to its matching `))`, parsing any substitutions inside it.
   /// Returns `Ok(false)` if the form is not closed as arithmetic so the caller can backtrack to `$(...)`.
   fn read_arithmetic(&mut self) -> Result<bool, String> {
@@ -394,6 +427,7 @@ impl Reader {
         }
         ';' | '\n' if depth == 0 => return Ok(false),
         '$' if self.peek() == Some('(') => self.read_dollar_paren()?,
+        '$' if self.peek() == Some('{') => self.read_parameter_expansion()?,
         '`' => self.read_list(Some('`'))?,
         '\'' if !self.skip_single_quoted() => return Ok(false),
         '"' if !self.read_arith_double_quoted()? => return Ok(false),
@@ -424,6 +458,7 @@ impl Reader {
           self.bump();
         }
         Some('$') if self.peek() == Some('(') => self.read_dollar_paren()?,
+        Some('$') if self.peek() == Some('{') => self.read_parameter_expansion()?,
         Some('`') => self.read_list(Some('`'))?,
         Some(_) => {}
       }
@@ -578,6 +613,7 @@ impl Reader {
           self.bump();
         }
         '$' if self.peek() == Some('(') => self.read_dollar_paren()?,
+        '$' if self.peek() == Some('{') => self.read_parameter_expansion()?,
         '`' => self.read_list(Some('`'))?,
         _ => {}
       }
@@ -619,6 +655,10 @@ impl Reader {
           placeholder(word);
           self.read_dollar_paren()?;
         }
+        Some('$') if self.peek() == Some('{') => {
+          placeholder(word);
+          self.read_parameter_expansion()?;
+        }
         Some('`') => {
           placeholder(word);
           self.read_list(Some('`'))?;
@@ -639,4 +679,68 @@ fn push(word: &mut Option<String>, character: char) {
 
 fn placeholder(word: &mut Option<String>) {
   open(word).push(SUBSTITUTION);
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn reads(text: &str) -> Result<Vec<Invocation>, String> {
+    invocations(text, Bodies::Data, &[])
+  }
+
+  fn command_words(found: &[Invocation]) -> Vec<&str> {
+    found
+      .iter()
+      .filter_map(|invocation| match invocation {
+        Invocation::Call { words, .. } => words.first().map(String::as_str),
+        Invocation::Dynamic => None,
+      })
+      .collect()
+  }
+
+  #[test]
+  fn a_parameter_expansion_pattern_reads_as_one_unit() {
+    // The `)` in `${stat##*) }` belongs to the pattern, as bash reads it, so the next command still reads.
+    let found = reads("rest=${stat##*) }\nread -r state <<<\"$rest\"\n").unwrap();
+    assert_eq!(command_words(&found), ["read"]);
+  }
+
+  #[test]
+  fn a_parameter_expansion_pattern_that_opens_a_parenthesis_reads() {
+    let found = reads("x=$(echo ${var%(*})\n").unwrap();
+    assert_eq!(command_words(&found), ["echo"]);
+  }
+
+  #[test]
+  fn a_parameter_expansion_and_a_command_substitution_nest() {
+    // The substitution runs inside the expansion, and an expansion's own `)` does not close the substitution around it.
+    assert_eq!(command_words(&reads("echo ${a:-$(b)}\n").unwrap()), ["b", "echo"]);
+    assert_eq!(command_words(&reads("echo $(echo ${a:-)})\n").unwrap()), ["echo", "echo"]);
+  }
+
+  #[test]
+  fn a_parameter_expansion_nests_another_expansion() {
+    let found = reads("echo ${a:-${b%)}}\n").unwrap();
+    assert_eq!(command_words(&found), ["echo"]);
+  }
+
+  #[test]
+  fn a_parameter_expansion_holds_a_quoted_parenthesis() {
+    // The `)` in the quoted part of the expansion is part of the expansion, as it is in bash.
+    let found = reads("echo \"${a:-\"x)\"}\"\n").unwrap();
+    assert_eq!(command_words(&found), ["echo"]);
+  }
+
+  #[test]
+  fn an_unbalanced_parenthesis_outside_an_expansion_is_refused() {
+    let error = reads("echo )\n").unwrap_err();
+    assert!(error.contains("never opened"), "{error}");
+  }
+
+  #[test]
+  fn an_unterminated_parameter_expansion_is_refused() {
+    let error = reads("echo ${a:-x\n").unwrap_err();
+    assert!(error.contains("before `}`"), "{error}");
+  }
 }

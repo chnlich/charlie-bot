@@ -20,10 +20,12 @@
 # the screenshot check, whose body lacks a full-URL View line, or whose View value
 # does not start with `/`, and carries the View lines into the squash commit message.
 # For a web page change, the review record (--review-record: the review's events.ndjson, kept by landing.md Step 6
-# as review-events.ndjson in the round's evidence directory) must show a read of each screenshot the body names.
-# It also refuses a merge unless the newest verdict comment names the pull request's head sha and reports no
-# issues. pr-comment --verdict-head writes that comment: its first line names the head the review read, and the
-# call refuses any head that is not the pull request's full head sha as GitHub reads it now, before it posts.
+# as review-events.ndjson in the round's evidence directory) must show a read of each screenshot the body names. A
+# pre-review record that pr-create wrote for its own check is refused, and a web page change's evidence layout is
+# checked again (dev/improve/web-evidence.sh). It also refuses a merge unless the newest verdict comment names the
+# pull request's head sha and reports no issues. pr-comment --verdict-head writes that comment: its first line names
+# the head the review read, and the call refuses any head that is not the pull request's full head sha as GitHub
+# reads it now, before it posts.
 # pr-merge also refuses a merge whose round event log or review record reads a skill file outside the round's skills
 # directory; dev/improve/skill-reads.sh names each such path. Inside a round (IMPROVE_LAUNCH_DIR is set) the round's
 # facts are the live launch directory and IMPROVE_SKILLS_DIR. A merge outside a round takes them from the evidence
@@ -36,10 +38,9 @@
 # (classic) lookup. It reads the PR's URL with gh pr view, then sends the
 # checked title and body with gh api -X PATCH on the REST pull endpoint.
 #
-# pr-create runs the merge's screenshot check on the changed paths, the evidence directory and the body before the
-# review (dev/improve/web-evidence.sh). A change that alters no web page passes. A web page change needs an evidence
-# directory whose top level holds exactly the screenshots the body names, and it must pass `charliebot screenshots
-# check`, so a layout fault stops the round before the review instead of at the merge.
+# pr-create runs the screenshot gate before the review (dev/improve/web-evidence.sh). A change that alters no web page
+# passes. A web page change must pass the evidence layout and the merge's screenshot check, so a fault stops the round
+# before the review instead of at the merge. landing.md (Web page evidence) states the layout.
 #
 # pr-create and pr-merge check the side record citations of the body (dev/improve/side-record.sh): a line that
 # contains `Side record:` outside the accepted form is refused. The cited records are checked against the round's

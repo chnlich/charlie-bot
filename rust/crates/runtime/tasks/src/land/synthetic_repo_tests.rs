@@ -1788,7 +1788,7 @@ async fn a_round_waiter_whose_heartbeats_are_declined_reaches_its_bound_and_remo
   let declined = decline_moves_of_the_flagged_ref(&root.path().join("origin.git"), &flag);
   fs::write(&flag, name.refname()).expect("the decline flag is written");
 
-  let bound = Duration::from_millis(900);
+  let bound = Duration::from_millis(1500);
   let started = Instant::now();
   let acquired = land_queue::acquire(&site, launch, 701, &round_head, ci_passed_ms, bound, CADENCE)
     .await

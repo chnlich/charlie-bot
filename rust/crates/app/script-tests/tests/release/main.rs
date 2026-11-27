@@ -1377,6 +1377,68 @@ fn test_trial_config_carries_the_live_weight_switches_and_an_absent_one_takes_it
   assert!(config.contains("\n  enable_session_io_weight: false\n"), "{config}");
 }
 
+/// The label the trial configures for the mock home's backend id: the live pool label's length and shape, a group, a
+/// tool, a model and the id in parentheses. It names no real model, option, pool or gateway.
+const MOCK_BACKEND_LABEL: &str = "Synthetic test group · Mock CLI · Mock model 10.5 (mock-backend)";
+
+/// The JSON value that a chat page assigns to `name`, as in `const BACKEND_POOLS=[...];`. The page's script is
+/// minified, so the first `name=` whose text parses as a JSON value is the assignment: the page's functions also write
+/// `name=` with a variable on the right.
+fn page_value(page: &str, name: &str) -> serde_json::Value {
+  let marker = format!("{name}=");
+  page
+    .match_indices(&marker)
+    .find_map(|(at, _)| {
+      let rest = &page[at + marker.len()..];
+      let value = serde_json::Deserializer::from_str(rest).into_iter::<serde_json::Value>().next();
+      value?.ok()
+    })
+    .unwrap_or_else(|| panic!("the chat page assigns {name} a JSON value"))
+}
+
+/// A serve trial configures the mock home's backend id as a pool under a label of the live pool label's length. Its
+/// chat page carries that label in the tables the page's script renders the header and the sidebar from, and lists the
+/// backend as a configured entry, so the page shows no "(not in config)" mark.
+#[test]
+#[ignore = "integration"]
+fn test_trial_serve_configures_the_mock_home_backend_under_a_live_length_label() {
+  assert_eq!(MOCK_BACKEND_LABEL.chars().count(), 64, "the live pool label is 64 characters");
+  let world = ServeWorld::new();
+  let seed = world.seed_home("seed", "2");
+  let manifest: serde_json::Value =
+    serde_json::from_slice(&fs::read(seed.join("manifest.json")).expect("the manifest")).expect("the manifest JSON");
+  let session = manifest["sessions"][0]["id"].as_str().expect("the seed's first session");
+  let tree_root = world.tree_root();
+  let copied = world.sandbox.root().join("trial-config.yaml");
+  let page = world.sandbox.root().join("chat-page.html");
+  let copied_text = copied.display().to_string();
+  let page_text = page.display().to_string();
+  let fetch = format!(
+    concat!(
+      "cp \"$CHARLIEBOT_HOME/config.yaml\" \"$1\" && ",
+      "curl -sf -H \"$CHARLIEBOT_SERVE_AUTH_HEADER\" \"$CHARLIEBOT_SERVE_URL/?session={session}\" -o \"$2\""
+    ),
+    session = session
+  );
+
+  let run = world.serve(tree_root, &seed, &["sh", "-c", &fetch, "sh", &copied_text, &page_text]);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  let config = fs::read_to_string(&copied).expect("the trial config");
+  let entry = format!("\n    - id: mock-backend\n      label: {MOCK_BACKEND_LABEL}\n      rule: rotate\n");
+  assert!(config.contains(&entry), "the trial config configures mock-backend as a pool: {config}");
+  let html = fs::read_to_string(&page).expect("the chat page");
+  let pools = page_value(&html, "BACKEND_POOLS");
+  let listed = pools
+    .as_array()
+    .expect("the page's pool list")
+    .iter()
+    .any(|pool| pool["id"] == "mock-backend" && pool["label"] == MOCK_BACKEND_LABEL);
+  assert!(listed, "the chat page lists mock-backend as a pool under the label: {pools}");
+  assert_eq!(page_value(&html, "BACKEND_LABELS")["mock-backend"][""][0], MOCK_BACKEND_LABEL);
+  assert_eq!(page_value(&html, "ACTIVE_SESSION_BACKEND"), "mock-backend");
+}
+
 /// A serve trial fires no scheduled task: every cron task of its home reads `enabled: false` while the server serves,
 /// the copied seed tasks and the repo's defaults alike, and the server seeded none of the defaults at its start, so the
 /// disabled files were in place before the server started.

@@ -443,6 +443,10 @@ if ! STAND_IN_OPTIONS=$("$TRIAL_CLI" release-helper stand-in-options "$REPO_ROOT
 fi
 STAND_IN_OPTION_LINES=$(sed 's/^/    /' <<<"$STAND_IN_OPTIONS")
 
+# The mock home's sessions name the backend mock-backend. The trial configures it as a pool whose label has the live pool
+# label's length and shape (group, tool, model, id in parentheses), so the pages show a live-length label. It is a pool,
+# not an option: the startup check refuses an option whose id lacks its type's usage prefix. No backends.calls target
+# names mock-backend, so the entry adds no call; its member is the probe option that the trial's pool already names.
 # backends.calls.new_session names the trial's first option, the target new sessions took before the key was required.
 # Without it the server refuses to start.
 cat >"$TRIAL_CB_HOME/config.yaml" <<EOF
@@ -466,6 +470,11 @@ backends:
   pools:
     - id: pool
       label: Pool
+      rule: rotate
+      members:
+        - charlie-code-release-trial
+    - id: mock-backend
+      label: Synthetic test group · Mock CLI · Mock model 10.5 (mock-backend)
       rule: rotate
       members:
         - charlie-code-release-trial

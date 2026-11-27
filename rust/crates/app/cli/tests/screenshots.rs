@@ -107,6 +107,18 @@ fn a_web_page_change_whose_review_read_every_named_screenshot_passes_and_names_t
 
 #[test]
 #[ignore = "integration"]
+fn a_rust_page_source_is_a_web_page_change_that_names_itself() {
+  let dir = evidence_dir(2);
+  let names = shot_names(2);
+  let review = review_of(&names, &names);
+  let output = check(dir.path(), "rust/crates/features/files/src/error_page.rs\n", Some(review.path()));
+
+  assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+  assert!(String::from_utf8_lossy(&output.stdout).contains("web page change: 1 path(s)"), "{}", text(&output));
+}
+
+#[test]
+#[ignore = "integration"]
 fn a_web_page_change_whose_review_missed_a_named_screenshot_exits_1() {
   let dir = evidence_dir(2);
   let names = shot_names(2);

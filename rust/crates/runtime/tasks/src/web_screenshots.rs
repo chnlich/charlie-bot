@@ -11,7 +11,11 @@
 //! - each page package's `templates/**` and `static/**` under `web/features/<name>` or `web/backends/<name>`, such
 //!   as `web/features/cron/templates/cron/page_modals.html`, `web/features/cron/static/cron.js` and
 //!   `web/backends/codex/templates/codex/codex.css`;
-//! - `prompts/*_template.html`, such as `prompts/plan_template.html`.
+//! - `prompts/*_template.html`, such as `prompts/plan_template.html`;
+//! - the Rust sources and HTML assets that build a page or a page fragment a browser receives, such as
+//!   `rust/crates/features/files/src/error_page.rs` (the file server's 403 page) and
+//!   `rust/crates/app/server/src/login_page.html`. `rust_pages::PAGE_SOURCES` lists them, and the harness check in
+//!   `rust_pages.rs` fails a new one until it is listed.
 //!
 //! The exempt set passes the gate: every other path under `web/`, such as `web/tests/**`, `web/package.json`,
 //! `web/package-lock.json`, `web/tailwind*.config.js` and a package's own file outside its `templates/` and
@@ -49,6 +53,8 @@ use charliebot_core::event_types::{
 use charliebot_registry::pages::is_served_path;
 use serde_json::Value;
 
+mod rust_pages;
+
 /// The CSS window sizes, at device pixel ratio 1, that a screenshot of a changed page shows: a 1920 wide
 /// screen at 125% zoom (`1536`), a narrower desktop window, and a phone. A capture at another scale, such as
 /// a 125% zoom's 1920 px width, matches no size.
@@ -75,10 +81,12 @@ const VIEW_PREFIX: &str = "View:";
 /// The punctuation that wraps a path in prose or a Markdown list, which a named path sheds (`PATH_WRAPPERS`).
 const PATH_WRAPPERS: &[char] = &['`', '\'', '"', '(', ')', '[', ']', '<', '>', ',', ';', ':', '.'];
 
-/// Whether a changed path alters a CharlieBot web page: a file the server serves or renders (`is_served_path`), or
-/// a page template directly under `prompts/` (`changes_web_page`).
+/// Whether a changed path alters a CharlieBot web page: a file the server serves or renders (`is_served_path`), a
+/// page template directly under `prompts/` (`changes_web_page`), or a Rust source that builds a served page or
+/// fragment (`rust_pages::is_page_source`).
 pub fn is_web_page_path(path: &str) -> bool {
   is_served_path(path)
+    || rust_pages::is_page_source(path)
     || path.strip_prefix("prompts/").is_some_and(|name| !name.contains('/') && name.ends_with("_template.html"))
 }
 
@@ -660,6 +668,8 @@ mod tests {
       "web/features/cron/static/cron.js",
       "web/backends/codex/templates/codex/codex.css",
       "prompts/plan_template.html",
+      "rust/crates/features/files/src/error_page.rs",
+      "rust/crates/app/server/src/login_page.html",
     ] {
       assert!(changes_web_page(&[served.to_string()]), "{served} is served");
     }
@@ -669,6 +679,7 @@ mod tests {
       "web/backends/opencode/cgroup_join.sh",
       "web/tailwind.config.js",
       "rust/crates/x/src/lib.rs",
+      "rust/crates/features/taste/src/candidates.rs",
       "prompts/master.md",
       "prompts/sub/plan_template.html",
     ] {

@@ -36,6 +36,7 @@ use charliebot_store::run_records::{
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value};
+use time::Duration;
 
 use crate::capture::capture_into_default_ledger;
 
@@ -180,7 +181,7 @@ fn is_cold_session(meta: &Map<String, Value>, now: UtcDateTime) -> bool {
   let Some(updated_at) = instant_of_stamp(&text_repr::value_str(raw_updated)) else {
     return false;
   };
-  now.into_inner() - updated_at >= time::Duration::days(MIN_IDLE_DAYS)
+  now.into_inner() - updated_at >= Duration::days(MIN_IDLE_DAYS)
 }
 
 /// The text of a truthy value, and none for a falsy one.

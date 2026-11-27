@@ -1,6 +1,7 @@
 //! The usage page's rows: the ledger's per-(source, model) rows folded into one page row per model, and each account
 //! attributed to the card it counts under.
 
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 use charliebot_core::config::CharlieBotConfig;
@@ -278,9 +279,7 @@ pub(crate) fn sum_counts<'a>(items: impl Iterator<Item = &'a Count>, label: &'st
 
 /// The first item of the largest key, so a tie keeps the earlier item.
 pub(crate) fn first_max_by<T>(items: &[T], key: impl Fn(&T) -> Count) -> Option<&T> {
-  items
-    .iter()
-    .reduce(|best, item| if key(item).compare(key(best)) == std::cmp::Ordering::Greater { item } else { best })
+  items.iter().reduce(|best, item| if key(item).compare(key(best)) == Ordering::Greater { item } else { best })
 }
 
 #[cfg(test)]

@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::Context;
 use charliebot_store::run_logs;
 use charliebot_store::run_records::parse_event_line;
-use memchr::memmem;
+use memchr::memmem::Finder;
 use serde_json::Value;
 
 pub fn parse_marker_lines<M: AsRef<[u8]>>(path: &Path, markers: &[M]) -> anyhow::Result<Vec<Value>> {
@@ -16,7 +16,7 @@ pub fn parse_marker_lines<M: AsRef<[u8]>>(path: &Path, markers: &[M]) -> anyhow:
   let mut line = Vec::new();
   let mut objects = Vec::new();
   let finders =
-    markers.iter().map(AsRef::as_ref).filter(|marker| !marker.is_empty()).map(memmem::Finder::new).collect::<Vec<_>>();
+    markers.iter().map(AsRef::as_ref).filter(|marker| !marker.is_empty()).map(Finder::new).collect::<Vec<_>>();
   loop {
     line.clear();
     if reader.read_until(b'\n', &mut line).with_context(|| format!("reading {}", path.display()))? == 0 {

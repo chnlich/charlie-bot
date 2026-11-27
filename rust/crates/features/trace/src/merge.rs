@@ -122,6 +122,9 @@ static RUNTIME: OnceLock<Arc<MergeRuntime>> = OnceLock::new();
 
 fn runtime() -> Arc<MergeRuntime> {
   Arc::clone(RUNTIME.get_or_init(|| {
+    // SAFETY: `sysconf` takes an integer name and no pointers, and it only reads system configuration, so the call
+    // has no memory-safety precondition. It returns -1 when the value cannot be determined; the check below falls
+    // back to 2 CPUs for any result under 1.
     let cpu_count = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
     let cpus = if cpu_count < 1 { 2 } else { cpu_count as usize };
     Arc::new(MergeRuntime { gate: Arc::new(Semaphore::new(cpus.min(4))), flights: Mutex::new(HashMap::new()) })

@@ -177,7 +177,8 @@ fn maps_fields(line: &[u8]) -> Option<&[u8]> {
 
 fn cmdline_paths(cmdline: &[u8], cwd: Option<&Path>) -> Vec<PathBuf> {
   let mut result = Vec::new();
-  for argument in cmdline.split(|byte| *byte == 0).filter(|argument| !argument.is_empty()) {
+  let arguments = cmdline.split(|byte| *byte == 0).filter(|argument| !argument.is_empty());
+  for argument in arguments {
     let mut values = vec![argument];
     if let Some(index) = argument.iter().position(|byte| *byte == b'=') {
       values.push(&argument[index + 1..]);

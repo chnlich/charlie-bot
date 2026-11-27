@@ -257,7 +257,8 @@ impl SweepReport {
     let mut lines: Vec<String> =
       self.rows.iter().filter(|row| row.action != SweepAction::Skip).map(SweepRow::to_tsv).collect();
     let mut skipped: BTreeMap<&str, usize> = BTreeMap::new();
-    for row in self.rows.iter().filter(|row| row.action == SweepAction::Skip) {
+    let skipped_rows = self.rows.iter().filter(|row| row.action == SweepAction::Skip);
+    for row in skipped_rows {
       let code = row.reason.split(':').next().unwrap_or("");
       *skipped.entry(code).or_default() += 1;
     }

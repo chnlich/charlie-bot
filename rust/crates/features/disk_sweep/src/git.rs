@@ -117,7 +117,8 @@ fn has_non_rebuildable_ignored(repo: &Path) -> Result<bool> {
     .split(|byte| *byte == 0)
     .filter_map(|entry| entry.strip_prefix(b"!! "))
     .map(|raw| raw.strip_suffix(b"/").unwrap_or(raw));
-  for raw in ignored_files.chain(ignored_entries) {
+  let ignored = ignored_files.chain(ignored_entries);
+  for raw in ignored {
     let relative = PathBuf::from(OsString::from_vec(raw.to_vec()));
     if !is_rebuildable(repo, &relative, &main_venv)? {
       return Ok(true);
@@ -211,7 +212,8 @@ pub(crate) fn decode_error(bytes: &[u8]) -> String {
 fn submodule_paths(repo: &Path) -> Result<HashSet<Vec<u8>>> {
   let output = git_output(repo, &["ls-files", "--stage", "-z"], None)?;
   let mut result = HashSet::new();
-  for entry in output.split(|byte| *byte == 0).filter(|entry| !entry.is_empty()) {
+  let entries = output.split(|byte| *byte == 0).filter(|entry| !entry.is_empty());
+  for entry in entries {
     let Some(separator) = entry.iter().position(|byte| *byte == b'\t') else {
       bail!("git ls-files --stage returned a row without a path in {}", repo.display());
     };
@@ -229,7 +231,8 @@ fn has_dirty_submodule(repo: &Path, status: &[u8]) -> Result<bool> {
   if paths.is_empty() {
     return Ok(false);
   }
-  for entry in status.split(|byte| *byte == 0).filter(|entry| entry.len() >= 4) {
+  let changed_entries = status.split(|byte| *byte == 0).filter(|entry| entry.len() >= 4);
+  for entry in changed_entries {
     let changed_path = &entry[3..];
     if paths.contains(changed_path) && &entry[..2] != b"  " {
       return Ok(true);
@@ -243,7 +246,8 @@ fn has_dirty_submodule(repo: &Path, status: &[u8]) -> Result<bool> {
 fn expanded_untracked_paths(repo: &Path) -> Result<Vec<PathBuf>> {
   let listed = git_output(repo, &["ls-files", "--others", "--exclude-standard", "-z"], None)?;
   let mut candidates: HashSet<PathBuf> = HashSet::new();
-  for raw in listed.split(|byte| *byte == 0).filter(|raw| !raw.is_empty()) {
+  let untracked = listed.split(|byte| *byte == 0).filter(|raw| !raw.is_empty());
+  for raw in untracked {
     let relative = PathBuf::from(OsString::from_vec(raw.to_vec()));
     let path = repo.join(relative);
     let metadata =

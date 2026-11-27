@@ -1,5 +1,5 @@
 //! The file server's routes and answers: the file views, the directory listing, the file and run-log answers, and the
-//! readable page that refuses a path the reader cannot open.
+//! 403 page that refuses a path the server process cannot read, or an entry that is not a regular file.
 //!
 //! The public surface is `api.rs`, which hands the routes and the matcher to the registry.
 
@@ -82,8 +82,8 @@ fn listing_icons(startup: &StartupState) -> Result<Arc<Icons>, String> {
   templating.icons().map_err(|error| error.to_string())
 }
 
-/// The answer below the file views, on the blocking pool: a directory listing, a file, or the readable page that
-/// refuses the path.
+/// The answer below the file views, on the blocking pool: a directory listing, a file, the 403 page that refuses the
+/// path, or the 404 or 500 that the route raises for it.
 fn answer_from_disk(
   path: &str,
   method: &Method,
@@ -109,7 +109,7 @@ fn answer_from_disk(
     Ok(metadata) if !metadata.is_file() => {
       error_page::refusal(error_page::Refusal::NotRegularFile, &display, &url_prefix)
     }
-    // The open tells whether the reader may read the file, before the static answer opens it for its own read.
+    // The open tells whether the server process may read the file, before the static answer opens it for its own read.
     Ok(_) => match fs::File::open(&fs_path) {
       Ok(_) => answer_file(&fs_path, method, headers),
       Err(error) if error.kind() == ErrorKind::PermissionDenied => denied(&fs_path, &display, &url_prefix),
@@ -118,8 +118,9 @@ fn answer_from_disk(
   }
 }
 
-/// The refusal of a path whose permissions deny the reader. A directory is refused as unlistable. Any other entry is
-/// refused as unreadable, including an entry under a directory the reader cannot search: its metadata is denied too.
+/// The refusal of a path whose permissions deny the server process. A directory whose metadata the server process can
+/// read is refused as unlistable. Any other entry is refused as unreadable, including an entry under a directory that
+/// the server process cannot search, because its metadata is denied too.
 fn denied(fs_path: &FsPath, display: &str, url_prefix: &str) -> Response {
   let is_dir = fs::metadata(fs_path).is_ok_and(|metadata| metadata.is_dir());
   let refusal = if is_dir { error_page::Refusal::DirectoryDenied } else { error_page::Refusal::EntryDenied };

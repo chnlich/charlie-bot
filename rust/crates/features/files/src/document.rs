@@ -3,7 +3,8 @@
 //! Below 600 px each listing row is a grid: the icon beside the name, and the size and modified time beneath the name.
 //! The viewport meta makes a phone use its own width, so the query matches the screen and not a 980 px desktop layout.
 
-/// The page titled `title`, with `body` in its body. Both arguments are markup that the caller has escaped.
+/// The page titled `title`, with `body` in its body. The caller escapes each value taken from the file system or the
+/// request before it puts the value into either argument.
 ///
 /// The format reads the style's doubled braces as single ones.
 pub(crate) fn document(title: &str, body: &str) -> String {

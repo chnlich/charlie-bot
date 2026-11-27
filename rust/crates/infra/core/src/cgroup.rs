@@ -18,6 +18,8 @@ pub const SESSION_CGROUP_PREFIX: &str = "charliebot-sess-";
 pub const AGENTS_SLICE: &str = "charliebot-agents.slice";
 /// The control file that lists a cgroup's processes; a write to it moves a pid into the cgroup.
 pub const PROCS_FILE_NAME: &str = "cgroup.procs";
+/// The launch environment variable naming the session cgroup.
+pub const SESSION_CGROUP_ENV: &str = "CHARLIEBOT_SESSION_CGROUP";
 /// The pre-split parent of the session slices. Nothing is created here; a leftover directory is still swept.
 pub const RETIRED_APP_SLICE: &str = "app.slice";
 /// The log event stating that the session cgroup limits are on.

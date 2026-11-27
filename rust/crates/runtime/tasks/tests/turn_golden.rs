@@ -827,7 +827,7 @@ async fn run_turn_with_spawn(
   on_task_spawn: TaskSpawnCallback,
 ) -> anyhow::Result<Option<String>> {
   let run_id = format!("run-{event_id}");
-  let transport_dir = cfg.sessions_dir().join(&meta.id).join("runs").join(&run_id);
+  let transport_dir = cfg.sessions_dir().join(&meta.id).join("data").join("runs").join(&run_id);
   std::fs::create_dir_all(&transport_dir)?;
   queue
     .run_message(MasterTurnRequest {

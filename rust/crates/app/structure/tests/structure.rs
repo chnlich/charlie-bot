@@ -928,11 +928,7 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use the `TASK_FILE_NAME` of `backends/charlie_code/src/charlie_code_cli.rs`.",
   },
   OwnerRow { name: ".claude", owner: "infra/core", hint: "Use `charliebot_core::home::CLAUDE_CONFIG_DIR_NAME`." },
-  OwnerRow {
-    name: "PreToolUse",
-    owner: "backends/claude_code",
-    hint: "Use `charliebot_claude_code::claude_launch::PRE_TOOL_USE_HOOK_EVENT`.",
-  },
+  OwnerRow { name: "PreToolUse", owner: "infra/core", hint: "Use `charliebot_core::hooks::PRE_TOOL_USE_HOOK_EVENT`." },
   OwnerRow {
     name: "SessionStart",
     owner: "backends/claude_code",

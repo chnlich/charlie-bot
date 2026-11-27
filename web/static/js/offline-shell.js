@@ -107,7 +107,10 @@ function recordUpdateState(worker) {
 
 function currentWorkerRegistration() {
   return navigator.serviceWorker.register(OFFLINE_SHELL_WORKER_PATH, {scope: '/?session='})
-    .catch((err) => console.error('offline shell worker registration failed:', err))
+    .catch((err) => {
+      console.error('offline shell worker registration failed:', err);
+      throw err;
+    })
     .then(() => navigator.serviceWorker.getRegistration())
     .then((registration) => (registration === undefined ? undefined : whenUpdateTakesOver(registration)));
 }

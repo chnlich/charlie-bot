@@ -615,11 +615,16 @@ export class Tabs {
   // record, so a trace can name the requests a worker sent for the page.
   #worker = new Tab('service worker', null);
   #workerSessions = new Set();
+  // TEMPORARY (regloop repro, never lands): whether the browser attaches DevTools to each origin service worker
+  // target as it is created, and every such target's lifecycle in wall-clock ms, keyed by target id:
+  // {url, createdAt, destroyedAt, crashedAt, crash, infoChanges, attach}. `attach` is null when attaching is off.
+  #attachWorkers;
+  workerTargets = new Map();
 
   // `origin` is the TLS front's https origin; the page and its socket live there. `cdn` says where the CDN files come
   // from: `local` answers them in the browser from the assets, so they never cross the link; `link` lets the browser
   // fetch them, through the proxy, from the CDN stand-in.
-  constructor({ browser, assets, accessKey, origin, cdn }) {
+  constructor({ browser, assets, accessKey, origin, cdn, attachWorkers = true }) {
     if (cdn !== 'local' && cdn !== 'link') {
       throw new Error(`cdn must be local or link, got ${cdn}`);
     }
@@ -628,17 +633,35 @@ export class Tabs {
     this.#accessKey = accessKey;
     this.#origin = origin;
     this.#cdn = cdn;
+    this.#attachWorkers = attachWorkers;
     browser.send('Target.setDiscoverTargets', { discover: true });
     browser.onMessage((message) => {
       if (message.method === 'Target.targetCreated' && message.params.targetInfo.type === 'service_worker' &&
           message.params.targetInfo.url.startsWith(this.#origin)) {
         const { targetId } = message.params.targetInfo;
+        const record = {
+          url: message.params.targetInfo.url, createdAt: Date.now(), destroyedAt: null, crashedAt: null, crash: null,
+          infoChanges: [], detachedAt: null,
+          attach: this.#attachWorkers
+            ? { requestedAt: Date.now(), attachedAt: null, enabledAt: null, error: null, errorAt: null }
+            : null,
+        };
+        this.workerTargets.set(targetId, record);
+        if (!this.#attachWorkers) {
+          return;
+        }
         browser.send('Target.attachToTarget', { targetId, flatten: true })
           .then(({ sessionId }) => {
+            record.attach.attachedAt = Date.now();
             this.#workerSessions.add(sessionId);
             return browser.sendTo(sessionId, 'Network.enable');
           })
+          .then(() => {
+            record.attach.enabledAt = Date.now();
+          })
           .catch((error) => {
+            record.attach.error = error.message;
+            record.attach.errorAt = Date.now();
             // The target ended before the call answered: Chrome answers a dead target's session with this message,
             // and a browser close fails every call it still holds. Only the worker's own trace is lost.
             if (error.message.endsWith(': Inspected target navigated or closed') ||
@@ -648,6 +671,22 @@ export class Tabs {
             }
             throw error;
           });
+        return;
+      }
+      const known = message.params?.targetId ?? message.params?.targetInfo?.targetId;
+      if (!message.sessionId && known !== undefined && this.workerTargets.has(known)) {
+        const record = this.workerTargets.get(known);
+        if (message.method === 'Target.targetDestroyed') record.destroyedAt = Date.now();
+        if (message.method === 'Target.targetCrashed') {
+          record.crashedAt = Date.now();
+          record.crash = { status: message.params.status, errorCode: message.params.errorCode };
+        }
+        if (message.method === 'Target.targetInfoChanged') {
+          record.infoChanges.push({
+            at: Date.now(), url: message.params.targetInfo.url, attached: message.params.targetInfo.attached,
+          });
+        }
+        if (message.method === 'Target.detachedFromTarget') record.detachedAt = Date.now();
         return;
       }
       if (message.sessionId && this.#workerSessions.has(message.sessionId)) {

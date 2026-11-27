@@ -89,7 +89,7 @@ async function withCleanup(body, cleanup) {
 // the first tab before the page's own scripts. One fresh browser profile behind one fresh proxy, with the tabs
 // `tabNames` names. Exported for the For-you scenario's first-open cells, which need a fresh profile that has opened no
 // page yet.
-export async function withLink(ctx, label, tabNames, body, initScript = null) {
+export async function withLink(ctx, label, tabNames, body, initScript = null, tabsOptions = {}) {
   const proxy = new ShapingProxy({ target: { host: '127.0.0.1', port: ctx.frontPort } });
   const proxyPort = await proxy.start();
   const profile = `${ctx.runDir}/profile-${label}-${randomTag()}`;
@@ -103,7 +103,7 @@ export async function withLink(ctx, label, tabNames, body, initScript = null) {
   ctx.chromeVersion = browser.version;
   try {
     const tabs = new Tabs({
-      browser, assets: ctx.assets, accessKey: ctx.api.accessKey, origin: ctx.origin, cdn: 'local',
+      browser, assets: ctx.assets, accessKey: ctx.api.accessKey, origin: ctx.origin, cdn: 'local', ...tabsOptions,
     });
     const opened = [];
     for (const [index, name] of tabNames.entries()) {

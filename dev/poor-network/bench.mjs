@@ -48,6 +48,8 @@ import { RateGateError, Segments, StepCapped } from './segments.mjs';
 import { formatSearch, searchScenario } from './search.mjs';
 import { FOR_YOU_SCENARIO, forYouScenario, seedForYouTargets, seedSparseTarget } from './foryou.mjs';
 import { forYouShots } from './foryou-shots.mjs';
+// TEMPORARY (regloop repro, never lands).
+import { REGLOOP_SCENARIO, regLoopScenario } from './regloop.mjs';
 import { deriveSide, formatSide, percentile } from './report.mjs';
 import { TrialWatch } from './trials.mjs';
 
@@ -160,7 +162,8 @@ function parseArgs(argv) {
   }
   const named = new Set(args.scenarios.split(','));
   for (const name of named) {
-    if (!(name in SCENARIOS) && name !== FOR_YOU_SCENARIO && name !== OPEN_SCENARIO && name !== SEARCH_SCENARIO) {
+    if (!(name in SCENARIOS) && name !== FOR_YOU_SCENARIO && name !== OPEN_SCENARIO && name !== SEARCH_SCENARIO &&
+        name !== REGLOOP_SCENARIO) {
       throw new Error(`unknown scenario ${name}`);
     }
   }
@@ -180,6 +183,7 @@ function parseArgs(argv) {
     ...named.has(FOR_YOU_SCENARIO) ? [FOR_YOU_SCENARIO] : [],
     ...named.has(OPEN_SCENARIO) ? [OPEN_SCENARIO] : [],
     ...named.has(SEARCH_SCENARIO) ? [SEARCH_SCENARIO] : [],
+    ...named.has(REGLOOP_SCENARIO) ? [REGLOOP_SCENARIO] : [],
   ];
   return args;
 }
@@ -390,7 +394,7 @@ async function prepareSessions(ctx, args) {
   ctx.assets = await loadAssets(args.assets);
   ctx.replyBytes = replyTextBytes(args.replyDir);
   ctx.sessions = await createSessions(ctx.api);
-  if (args.mode === 'seed' || args.scenarios.includes(FOR_YOU_SCENARIO)) {
+  if (args.mode === 'seed' || args.scenarios.includes(FOR_YOU_SCENARIO) || args.scenarios.includes(REGLOOP_SCENARIO)) {
     ctx.sessions.foryou = await seedForYouTargets(ctx.api, ctx.sessions);
   }
 }
@@ -456,6 +460,8 @@ async function main() {
   const openResult = { cpu: null, reference: null, cells: [], releases: 0 };
   // The search view fills this object once its repetitions end, so a side that fails before then leaves it null.
   let searchResult = null;
+  // TEMPORARY (regloop repro): the loop's load records, written beside the side's own fields.
+  const regloopResult = [];
   let status = 'measured';
   let error = null;
   let exitCode = 1;
@@ -511,6 +517,10 @@ async function main() {
       }
       if (name === SEARCH_SCENARIO) {
         searchResult = await searchScenario(ctx);
+        continue;
+      }
+      if (name === REGLOOP_SCENARIO) {
+        await regLoopScenario(ctx, args.scenarioRepetitions.get(name) ?? args.repetitions, regloopResult, cappedSteps);
         continue;
       }
       const repetitions = args.scenarioRepetitions.get(name) ?? args.repetitions;
@@ -579,6 +589,7 @@ async function main() {
     units: gate.units,
     yields: gate.yields,
   });
+  side.regloop = regloopResult;
   fs.writeFileSync(args.out, `${JSON.stringify(side, null, 2)}\n`);
   process.stderr.write(`wrote ${args.out}\n`);
   if (status === 'failed') {

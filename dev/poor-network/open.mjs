@@ -28,7 +28,7 @@ const STORED_COPY_CONDITIONS = Object.freeze(['release-offline', 'replied-offlin
 // The measured document's worker state, read after its navigation: whether a worker controlled the document, whether a
 // worker answered its navigation (workerStart is 0 when none did), the registration's worker states and the cache
 // names. A stored-copy open that reads the network names the worker that failed to answer it.
-const DOCUMENT_WORKER_STATE = `(async () => {
+export const DOCUMENT_WORKER_STATE = `(async () => {
   const entry = performance.getEntriesByType('navigation')[0] ?? null;
   const registration = await navigator.serviceWorker.getRegistration(location.href);
   return {

@@ -211,7 +211,7 @@ export async function seedSparseTarget(api, backendId) {
 // The init script of a first-open tab. It runs in every document of the tab and reports when the target's marker
 // first shows in the chat, with its document's address, so the driver reads the report of the target's document and
 // not of the page the browser opened first.
-function forYouInitScript(marker) {
+export function forYouInitScript(marker) {
   return `(() => {
     if (window !== window.top) return;
     const report = (fields) => window.${PAGE_REPORT_BINDING}(

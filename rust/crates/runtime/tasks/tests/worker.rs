@@ -376,7 +376,6 @@ impl Root {
   fn new() -> anyhow::Result<Self> {
     let root = Self { dir: tempfile::tempdir()? };
     fs::create_dir_all(root.work())?;
-    fs::create_dir_all(root.events_log().parent().unwrap())?;
     Ok(root)
   }
 
@@ -393,7 +392,7 @@ impl Root {
   }
 
   fn events_log(&self) -> PathBuf {
-    self.home().join("sessions/s1/data/runs/t1/events.jsonl")
+    self.path().join("data").join("events.jsonl")
   }
 
   fn claude(&self, label: &str) -> PathBuf {

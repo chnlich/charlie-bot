@@ -1433,6 +1433,10 @@ mod tests {
     assert_eq!(stored(&home, &sid).await["remaining"], json!(["Read back"]));
     assert_eq!(status_events(&home, &sid).last().expect("an event")["web_status_changed"], json!(["remaining"]));
 
+    // A re-submitted unchanged list is still named in the set's changed fields, which status-reread reads.
+    set_status(&home.features, &sid, r#"{"remaining": ["Read back"]}"#).await.expect("the unchanged list stores");
+    assert_eq!(status_events(&home, &sid).last().expect("an event")["web_status_changed"], json!(["remaining"]));
+
     set_status(&home.features, &sid, r#"{"remaining": []}"#).await.expect("the empty list stores");
     assert_eq!(stored(&home, &sid).await["remaining"], json!([]));
   }

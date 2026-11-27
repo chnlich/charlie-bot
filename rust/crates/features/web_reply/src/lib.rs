@@ -13,6 +13,7 @@ pub mod metadata;
 pub mod pending_wake;
 mod plan_links;
 mod reply;
+mod route_paths;
 mod sidebar;
 pub mod status;
 mod turn_contribution;

@@ -49,6 +49,9 @@ seconds without getting it.
 The bench holds the host's bench lock one step at a time: a preparation stage, or one measurement with the CPU probe
 that starts its segment inside the same step. After each step, when `/proc/locks` lists a process queued behind the
 lock, the bench gives the lock up, waits until that process has taken it, and queues again behind it (`step-gate.mjs`).
+A queued process fails the yield only when the lock has no holder for 60 s (`RELEASE_TAKE_MS`) while it stays queued:
+the time another process holds the lock does not count. The whole yield, the retake included, is bounded by
+`--lock-wait`, and a yield past that bound throws with the waiting pids and the holder.
 A step is capped at 600 s, so the probe and its measurement share one cap. A capped step stops every browser and proxy
 it started and runs once more, probe included; a second pass over the cap is recorded as capped. The preparation stage
 has one attempt, so a pass over its cap fails the side. The lock descriptor is close-on-exec, so a step's children never
@@ -713,7 +716,9 @@ path under a replaced `HOME` and checks that it names the passwd-home file. The 
 search view's arithmetic (see "Search view").
 
 The step-gate tests check the yield rule (a process queued behind the lock gets it after the step it waits for, and
-nothing yields when nothing waits), the cap kill (a capped step's browsers and proxies stop, and the step runs once
+nothing yields when nothing waits), the yield's wait (a holder that keeps the lock past 60 s does not fail the yield, a
+queued process on a free lock fails once 60 s of lock-free time pass, and a yield past its budget throws with the waiting
+pids and the holder), the cap kill (a capped step's browsers and proxies stop, and the step runs once
 more), the descriptor's close-on-exec, and that closing the gate releases the lock. The segment tests check the rate
 gate: a probe outside 3.0 to 10.0 is discarded and rerun once, and a probe inside the range passes whatever its ratio to
 other probes; a second failure is exit 5 with the discarded segments kept in `units[]`. They also check which reads and

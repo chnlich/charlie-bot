@@ -8,14 +8,14 @@
 // The prefix the file server answers on: "/absolute_filepath/", the form written into chat text.
 // rust/crates/infra/compat/src/file_urls.rs's FILE_SERVER_MOUNT owns the prefix. Retired
 // "/files/" and "/file/" links are marked without probing.
-var FILE_SERVER_PREFIXES = ['/absolute_filepath'];
-var FILE_SERVER_PREFIX = FILE_SERVER_PREFIXES[0];
-var FILE_SERVER_PREFIX_GROUP = '(?:' + FILE_SERVER_PREFIXES.join('|') + ')';
-var RETIRED_FILE_SERVER_PREFIXES = ['/files/', '/file/'];
+const FILE_SERVER_PREFIXES = ['/absolute_filepath'];
+const FILE_SERVER_PREFIX = FILE_SERVER_PREFIXES[0];
+const FILE_SERVER_PREFIX_GROUP = '(?:' + FILE_SERVER_PREFIXES.join('|') + ')';
+const RETIRED_FILE_SERVER_PREFIXES = ['/files/', '/file/'];
 
 function absolutePathFromServedPathname(pathname) {
-  for (var i = 0; i < FILE_SERVER_PREFIXES.length; i++) {
-    var prefix = FILE_SERVER_PREFIXES[i] + '/';
+  for (let i = 0; i < FILE_SERVER_PREFIXES.length; i++) {
+    const prefix = FILE_SERVER_PREFIXES[i] + '/';
     if (pathname.indexOf(prefix) !== 0) continue;
     try {
       return '/' + decodeURIComponent(pathname.slice(prefix.length));
@@ -44,7 +44,7 @@ function parseLinkUrl(href) {
 // host (the publish lane and each neighboring port serve their own server), and is left
 // exactly as written. Another hostname is another server, and is returned as written.
 function isFileServerPath(pathname) {
-  for (var i = 0; i < FILE_SERVER_PREFIXES.length; i++) {
+  for (let i = 0; i < FILE_SERVER_PREFIXES.length; i++) {
     if (pathname === FILE_SERVER_PREFIXES[i] || pathname.indexOf(FILE_SERVER_PREFIXES[i] + '/') === 0) return true;
   }
   return false;
@@ -68,8 +68,8 @@ function resolveFileServerUrl(href) {
 // not resolve. It leaves alone a served link whose answer the package's own
 // fetch brings back.
 // ---------------------------------------------------------------------------
-var MISSING_FILE_MARKER_LABEL = 'missing';
-var MISSING_FILE_MARKER_TITLE = 'The file server found nothing at this path';
+const MISSING_FILE_MARKER_LABEL = 'missing';
+const MISSING_FILE_MARKER_TITLE = 'The file server found nothing at this path';
 // Both recognition patterns cut a text run at the same boundaries, so the tail class is one
 // definition shared by both. URL_TAIL_CLASS holds the class. Each pattern appends its own
 // quantifier. It ends the run at whitespace, at the closers markdown and prose
@@ -80,19 +80,19 @@ var MISSING_FILE_MARKER_TITLE = 'The file server found nothing at this path';
 // cuts bare URLs at the same boundary — two copies of one definition, kept in sync by the
 // comments in both files. The modules load independently, so sharing a constant would couple
 // their load order.
-var URL_TAIL_CLASS = '[^\\s\\)\\]"\'`<>\\x7F-\\uFFFF]';
+const URL_TAIL_CLASS = '[^\\s\\)\\]"\'`<>\\x7F-\\uFFFF]';
 // A live link carries one or more tail characters. A retired link may end at its prefix, so it takes zero or more.
-var URL_TAIL_SOURCE = URL_TAIL_CLASS + '+';
+const URL_TAIL_SOURCE = URL_TAIL_CLASS + '+';
 // A run naming a path under the prefix, with or without a scheme and host in front.
-var FILE_SERVER_LINK_SOURCE =
+const FILE_SERVER_LINK_SOURCE =
   '(?:https?:\\/\\/[^\\s]+?)?' + FILE_SERVER_PREFIX_GROUP + '\\/' + URL_TAIL_SOURCE;
-var LINK_TRAILING_PUNCTUATION_RE = /[.,;:!?*，。！？；、：．]+$/;
+const LINK_TRAILING_PUNCTUATION_RE = /[.,;:!?*，。！？；、：．]+$/;
 
 // A family of file links that a package owns. textSource finds the family's links in message
 // text (a RegExp source that ends in FILE_LINK_TAIL_SOURCE). answersFor(pathname) is true for a
 // served path whose missing target the package's own fetch reports. recognizes(url) is true for
 // a same-host URL of the family that the file-server prefix does not resolve.
-var fileLinkFamilies = new Map();
+const fileLinkFamilies = new Map();
 
 function registerFileLinkFamily(family) {
   if (!family || typeof family.name !== 'string' || !family.name || typeof family.textSource !== 'string'
@@ -109,7 +109,7 @@ function missingMarkerInnerHtml() {
 }
 
 function buildMissingMarker() {
-  var marker = document.createElement('span');
+  const marker = document.createElement('span');
   marker.className = 'file-link-missing';
   marker.title = MISSING_FILE_MARKER_TITLE;
   marker.innerHTML = missingMarkerInnerHtml();
@@ -127,19 +127,19 @@ function missingMarkerHtml() {
 // offset just past the link inside a text node, which is where that node has to be split.
 // Element carriers take the marker as a sibling instead.
 function fileServerOccurrence(href, node, kind, end) {
-  var url = resolveFileServerUrl(href);
+  const url = resolveFileServerUrl(href);
   if (!url) return null;
-  var pathname = url.pathname || '';
-  var page = new URL(window.location.href);
+  const pathname = url.pathname || '';
+  const page = new URL(window.location.href);
   if (url.origin !== page.origin) return null;
   if (isRetiredFileServerPath(pathname)) {
     return {key: 'retired:' + url.href, probeUrl: url.href, node: node, kind: kind, end: end, immediate: true};
   }
-  var absPath = absolutePathFromServedPathname(pathname);
+  const absPath = absolutePathFromServedPathname(pathname);
   if (absPath !== null) {
     // A family whose own fetch answers for this path already has a request on the way. Probing
     // it here would be a second request for the same thing.
-    for (var family of fileLinkFamilies.values()) {
+    for (const family of fileLinkFamilies.values()) {
       if (family.answersFor(pathname)) return null;
     }
     return {key: absPath, probeUrl: url.href, node: node, kind: kind, end: end};
@@ -152,9 +152,9 @@ function fileServerOccurrence(href, node, kind, end) {
 // check. A link on another host or port is left as written and unprobed because this server
 // would not answer for that origin.
 function familyOccurrence(url, node, kind, end) {
-  var page = new URL(window.location.href);
+  const page = new URL(window.location.href);
   if (url.origin !== page.origin) return null;
-  for (var family of fileLinkFamilies.values()) {
+  for (const family of fileLinkFamilies.values()) {
     if (family.recognizes(url)) return {key: url.href, probeUrl: url.href, node: node, kind: kind, end: end};
   }
   return null;
@@ -165,18 +165,18 @@ function collectFileServerOccurrences(out, text, node, kind) {
   // One URL run can match several patterns (a scheme-full link under the prefix that a family
   // pattern also finds). The span key keeps such a run one occurrence, so neither its probe
   // budget nor its marker is doubled.
-  var claimed = new Set();
-  var sources = [FILE_SERVER_LINK_SOURCE, RETIRED_FILE_SERVER_LINK_SOURCE];
+  const claimed = new Set();
+  const sources = [FILE_SERVER_LINK_SOURCE, RETIRED_FILE_SERVER_LINK_SOURCE];
   fileLinkFamilies.forEach(function(family) { sources.push(family.textSource); });
   sources.forEach(function(source) {
-    var pattern = new RegExp(source, 'g');
-    var match;
+    const pattern = new RegExp(source, 'g');
+    let match;
     while ((match = pattern.exec(text)) !== null) {
-      var href = match[0].replace(LINK_TRAILING_PUNCTUATION_RE, '');
-      var span = match.index + ':' + (match.index + href.length);
+      const href = match[0].replace(LINK_TRAILING_PUNCTUATION_RE, '');
+      const span = match.index + ':' + (match.index + href.length);
       if (claimed.has(span)) continue;
       claimed.add(span);
-      var occurrence = fileServerOccurrence(href, node, kind, match.index + href.length);
+      const occurrence = fileServerOccurrence(href, node, kind, match.index + href.length);
       if (occurrence) out.push(occurrence);
     }
   });
@@ -193,23 +193,23 @@ function probeFileMissing(probeUrl) {
 
 function markMissingFileLinks(occurrences) {
   if (!occurrences.length) return Promise.resolve();
-  var byKey = new Map();
+  const byKey = new Map();
   occurrences.forEach(function(occurrence) {
-    var group = byKey.get(occurrence.key);
+    let group = byKey.get(occurrence.key);
     if (!group) {
       group = [];
       byKey.set(occurrence.key, group);
     }
     group.push(occurrence);
   });
-  var groups = Array.from(byKey.values());
+  const groups = Array.from(byKey.values());
   // One HEAD per unique probe target — the absolute path for links under the prefix and the
   // literal URL for family links outside it. Retired aliases are marked immediately.
   // All markers wait until probes finish so a text node splits once with every missing link.
   return Promise.all(groups.map(function(group) {
     return group[0].immediate ? Promise.resolve(true) : probeFileMissing(group[0].probeUrl);
   })).then(function(missing) {
-    var marked = [];
+    let marked = [];
     groups.forEach(function(group, index) {
       if (missing[index]) marked = marked.concat(group);
     });
@@ -218,10 +218,10 @@ function markMissingFileLinks(occurrences) {
 }
 
 function markOccurrencesMissing(occurrences) {
-  var textNodes = new Map();
+  const textNodes = new Map();
   occurrences.forEach(function(occurrence) {
     if (occurrence.kind === 'text') {
-      var group = textNodes.get(occurrence.node);
+      let group = textNodes.get(occurrence.node);
       if (!group) {
         group = [];
         textNodes.set(occurrence.node, group);
@@ -237,7 +237,7 @@ function markOccurrencesMissing(occurrences) {
 // The chat can be rebuilt (SPA session switch) while a probe is in flight, which leaves the
 // carrier detached. A marker on a detached node would never be seen, so there is nothing to do.
 function insertMissingMarkerAfter(node) {
-  var parent = node.parentNode;
+  const parent = node.parentNode;
   if (!parent) return;
   parent.insertBefore(buildMissingMarker(), node.nextSibling);
 }
@@ -245,11 +245,11 @@ function insertMissingMarkerAfter(node) {
 // A text node carries no attribute to hang a marker off, so it is split just past each missing
 // link and the marker goes between the halves. Offsets ascend, so one pass rebuilds the node.
 function splitTextNodeAroundMarkers(occurrences, node) {
-  var parent = node.parentNode;
+  const parent = node.parentNode;
   if (!parent) return;
-  var text = node.nodeValue || '';
-  var pieces = document.createDocumentFragment();
-  var cursor = 0;
+  const text = node.nodeValue || '';
+  const pieces = document.createDocumentFragment();
+  let cursor = 0;
   occurrences.sort(function(a, b) { return a.end - b.end; });
   occurrences.forEach(function(occurrence) {
     pieces.appendChild(document.createTextNode(text.slice(cursor, occurrence.end)));
@@ -263,9 +263,9 @@ function splitTextNodeAroundMarkers(occurrences, node) {
 function localPathOccurrence(href, node) {
   if (/^[a-zA-Z][a-zA-Z0-9+.\-]*:/.test(href) || href.indexOf('/?') === 0 || href.charAt(0) === '?'
       || href.charAt(0) === '#') return null;
-  var url = parseLinkUrl(href);
+  const url = parseLinkUrl(href);
   if (!url) return null;
-  var page = new URL(window.location.href);
+  const page = new URL(window.location.href);
   if (url.origin !== page.origin || isFileServerPath(url.pathname || '') || isRetiredFileServerPath(url.pathname || '')) {
     return null;
   }
@@ -277,14 +277,14 @@ function localPathOccurrence(href, node) {
 function markFileLinks(root) {
   root.querySelectorAll('.prose-msg').forEach(function(prose) {
     if (prose.id === 'streaming-msg' || prose.closest('#streaming-msg')) return;
-    var occurrences = [];
+    const occurrences = [];
     Array.from(prose.querySelectorAll('a[href]')).forEach(function(anchor) {
-      var href = anchor.getAttribute('href') || '';
-      var writtenHref = href;
-      var occurrence = fileServerOccurrence(href, anchor, 'element', null);
+      const href = anchor.getAttribute('href') || '';
+      const writtenHref = href;
+      const occurrence = fileServerOccurrence(href, anchor, 'element', null);
       if (occurrence) occurrences.push(occurrence);
       else {
-        var localOccurrence = localPathOccurrence(writtenHref, anchor);
+        const localOccurrence = localPathOccurrence(writtenHref, anchor);
         if (localOccurrence) occurrences.push(localOccurrence);
       }
     });
@@ -293,18 +293,18 @@ function markFileLinks(root) {
     });
     (function scanPlainText(node) {
       if (!node) return;
-      var type = node.nodeType;
+      const type = node.nodeType;
       if (type === Node.TEXT_NODE) {
         collectFileServerOccurrences(occurrences, node.nodeValue || '', node, 'text');
         return;
       }
       if (type === Node.ELEMENT_NODE) {
-        var tag = node.tagName;
+        const tag = node.tagName;
         if (tag === 'A' || tag === 'CODE') return;
       }
-      var children = node.childNodes;
+      const children = node.childNodes;
       if (children) {
-        for (var ci = 0; ci < children.length; ci++) scanPlainText(children[ci]);
+        for (let ci = 0; ci < children.length; ci++) scanPlainText(children[ci]);
       }
     })(prose);
     markMissingFileLinks(occurrences);
@@ -312,8 +312,8 @@ function markFileLinks(root) {
 }
 
 // The tail run of a link, for a family's textSource.
-var FILE_LINK_TAIL_SOURCE = URL_TAIL_SOURCE;
-var RETIRED_FILE_SERVER_LINK_SOURCE =
+const FILE_LINK_TAIL_SOURCE = URL_TAIL_SOURCE;
+const RETIRED_FILE_SERVER_LINK_SOURCE =
   'https?:\\/\\/[^\\s]+?\\/(?:files|file)\\/' + URL_TAIL_CLASS + '*';
 
 const CHAT_ONLY = {

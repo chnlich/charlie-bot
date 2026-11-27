@@ -18,7 +18,8 @@ export const STEP_CAP_MS = 600000;
 // How often the gate reads /proc/locks while it holds the lock, so a queued process is seen within this time (design
 // value).
 export const WAITER_POLL_MS = 5000;
-// How long a queued process may take to get the lock after the gate releases it (design value).
+// How long a queued process may stay queued while the lock has no holder, counted from the gate's release (design
+// value). The time a holder keeps the lock does not count toward it.
 export const RELEASE_TAKE_MS = 60000;
 // The status flock exits with when its wait runs out (lock.sh BENCH_LOCK_TIMEOUT_EXIT).
 export const LOCK_TIMEOUT_EXIT = 75;
@@ -63,6 +64,7 @@ function pidsIn(stdout) {
 export class BenchGate {
   #lockWaitSeconds;
   #capMs;
+  #takeMs;
   #fd = null;
   #held = false;
   #poll = null;
@@ -74,9 +76,10 @@ export class BenchGate {
   // Every yield's record, in run order.
   yields = [];
 
-  constructor({ lockWaitSeconds, capMs = STEP_CAP_MS }) {
+  constructor({ lockWaitSeconds, capMs = STEP_CAP_MS, takeMs = RELEASE_TAKE_MS }) {
     this.#lockWaitSeconds = lockWaitSeconds;
     this.#capMs = capMs;
+    this.#takeMs = takeMs;
   }
 
   get held() {
@@ -131,14 +134,22 @@ export class BenchGate {
   // Waits for the bench lock, up to the wait. A wait that runs out throws LockWaitTimeout.
   async take() {
     this.#requireOpen();
-    const { code, stderr } = await lockCall('bench_lock_fd_take', [LOCK_FD_ARG, String(this.#lockWaitSeconds)], this.#fd);
-    if (code === LOCK_TIMEOUT_EXIT) {
+    if (!(await this.#takeWithin(this.#lockWaitSeconds))) {
       throw new LockWaitTimeout(`the bench lock stayed held for ${this.#lockWaitSeconds} s`);
+    }
+  }
+
+  // Waits up to `seconds` for the bench lock on the gate's descriptor. Returns false when the wait runs out.
+  async #takeWithin(seconds) {
+    const { code, stderr } = await lockCall('bench_lock_fd_take', [LOCK_FD_ARG, String(seconds)], this.#fd);
+    if (code === LOCK_TIMEOUT_EXIT) {
+      return false;
     }
     if (code !== 0) {
       throw new Error(`taking the bench lock failed (${code}): ${stderr.trim()}`);
     }
     this.#held = true;
+    return true;
   }
 
   async release() {
@@ -214,8 +225,9 @@ export class BenchGate {
   }
 
   // Gives the lock up when a process is queued for it. The gate releases the lock, waits until each queued process has
-  // taken it (flock does not queue in arrival order, so a release alone does not hand the lock to the waiter), and queues
-  // again behind it. Returns the yield's record, or null when nothing was queued.
+  // taken it or left the queue (flock does not queue in arrival order, so a release alone does not hand the lock to
+  // the waiter), and queues again behind it. The whole wait, takers and the retake, is bounded by the lock-wait budget
+  // counted from the release. Returns the yield's record, or null when nothing was queued.
   async yieldIfWaited() {
     this.#checkPoll();
     this.#requireOpen();
@@ -227,31 +239,84 @@ export class BenchGate {
     const seenAt = this.#waitSeenAt ?? Date.now();
     await this.release();
     const releasedAt = Date.now();
-    await this.#waitForTakers(pids);
-    await this.take();
+    const budgetEnd = releasedAt + this.#lockWaitSeconds * 1000;
+    const takersWaitMs = await this.#waitForTakers(pids, releasedAt, budgetEnd);
+    await this.#retake(budgetEnd);
     const record = {
       waiterPids: pids,
       waiterSeenAt: isoOf(seenAt),
       releasedAt: isoOf(releasedAt),
       retakenAt: isoOf(Date.now()),
       seenToReleaseMs: releasedAt - seenAt,
+      takersWaitMs,
     };
     this.yields.push(record);
     return record;
   }
 
-  async #waitForTakers(pids) {
-    const deadline = Date.now() + RELEASE_TAKE_MS;
+  // Waits until each pid in `pids` has taken the lock or left the queue, and returns the wait in ms. A queued pid is a
+  // fault only when the lock has no holder while it stays queued for `takeMs` in total: a stretch in which a holder
+  // keeps the lock does not count. The wait ends at the budget, which throws.
+  async #waitForTakers(pids, releasedAt, budgetEnd) {
+    // The lock-free time so far. A stretch counts when two samples in a row found the lock free.
+    let freeMs = 0;
+    let freeAt = null;
     for (;;) {
+      const held = await this.#lockHeld();
       const queued = (await this.waiters()).filter((pid) => pids.includes(pid));
+      const now = Date.now();
       if (queued.length === 0) {
-        return;
+        return now - releasedAt;
       }
-      if (Date.now() >= deadline) {
-        throw new Error(`queued process ${queued.join(', ')} did not take the bench lock within ${RELEASE_TAKE_MS} ms of the release`);
+      if (held) {
+        freeAt = null;
+      } else {
+        if (freeAt !== null) {
+          freeMs += now - freeAt;
+        }
+        freeAt = now;
+        if (freeMs >= this.#takeMs) {
+          throw new Error(
+            `queued process ${queued.join(', ')} did not take the bench lock: the lock had no holder ` +
+              `for ${this.#takeMs} ms while it stayed queued`,
+          );
+        }
+      }
+      if (now >= budgetEnd) {
+        throw await this.#budgetError('queued processes took the bench lock');
       }
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
+  }
+
+  // Takes the lock again with what is left of the yield's budget.
+  async #retake(budgetEnd) {
+    const remainingMs = budgetEnd - Date.now();
+    if (remainingMs <= 0 || !(await this.#takeWithin(remainingMs / 1000))) {
+      throw await this.#budgetError('gate retook the bench lock');
+    }
+  }
+
+  // Whether /proc/locks lists a holder of the bench lock now.
+  async #lockHeld() {
+    const { code, stdout, stderr } = await lockCall('bench_lock_hold_pid', []);
+    if (code !== 0) {
+      throw new Error(`bench_lock_hold_pid failed (${code}): ${stderr.trim()}`);
+    }
+    return stdout.trim() !== '';
+  }
+
+  // The error of a yield that ran past its budget: it names the pids queued now and the lock's holder.
+  async #budgetError(stage) {
+    const waiting = await this.waiters();
+    const { code, stdout, stderr } = await lockCall('bench_lock_holder', []);
+    if (code !== 0) {
+      throw new Error(`bench_lock_holder failed (${code}): ${stderr.trim()}`);
+    }
+    return new LockWaitTimeout(
+      `the yield's ${this.#lockWaitSeconds} s budget ran out before the ${stage}: ` +
+        `waiting pids ${waiting.join(', ') || 'none'}; holder ${stdout.trim() || 'none'}`,
+    );
   }
 
   // Stops the poll and closes the descriptor. Closing the last copy releases a lock the gate still holds.

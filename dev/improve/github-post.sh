@@ -20,10 +20,12 @@
 # the screenshot check, whose body lacks a full-URL View line, or whose View value
 # does not start with `/`, and carries the View lines into the squash commit message.
 # For a web page change, the review record (--review-record: the review's events.ndjson, kept by landing.md Step 6
-# as review-events.ndjson in the round's evidence directory) must show a read of each screenshot the body names.
-# It also refuses a merge unless the newest verdict comment names the pull request's head sha and reports no
-# issues. pr-comment --verdict-head writes that comment: its first line names the head the review read, and the
-# call refuses any head that is not the pull request's full head sha as GitHub reads it now, before it posts.
+# as review-events.ndjson in the round's evidence directory) must show a read of each screenshot the body names. A
+# pre-review record that pr-create wrote for its own check is refused, and a web page change's evidence layout is
+# checked again (dev/improve/web-evidence.sh). It also refuses a merge unless the newest verdict comment names the
+# pull request's head sha and reports no issues. pr-comment --verdict-head writes that comment: its first line names
+# the head the review read, and the call refuses any head that is not the pull request's full head sha as GitHub
+# reads it now, before it posts.
 # pr-merge also refuses a merge whose round event log or review record reads a skill file outside the round's skills
 # directory; dev/improve/skill-reads.sh names each such path. Inside a round (IMPROVE_LAUNCH_DIR is set) the round's
 # facts are the live launch directory and IMPROVE_SKILLS_DIR. A merge outside a round takes them from the evidence
@@ -35,6 +37,10 @@
 # pr-edit does not call gh pr edit: on gh 2.45 that fails on the Projects
 # (classic) lookup. It reads the PR's URL with gh pr view, then sends the
 # checked title and body with gh api -X PATCH on the REST pull endpoint.
+#
+# pr-create runs the screenshot gate before the review (dev/improve/web-evidence.sh). A change that alters no web page
+# passes. A web page change must pass the evidence layout and the merge's screenshot check, so a fault stops the round
+# before the review instead of at the merge. landing.md (Web page evidence) states the layout.
 #
 # pr-create and pr-merge check the side record citations of the body (dev/improve/side-record.sh): a line that
 # contains `Side record:` outside the accepted form is refused. The cited records are checked against the round's
@@ -79,6 +85,7 @@ repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 scanner="$repo_root/dev/check-skills-host-leak.sh"
 source "$repo_root/dev/push-text-lists.sh"
 source "$repo_root/dev/improve/side-record.sh"
+source "$repo_root/dev/improve/web-evidence.sh"
 source "$repo_root/dev/improve/code-style-rules.sh"
 source "$repo_root/dev/improve/moved-references.sh"
 
@@ -363,6 +370,7 @@ case "$subcommand" in
       exit 2
     }
     moved_references_check "$tmp_dir" "$pr_head" "$body_file" || exit 2
+    web_evidence_check "$evidence_dir" "$body_file" "$tmp_dir/changed" "$tmp_dir" || exit 2
     without_evidence_dir
     gh pr create "${gh_args[@]}"
     ;;
@@ -587,6 +595,11 @@ case "$subcommand" in
       printf 'PR %s changes a path that live work claims; nothing was merged.\n' "$pr_selector" >&2
       exit 2
     }
+    # pr-create's pre-review record passes the screenshot check's read rule with no review behind it, so a merge refuses
+    # it and needs the review's own record.
+    if [[ -n "$review_record" ]]; then
+      web_evidence_refuse_pre_review "$review_record" || exit 2
+    fi
     # `charliebot` is the round's own build (dev/improve/remote-runner.sh builds it), so it carries
     # the window sizes this check reads.
     check_args=(screenshots check --pr-body "$tmp_dir/pr-body")
@@ -603,6 +616,11 @@ case "$subcommand" in
       else
         printf 'PR %s did not pass the screenshot check; nothing was merged.\n' "$pr_selector" >&2
       fi
+      exit 2
+    fi
+    # The merge sends this body, so the layout is checked here too: pr-edit can change the body after pr-create.
+    if [[ -n "$web_change" ]] && ! web_evidence_layout "$evidence_dir" "$tmp_dir/pr-body" "$tmp_dir"; then
+      printf 'PR %s: the evidence directory does not match its body; nothing was merged.\n' "$pr_selector" >&2
       exit 2
     fi
     # A round reads each skill file from its skills directory. The round's event log and the review record must hold no

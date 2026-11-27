@@ -239,6 +239,16 @@ pub enum Step {
   Waiting,
 }
 
+/// What a heartbeat renewal found.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Renewal {
+  /// The claim still holds its entry: no renewal was due, the renewal landed, or a refused push left the entry in
+  /// place.
+  Held,
+  /// Origin no longer holds the entry at the sha the claim last wrote. The reason is git's stderr for the refused push.
+  Removed(String),
+}
+
 impl Site {
   /// Reads the queue from origin. A dead ref is deleted first, with a message naming it and the reason.
   pub async fn read(&self) -> anyhow::Result<QueueView> {
@@ -361,7 +371,7 @@ impl Site {
       Pushed::Done => {
         eprintln!("pruned {}: its heartbeat is {}s old, past the {DEAD_AFTER_SECS}s limit", beat.refname, beat.age(now))
       }
-      Pushed::Refused(_) => eprintln!("kept {}: it moved while it was read", beat.refname),
+      Pushed::Refused(err) => eprintln!("kept {}: it moved while it was read: {err}", beat.refname),
     }
     Ok(())
   }
@@ -580,6 +590,36 @@ impl Claim {
     Ok(pushed)
   }
 
+  /// Renews the heartbeat when it is due. A refused renewal is read back: when origin still holds this claim's entry at
+  /// the sha the claim last wrote, the refusal was a failed push, so the claim keeps its place and logs the refusal's
+  /// stderr. Otherwise the entry is gone or moved, and `Removed` carries git's stderr as the reason.
+  pub async fn renew_if_due(&mut self, cadence: Cadence) -> anyhow::Result<Renewal> {
+    if !self.beat_due(cadence) {
+      return Ok(Renewal::Held);
+    }
+    let parent = self.parent.clone();
+    let Pushed::Refused(err) = self.beat(&parent).await? else {
+      return Ok(Renewal::Held);
+    };
+    if self.entry_holds_lease().await? {
+      eprintln!(
+        "heartbeat of {} was refused while its entry still holds its sha; it keeps its place: {err}",
+        self.holder
+      );
+      return Ok(Renewal::Held);
+    }
+    Ok(Renewal::Removed(err))
+  }
+
+  /// Whether origin still holds this claim's entry at the sha this claim last wrote, read from origin now.
+  async fn entry_holds_lease(&self) -> anyhow::Result<bool> {
+    let Some(entry) = &self.entry else {
+      return Ok(false);
+    };
+    let view = self.site.read().await?;
+    Ok(view.entries.iter().any(|(_, beat)| beat.refname == entry.refname && beat.sha == entry.sha))
+  }
+
   /// Deletes the refs this claim still holds. A ref that a pruner or a newer head moved is forgotten, and the rest are
   /// deleted in a further push, because the atomic push deleted nothing while one of its leases failed. A refusal
   /// with every held ref still in place is an error.
@@ -718,9 +758,8 @@ pub enum Armed {
 /// already serves returns `Existing`; a new head cancels the older head's wake and removes its entry before the new
 /// command registers.
 pub async fn arm_landing(site: &Site, owner: &Owner, pr: u64, sha: &str) -> anyhow::Result<Armed> {
-  let message = format!("{WAKE_PREFIX}{}", short_sha(sha));
   let wakes = owner.pending().await?;
-  if wakes.iter().any(|wake| wake.message == message) {
+  if queued_command_pending(&wakes, sha) {
     return Ok(Armed::Existing);
   }
   for wake in wakes.iter().filter(|wake| is_landing_wake(&wake.message)) {
@@ -731,13 +770,26 @@ pub async fn arm_landing(site: &Site, owner: &Owner, pr: u64, sha: &str) -> anyh
     && beat.parent != sha
   {
     let change = Change::Delete { refname: name.refname(), from: beat.sha.clone() };
-    if site.push(&[change]).await? != Pushed::Done {
-      anyhow::bail!("could not remove the entry of the replaced head of PR {pr}: {}", name.refname());
+    if let Pushed::Refused(err) = site.push(&[change]).await? {
+      anyhow::bail!("could not remove the entry of the replaced head of PR {pr}: {}: {err}", name.refname());
     }
   }
   let cmd = format!("timeout {WAKE_MAX_WAIT_SECS} charliebot land queue run --sha {sha}");
-  owner.register(&message, &cmd).await?;
+  owner.register(&landing_wake_message(sha), &cmd).await?;
   Ok(Armed::Registered)
+}
+
+/// Whether `wakes` holds the queued command of the landing head `sha`. This is the one rule that decides whether a
+/// queued command is live: `land` returns its waiting record unchanged while the rule holds, and `arm_landing`
+/// registers nothing.
+pub fn queued_command_pending(wakes: &[PendingWake], sha: &str) -> bool {
+  let message = landing_wake_message(sha);
+  wakes.iter().any(|wake| wake.message == message)
+}
+
+/// The label of the queued command of the landing head `sha`.
+fn landing_wake_message(sha: &str) -> String {
+  format!("{WAKE_PREFIX}{}", short_sha(sha))
 }
 
 fn is_landing_wake(message: &str) -> bool {
@@ -779,9 +831,9 @@ async fn run_under_turn(claim: &mut Claim, merge_cmd: &str, cadence: Cadence) ->
       _ = tokio::time::sleep(cadence.poll) => {
         if claim.beat_due(cadence) {
           let parent = claim.parent.clone();
-          if claim.beat(&parent).await? != Pushed::Done {
+          if let Pushed::Refused(err) = claim.beat(&parent).await? {
             child.kill().await.context("could not stop the merge command after its turn was lost")?;
-            anyhow::bail!("the turn of {} was lost while its merge ran", claim.holder);
+            anyhow::bail!("the turn of {} was lost while its merge ran: {err}", claim.holder);
           }
         }
       }
@@ -833,8 +885,8 @@ pub async fn pr_merge_gate(
     && beat.parent != head
   {
     let change = Change::Delete { refname: name.refname(), from: beat.sha.clone() };
-    if site.push(&[change]).await? != Pushed::Done {
-      anyhow::bail!("could not replace the entry of the older head of PR {pr}: {}", name.refname());
+    if let Pushed::Refused(err) = site.push(&[change]).await? {
+      anyhow::bail!("could not replace the entry of the older head of PR {pr}: {}: {err}", name.refname());
     }
     for wake in owner.pending().await?.iter().filter(|wake| wake.message == pr_merge_wake(pr)) {
       owner.cancel(&wake.id).await?;
@@ -907,14 +959,11 @@ pub async fn acquire(
   }
   let started = Instant::now();
   loop {
-    if claim.beat_due(cadence) {
-      let parent = claim.parent.clone();
-      if claim.beat(&parent).await? != Pushed::Done {
-        // A prune after a stalled push removes an entry whose heartbeat went stale; the waiter keeps its place.
-        eprintln!("{} was removed while it waited; re-entered at its original key {owner}", name.refname());
-        claim = Claim::enter(site, &name, head).await?;
-        continue;
-      }
+    if let Renewal::Removed(err) = claim.renew_if_due(cadence).await? {
+      // A prune after a stalled push removes an entry whose heartbeat went stale; the waiter keeps its place.
+      eprintln!("{} was removed while it waited ({err}); re-entered at its original key {owner}", name.refname());
+      claim = Claim::enter(site, &name, head).await?;
+      continue;
     }
     let view = site.read().await?;
     if may_take(&view, claim.entry_refname()) && claim.take_turn().await? == Take::Taken {
@@ -984,13 +1033,11 @@ pub async fn pr_head(worktree: &Path, repo: &str, pr: u64) -> anyhow::Result<Str
 }
 
 /// One step toward the turn: renews the heartbeat when it is due, then takes the turn when the queue lets this claim.
-/// A renewal that a ref refused means the entry was removed under the claim, which is an error here.
+/// A renewal that finds the entry removed is an error; a refused push that leaves the entry in place keeps the claim
+/// waiting at its key.
 pub async fn turn_step(claim: &mut Claim, cadence: Cadence) -> anyhow::Result<Step> {
-  if claim.beat_due(cadence) {
-    let parent = claim.parent.clone();
-    if claim.beat(&parent).await? != Pushed::Done {
-      anyhow::bail!("the queue entry of {} was removed while it waited", claim.holder);
-    }
+  if let Renewal::Removed(err) = claim.renew_if_due(cadence).await? {
+    anyhow::bail!("the queue entry of {} was removed while it waited: {err}", claim.holder);
   }
   let view = claim.site.read().await?;
   if may_take(&view, claim.entry_refname()) && claim.take_turn().await? == Take::Taken {

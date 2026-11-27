@@ -1357,6 +1357,27 @@ fn a_pr_create_accepts_the_body_pair_at_the_top_level_and_the_extra_shots_in_ext
   );
 }
 
+#[test]
+#[ignore = "integration"]
+fn a_pr_create_of_a_change_that_names_no_screenshot_and_alters_no_web_page_passes_unchanged() {
+  let sandbox = Sandbox::new();
+  let (env, gh_log, _home) = post(&sandbox);
+  let clone = push_repo(&sandbox, &env);
+  // A stray shot in the evidence directory: the gate reads no evidence for a change that alters no web page.
+  let evidence = sandbox.dir("evidence");
+  write_png(&evidence.join("stray-800x600.png"), 800, 600);
+  let body = body_file(&sandbox, "body.md", CLEAN_BODY);
+
+  let run = pr_create_with_evidence(&env, &clone, &body, &evidence);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(
+    gh_log_lines(&gh_log).iter().any(|line| line.contains("pr create")),
+    "the pull request was created: {}",
+    run.describe()
+  );
+}
+
 // -- github-post.sh pr-merge --
 
 /// The `gh` stand-in for `pr-merge` and the verdict comment: it answers the diff and view reads from files the test

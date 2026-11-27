@@ -355,6 +355,157 @@ fn a_pr_create_refuses_an_existing_claimed_path_and_allows_own_and_absent_claims
   assert_eq!(creates, 2, "{}", run.describe());
 }
 
+// -- claims that a three-way merge tests --
+
+/// Writes `path` in `clone` as ten lines `line N`, with the line `edited` replaced by its text.
+fn write_numbered(clone: &Path, path: &str, edited: Option<(usize, &str)>) {
+  let text: String = (1..=10)
+    .map(|line| match edited {
+      Some((at, text)) if at == line => format!("{text}\n"),
+      _ => format!("line {line}\n"),
+    })
+    .collect();
+  std::fs::create_dir_all(clone.join(path).parent().unwrap()).unwrap();
+  std::fs::write(clone.join(path), text).unwrap();
+}
+
+/// A work clone whose origin/main holds `path` as ten numbered lines. The claimant branch on origin edits line
+/// `claim_line`, and the topic branch, HEAD_BRANCH, edits line `topic_line`: each branch is one commit ahead of main.
+fn claim_repo(sandbox: &Sandbox, env: &Env, path: &str, claim_line: usize, topic_line: usize) -> PathBuf {
+  let origin = sandbox.dir("origin.git");
+  let clone = sandbox.dir("clone");
+  git(env, sandbox.root(), &["init", "--bare", "-q", origin.to_str().unwrap()]);
+  git(env, sandbox.root(), &["init", "-q", "-b", "main", clone.to_str().unwrap()]);
+  git(env, &clone, &["remote", "add", "origin", origin.to_str().unwrap()]);
+  write_numbered(&clone, path, None);
+  git(env, &clone, &["add", path]);
+  git(env, &clone, &["commit", "-q", "-m", "numbered lines"]);
+  git(env, &clone, &["push", "-q", "origin", "main"]);
+  git(env, &clone, &["switch", "-q", "-c", OTHER_CLAIMANT]);
+  write_numbered(&clone, path, Some((claim_line, "claimant edit")));
+  git(env, &clone, &["commit", "-q", "-am", "claimant edit"]);
+  git(env, &clone, &["push", "-q", "origin", OTHER_CLAIMANT]);
+  git(env, &clone, &["switch", "-q", "main"]);
+  git(env, &clone, &["switch", "-q", "-c", HEAD_BRANCH]);
+  write_numbered(&clone, path, Some((topic_line, "topic edit")));
+  git(env, &clone, &["commit", "-q", "-am", "topic edit"]);
+  clone
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_create_passes_a_claim_whose_merge_with_the_diff_is_clean_and_names_it() {
+  let sandbox = Sandbox::new();
+  let (env, gh_log, _home) = post(&sandbox);
+  let clone = claim_repo(&sandbox, &env, "seed.txt", 1, 10);
+  let body = body_file(&sandbox, "body.md", CLEAN_BODY);
+  write_inflight_list(&env, &[("seed.txt", OTHER_CLAIMANT)]);
+
+  let run = pr_create(&env, &clone, &body);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(
+    run
+      .stderr
+      .lines()
+      .any(|line| line.contains("claim passed") && line.contains("seed.txt") && line.contains(OTHER_CLAIMANT)),
+    "the passed claim names its path and branch: {}",
+    run.stderr
+  );
+  assert!(gh_log_lines(&gh_log)[0].contains("pr create"), "{}", gh_log_lines(&gh_log)[0]);
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_create_refuses_a_claim_whose_merge_with_the_diff_conflicts() {
+  let sandbox = Sandbox::new();
+  let (env, gh_log, _home) = post(&sandbox);
+  let clone = claim_repo(&sandbox, &env, "seed.txt", 5, 5);
+  let body = body_file(&sandbox, "body.md", CLEAN_BODY);
+  write_inflight_list(&env, &[("seed.txt", OTHER_CLAIMANT)]);
+
+  let run = pr_create(&env, &clone, &body);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(
+    run
+      .stderr
+      .lines()
+      .any(|line| line.contains("seed.txt") && line.contains(OTHER_CLAIMANT) && line.contains("conflicts")),
+    "the refusal names the path, the claimant and the conflict: {}",
+    run.stderr
+  );
+  assert!(gh_log_lines(&gh_log).is_empty(), "no pull request was created");
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_create_refuses_a_claim_whose_claimant_branch_origin_lacks_and_names_the_cause() {
+  let sandbox = Sandbox::new();
+  let (env, gh_log, _home) = post(&sandbox);
+  let clone = claim_repo(&sandbox, &env, "seed.txt", 1, 10);
+  let body = body_file(&sandbox, "body.md", CLEAN_BODY);
+  const UNPUSHED: &str = "charliebot/task-not-pushed";
+  write_inflight_list(&env, &[("seed.txt", UNPUSHED)]);
+
+  let run = pr_create(&env, &clone, &body);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(
+    run.stderr.lines().any(|line| {
+      line.contains("seed.txt") && line.contains(UNPUSHED) && line.contains("cannot read the claimant ref")
+    }),
+    "the refusal names the path, the claimant and the cause: {}",
+    run.stderr
+  );
+  assert!(gh_log_lines(&gh_log).is_empty(), "no pull request was created");
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_create_refuses_a_claimed_lock_file_on_its_path_alone_when_the_merge_is_clean() {
+  let sandbox = Sandbox::new();
+  let (env, gh_log, _home) = post(&sandbox);
+  let clone = claim_repo(&sandbox, &env, "rust/Cargo.lock", 1, 10);
+  let body = body_file(&sandbox, "body.md", CLEAN_BODY);
+  write_inflight_list(&env, &[("rust/Cargo.lock", OTHER_CLAIMANT)]);
+
+  let run = pr_create(&env, &clone, &body);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(
+    run.stderr.lines().any(|line| {
+      line.contains("rust/Cargo.lock") && line.contains(OTHER_CLAIMANT) && line.contains("on its path alone")
+    }),
+    "the refusal names the lock file, the claimant and the path-level rule: {}",
+    run.stderr
+  );
+  assert!(gh_log_lines(&gh_log).is_empty(), "no pull request was created");
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_create_refuses_work_origin_does_not_carry_even_when_the_claimant_branch_merges_clean() {
+  let sandbox = Sandbox::new();
+  let (env, gh_log, _home) = post(&sandbox);
+  let clone = claim_repo(&sandbox, &env, "seed.txt", 1, 10);
+  let body = body_file(&sandbox, "body.md", CLEAN_BODY);
+  write_inflight_list_lines(&env, &[format!("seed.txt\t{OTHER_CLAIMANT}\tlocal-only")]);
+
+  let run = pr_create(&env, &clone, &body);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(
+    run
+      .stderr
+      .lines()
+      .any(|line| { line.contains("seed.txt") && line.contains(OTHER_CLAIMANT) && line.contains("not on origin") }),
+    "the refusal names the path, the claimant and that origin lacks the work: {}",
+    run.stderr
+  );
+  assert!(gh_log_lines(&gh_log).is_empty(), "no pull request was created");
+}
+
 // -- github-post.sh pr-create of moved code --
 
 /// A work clone whose topic renames `tools/old_name.sh`. The base names the old path at `docs/index.md` line 3 and at
@@ -1653,6 +1804,19 @@ impl MergeWorld {
     path
   }
 
+  /// Pushes OTHER_CLAIMANT to the sandbox origin as one commit on main that writes `path`, then returns the sandbox
+  /// worktree to the head, so the claim's merge with the head is computed.
+  fn push_claimant_branch(&self, path: &str) {
+    let root = self.sandbox.root();
+    self.git(&["switch", "-q", "-c", OTHER_CLAIMANT, "main"]);
+    std::fs::create_dir_all(root.join(path).parent().unwrap()).unwrap();
+    std::fs::write(root.join(path), "claimant edit\n").unwrap();
+    self.git(&["add", path]);
+    self.git(&["commit", "-q", "-m", "claimant edit"]);
+    self.git(&["push", "-q", "origin", OTHER_CLAIMANT]);
+    self.git(&["switch", "-q", "--detach", &self.head]);
+  }
+
   fn merge(&self, args: &[&str]) -> Run {
     let mut command = harness::command("bash", &self.env);
     command.arg(github_post()).arg("pr-merge").args(args);
@@ -2108,6 +2272,46 @@ fn a_pr_merge_allows_a_diff_whose_only_claim_is_absent_from_origin_main() {
 
   assert_eq!(run.code, 0, "{}", run.describe());
   assert_eq!(world.merge_calls().len(), 1, "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_passes_a_claim_whose_merge_with_the_head_is_clean_and_names_it() {
+  let world = MergeWorld::new("rust/crates/x/src/lib.rs\n", CLEAN_BODY);
+  world.push_claimant_branch("rust/crates/x/src/lib.rs");
+  write_inflight_list(&world.env, &[("rust/crates/x/src/lib.rs", OTHER_CLAIMANT)]);
+
+  let run = world.merge(&["5046"]);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(
+    run.stderr.lines().any(|line| line.contains("claim passed") && line.contains(OTHER_CLAIMANT)),
+    "the passed claim names its branch: {}",
+    run.stderr
+  );
+  assert_eq!(world.merge_calls().len(), 1, "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_refuses_a_claim_whose_claimant_branch_origin_lacks_and_names_the_cause() {
+  let world = MergeWorld::new("rust/crates/x/src/lib.rs\n", CLEAN_BODY);
+  const UNPUSHED: &str = "charliebot/task-not-pushed";
+  write_inflight_list(&world.env, &[("rust/crates/x/src/lib.rs", UNPUSHED)]);
+
+  let run = world.merge(&["5046"]);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(
+    run.stderr.lines().any(|line| {
+      line.contains("rust/crates/x/src/lib.rs")
+        && line.contains(UNPUSHED)
+        && line.contains("cannot read the claimant ref")
+    }),
+    "the refusal names the path, the claimant and the cause: {}",
+    run.stderr
+  );
+  assert!(world.merge_calls().is_empty(), "nothing may merge: {}", run.describe());
 }
 
 #[test]

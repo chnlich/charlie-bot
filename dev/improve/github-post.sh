@@ -16,8 +16,8 @@
 # "repos/{owner}/{repo}/pulls/<PR>/update-branch", gh run rerun, and the read-only calls.
 # The gh shim checks their arguments. gh 2.45 has no gh pr update-branch command,
 # so branch updates use the REST endpoint. A merge goes through pr-merge, which
-# refuses a draft pull request, a diff that changes a claimed path, a web page change whose evidence directory fails
-# the screenshot check, whose body lacks a full-URL View line, or whose View value
+# refuses a draft pull request, a diff that a live claim conflicts with (dev/improve/claim-check.sh), a web page change
+# whose evidence directory fails the screenshot check, whose body lacks a full-URL View line, or whose View value
 # does not start with `/`, and carries the View lines into the squash commit message. A web page change whose View line
 # names a session that the round's live sessions record does not list is refused too (dev/improve/live-sessions.sh).
 # For a web page change, the review record (--review-record: the review's events.ndjson, kept by landing.md Step 6
@@ -53,11 +53,11 @@
 # cited lines of the pinned Google style guide in the kit's dev/improve/google-styleguide/, and a body with no rule
 # line (dev/improve/code-style-rules.sh). Other directions' pr-create takes no such check.
 #
-# pr-create and pr-merge also refuse a diff that changes a path another branch claims in the round's in-flight list,
-# inflight-files.txt, the list Step 3 reads: the launch directory's inside a round, the evidence directory's outside
-# one. A claim that the list marks absent-on-origin-main does
-# not refuse. The pull request's own head branch claims nothing for itself. A refusal names each claimed path with its
-# claimant and sends nothing.
+# pr-create and pr-merge also refuse a diff that a claim in the round's in-flight list, inflight-files.txt, conflicts
+# with: the launch directory's inside a round, the evidence directory's outside one. The test is one function,
+# check_inflight_claims in dev/improve/claim-check.sh, which the Step 3 check runs too. A claim that the list marks
+# absent-on-origin-main does not refuse. The pull request's own head branch claims nothing for itself. A refusal names
+# each claimed path with its claimant and the cause, and sends nothing; each claim that passes is named on stderr.
 #
 # pr-create also refuses a diff that deletes or renames a path which the head's tree still names outside recorded
 # data, or names a recorded line that the body does not name as <path>:<line> (dev/improve/moved-references.sh). A
@@ -90,6 +90,7 @@ source "$repo_root/dev/improve/web-evidence.sh"
 source "$repo_root/dev/improve/code-style-rules.sh"
 source "$repo_root/dev/improve/moved-references.sh"
 source "$repo_root/dev/improve/live-sessions.sh"
+source "$repo_root/dev/improve/claim-check.sh"
 
 tmp_dir=$(mktemp -d)
 trap 'rm -rf "$tmp_dir"' EXIT
@@ -150,29 +151,6 @@ require_readable() {  # require_readable <path> <what>
     printf 'Cannot read %s file: %s\n' "$2" "$1" >&2
     exit 2
   fi
-}
-
-# check_inflight_claims <changed paths file> <head branch> <in-flight list>: return 1 after naming each path that the
-# diff changes and another branch claims on a path origin/main has. A claim the list marks absent-on-origin-main does not
-# refuse. The list is the round's in-flight list, the file the runner writes at launch and Step 3 reads, so the check
-# and the round's own avoidance share one source. The head branch never refuses itself.
-check_inflight_claims() {
-  local changed=$1 head=$2 list=$3
-  local -A changed_paths=()
-  local path claimed branch absent found=0
-  require_readable "$list" "in-flight list"
-  while IFS= read -r path; do
-    [[ -n $path ]] || continue
-    changed_paths["$path"]=1
-  done < "$changed"
-  while IFS=$'\t' read -r claimed branch absent; do
-    [[ -n $claimed && -n ${changed_paths["$claimed"]:-} ]] || continue
-    [[ $branch != "$head" ]] || continue
-    [[ $absent != absent-on-origin-main ]] || continue
-    printf 'claimed path %s, claimed by %s\n' "$claimed" "$branch" >&2
-    found=1
-  done < "$list"
-  [[ $found -eq 0 ]]
 }
 
 # without_evidence_dir: set gh_args to the call's arguments without each --evidence-dir option, which this script reads.
@@ -367,8 +345,8 @@ case "$subcommand" in
         >&2
       exit 2
     }
-    check_inflight_claims "$tmp_dir/changed" "$pr_head" "$IMPROVE_LAUNCH_DIR/inflight-files.txt" || {
-      printf 'PR changes a path that live work claims; nothing was sent.\n' >&2
+    check_inflight_claims "$tmp_dir/changed" "$pr_head" "$pr_head" "$IMPROVE_LAUNCH_DIR/inflight-files.txt" || {
+      printf 'PR changes a path that a live claim holds and does not merge clean with; nothing was sent.\n' >&2
       exit 2
     }
     moved_references_check "$tmp_dir" "$pr_head" "$body_file" || exit 2
@@ -597,8 +575,9 @@ case "$subcommand" in
       printf 'Cannot read the head branch of PR %s; nothing was merged.\n' "$pr_selector" >&2
       exit 2
     }
-    check_inflight_claims "$tmp_dir/changed" "$pr_head" "$facts_dir/inflight-files.txt" || {
-      printf 'PR %s changes a path that live work claims; nothing was merged.\n' "$pr_selector" >&2
+    check_inflight_claims "$tmp_dir/changed" "$pr_head" "$merge_head" "$facts_dir/inflight-files.txt" || {
+      printf 'PR %s changes a path that a live claim holds and does not merge clean with; nothing was merged.\n' \
+        "$pr_selector" >&2
       exit 2
     }
     # The session View lines are checked against the round's launch record, as pr-create checked them before it sent.

@@ -6,6 +6,9 @@
 # Print one `path<TAB>branch` line per claimed path: open pull request files, and the
 # committed and uncommitted paths of each worktree branch with a live claimant. A claimed
 # path that origin/main has no object at carries a third field, `absent-on-origin-main`.
+# Work that origin does not carry, on a path origin/main has, carries the third field `local-only`: uncommitted work,
+# and every committed path of a branch whose origin copy does not contain the commit this checkout holds. No merge on
+# origin can test that work, so the claim check refuses it (dev/improve/claim-check.sh).
 # The branch is the one that carries the path: uncommitted work prints with the branch of
 # its dirty worktree, a path that an unmerged commit changes prints with that commit's
 # branch, and an open pull request's files print with its head branch. A path whose
@@ -67,13 +70,20 @@ read_main_patch_ids() {
 # The third field of a claim whose path origin/main has no object at. A claim without it names a path origin/main has.
 readonly ABSENT_ON_MAIN_FIELD=absent-on-origin-main
 
-# Print one claim as `path<TAB>branch`, with the absent field when origin/main has no object at the path. The lookup
+# The third field of a claim whose work origin does not carry: uncommitted work, or a commit that the branch's origin
+# copy lacks. No merge on origin holds that work, so the claim check cannot merge-test it (dev/improve/claim-check.sh
+# reads this field).
+readonly LOCAL_ONLY_FIELD=local-only
+
+# Print one claim as `path<TAB>branch`, with the absent field when origin/main has no object at the path, or the
+# local-only field when the claim is work origin does not carry (local_only=yes) on a path origin/main has. The lookup
 # runs in the repository at root, any checkout of it, because main_ref lives in the refs that all checkouts share. An
 # unreadable repository stops the script. A missing path is no error: git answers it with the object name and `missing`.
 print_claim() {
   local root=$1
   local path=$2
   local branch=$3
+  local local_only=${4:-no}
   local answer
   if ! answer=$(git -C "$root" cat-file --batch-check='%(objecttype)' <<<"$main_ref:$path"); then
     printf 'cannot read %s:%s in %s\n' "$main_ref" "$path" "$root" >&2
@@ -81,8 +91,66 @@ print_claim() {
   fi
   if [[ $answer == "$main_ref:$path missing" ]]; then
     printf '%s\t%s\t%s\n' "$path" "$branch" "$ABSENT_ON_MAIN_FIELD"
+  elif [[ $local_only == yes ]]; then
+    printf '%s\t%s\t%s\n' "$path" "$branch" "$LOCAL_ONLY_FIELD"
   else
     printf '%s\t%s\n' "$path" "$branch"
+  fi
+}
+
+# branch_local_only <root> <branch>: set branch_is_local_only to yes when origin does not contain the commit this
+# checkout holds for the branch, and to no when it does. A remote branch may have advanced while still carrying that
+# commit. A commit origin lacks has no merge on origin to test. An unreadable branch or origin stops the script. The
+# result is a variable, not printed output, so the exit stops the script rather than a subshell.
+branch_is_local_only=no
+branch_local_only() {
+  local root=$1
+  local branch=$2
+  local tip listing sha ref remote_tip= remote_ref comparison status
+  if ! tip=$(git -C "$root" rev-parse --verify --quiet "refs/heads/$branch^{commit}"); then
+    printf 'cannot read the commit of branch %s in %s\n' "$branch" "$root" >&2
+    exit 1
+  fi
+  if ! listing=$(git -C "$root" ls-remote --heads origin "refs/heads/$branch"); then
+    printf 'cannot read branch %s on origin from %s\n' "$branch" "$root" >&2
+    exit 1
+  fi
+  while IFS=$'\t' read -r sha ref; do
+    if [[ $ref == "refs/heads/$branch" ]]; then
+      remote_tip=$sha
+    fi
+  done <<<"$listing"
+  if [[ -z $remote_tip ]]; then
+    branch_is_local_only=yes
+    return
+  fi
+  if [[ $remote_tip == "$tip" ]]; then
+    branch_is_local_only=no
+    return
+  fi
+  remote_ref="refs/improve/inflight-origin/$BASHPID/$branch"
+  if ! git -C "$root" fetch --quiet --no-tags --no-write-fetch-head origin \
+    "+refs/heads/$branch:$remote_ref"; then
+    printf 'cannot fetch branch %s from origin in %s\n' "$branch" "$root" >&2
+    exit 1
+  fi
+  if comparison=$(git -C "$root" merge-base --is-ancestor "$tip" "$remote_ref" 2>&1); then
+    status=0
+  else
+    status=$?
+  fi
+  if ! git -C "$root" update-ref -d "$remote_ref"; then
+    printf 'cannot remove temporary claim ref %s in %s\n' "$remote_ref" "$root" >&2
+    exit 1
+  fi
+  if (( status == 0 )); then
+    branch_is_local_only=no
+  elif (( status == 1 )); then
+    branch_is_local_only=yes
+  else
+    printf 'cannot compare branch %s with origin in %s: git merge-base exited %s: %s\n' \
+      "$branch" "$root" "$status" "$comparison" >&2
+    exit 1
   fi
 }
 
@@ -99,6 +167,7 @@ list_committed_paths() {
   local line sha path id patch_ids log changed_paths
   local -A carried=() landed=() commit_patch_id=()
 
+  branch_local_only "$root" "$branch"
   if ! changed_paths=$(git -C "$root" diff --name-only "$merge_base" "$branch"); then
     printf 'cannot read changed paths of %s in %s\n' "$branch" "$root" >&2
     exit 1
@@ -130,7 +199,7 @@ list_committed_paths() {
   while IFS= read -r path; do
     [[ -n $path ]] || continue
     if [[ -n ${carried["$path"]:-} || -z ${landed["$path"]:-} ]]; then
-      print_claim "$root" "$path" "$branch"
+      print_claim "$root" "$path" "$branch" "$branch_is_local_only"
     fi
   done <<<"$changed_paths"
 }
@@ -157,7 +226,7 @@ list_dirty_paths() {
   listing=$(dirty_paths "$worktree") || exit 1
   while IFS= read -r path; do
     [[ -n $path ]] || continue
-    print_claim "$worktree" "$path" "$branch"
+    print_claim "$worktree" "$path" "$branch" yes
   done <<<"$listing"
 }
 

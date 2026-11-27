@@ -14,8 +14,8 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use charliebot_core::event_types::{
-  INPUT_EVENT_ID, OWNER_RUN_ID, TASK_CLOSE_REQUESTED, TURN_HOOKS, WEB_REPLY, WEB_REPLY_NOTICE, WEB_STATUS,
-  WEB_STATUS_CONFIRMED,
+  CHILD_REPORT, INPUT_EVENT_ID, OWNER_RUN_ID, TASK_CLOSE_REQUESTED, TURN_HOOKS, WEB_REPLY, WEB_REPLY_NOTICE,
+  WEB_STATUS, WEB_STATUS_CONFIRMED,
 };
 use charliebot_registry::FeatureContext;
 use charliebot_registry::turn::{CheckResult, TurnInput};
@@ -32,14 +32,15 @@ use crate::reply;
 pub const WEB_REPLY_ENTRY: &str = "web-reply";
 /// The entry that checks the turn ran a status set or confirm.
 pub const WEB_STATUS_ENTRY: &str = "web-status";
-/// The entry that checks a turn which received an input stored a status set after it that names each non-empty
-/// Waiting on you or Remaining list.
+/// The entry that checks a turn which received an input stored a status set after it that names each list the turn must
+/// store: Waiting on you, and Remaining for a turn that received a user message or a child report.
 pub const STATUS_REREAD_ENTRY: &str = "status-reread";
 
 /// The status instruction that ends a status reminder.
 const STATUS_SENTENCES: &str = concat!(
   "Run `charliebot web status set` when Goal, Remaining, Now or Waiting on you differs from the state that turn ",
-  "read back, or when the turn received an input and Waiting on you or Remaining holds items. ",
+  "read back, when the turn received an input and Waiting on you holds items, or when the turn received a user ",
+  "message or a child report and Remaining holds items. ",
   "Otherwise run `charliebot web status confirm`. The panel then shows the state the last turn read back."
 );
 
@@ -113,10 +114,13 @@ pub fn check_web_status(input: &TurnInput) -> CheckResult {
 }
 
 /// The `status-reread` entry: a turn that received an input stores a status set after its last input that names each
-/// non-empty list of the stored status, Waiting on you and Remaining. A confirm, a set stored before the last input,
-/// and a set that printed its cold read and stored nothing do not count. The first miss blocks with the reason; a miss
-/// after that passes with the notice of the lists left. A parent-approved session's Waiting on you list is exempt: its
-/// status set refuses a non-empty list, so the reason could not be met.
+/// list the turn must store (`required_lists`). A confirm, a set stored before the last input, and a set that printed
+/// its cold read and stored nothing do not count. The first miss blocks with the reason; a miss after that passes with
+/// the notice of the lists left. A parent-approved session's Waiting on you list is exempt: its status set refuses a
+/// non-empty list, so the reason could not be met.
+///
+/// This is stage 1 of a staged rollout. Remaining is required only when the turn received a user message or a child
+/// report; a turn whose inputs are only agent messages or scheduled triggers keeps the rule it had before Remaining.
 pub fn check_status_reread(input: &TurnInput) -> CheckResult {
   if !web_turn_checks_apply(input) {
     return CheckResult::Pass;
@@ -144,15 +148,25 @@ struct StatusList {
 }
 
 /// The lists that a turn with an input must store: each non-empty list of the stored status. A parent-approved
-/// session's Waiting on you list is not one of them.
+/// session's Waiting on you list is not one of them, and Remaining is one only for a turn that received a user message
+/// or a child report.
 fn required_lists(input: &TurnInput) -> Vec<StatusList> {
   let mut lists = Vec::new();
   if !input.parent_approved {
     lists.push(StatusList { key: "waiting", label: "Waiting on you", items: waiting_texts(&input.status) });
   }
-  lists.push(StatusList { key: "remaining", label: "Remaining", items: remaining_texts(&input.status) });
+  if received_user_or_report(&input.turn) {
+    lists.push(StatusList { key: "remaining", label: "Remaining", items: remaining_texts(&input.status) });
+  }
   lists.retain(|list| !list.items.is_empty());
   lists
+}
+
+/// Whether the turn received a user message, as `reply::answered_user_id` classifies one, or a child report.
+fn received_user_or_report(turn: &[Value]) -> bool {
+  turn.iter().any(|event| {
+    event["received_at"].is_string() && (reply::answered_user_id(event).is_some() || event["type"] == CHILD_REPORT)
+  })
 }
 
 /// Whether a set stored in `events` names the list `key` in its changed fields.
@@ -311,7 +325,7 @@ pub(crate) async fn close_request_pending(store: &Arc<Store>, session_id: &str) 
 
 #[cfg(test)]
 mod tests {
-  use charliebot_core::event_types::{CHILD_REPORT, COLD_READ_CHECK, SCHEDULED_TRIGGER};
+  use charliebot_core::event_types::{AGENT_MESSAGE, COLD_READ_CHECK, SCHEDULED_TRIGGER};
   use charliebot_tasks::task_input_prompt::child_report_text;
 
   use super::*;
@@ -574,6 +588,50 @@ mod tests {
     assert!(reason.contains("Waiting on you holds 1 item and Remaining holds 1 item"), "{reason}");
 
     assert_eq!(check_status_reread(&turn(vec![status_set(&["waiting", "remaining"])])), CheckResult::Pass);
+  }
+
+  /// An agent message that the turn received at 00:00:01.
+  fn agent_message_input() -> Value {
+    json!({"type": AGENT_MESSAGE, "id": "m1", "content": "a question", "received_at": "2026-01-01T00:00:01Z"})
+  }
+
+  /// A scheduled trigger that the turn received at 00:00:01.
+  fn scheduled_trigger_input() -> Value {
+    json!({"type": SCHEDULED_TRIGGER, "id": "t1", "content": "Nightly sweep", "received_at": "2026-01-01T00:00:01Z"})
+  }
+
+  #[test]
+  fn an_agent_message_only_turn_passes_a_confirm_with_remaining() {
+    let status = stored_lists(&[], &["Land the list"]);
+    let confirm = json!({"type": WEB_STATUS_CONFIRMED, "id": "c1"});
+    let turn = TurnInput { status, ..input(false, 0, vec![agent_message_input(), confirm.clone()]) };
+    assert_eq!(check_status_reread(&turn), CheckResult::Pass);
+
+    // The Waiting on you requirement still applies to an agent-message turn.
+    let waiting = stored_lists(&["Choose the title"], &["Land the list"]);
+    let turn = TurnInput { status: waiting, ..input(false, 0, vec![agent_message_input(), confirm]) };
+    let CheckResult::Block(reason) = check_status_reread(&turn) else { panic!("the confirm blocks") };
+    assert!(reason.contains("Waiting on you holds 1 item") && !reason.contains("Remaining"), "{reason}");
+  }
+
+  #[test]
+  fn a_scheduled_trigger_only_turn_passes_a_confirm_with_remaining() {
+    let status = stored_lists(&[], &["Land the list"]);
+    let confirm = json!({"type": WEB_STATUS_CONFIRMED, "id": "c1"});
+    let turn = TurnInput { status, ..input(false, 0, vec![scheduled_trigger_input(), confirm]) };
+    assert_eq!(check_status_reread(&turn), CheckResult::Pass);
+  }
+
+  #[test]
+  fn a_turn_with_an_agent_message_and_a_child_report_needs_remaining() {
+    let status = stored_lists(&[], &["Land the list"]);
+    let confirm = json!({"type": WEB_STATUS_CONFIRMED, "id": "c1"});
+    let turn = TurnInput {
+      status,
+      ..input(false, 0, vec![agent_message_input(), child_report("child-1", "2026-01-01T00:00:01Z"), confirm])
+    };
+    let CheckResult::Block(reason) = check_status_reread(&turn) else { panic!("the confirm blocks") };
+    assert!(reason.contains("Remaining holds 1 item"), "{reason}");
   }
 
   #[test]

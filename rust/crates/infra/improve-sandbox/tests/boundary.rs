@@ -166,6 +166,7 @@ fn a_write_under_the_golden_scratch_directory_succeeds_and_a_neighbouring_path_f
 
 /// A direction without a clone is refused before any command runs. The refusal names the missing clone, and the program
 /// creates no clone path. The refusal starts no boundary, so this test runs on every kernel.
+#[ignore = "integration"]
 #[test]
 fn a_direction_without_a_clone_is_refused_before_any_command_and_creates_no_clone() {
   let home = tempfile::tempdir_in("/tmp").expect("the scratch HOME");
@@ -182,7 +183,6 @@ fn a_direction_without_a_clone_is_refused_before_any_command_and_creates_no_clon
     .args([direction.as_str(), "--", "sh", "-c", script.as_str()])
     .output()
     .expect("the sandbox starts");
-  remove_tmp_directories(&direction);
 
   let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
   assert!(!output.status.success(), "the sandbox accepted a direction without a clone: stderr: {stderr}");

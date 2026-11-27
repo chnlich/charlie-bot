@@ -116,7 +116,7 @@ fn deadline_text() -> String {
 }
 
 #[test]
-#[ignore = "needs systemd --user and cgroup v2"]
+#[ignore = "integration"]
 fn a_command_past_the_deadline_returns_its_partial_output_and_the_error_text() {
   let session = TestSession::new("partial");
   let started = Instant::now();
@@ -130,7 +130,7 @@ fn a_command_past_the_deadline_returns_its_partial_output_and_the_error_text() {
 }
 
 #[test]
-#[ignore = "needs systemd --user and cgroup v2"]
+#[ignore = "integration"]
 fn a_child_that_ignores_sigterm_ends_by_cgroup_kill() {
   let session = TestSession::new("sigterm");
   let started = Instant::now();
@@ -145,7 +145,7 @@ fn a_child_that_ignores_sigterm_ends_by_cgroup_kill() {
 }
 
 #[test]
-#[ignore = "needs systemd --user and cgroup v2"]
+#[ignore = "integration"]
 fn the_deadline_holds_after_the_starting_process_is_killed() {
   let session = TestSession::new("starter-dies");
   let marker = session.scratch.path().join("never-created");
@@ -182,7 +182,7 @@ fn the_deadline_holds_after_the_starting_process_is_killed() {
 }
 
 #[test]
-#[ignore = "needs systemd --user and cgroup v2"]
+#[ignore = "integration"]
 fn a_call_over_the_session_memory_cap_is_killed_with_rc_137() {
   let session = TestSession::new("memcap");
   // 200 MiB touched page by page, against the 80 MiB session cap.
@@ -193,7 +193,7 @@ fn a_call_over_the_session_memory_cap_is_killed_with_rc_137() {
 }
 
 #[test]
-#[ignore = "needs systemd --user and cgroup v2"]
+#[ignore = "integration"]
 fn a_call_child_processes_stay_under_the_session_pids_cap() {
   let session = TestSession::new("pidcap");
   let count_file = session.scratch.path().join("fork-count");
@@ -212,7 +212,7 @@ fn a_call_child_processes_stay_under_the_session_pids_cap() {
 }
 
 #[test]
-#[ignore = "needs systemd --user and cgroup v2"]
+#[ignore = "integration"]
 fn a_job_moved_into_the_session_cgroup_survives_the_deadline() {
   let session = TestSession::new("detach");
   let pid_file = session.scratch.path().join("job.pid");
@@ -234,7 +234,7 @@ fn a_job_moved_into_the_session_cgroup_survives_the_deadline() {
 }
 
 #[test]
-#[ignore = "needs systemd --user and cgroup v2"]
+#[ignore = "integration"]
 fn a_completed_call_removes_its_cgroup_and_passes_its_status_through() {
   let session = TestSession::new("completed");
   let output = run_call(&session, "echo hi; exit 3");
@@ -245,7 +245,7 @@ fn a_completed_call_removes_its_cgroup_and_passes_its_status_through() {
 }
 
 #[test]
-#[ignore = "needs systemd --user and cgroup v2"]
+#[ignore = "integration"]
 fn a_call_without_the_session_cgroup_variable_never_runs() {
   let session = TestSession::new("no-variable");
   let marker = session.scratch.path().join("ran");
@@ -268,7 +268,7 @@ fn a_call_without_the_session_cgroup_variable_never_runs() {
 }
 
 #[test]
-#[ignore = "needs systemd --user and cgroup v2"]
+#[ignore = "integration"]
 fn a_call_whose_guard_cannot_start_never_runs() {
   let session = TestSession::new("no-guard");
   let marker = session.scratch.path().join("ran");

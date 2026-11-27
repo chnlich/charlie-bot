@@ -3518,6 +3518,9 @@ mod synthetic_repo_tests {
       ],
     );
     git_ok(&work, &["switch", "-q", "-c", name]);
+    // The landing rebases in this clone, and a host without a global git identity has no committer for it.
+    git_ok(&work, &["config", "user.name", "Synthetic"]);
+    git_ok(&work, &["config", "user.email", "synthetic@example.test"]);
     commit(&work, &format!("{name}.txt"), &format!("{name}\n"));
     git_ok(&work, &["push", "-q", "-u", "origin", name]);
     work

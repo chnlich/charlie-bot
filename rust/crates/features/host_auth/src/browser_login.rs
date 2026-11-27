@@ -959,10 +959,12 @@ struct PtyMaster {
 impl PtyMaster {
   /// The master in its async wrapper, whose reads and writes the wrapper drives without blocking.
   fn new(fd: OwnedFd) -> io::Result<Arc<PtyMaster>> {
+    // SAFETY: `fd` is an open descriptor this function owns, and `F_GETFL` takes no pointer argument.
     let flags = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFL) };
     if flags == -1 {
       return Err(io::Error::last_os_error());
     }
+    // SAFETY: `fd` is still open, and `F_SETFL` takes an integer argument, so it reads no memory of this program.
     if unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
       return Err(io::Error::last_os_error());
     }
@@ -1051,16 +1053,19 @@ fn spawn_pty(argv: &[String], echo: bool) -> io::Result<(Child, Arc<PtyMaster>)>
 /// Both carry close-on-exec. An unrelated fork of this process may hold the descriptors until it execs. A copy
 /// of the slave that survived an exec would keep a master read from ending at the login's exit.
 fn open_pty() -> io::Result<(OwnedFd, OwnedFd)> {
+  // SAFETY: `posix_openpt` takes only flag integers and returns a new descriptor or -1, which the next check rejects.
   let master = unsafe { libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC) };
   if master == -1 {
     return Err(io::Error::last_os_error());
   }
   // SAFETY: the descriptor is newly opened and no other owner holds it.
   let master = unsafe { OwnedFd::from_raw_fd(master) };
+  // SAFETY: `master` is the open master descriptor from above, and both calls take no pointer argument.
   if unsafe { libc::grantpt(master.as_raw_fd()) } == -1 || unsafe { libc::unlockpt(master.as_raw_fd()) } == -1 {
     return Err(io::Error::last_os_error());
   }
   let mut name: [libc::c_char; 128] = [0; 128];
+  // SAFETY: `ptsname_r` writes the NUL-terminated name into `name` and stops at its `name.len()` bytes.
   if unsafe { libc::ptsname_r(master.as_raw_fd(), name.as_mut_ptr(), name.len()) } != 0 {
     return Err(io::Error::last_os_error());
   }
@@ -1075,8 +1080,9 @@ fn open_pty() -> io::Result<(OwnedFd, OwnedFd)> {
 
 /// The clearing of the terminal's echo of typed input.
 fn disable_echo(fd: libc::c_int) -> io::Result<()> {
-  // SAFETY: `termios` holds integers only, so the zeroed value is valid, and `tcgetattr` fills it for this descriptor.
+  // SAFETY: `termios` holds integers only, so the zeroed value is valid.
   let mut term: libc::termios = unsafe { std::mem::zeroed() };
+  // SAFETY: `fd` is the open terminal the caller holds for the call, and `tcgetattr` writes only into `term`.
   if unsafe { libc::tcgetattr(fd, &mut term) } == -1 {
     return Err(io::Error::last_os_error());
   }
@@ -1089,11 +1095,13 @@ fn disable_echo(fd: libc::c_int) -> io::Result<()> {
 }
 
 fn read_bytes(fd: libc::c_int, buffer: &mut [u8]) -> io::Result<usize> {
+  // SAFETY: the caller passes an open descriptor, and `read` writes at most `buffer.len()` bytes into `buffer`.
   let read = unsafe { libc::read(fd, buffer.as_mut_ptr().cast(), buffer.len()) };
   if read < 0 { Err(io::Error::last_os_error()) } else { Ok(read as usize) }
 }
 
 fn write_bytes(fd: libc::c_int, bytes: &[u8]) -> io::Result<usize> {
+  // SAFETY: the caller passes an open descriptor, and `write` reads at most `bytes.len()` bytes from `bytes`.
   let written = unsafe { libc::write(fd, bytes.as_ptr().cast(), bytes.len()) };
   if written < 0 { Err(io::Error::last_os_error()) } else { Ok(written as usize) }
 }

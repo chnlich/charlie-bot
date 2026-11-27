@@ -45,11 +45,12 @@
 # retries the work in a run with its own id. Or it must end with outcome success in the switch's own log
 # (`readback: run <id> ended during the switch: outcome success`). Or it must end failed on its own quota end, with a
 # run of its session that the server started for it as a retry: `own_failure` reads that rule from the run's records,
-# and the readback applies the same rule. The server is the first server log launched after the prior switch's last
-# server stop (its `stopping the old server` line, or its `no server listens` line) and no later than this check. The
-# prior switch's log may end before that server starts: a switch killed after its stop leaves the server's launcher to
-# start it. A prior switch with no stop, or no server log in that span, names the gap in its refusal. A run that is
-# neither refuses the switch and is named. No switch record, or a record without its runs file, refuses it too.
+# and the readback applies the same rule. The server is the first server log that holds a launch at or after the prior
+# switch's last server stop, to the millisecond (its `stopping the old server` line, or its `no server listens` line),
+# and no later than this check. The prior switch's log may end before that server starts: a switch killed after its
+# stop leaves the server's launcher to start it. A prior switch with no stop, or no server log in that span, names the
+# gap in its refusal. A run that is neither refuses the switch and is named. No switch record, or a record without its
+# runs file, refuses it too.
 # `--approve-unaccounted-runs` is the only override: pass it once the user approves the restart over the named runs.
 # Check B (no concurrent release or switch) is the host release lock. The switch takes it in run_detached before the
 # preflight, and scripts/release.sh takes it before its first stage, so a second release or switch exits at once while
@@ -1632,7 +1633,7 @@ check_prior_switch() {
     if [ -z "$stop" ]; then
       gap="the prior switch stopped no server, so none of its runs was reattached on a server it started"
     else
-      stop_stamp="$(cut -c1-19 <<<"$stop" | tr -dc '0-9')"
+      stop_stamp="$(cut -c1-23 <<<"$stop" | tr -dc '0-9')"
       server="$(new_server_log "$LOG_DIR" "$stop_stamp")"
       if [ -z "$server" ]; then
         gap="no server log in $LOG_DIR started after the prior switch's last server stop at ${stop:0:23}"

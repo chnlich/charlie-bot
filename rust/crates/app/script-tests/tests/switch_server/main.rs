@@ -550,6 +550,57 @@ fn test_prior_switch_that_accounted_for_every_run_passes_the_preflight() {
 
 #[test]
 #[ignore = "integration"]
+fn test_prior_switch_stopped_at_the_end_of_a_second_accounts_for_the_run_in_the_server_launched_after_it() {
+  // The old server stopped at .999 of a second. Another server launched earlier in that second, at .687, is not the
+  // server the switch started and holds no resume record. The server launched in the next second, at .081, resumed the
+  // run, so check A takes that one.
+  let world = World::new();
+  world.seed_prior_switch_stopped_at("2025-01-01 00:00:01.999", &[], &["run-resumed"]);
+  world.seed_server_log_launched_at("2025-01-01 00:00:01.687", &[]);
+  world.seed_server_log_launched_at("2025-01-01 00:00:02.081", &[("task_recovery_resume", "run-resumed")]);
+  let running = format!("rust {}", world.old_sha);
+
+  let run = world.stubbed_preflight(&running, "rust", &world.rust_sha);
+
+  assert_eq!(run.code, 0, "{}", world.report(&run));
+  assert!(run.stdout.contains("every run of the prior switch"), "{}", world.report(&run));
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_prior_switch_accounts_for_the_run_in_a_server_launched_later_in_its_stop_second() {
+  // A server launched in the stop's own second, after the stop, is the server the switch started.
+  let world = World::new();
+  world.seed_prior_switch(&[], &["run-resumed"]);
+  world.seed_server_log_launched_at("2025-01-01 00:00:01.500", &[("task_recovery_resume", "run-resumed")]);
+  let running = format!("rust {}", world.old_sha);
+
+  let run = world.stubbed_preflight(&running, "rust", &world.rust_sha);
+
+  assert_eq!(run.code, 0, "{}", world.report(&run));
+  assert!(run.stdout.contains("every run of the prior switch"), "{}", world.report(&run));
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_prior_switch_accounts_for_the_run_in_a_server_restored_into_the_log_its_stopped_server_began() {
+  // A switch back stops the server it started at .531 and restores the previous one at .600, in the same second. The
+  // launcher names both logs for that second and appends the restored launch to the log the stopped server began at
+  // .208, so the log's first launch precedes the stop and the launch after the stop is a later line of that log.
+  let world = World::new();
+  world.seed_prior_switch_stopped_at("2025-01-01 00:00:01.531", &[], &["run-resumed"]);
+  world.seed_server_log_launched_at("2025-01-01 00:00:01.208", &[]);
+  world.seed_server_log_launched_at("2025-01-01 00:00:01.600", &[("task_recovery_resume", "run-resumed")]);
+  let running = format!("rust {}", world.old_sha);
+
+  let run = world.stubbed_preflight(&running, "rust", &world.rust_sha);
+
+  assert_eq!(run.code, 0, "{}", world.report(&run));
+  assert!(run.stdout.contains("every run of the prior switch"), "{}", world.report(&run));
+}
+
+#[test]
+#[ignore = "integration"]
 fn test_prior_switch_killed_after_its_stop_accounts_for_every_run_in_the_server_its_pane_started() {
   // The prior switch's log ends before the server it started, as switch 7's did. Check A reads the server's resume
   // record for the run that resumed. The run that ended with success is accounted by a readback line, which this
@@ -593,7 +644,7 @@ fn test_prior_switch_names_the_gap_when_only_a_server_from_before_its_stop_is_lo
   // not reattach the run.
   let world = World::new();
   world.seed_prior_switch(&[], &["run-resumed"]);
-  world.seed_server_log_at("20241231_235959", &[("task_recovery_resume", "run-resumed")]);
+  world.seed_server_log_launched_at("2024-12-31 23:59:59.000", &[("task_recovery_resume", "run-resumed")]);
   let running = format!("rust {}", world.old_sha);
 
   let run = world.stubbed_preflight(&running, "rust", &world.rust_sha);

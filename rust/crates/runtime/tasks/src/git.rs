@@ -250,6 +250,24 @@ pub(crate) async fn git_stdout(
   }
 }
 
+/// Run git with a timeout and retain both complete text streams, including on success.
+pub(crate) async fn git_output(
+  repo_path: &Path,
+  args: &[&str],
+  limit: Duration,
+  label: &str,
+) -> (bool, String, String) {
+  match git_proc_bytes(repo_path, args, limit).await {
+    Ok(proc) => (
+      proc.returncode == 0,
+      String::from_utf8_lossy(&proc.stdout).into_owned(),
+      String::from_utf8_lossy(&proc.stderr).into_owned(),
+    ),
+    Err(GitProcError::TimedOut) => (false, String::new(), format!("{label} timed out after {}s", secs_text(limit))),
+    Err(GitProcError::Spawn(error)) => (false, String::new(), format!("{label} failed to start: {error}")),
+  }
+}
+
 /// Run a git command with a timeout and return the raw stdout bytes: the variant of [`git_stdout`]
 /// for output that is not text, such as a blob read for decompression.
 pub(crate) async fn git_bytes(

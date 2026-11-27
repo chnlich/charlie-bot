@@ -65,6 +65,7 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::git;
 use crate::github_api::{RestOutcome, rest_get, run_gh};
+use crate::land_push::{PushRejection, push_rejection_kind};
 use crate::land_queue::{self, Cadence};
 use crate::review_text;
 use crate::web_screenshots;
@@ -1552,12 +1553,7 @@ async fn push_task_branch(ctx: &TaskLanding, branch: &str) -> anyhow::Result<()>
   } else {
     format!("--force-with-lease=refs/heads/{branch}:")
   };
-  let (ok, _, err) =
-    git::git_stdout(&ctx.worktree, &["push", &lease, "origin", branch], GIT_PUSH_TIMEOUT, "git push task branch").await;
-  if !ok {
-    anyhow::bail!("pushing task branch {branch} failed: {err}");
-  }
-  Ok(())
+  crate::land_push::push_task_branch(&ctx.worktree, "origin", branch, &lease, GIT_PUSH_TIMEOUT).await
 }
 
 async fn origin_has_branch(ctx: &TaskLanding, branch: &str) -> anyhow::Result<bool> {
@@ -1572,70 +1568,6 @@ async fn origin_has_branch(ctx: &TaskLanding, branch: &str) -> anyhow::Result<bo
     anyhow::bail!("git ls-remote origin {branch} failed: {err}");
   }
   Ok(!out.trim().is_empty())
-}
-
-/// The push-to-base rejection class: repository rules (GH013) answer `pr-merge-required` with the
-/// green PR kept open. Only git's own non-fast-forward report can start a verification; every other
-/// refusal — a local or remote hook included — ends the landing at once.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PushRejection {
-  NonFastForward,
-  RepositoryRules,
-  Timeout,
-  Transport,
-  Auth,
-  Refused,
-}
-
-/// stderr fragments git prints when the remote's own check rejects the pushed sha as not a
-/// descendant of its tip.
-const NON_FAST_FORWARD_MARKERS: [&str; 3] = ["non-fast-forward", "fetch first", "stale info"];
-
-/// The two fragments receive-pack prints when the ref moved between the push's advertisement and
-/// its update transaction — the lease check of a lost push race. Both must appear, so a hook or a
-/// local lock failure that echoes only `cannot lock ref` stays a plain refusal.
-const LEASE_CHECK_MARKERS: [&str; 2] = ["cannot lock ref", "but expected"];
-
-/// stderr fragments of timed-out remote operations, including an SSH connection timeout.
-const TIMEOUT_MARKERS: [&str; 2] = ["timed out", "timeout"];
-
-/// stderr fragments of a dead or unreachable connection: handshake resets, DNS and TCP failures,
-/// mid-transfer failures, and git's "could not read from remote repository" closer.
-const TRANSPORT_MARKERS: [&str; 12] = [
-  "connection reset",
-  "connection refused",
-  "could not resolve hostname",
-  "temporary failure in name resolution",
-  "no route to host",
-  "network is unreachable",
-  "kex_exchange_identification",
-  "could not read from remote repository",
-  "the remote end hung up unexpectedly",
-  "early eof",
-  "rpc failed",
-  "broken pipe",
-];
-
-/// stderr fragments of a refused login: ssh publickey and https credential rejections.
-const AUTH_MARKERS: [&str; 2] = ["permission denied", "authentication failed"];
-
-fn push_rejection_kind(stderr: &str) -> PushRejection {
-  let lowered = stderr.to_lowercase();
-  if lowered.contains("gh013") || lowered.contains("repository rule") || lowered.contains("rule violations") {
-    PushRejection::RepositoryRules
-  } else if NON_FAST_FORWARD_MARKERS.iter().any(|marker| lowered.contains(marker))
-    || LEASE_CHECK_MARKERS.iter().all(|marker| lowered.contains(marker))
-  {
-    PushRejection::NonFastForward
-  } else if TIMEOUT_MARKERS.iter().any(|marker| lowered.contains(marker)) {
-    PushRejection::Timeout
-  } else if AUTH_MARKERS.iter().any(|marker| lowered.contains(marker)) {
-    PushRejection::Auth
-  } else if TRANSPORT_MARKERS.iter().any(|marker| lowered.contains(marker)) {
-    PushRejection::Transport
-  } else {
-    PushRejection::Refused
-  }
 }
 
 /// Whether the CI gate applies: the base must be the repository's default branch and that branch
@@ -2949,7 +2881,7 @@ mod synthetic_repo_tests {
     git_ok(&repo, &["commit", "-q", "--amend", "-m", "rewritten"]);
     let error = push_task_branch(&landing_ctx(&repo, "task1"), "task1").await.expect_err("the other push stands");
     let text = format!("{error:#}");
-    assert!(text.contains("cannot lock ref") && text.contains("but expected"), "{text}");
+    assert!(text.contains("NonFastForward"), "{text}");
     assert_eq!(git::git_rev_parse(&origin, "refs/heads/task1").await.expect("origin holds the branch"), other_tip);
   }
 

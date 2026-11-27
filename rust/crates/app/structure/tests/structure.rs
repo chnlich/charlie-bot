@@ -33,7 +33,7 @@ const CHAT_CHANNELS: [&str; 3] = ["slack", "discord", "feishu"];
 ///
 /// A runtime crate depends only on its own layer or a lower layer. The table must cover every runtime crate and name
 /// no missing one.
-const RUNTIME_LAYERS: [(&str, usize); 10] = [
+const RUNTIME_LAYERS: [(&str, usize); 11] = [
   ("store", 1),
   ("inline-js", 1),
   ("registry", 2),

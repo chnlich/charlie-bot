@@ -55,6 +55,9 @@ printf '%s\n' "$*" >> "$GH_CALL_LOG"
 "#
     ),
   );
+  // The round's own build is first on PATH in a round, and pr-create's screenshot check runs it; the test runs the
+  // stand-in for that binary, so no host's charliebot decides the test's answer.
+  charliebot_stub(sandbox);
   let mut env = sandbox.env();
   env.insert("HOME".to_string(), sandbox.root().display().to_string());
   env.insert("CHARLIEBOT_HOME".to_string(), home.display().to_string());
@@ -1106,6 +1109,275 @@ fn tools_scanner(repo: &Path) -> PathBuf {
   repo.join("dev/check-skills-host-leak.sh")
 }
 
+// -- github-post.sh pr-create's screenshot layout gate --
+
+/// The `charliebot` stand-in that runs the built binary, which the screenshot check runs.
+fn charliebot_stub(sandbox: &Sandbox) {
+  let binary = harness::built_binary("charliebot").display().to_string();
+  assert!(!binary.contains('\''), "the binary path carries no quote: {binary}");
+  sandbox.stub("charliebot", &format!("exec '{binary}' \"$@\"\n"));
+}
+
+/// The `charliebot` stand-in of a pr-create run that copies each review record it is given to `$RECORD_COPY` before the
+/// built binary runs. pr-create deletes its pre-review record when it exits, so the copy is the record it built.
+fn charliebot_recording_review_record(sandbox: &Sandbox) {
+  let binary = harness::built_binary("charliebot").display().to_string();
+  assert!(!binary.contains('\''), "the binary path carries no quote: {binary}");
+  let copy = [
+    "previous=",
+    "for argument in \"$@\"; do",
+    "  if [ \"$previous\" = --review-record ]; then cp -- \"$argument\" \"$RECORD_COPY\"; fi",
+    "  previous=$argument",
+    "done",
+  ]
+  .join("\n");
+  sandbox.stub("charliebot", &format!("{copy}\nexec '{binary}' \"$@\"\n"));
+}
+
+/// Writes a PNG whose IHDR chunk carries `width` and `height`, as a round's capture writes one.
+fn write_png(path: &Path, width: u32, height: u32) {
+  let mut bytes = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+  bytes.extend_from_slice(&13u32.to_be_bytes());
+  bytes.extend_from_slice(b"IHDR");
+  bytes.extend_from_slice(&width.to_be_bytes());
+  bytes.extend_from_slice(&height.to_be_bytes());
+  std::fs::write(path, bytes).unwrap();
+}
+
+/// Writes `count` PNGs at each window size into `dir`, named as `shot_names(count)` names them.
+fn write_window_shots(dir: &Path, count: usize) {
+  for (width, height) in charliebot_tasks::web_screenshots::WINDOW_SIZES {
+    for copy in 0..count {
+      write_png(&dir.join(format!("shot-{width}-{height}-{copy}.png")), width, height);
+    }
+  }
+}
+
+/// Writes a before and an after screenshot at each window size into `dir`, as a round's driver does, and returns
+/// their names in window-size order. The round's body names these, so they sit at the evidence directory's top level.
+fn write_round_pair(dir: &Path) -> Vec<String> {
+  let mut names = Vec::new();
+  for (width, height) in charliebot_tasks::web_screenshots::WINDOW_SIZES {
+    for state in ["before", "after"] {
+      let name = format!("{state}-page-{width}x{height}.png");
+      write_png(&dir.join(&name), width, height);
+      names.push(name);
+    }
+  }
+  names
+}
+
+/// Writes the screenshots a round takes beyond the body's pair into the evidence directory's extra subfolder, as
+/// landing.md sets the layout: another state and a probe at each window size, and a header crop at another size.
+fn write_extra_shots(evidence: &Path) {
+  let extra = evidence.join("extra");
+  std::fs::create_dir_all(&extra).unwrap();
+  for (width, height) in charliebot_tasks::web_screenshots::WINDOW_SIZES {
+    write_png(&extra.join(format!("click-{width}x{height}.png")), width, height);
+    write_png(&extra.join(format!("probe-{width}x{height}.png")), width, height);
+  }
+  write_png(&extra.join("header-crop-800x200.png"), 800, 200);
+}
+
+/// Writes a review record whose review read each of `reads`, at `path`, as `charliebot backend run` writes its
+/// `events.ndjson`: a `Read` call on an assistant event, answered on the next user event by its result.
+fn write_review_record(path: &Path, reads: &[String]) {
+  let mut lines = Vec::new();
+  for (index, name) in reads.iter().enumerate() {
+    let id = format!("toolu_{index}");
+    lines.push(
+      serde_json::json!({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": id.clone(), "name": "Read", "input": {"file_path": format!("/evidence/{name}")}}
+      ]}})
+      .to_string(),
+    );
+    lines.push(
+      serde_json::json!({"type": "user", "message": {"content": [
+        {"type": "tool_result", "tool_use_id": id, "is_error": false, "content": "ok"}
+      ]}})
+      .to_string(),
+    );
+  }
+  std::fs::write(path, lines.join("\n") + "\n").unwrap();
+}
+
+/// A work clone whose topic changes a served web page, one commit ahead of origin/main on `improve/ux/topic-slug`.
+fn web_push_repo(sandbox: &Sandbox, env: &Env) -> PathBuf {
+  let origin = sandbox.dir("origin.git");
+  let clone = sandbox.dir("clone");
+  git(env, sandbox.root(), &["init", "--bare", "-q", origin.to_str().unwrap()]);
+  git(env, sandbox.root(), &["init", "-q", "-b", "main", clone.to_str().unwrap()]);
+  git(env, &clone, &["remote", "add", "origin", origin.to_str().unwrap()]);
+  std::fs::create_dir_all(clone.join("web/static")).unwrap();
+  std::fs::write(clone.join("web/static/ui.js"), "const label = 'before';\n").unwrap();
+  git(env, &clone, &["add", "."]);
+  git(env, &clone, &["commit", "-q", "-m", "seed commit"]);
+  git(env, &clone, &["push", "-q", "origin", "main"]);
+  git(env, &clone, &["switch", "-c", "improve/ux/topic-slug"]);
+  std::fs::write(clone.join("web/static/ui.js"), "const label = 'after';\n").unwrap();
+  git(env, &clone, &["commit", "-q", "-am", "topic change"]);
+  clone
+}
+
+/// Runs `charliebot screenshots check` with `args`, feeding `changed` on standard input.
+fn run_screenshots_check(env: &Env, cwd: &Path, changed: &str, args: &[&str]) -> Run {
+  let mut command = harness::command("charliebot", env);
+  command.args(["screenshots", "check"]).args(args);
+  run_with_stdin(&mut command, cwd, changed)
+}
+
+/// Runs pr-create of the clone's current branch with the round's evidence directory.
+fn pr_create_with_evidence(env: &Env, clone: &Path, body: &Path, evidence: &Path) -> Run {
+  let mut command = harness::command("bash", env);
+  command.arg(github_post()).args(["pr-create", "--title", "clean topic", "--body-file"]).arg(body);
+  command.args(["--evidence-dir"]).arg(evidence).args(["--base", "main"]);
+  run_in(&mut command, clone)
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_round_pair_at_the_top_level_passes_the_screenshot_check_with_its_extra_shots_in_extra() {
+  let sandbox = Sandbox::new();
+  let (env, _gh_log, _home) = post(&sandbox);
+  let evidence = sandbox.dir("evidence");
+  let names = write_round_pair(&evidence);
+  write_extra_shots(&evidence);
+  let body = body_file(&sandbox, "body.md", &body_naming(&names, "\nView: /?session=abc\n"));
+  let record = sandbox.root().join("events.ndjson");
+  write_review_record(&record, &names);
+
+  let run = run_screenshots_check(
+    &env,
+    sandbox.root(),
+    "web/static/ui.js\n",
+    &[
+      "--dir",
+      evidence.to_str().unwrap(),
+      "--pr-body",
+      body.to_str().unwrap(),
+      "--review-record",
+      record.to_str().unwrap(),
+    ],
+  );
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(run.stdout.contains("web page change: 1 path(s)"), "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_create_refuses_a_screenshot_at_the_top_level_that_the_body_does_not_name() {
+  let sandbox = Sandbox::new();
+  let (env, gh_log, _home) = post(&sandbox);
+  let clone = web_push_repo(&sandbox, &env);
+  let evidence = sandbox.dir("evidence");
+  let names = write_round_pair(&evidence);
+  // A side shot that stayed beside the body's pair, which the merge's check would accept at its window size.
+  write_png(&evidence.join("after-click-1536x900.png"), 1536, 900);
+  let body = body_file(&sandbox, "body.md", &body_naming(&names, "\nView: /?session=abc\n"));
+
+  let run = pr_create_with_evidence(&env, &clone, &body, &evidence);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("after-click-1536x900.png"), "{}", run.stderr);
+  assert!(
+    !gh_log_lines(&gh_log).iter().any(|line| line.contains("pr create")),
+    "no refused body created a pull request: {}",
+    run.describe()
+  );
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_create_refuses_a_body_whose_screenshot_is_not_at_the_top_level() {
+  let sandbox = Sandbox::new();
+  let (env, gh_log, _home) = post(&sandbox);
+  let clone = web_push_repo(&sandbox, &env);
+  let evidence = sandbox.dir("evidence");
+  let names = write_round_pair(&evidence);
+  // The body names a state that the round left in the extra subfolder.
+  let extra = evidence.join("extra");
+  std::fs::create_dir_all(&extra).unwrap();
+  write_png(&extra.join("after-tray-1536x900.png"), 1536, 900);
+  let mut named = names.clone();
+  named.push("after-tray-1536x900.png".to_string());
+  let body = body_file(&sandbox, "body.md", &body_naming(&named, "\nView: /?session=abc\n"));
+
+  let run = pr_create_with_evidence(&env, &clone, &body, &evidence);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("after-tray-1536x900.png"), "{}", run.stderr);
+  assert!(
+    !gh_log_lines(&gh_log).iter().any(|line| line.contains("pr create")),
+    "no refused body created a pull request: {}",
+    run.describe()
+  );
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_create_of_a_web_page_change_needs_the_evidence_directory() {
+  let sandbox = Sandbox::new();
+  let (env, gh_log, _home) = post(&sandbox);
+  let clone = web_push_repo(&sandbox, &env);
+  let body = body_file(&sandbox, "body.md", "## Evidence\nno screenshot before the review.\n");
+
+  let mut command = harness::command("bash", &env);
+  command.arg(github_post()).args(["pr-create", "--title", "clean topic", "--body-file"]).arg(&body);
+  command.args(["--base", "main"]);
+  let run = run_in(&mut command, &clone);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("--evidence-dir"), "{}", run.stderr);
+  assert!(
+    !gh_log_lines(&gh_log).iter().any(|line| line.contains("pr create")),
+    "no refused body created a pull request: {}",
+    run.describe()
+  );
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_create_accepts_the_body_pair_at_the_top_level_and_the_extra_shots_in_extra() {
+  let sandbox = Sandbox::new();
+  let (env, gh_log, _home) = post(&sandbox);
+  let clone = web_push_repo(&sandbox, &env);
+  let evidence = sandbox.dir("evidence");
+  let names = write_round_pair(&evidence);
+  write_extra_shots(&evidence);
+  let body = body_file(&sandbox, "body.md", &body_naming(&names, "\nView: /?session=abc\n"));
+
+  let run = pr_create_with_evidence(&env, &clone, &body, &evidence);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(
+    gh_log_lines(&gh_log).iter().any(|line| line.contains("pr create")),
+    "the pull request was created: {}",
+    run.describe()
+  );
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_create_of_a_change_that_names_no_screenshot_and_alters_no_web_page_passes_unchanged() {
+  let sandbox = Sandbox::new();
+  let (env, gh_log, _home) = post(&sandbox);
+  let clone = push_repo(&sandbox, &env);
+  // A stray shot in the evidence directory: the gate reads no evidence for a change that alters no web page.
+  let evidence = sandbox.dir("evidence");
+  write_png(&evidence.join("stray-800x600.png"), 800, 600);
+  let body = body_file(&sandbox, "body.md", CLEAN_BODY);
+
+  let run = pr_create_with_evidence(&env, &clone, &body, &evidence);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(
+    gh_log_lines(&gh_log).iter().any(|line| line.contains("pr create")),
+    "the pull request was created: {}",
+    run.describe()
+  );
+}
+
 // -- github-post.sh pr-merge --
 
 /// The `gh` stand-in for `pr-merge` and the verdict comment: it answers the diff and view reads from files the test
@@ -1232,9 +1504,6 @@ impl MergeWorld {
     let gh_log = sandbox.root().join("gh-calls.log");
     let env = post_env(&sandbox, &home, &gh_log);
     sandbox.stub("gh", MERGE_GH_STUB);
-    let binary = harness::built_binary("charliebot").display().to_string();
-    assert!(!binary.contains('\''), "the binary path carries no quote: {binary}");
-    sandbox.stub("charliebot", &format!("exec '{binary}' \"$@\"\n"));
     // Every merge holds the landing queue's turn on origin, so the sandbox is a worktree whose origin is a bare
     // repository, and the pull request's head is a commit in both. The queue keys an entry by the head's check
     // completion, which the gh stub answers from a fixed check-runs document.
@@ -1352,40 +1621,14 @@ impl MergeWorld {
 
   /// Writes `count` PNGs at each window size into the evidence directory.
   fn write_screenshots(&self, count: usize) {
-    for (width, height) in charliebot_tasks::web_screenshots::WINDOW_SIZES {
-      for copy in 0..count {
-        let name = format!("shot-{width}-{height}-{copy}.png");
-        let mut bytes = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
-        bytes.extend_from_slice(&13u32.to_be_bytes());
-        bytes.extend_from_slice(b"IHDR");
-        bytes.extend_from_slice(&width.to_be_bytes());
-        bytes.extend_from_slice(&height.to_be_bytes());
-        std::fs::write(self.evidence.join(name), bytes).unwrap();
-      }
-    }
+    write_window_shots(&self.evidence, count);
   }
 
   /// Writes the review record of a review that read each of `reads`, as `charliebot backend run` writes its
-  /// `events.ndjson`: a `Read` call on an assistant event, answered on the next user event by its result.
+  /// `events.ndjson`.
   fn review_record(&self, reads: &[String]) -> PathBuf {
-    let mut lines = Vec::new();
-    for (index, name) in reads.iter().enumerate() {
-      let id = format!("toolu_{index}");
-      lines.push(
-        serde_json::json!({"type": "assistant", "message": {"content": [
-          {"type": "tool_use", "id": id.clone(), "name": "Read", "input": {"file_path": format!("/evidence/{name}")}}
-        ]}})
-        .to_string(),
-      );
-      lines.push(
-        serde_json::json!({"type": "user", "message": {"content": [
-          {"type": "tool_result", "tool_use_id": id, "is_error": false, "content": "ok"}
-        ]}})
-        .to_string(),
-      );
-    }
     let path = self.sandbox.root().join("events.ndjson");
-    std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+    write_review_record(&path, reads);
     path
   }
 
@@ -1657,6 +1900,69 @@ fn a_pr_merge_refuses_a_web_page_change_without_a_review_record() {
   assert_eq!(run.code, 2, "{}", run.describe());
   assert!(run.stderr.contains("--review-record"), "{}", run.describe());
   assert!(world.merge_calls().is_empty(), "nothing may merge: {}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_refuses_the_pre_review_record_that_pr_create_built_and_takes_the_review_record() {
+  let names = shot_names(2);
+  let body = body_naming(&names, "\nView: /?session=abc\n");
+  // pr-create checks the round's screenshots against the pre-review record it builds, and deletes it when it exits.
+  let creating = Sandbox::new();
+  let (mut env, _gh_log, _home) = post(&creating);
+  let clone = web_push_repo(&creating, &env);
+  let evidence = creating.dir("evidence");
+  write_window_shots(&evidence, 2);
+  let body_path = body_file(&creating, "body.md", &body);
+  charliebot_recording_review_record(&creating);
+  let copy = creating.root().join("pre-review-record.ndjson");
+  env.insert("RECORD_COPY".to_string(), copy.display().to_string());
+  let created = pr_create_with_evidence(&env, &clone, &body_path, &evidence);
+  assert_eq!(created.code, 0, "{}", created.describe());
+
+  // Its reads match the body, so the screenshot check alone would pass it: pr-merge refuses it by its first line.
+  let world = MergeWorld::new("web/static/ui.js\n", &body);
+  world.write_screenshots(2);
+  let pre_review = world.sandbox.root().join("pre-review-record.ndjson");
+  std::fs::copy(&copy, &pre_review).expect("the pre-review record is copied");
+  let evidence_arg = world.evidence.to_str().unwrap();
+  let refused = world.merge(&["--evidence-dir", evidence_arg, "--review-record", pre_review.to_str().unwrap(), "5046"]);
+
+  assert_eq!(refused.code, 2, "{}", refused.describe());
+  assert!(refused.stderr.contains("is a pre-review record that pr-create wrote"), "{}", refused.describe());
+  assert!(world.merge_calls().is_empty(), "nothing may merge: {}", refused.describe());
+  assert!(!world.merge_body.exists(), "no squash message was written");
+
+  // The review's own record of the same reads passes in the same world, so the refusal is the record's line alone.
+  let review = world.review_record(&names);
+  let merged = world.merge(&["--evidence-dir", evidence_arg, "--review-record", review.to_str().unwrap(), "5046"]);
+
+  assert_eq!(merged.code, 0, "{}", merged.describe());
+  assert_eq!(world.merge_calls().len(), 1, "{}", merged.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_refuses_a_web_page_change_whose_top_level_holds_a_screenshot_the_body_does_not_name() {
+  let names = shot_names(2);
+  let world = MergeWorld::new("web/static/ui.js\n", &body_naming(&names, "\nView: /?session=abc\n"));
+  world.write_screenshots(2);
+  // A side shot left at a window size beside the pair: the merge's check accepts it, but the layout does not.
+  write_png(&world.evidence.join("after-tray-1536-900.png"), 1536, 900);
+  let record = world.review_record(&names);
+
+  let run = world.merge(&[
+    "--evidence-dir",
+    world.evidence.to_str().unwrap(),
+    "--review-record",
+    record.to_str().unwrap(),
+    "5046",
+  ]);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("after-tray-1536-900.png"), "{}", run.describe());
+  assert!(world.merge_calls().is_empty(), "nothing may merge: {}", run.describe());
+  assert!(!world.merge_body.exists(), "no squash message was written");
 }
 
 #[test]

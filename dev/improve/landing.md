@@ -215,6 +215,14 @@ the change alters, and an after screenshot of each state the change adds. Each p
 the change, so the reader can see the user-facing difference. The driver starts the browser that `$IMPROVE_BROWSER`
 names (The round's browser, above).
 
+The evidence directory's top level holds only the screenshots the pull request body names: the before and after
+screenshot of each view at each window size, each by its file name. Every other screenshot the driver takes — another
+state, the screen after a click, a probe, or a crop at any other size — goes in the evidence directory's `extra/`
+subfolder. The merge's screenshot check reads the top level only, and it refuses a PNG whose width and height are not
+one of the window sizes that `charliebot screenshots sizes` prints. `github-post.sh pr-create` holds the top level to
+exactly the files the body names before the review, and `pr-merge` holds it again, so a stray shot at the top level or
+a named file the directory lacks stops the round there instead of at the merge.
+
 ## The round's login and the launch's exit codes
 
 The launch forwards the member's login for one round only.

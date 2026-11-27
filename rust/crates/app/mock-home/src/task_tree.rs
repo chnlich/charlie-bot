@@ -29,11 +29,11 @@
 //! fixed around `marker_time()`, so `reset` restores them from the seed's plan.
 //!
 //! The serve shape also writes one fixture row (`ServeFixture`): a sidebar row that carries six of the row indicators
-//! a ux round captures, with a long display name and a long backend name. Its inputs are store facts of three sessions:
-//! the row's own unread flag, Waiting on you item and pending trigger, its worker child's pending wake-up trigger, and
-//! the decoy root that the chat page's redirect opens so the fixture row keeps its unread dot. The row's own spinner
-//! stays unlit: the sidebar paints it for a live run or a busy turn, and a home file carries neither. The loader, which
-//! the same row paints for that paused child, holds the spinner's place in the row's lead column.
+//! a ux round captures, with a long display name and a backend whose label is long. Its inputs are store facts of
+//! three sessions: the row's own unread flag, Waiting on you item and pending trigger, its worker child's pending
+//! wake-up trigger, and the decoy root that the chat page's redirect opens so the fixture row keeps its unread dot. The
+//! row's own spinner stays unlit: the sidebar paints it for a live run or a busy turn, and a home file carries neither.
+//! The loader, which the same row paints for that paused child, holds the spinner's place in the row's lead column.
 
 use std::fs::{self, File};
 use std::path::Path;
@@ -145,17 +145,15 @@ const ARCHIVE_FILE_NAME: &str = "chat_events.2026-W44.jsonl";
 /// The lowest pid a launched run carries: Linux's PID_MAX_LIMIT on 64-bit hosts, which no process id reaches.
 const STALE_PID_FLOOR: u32 = 1 << 22;
 
-/// The backend every generated session names, except the serve fixture's row, which names a backend of the real label
-/// length family so its label wraps under the row's date.
+/// The backend every generated session names, the serve fixture's row included. The release trial's config declares it
+/// as a pool with a label (`scripts/release/trial.sh`), so each row's backend line shows that label in full. A backend
+/// id the trial config lacks would show as its raw id.
 const MOCK_BACKEND: &str = "mock-backend";
 
 /// The display name of the serve fixture's row: the wrapping case a ux round captures. It starts with the live row's
 /// "1652: Char" and runs long enough to fill the row's name line at every sidebar width.
 const FIXTURE_ROW_NAME: &str =
   "1652: CharlieBot improve round sidebar row with a long display name that fills the line";
-/// The backend of the serve fixture's row: an option id of the real label length family, so the row's backend label
-/// cannot share the date's line and moves under it.
-const FIXTURE_ROW_BACKEND: &str = "claude-code-deepseek-flash";
 /// The Waiting on you item of the serve fixture's rows. It paints the row's own waiting box and, on the row's parent,
 /// the subtree box.
 const FIXTURE_WAITING_TEXT: &str = "Approve the sidebar row's layout change";
@@ -272,7 +270,7 @@ struct SessionPlan {
   waiting: bool,
   /// The display name its row shows, when the serve fixture sets one; every other row takes a generated title.
   name: Option<&'static str>,
-  /// The backend id its row shows. The serve fixture's row names a long one, so its label wraps under the date.
+  /// The backend id its row shows.
   backend: &'static str,
   /// Whether the log holds its task boundary and no turn. The serve fixture's worker child is an open task that never
   /// ran, so its log carries nothing a start could dispatch.
@@ -307,7 +305,7 @@ struct HomePlan {
 }
 
 /// The serve home's fixture row: one existing session's sidebar row, which carries six of the row indicators a ux
-/// round captures, with a long display name and a long backend name. The facts behind the six are:
+/// round captures, with a long display name and a backend whose label is long. The facts behind the six are:
 ///
 /// - the child count, from a child whose profile is not `worker`;
 /// - the activity loader, from the worker child's pending wake-up trigger: a worker with a pending trigger and no live
@@ -462,7 +460,6 @@ impl HomePlan {
     row.waiting = true;
     row.pending_triggers += 1;
     row.name = Some(FIXTURE_ROW_NAME);
-    row.backend = FIXTURE_ROW_BACKEND;
     // A child stays in the sidebar's active listing only while its task is open: the derived tree archives every other
     // task and its subtree. The manager child keeps its planned runs, whose finishes confirmed every input, so an open
     // task dispatches nothing — the state the plan gives every other open task.
@@ -1377,8 +1374,8 @@ mod tests {
 
   /// The serve shape's fixture row carries six row indicators from store facts — the child count, the unread dot, the
   /// pending-trigger bell, its own and its subtree's waiting boxes, and the loader its paused child paints in the
-  /// spinner's place — with the long display name and backend name of the wrapping case, at the listing order's second
-  /// place. The lab shape plants no fixture, and neither shape adds a session.
+  /// spinner's place — with the long display name of the wrapping case, at the listing order's second place. The lab
+  /// shape plants no fixture, and neither shape adds a session.
   #[test]
   fn the_serve_shape_marks_one_row_with_every_indicator() {
     let sessions = SCALED_SESSIONS;
@@ -1394,7 +1391,7 @@ mod tests {
     assert!(row.waiting, "the row's own Waiting on you item paints its waiting box");
     assert!(row.pending_triggers > 0, "a pending trigger paints the bell");
     assert_eq!(row.name, Some(FIXTURE_ROW_NAME));
-    assert_eq!(row.backend, FIXTURE_ROW_BACKEND);
+    assert_eq!(row.backend, MOCK_BACKEND);
     let children: Vec<&SessionPlan> =
       plan.sessions.iter().filter(|session| session.parent == Some(fixture.row)).collect();
     assert!(children.iter().any(|child| child.profile != TaskProfile::Worker), "a manager child draws the child count");
@@ -1429,6 +1426,40 @@ mod tests {
       HomePlan::new(&sizes, 1, Language::Mixed, Shape::TaskTree).serve_fixture.is_none(),
       "the lab shape writes no fixture"
     );
+  }
+
+  /// The `(id, label)` pairs of the pools in the release trial's config, read from the `backends.pools` section of the
+  /// heredoc that `trial.sh` writes. A row whose backend id names one of these shows that pool's label, not its id.
+  fn trial_pool_labels() -> Vec<(&'static str, &'static str)> {
+    const TRIAL_SCRIPT: &str = include_str!("../../../../../scripts/release/trial.sh");
+    let mut pools: Vec<(&'static str, &'static str)> = Vec::new();
+    let mut in_pools = false;
+    for line in TRIAL_SCRIPT.lines() {
+      if line == "  pools:" {
+        in_pools = true;
+      } else if line == "  calls:" {
+        break;
+      } else if in_pools {
+        if let Some(id) = line.strip_prefix("    - id: ") {
+          pools.push((id, ""));
+        } else if let (Some(label), Some(pool)) = (line.strip_prefix("      label: "), pools.last_mut()) {
+          pool.1 = label;
+        }
+      }
+    }
+    pools
+  }
+
+  /// The serve fixture's row names a backend that the release trial's config declares as a labelled pool, so its
+  /// sidebar row paints that label in full. A backend id the trial config lacks would paint its raw id.
+  #[test]
+  fn the_serve_fixture_backend_resolves_to_a_trial_pool_label() {
+    let (_, _, sizes) = session::planned_home(SCALED_SESSIONS, 1, Language::Mixed);
+    let plan = HomePlan::new(&sizes, 1, Language::Mixed, Shape::ServeTaskTree);
+    let fixture = plan.serve_fixture.expect("the serve plan holds its fixture row");
+    let backend = plan.sessions[fixture.row].backend;
+    let label = trial_pool_labels().into_iter().find(|(id, _)| *id == backend).map(|(_, label)| label);
+    assert!(label.is_some_and(|label| !label.is_empty()), "the trial config declares no labelled pool `{backend}`");
   }
 
   /// The plan deals every keep reason at its scaled reference count, so a lab start's full-pass distribution lands

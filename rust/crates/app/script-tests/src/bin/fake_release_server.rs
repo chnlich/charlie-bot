@@ -358,7 +358,7 @@ impl Server {
       event_line(&json!({
         "type": event_types::ASSISTANT_ERROR,
         "content": self.behavior.probe_chat_error,
-        "quota_exhausted": true,
+        (event_types::QUOTA_EXHAUSTED): true,
       })),
     )
   }

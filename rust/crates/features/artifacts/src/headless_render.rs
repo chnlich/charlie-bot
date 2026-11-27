@@ -175,14 +175,10 @@ impl WarmRenderer {
     let (port, path) = loop {
       if port_path.is_file() {
         let contents = fs::read_to_string(&port_path).map_err(|error| RenderFailure::Other(error.to_string()))?;
-        let mut lines = contents.lines();
-        let port = lines
-          .next()
-          .ok_or_else(|| RenderFailure::Value("not enough values to unpack (expected 2, got 0)".to_owned()))?;
-        let path = lines
-          .next()
-          .ok_or_else(|| RenderFailure::Value("not enough values to unpack (expected 2, got 1)".to_owned()))?;
-        break (port.to_owned(), path.to_owned());
+        // The browser creates the file before it writes the port and path, so a read can find the file still empty.
+        if let Some(endpoint) = devtools_endpoint(&contents) {
+          break endpoint;
+        }
       }
       if self.process_exited().map_err(|error| RenderFailure::Other(error.to_string()))?
         || self.deadline.is_some_and(|deadline| Instant::now() > deadline)
@@ -495,6 +491,15 @@ enum ProcessRead {
   /// A `/proc` field refused permission, so the process cannot be classified from this read.
   Refused,
   Record(ProcessRecord),
+}
+
+/// The DevTools port and browser path in the `DevToolsActivePort` file: its first two lines. Returns `None` while the
+/// file holds fewer than two lines, because the browser has not finished writing it.
+fn devtools_endpoint(contents: &str) -> Option<(String, String)> {
+  let mut lines = contents.lines();
+  let port = lines.next()?;
+  let path = lines.next()?;
+  Some((port.to_owned(), path.to_owned()))
 }
 
 /// Whether `process` is a renderer browser whose parent chain has no live CharlieBot server.
@@ -962,6 +967,14 @@ mod tests {
         }
       }
     })
+  }
+
+  #[test]
+  fn devtools_endpoint_waits_until_the_browser_has_written_the_port_and_path() {
+    assert_eq!(devtools_endpoint(""), None);
+    assert_eq!(devtools_endpoint("9222\n"), None);
+    let endpoint = ("9222".to_owned(), "/devtools/browser/stub".to_owned());
+    assert_eq!(devtools_endpoint("9222\n/devtools/browser/stub\n"), Some(endpoint));
   }
 
   #[test]

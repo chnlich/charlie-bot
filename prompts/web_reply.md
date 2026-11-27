@@ -36,12 +36,14 @@ The For-you view shows your web replies and hides the rest of your turn output.
 
 ## When to set the session status
 
-- When the turn received an input and Waiting on you holds items, store a `web status set` whose Waiting on you list
-  is the list as it stands after the last input.
+- When the turn received an input and Waiting on you or Remaining holds items, store a `web status set` after the last
+  input that carries each such list as it stands after that input. A parent-approved session's Waiting on you list is
+  exempt: its set refuses a non-empty one, so the set carries only its Remaining list.
 - When that status set prints the cold read of the kept items against this turn's record, act on each item before the
   next set: remove a settled item, rewrite a changed item, and keep an open item.
-- Otherwise, end the turn with the session status that matches what the turn did: store a `web status set` for a change
-  to Goal, Remaining, Now or Waiting on you, and a `web status confirm` for an unchanged status.
+- Otherwise (the turn received no input, or both lists hold no items), end the turn with the session status that matches
+  what the turn did: store a `web status set` for a change to Goal, Remaining, Now or Waiting on you, and a
+  `web status confirm` for an unchanged status.
 - A child session keeps its own progress in its own **Now**.
 - When a child session reports progress that changes this session's next milestone, set the new **Now**.
 - Before the end-of-turn status command, reconcile every Waiting on you item with the evidence and rules read this turn.

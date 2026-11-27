@@ -863,7 +863,10 @@ impl TaskExecutionAdapter {
     if let Some(continuation) = continuation.as_ref().filter(|continuation| continuation.native_id.is_none()) {
       let previous = &continuation.previous;
       let reason = if previous.backend.as_deref().is_some_and(|backend| backend != option.id) {
-        session_anchors::backend_switch_reset_reason(previous.backend.as_deref().unwrap(), &option.id)
+        session_anchors::backend_switch_reset_reason(
+          previous.backend.as_deref().expect("the is_some_and check above proves a backend is recorded"),
+          &option.id,
+        )
       } else if previous.native_session_id.is_none() {
         "the previous run recorded no native conversation id, so this run starts a fresh native conversation"
           .to_string()

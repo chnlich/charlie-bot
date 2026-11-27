@@ -28,10 +28,12 @@
 //! fires on 2030-01-01. No worker is a cold read, whose replay can start a run. The boot marker and every file time are
 //! fixed around `marker_time()`, so `reset` restores them from the seed's plan.
 //!
-//! The serve shape also writes one fixture row (`ServeFixture`): a sidebar row that carries the six indicators a ux
-//! round captures, with a long display name and a long backend name. Its inputs are store facts of three sessions: the
-//! row's own unread flag, Waiting on you item and pending trigger, its worker child's pending wake-up trigger, and the
-//! decoy root that the chat page's redirect opens so the fixture row keeps its unread dot.
+//! The serve shape also writes one fixture row (`ServeFixture`): a sidebar row that carries six of the row indicators
+//! a ux round captures, with a long display name and a long backend name. Its inputs are store facts of three sessions:
+//! the row's own unread flag, Waiting on you item and pending trigger, its worker child's pending wake-up trigger, and
+//! the decoy root that the chat page's redirect opens so the fixture row keeps its unread dot. The row's own spinner
+//! stays unlit: the sidebar paints it for a live run or a busy turn, and a home file carries neither. The loader, which
+//! the same row paints for that paused child, holds the spinner's place in the row's lead column.
 
 use std::fs::{self, File};
 use std::path::Path;
@@ -304,12 +306,13 @@ struct HomePlan {
   serve_fixture: Option<ServeFixture>,
 }
 
-/// The serve home's fixture row: one existing session's sidebar row, which carries the six indicators a ux round
-/// captures, with a long display name and a long backend name. The facts behind the six are:
+/// The serve home's fixture row: one existing session's sidebar row, which carries six of the row indicators a ux
+/// round captures, with a long display name and a long backend name. The facts behind the six are:
 ///
 /// - the child count, from a child whose profile is not `worker`;
-/// - the spinner, from the worker child's pending wake-up trigger: a worker with a pending trigger and no live run is
-///   the paused-worker stand-in a parent row paints as the spinner;
+/// - the activity loader, from the worker child's pending wake-up trigger: a worker with a pending trigger and no live
+///   run is the paused worker whose ancestor row paints the loader. The row's own spinner stays unlit, because it reads
+///   a live run (`has_running_tasks`) or a busy turn (`thinking_since`), and no home file carries either;
 /// - the unread dot, from the row's own `has_unread`;
 /// - the pending-trigger bell, from the row's own pending trigger;
 /// - the own waiting box, from the row's own unanswered Waiting on you item;
@@ -318,8 +321,8 @@ struct ServeFixture {
   /// The fixture row: an open manager task at the listing order's second place, with a worker child and a manager
   /// child.
   row: usize,
-  /// The worker child whose pending trigger paints the row's spinner, and whose Waiting on you item paints its subtree
-  /// waiting box. The fixture closes it as completed, so it stays in the sidebar's active listing.
+  /// The worker child whose pending trigger paints the row's loader, and whose Waiting on you item paints its subtree
+  /// waiting box. The fixture opens it, so it stays in the sidebar's active listing.
   paused_worker: usize,
   /// The manager child whose non-worker profile draws the row's child count. The fixture opens it, so it stays in the
   /// sidebar's active listing.
@@ -447,7 +450,7 @@ impl HomePlan {
   /// Gives the fixture row and its two children the facts their sidebar rows paint, and puts the row at the listing
   /// order's second place behind the decoy. Both times sit above every planned file time, and both sessions are open
   /// tasks, so their files after the marker keep the full pass their state already takes. The row's own state stays
-  /// idle, which the spinner stand-in needs.
+  /// idle, which the loader stand-in needs.
   fn plant_serve_fixture(sessions: &mut [SessionPlan], fixture: &ServeFixture) {
     // The listing orders its rows by `updated_at`, newest first, so these two times sit above every planned file time.
     sessions[fixture.decoy].modified_at = marker_time() + seconds(4 * 86_400);
@@ -463,8 +466,8 @@ impl HomePlan {
     // task dispatches nothing — the state the plan gives every other open task.
     sessions[fixture.counted].close = None;
     // The worker child is an open task that never ran: its log holds its task boundary alone, so no run exists to
-    // deliver work to the fixture row and no input waits for a turn. Its pending trigger paints the paused-worker
-    // stand-in that the row above shows as the spinner.
+    // deliver work to the fixture row and no input waits for a turn. Its pending trigger makes it the paused worker
+    // that the row above stands in for with the loader.
     let paused_worker = &mut sessions[fixture.paused_worker];
     paused_worker.close = None;
     paused_worker.runs.clear();
@@ -1370,9 +1373,10 @@ mod tests {
     assert_eq!(live_runs(Shape::ServeTaskTree), 0);
   }
 
-  /// The serve shape's fixture row carries the six indicators a ux round captures from store facts, with the long
-  /// display name and backend name of the wrapping case, at the listing order's second place. The lab shape plants no
-  /// fixture, and neither shape adds a session.
+  /// The serve shape's fixture row carries six row indicators from store facts — the child count, the unread dot, the
+  /// pending-trigger bell, its own and its subtree's waiting boxes, and the loader its paused child paints — with the
+  /// long display name and backend name of the wrapping case, at the listing order's second place. The lab shape plants
+  /// no fixture, and neither shape adds a session.
   #[test]
   fn the_serve_shape_marks_one_row_with_every_indicator() {
     let sessions = SCALED_SESSIONS;
@@ -1393,7 +1397,7 @@ mod tests {
       plan.sessions.iter().filter(|session| session.parent == Some(fixture.row)).collect();
     assert!(
       children.iter().any(|child| child.profile == TaskProfile::Worker),
-      "a worker child's pending trigger paints the spinner"
+      "a worker child's pending trigger paints the loader"
     );
     assert!(children.iter().any(|child| child.profile != TaskProfile::Worker), "a manager child draws the child count");
     let paused_worker = &plan.sessions[fixture.paused_worker];

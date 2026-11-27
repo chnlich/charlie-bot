@@ -1396,9 +1396,20 @@ fn page_value(page: &str, name: &str) -> serde_json::Value {
     .unwrap_or_else(|| panic!("the chat page assigns {name} a JSON value"))
 }
 
+/// The text of one `backends` entry of a trial config, from its `- id:` line through the six-space field lines under it.
+fn config_entry<'a>(config: &'a str, id: &str) -> &'a str {
+  let head = format!("\n    - id: {id}\n");
+  let start = config.find(&head).unwrap_or_else(|| panic!("the trial config holds {id}: {config}")) + 1;
+  let rest = &config[start..];
+  let end =
+    rest.match_indices('\n').find(|(at, _)| !rest[at + 1..].starts_with("      ")).map_or(rest.len(), |(at, _)| at + 1);
+  &rest[..end]
+}
+
 /// A serve trial configures the mock home's backend id as a pool under a label of the live pool label's length. Its
 /// chat page carries that label in the tables the page's script renders the header and the sidebar from, and lists the
-/// backend as a configured entry, so the page shows no "(not in config)" mark.
+/// backend as a configured entry, so the page shows no "(not in config)" mark. The pool's one member is an option that
+/// holds no credential, even though the probe option of the same trial carries one.
 #[test]
 #[ignore = "integration"]
 fn test_trial_serve_configures_the_mock_home_backend_under_a_live_length_label() {
@@ -1427,6 +1438,31 @@ fn test_trial_serve_configures_the_mock_home_backend_under_a_live_length_label()
   let config = fs::read_to_string(&copied).expect("the trial config");
   let entry = format!("\n    - id: mock-backend\n      label: {MOCK_BACKEND_LABEL}\n      rule: rotate\n");
   assert!(config.contains(&entry), "the trial config configures mock-backend as a pool: {config}");
+  let pool = config_entry(&config, "mock-backend");
+  assert!(
+    pool.ends_with("      members:\n        - charlie-code-release-refuse\n"),
+    "mock-backend's only member is the refusing option: {pool}"
+  );
+  let refuse = config_entry(&config, "charlie-code-release-refuse");
+  assert!(refuse.contains("      type: charlie-code\n"), "the refusing option is a charlie-code option: {refuse}");
+  assert!(refuse.contains("      api_base: http://127.0.0.1:9/v1\n"), "the refusing option refuses at once: {refuse}");
+  assert!(!refuse.contains("credential"), "the refusing option holds no credential: {refuse}");
+  // The option id appears once as its entry and once as mock-backend's member: no other pool or call names it.
+  assert_eq!(config.matches("charlie-code-release-refuse").count(), 2, "{config}");
+  let probe = config_entry(&config, "charlie-code-release-trial");
+  assert_eq!(
+    probe,
+    concat!(
+      "    - id: charlie-code-release-trial\n",
+      "      label: Release trial\n",
+      "      type: charlie-code\n",
+      "      model: openai/test-model\n",
+      "      prompt_overlay: none\n",
+      "      api_base: http://127.0.0.1:9/v1\n",
+      "      credential: serve-test\n",
+    ),
+    "the probe option stays unchanged"
+  );
   let html = fs::read_to_string(&page).expect("the chat page");
   let pools = page_value(&html, "BACKEND_POOLS");
   let listed = pools

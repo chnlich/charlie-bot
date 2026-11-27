@@ -6,7 +6,7 @@
 use charliebot_core::event_types::{AGENT_MESSAGE, NUDGE_OF, THREAD_PLATFORM_KEYS, USER, WEB_REPLY, WEB_REPLY_NOTICE};
 use serde_json::{Value, json};
 
-use crate::{Store, StoreResult};
+use crate::{Store, StoreResult, run_logs};
 
 /// The reply layer's roles: the user's messages, the agent's web replies and the notices that answer them. The web
 /// reply dialog reads these alone.
@@ -26,8 +26,12 @@ pub const ERROR_PREFIX: &str = "Error: ";
 pub const LEGACY_THREAD_PREFIX: &str = "Posted to ";
 /// The most For-you rows one bootstrap carries before its first screen.
 pub const FOR_YOU_MAX_ROWS: usize = 10;
-/// The most event lines one bootstrap's scan reads back from its first screen.
+/// The most rendered event lines one bootstrap's scan reads back from its first screen. A progress line renders no row,
+/// so it does not count here.
 pub const FOR_YOU_SCAN_MAX_LINES: usize = 2_000;
+/// The most event lines one bootstrap's scan reads back from its first screen, progress lines included. It bounds the
+/// read cost of a progress flood between the replies.
+pub const FOR_YOU_SCAN_MAX_READ_LINES: usize = 16_384;
 /// The event lines one scan read takes at a time.
 const FOR_YOU_SCAN_WINDOW_LINES: usize = 200;
 /// The JSON bytes the older rows may take. The newest row is kept whatever its size.
@@ -105,17 +109,31 @@ impl Store {
   /// The For-you rows before the event index `before`, oldest first.
   ///
   /// The scan walks back from `before` in windows of event lines, archived lines included, and keeps the newest
-  /// For-you rows (see [`is_for_you_row`]). It stops at [`FOR_YOU_MAX_ROWS`] rows, at [`FOR_YOU_SCAN_MAX_LINES`] lines,
-  /// or when the next row would take the JSON past [`FOR_YOU_MAX_JSON_BYTES`]. The newest row is always kept.
+  /// For-you rows (see [`is_for_you_row`]). A progress line (a thinking-token event) renders no row, so it counts only
+  /// against [`FOR_YOU_SCAN_MAX_READ_LINES`]; every other line counts against both bounds. The scan stops at
+  /// [`FOR_YOU_MAX_ROWS`] rows, at either bound, or when the next row would take the JSON past
+  /// [`FOR_YOU_MAX_JSON_BYTES`]. The newest row is always kept.
   pub fn for_you_rows_before(&self, session_id: &str, before: usize) -> StoreResult<Vec<Value>> {
     let mut newest_first: Vec<Value> = Vec::new();
     let mut json_bytes = 2; // The array's opening and closing brackets.
     let mut end = before;
-    let mut scanned = 0;
-    'scan: while end > 0 && scanned < FOR_YOU_SCAN_MAX_LINES && newest_first.len() < FOR_YOU_MAX_ROWS {
-      let lines = FOR_YOU_SCAN_WINDOW_LINES.min(FOR_YOU_SCAN_MAX_LINES - scanned).min(end);
+    let mut rendered = 0;
+    let mut read = 0;
+    'scan: while end > 0
+      && rendered < FOR_YOU_SCAN_MAX_LINES
+      && read < FOR_YOU_SCAN_MAX_READ_LINES
+      && newest_first.len() < FOR_YOU_MAX_ROWS
+    {
+      // The window takes no more lines than either bound still allows, so its rendered lines stay within the first.
+      let lines = FOR_YOU_SCAN_WINDOW_LINES
+        .min(FOR_YOU_SCAN_MAX_LINES - rendered)
+        .min(FOR_YOU_SCAN_MAX_READ_LINES - read)
+        .min(end);
       let start = end - lines;
       let (events, _) = self.load_chat_events_range(session_id, start, end)?;
+      let progress = events.iter().filter(|event| run_logs::is_thinking_tokens_event(*event)).count();
+      rendered += lines - progress;
+      read += lines;
       for message in self.events_to_messages_at(&events, start)?.into_iter().rev() {
         if !is_for_you_row(&message) {
           continue;
@@ -131,7 +149,6 @@ impl Store {
           break 'scan;
         }
       }
-      scanned += lines;
       end = start;
     }
     newest_first.reverse();
@@ -279,5 +296,49 @@ mod tests {
     assert!(rows.iter().all(is_for_you_row));
     assert_eq!(rows[1]["slack"]["thread_ts"], "1.0", "the summon keeps its platform block");
     assert_eq!(rows[3]["content"], "Posted to Discord: old answer");
+  }
+
+  /// Writes `lines` into the session's live log in one write. A fixture of thousands of lines is too slow to append one
+  /// event at a time in a unit test.
+  fn write_live_lines(store: &Store, session_id: &str, lines: &[Value]) {
+    let path = store.chat_events_path(session_id);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let body: String = lines.iter().map(|line| format!("{line}\n")).collect();
+    std::fs::write(path, body).unwrap();
+  }
+
+  /// A thinking-token progress line, as Claude Code's stream writes it.
+  fn progress_line(index: usize) -> Value {
+    json!({"type": "system", "subtype": "thinking_tokens", "estimated_tokens": index})
+  }
+
+  /// The newest replies reach the older rows behind a flood of 5,000 progress lines. A progress line renders no row, so
+  /// it does not spend the rendered-line bound.
+  #[test]
+  fn the_newest_replies_reach_the_older_rows_behind_a_progress_flood() {
+    let (_home, store) = make_test_store_with_runtime(Arc::new(ThreadRenderHook));
+    write_manager_session(&store, "progress-flood");
+    let mut lines: Vec<Value> = (0..12).map(|turn| json!({"type": USER, "content": format!("reply {turn}")})).collect();
+    lines.extend((0..5_000).map(progress_line));
+    write_live_lines(&store, "progress-flood", &lines);
+
+    let rows = store.for_you_rows_before("progress-flood", lines.len()).unwrap();
+    let contents: Vec<String> = rows.iter().map(|row| row["content"].as_str().unwrap().to_string()).collect();
+    assert_eq!(contents, (2..12).map(|turn| format!("reply {turn}")).collect::<Vec<_>>());
+  }
+
+  /// The scan reads at most [`FOR_YOU_SCAN_MAX_READ_LINES`] lines, progress lines included, so a flood longer than that
+  /// bound hides the reply behind it.
+  #[test]
+  #[ignore = "integration"]
+  fn a_progress_flood_past_the_read_bound_hides_the_reply_behind_it() {
+    let (_home, store) = make_test_store_with_runtime(Arc::new(ThreadRenderHook));
+    write_manager_session(&store, "progress-bound");
+    let mut lines = vec![json!({"type": USER, "content": "far"})];
+    lines.extend((0..FOR_YOU_SCAN_MAX_READ_LINES).map(progress_line));
+    write_live_lines(&store, "progress-bound", &lines);
+
+    let rows = store.for_you_rows_before("progress-bound", lines.len()).unwrap();
+    assert!(rows.is_empty(), "the reply sits one line past the read bound");
   }
 }

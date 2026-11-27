@@ -10,7 +10,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use charliebot_core::git::{
-  ancestry_args, object_exists_args, worktree_add_new_branch_args, worktree_prune_args, worktree_remove_forced_args,
+  ancestry_args, merge_base_args, object_exists_args, output_within, worktree_add_new_branch_args, worktree_prune_args,
+  worktree_remove_forced_args,
 };
 use charliebot_core::paths;
 use charliebot_core::text_repr;
@@ -1162,6 +1163,140 @@ pub async fn git_verify_commit_landed(repo_path: &Path, branch: &str, commit: &s
   (true, String::new())
 }
 
+/// Whether *branch*'s commits past *creation* have reached *target*, each commit by ancestry or by a
+/// patch-equivalent commit. Returns the commit of *target* that holds the branch's tip: the tip itself
+/// when it is an ancestor, else the patch-equivalent commit that a rebase or cherry-pick made.
+///
+/// A rebased landing gives its commits new shas, so the ancestry check alone would refuse it. A commit
+/// with neither an ancestor nor a patch-equivalent commit fails the verification and the reason names it.
+/// The upstream search reads the commits of `merge-base(creation, target)..target` only, so a base that
+/// moved far past the creation point costs the commits added since the two histories last met.
+pub async fn git_verify_branch_landed(
+  repo_path: &Path,
+  target: &str,
+  branch: &str,
+  tip: &str,
+  creation: &str,
+) -> Result<String, String> {
+  if let Some(remote_branch) = target.strip_prefix("origin/") {
+    // Judge the published tip, not a possibly stale remote-tracking ref.
+    let (fetched, fetch_detail) = git_fetch(repo_path, "origin", remote_branch).await;
+    if !fetched {
+      return Err(format!("could not fetch {target} in {}: {fetch_detail}", repo_path.display()));
+    }
+  }
+  let range = format!("{creation}..{tip}");
+  let not_target = format!("^{target}");
+  let missing = git_stdout_lines(repo_path, &["rev-list", "--reverse", &range, &not_target], branch).await?;
+  if missing.is_empty() {
+    return Ok(tip.to_string());
+  }
+  let base =
+    match git_c_proc_bytes(repo_path, &merge_base_args(creation, target), SUBPROCESS_GIT_READ_TIMEOUT_ASYNC).await {
+      Ok(proc) if proc.returncode == 0 => trimmed(&proc.stdout),
+      Ok(proc) => {
+        return Err(format!(
+          "no merge base of {creation} and {target} in {}: {}",
+          repo_path.display(),
+          trimmed(&proc.stderr)
+        ));
+      }
+      Err(error) => return Err(format!("git merge-base {creation} {target} failed: {}", error.text())),
+    };
+  let branch_patches = patch_ids_of_log(repo_path, &[&range, &not_target], branch).await?;
+  let base_range = format!("{base}..{target}");
+  let base_patches = patch_ids_of_log(repo_path, &[&base_range], target).await?;
+  let mut base_commit_of: HashMap<String, String> = HashMap::new();
+  for (patch, commit) in base_patches {
+    base_commit_of.entry(patch).or_insert(commit);
+  }
+  // `missing` is oldest first and non-empty, so it ends with the tip: an ancestor of `target` has all
+  // its ancestors reachable from `target` too, so a tip that `target` holds leaves `missing` empty.
+  let mut tip_base = String::new();
+  for commit in &missing {
+    let matched = branch_patches.iter().find(|(_, own)| own == commit).and_then(|(patch, _)| base_commit_of.get(patch));
+    match matched {
+      Some(base_commit) => tip_base = base_commit.clone(),
+      None => {
+        return Err(format!(
+          "commit {commit} of work branch {branch} has no ancestor or patch-equivalent commit on {target} in {}",
+          repo_path.display()
+        ));
+      }
+    }
+  }
+  Ok(tip_base)
+}
+
+/// The `(patch-id, commit)` pairs of the non-merge commits in the log of *revs*, read through
+/// `git patch-id --stable`, the patch identity git cherry compares.
+async fn patch_ids_of_log(repo_path: &Path, revs: &[&str], label: &str) -> Result<Vec<(String, String)>, String> {
+  let mut args = vec!["log", "-p", "--no-merges", "--no-color", "--no-ext-diff"];
+  args.extend_from_slice(revs);
+  let log = match git_c_proc_bytes(repo_path, &args, SUBPROCESS_GIT_READ_TIMEOUT_ASYNC).await {
+    Ok(proc) if proc.returncode == 0 => proc.stdout,
+    Ok(proc) => {
+      return Err(format!("git log of {label} failed in {}: {}", repo_path.display(), trimmed(&proc.stderr)));
+    }
+    Err(error) => return Err(format!("git log of {label} failed: {}", error.text())),
+  };
+  let patch_id = match output_within(
+    repo_path,
+    &["patch-id", "--stable"],
+    Some(log),
+    &[],
+    SUBPROCESS_GIT_READ_TIMEOUT_ASYNC,
+  )
+  .await
+  {
+    Ok(Some(output)) if output.status.success() => String::from_utf8_lossy(&output.stdout).into_owned(),
+    Ok(Some(output)) => {
+      return Err(format!(
+        "git patch-id of {label} failed in {}: {}",
+        repo_path.display(),
+        String::from_utf8_lossy(&output.stderr).trim()
+      ));
+    }
+    Ok(None) => return Err(format!("git patch-id of {label} timed out in {}", repo_path.display())),
+    Err(error) => return Err(format!("git patch-id of {label} failed to start: {error}")),
+  };
+  Ok(
+    patch_id
+      .lines()
+      .filter_map(|line| {
+        let mut fields = line.split_whitespace();
+        Some((fields.next()?.to_string(), fields.next()?.to_string()))
+      })
+      .collect(),
+  )
+}
+
+/// The non-empty lines of a git command's stdout, or the failure as the reason.
+async fn git_stdout_lines(repo_path: &Path, args: &[&str], label: &str) -> Result<Vec<String>, String> {
+  match git_c_proc_bytes(repo_path, args, SUBPROCESS_GIT_READ_TIMEOUT_ASYNC).await {
+    Ok(proc) if proc.returncode == 0 => {
+      Ok(trimmed(&proc.stdout).lines().filter(|line| !line.is_empty()).map(str::to_string).collect())
+    }
+    Ok(proc) => {
+      Err(format!("git {} failed for {label} in {}: {}", args[0], repo_path.display(), trimmed(&proc.stderr)))
+    }
+    Err(error) => Err(format!("git {} failed for {label}: {}", args[0], error.text())),
+  }
+}
+
+/// Whether *url* names a GitHub origin: its host is `github.com`. Both forms git reads are parsed,
+/// `scheme://[user@]host[:port]/path` and the scp form `[user@]host:path`.
+pub fn remote_url_is_github(url: &str) -> bool {
+  let url = url.trim();
+  let authority = match url.split_once("://") {
+    Some((_, rest)) => rest.split('/').next().unwrap_or_default(),
+    None => url.split_once(':').map_or("", |(host, _)| host),
+  };
+  let host_and_port = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+  let host = host_and_port.split(':').next().unwrap_or_default();
+  host.eq_ignore_ascii_case("github.com")
+}
+
 /// The `owner/repo` path a remote URL names, the form every `gh api` path needs. The URL forms
 /// GitHub serves — `https://`, `ssh://` and the scp style — all end in an `owner/repo` path.
 pub fn repo_from_remote_url(url: &str) -> Option<String> {
@@ -1190,11 +1325,71 @@ mod tests {
 
   use super::{
     collect_local_worktree_artifacts, contains_git_marker, git_branch_creation_point, git_rev_list_count_checked,
-    git_verify_commit_landed, run_git,
+    git_verify_branch_landed, git_verify_commit_landed, remote_url_is_github, run_git,
   };
 
   fn git(repo: &Path, args: &[&str]) -> std::process::Output {
     run_git(repo, args)
+  }
+
+  #[test]
+  fn an_origin_is_on_github_only_when_its_host_is_github_com() {
+    for url in ["https://github.com/o/r.git", "git@github.com:o/r.git", "ssh://git@github.com:22/o/r"] {
+      assert!(remote_url_is_github(url), "{url}");
+    }
+    for url in ["git@gitee.com:o/r.git", "https://github.example.com/o/r", "/srv/git/r.git"] {
+      assert!(!remote_url_is_github(url), "{url}");
+    }
+  }
+
+  /// Commits *file* with *body* on the checked-out branch of *repo* and returns the new commit's sha.
+  fn commit_file(repo: &Path, file: &str, body: &str) -> String {
+    fs::write(repo.join(file), body).expect("synthetic file is written");
+    assert!(git(repo, &["add", "."]).status.success());
+    assert!(git(repo, &["commit", "-q", "-m", file]).status.success());
+    String::from_utf8(git(repo, &["rev-parse", "HEAD"]).stdout).expect("git sha is UTF-8").trim().to_string()
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_rebased_copy_of_each_commit_verifies_as_landed_and_a_changed_copy_names_its_commit() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    let repo = root.path();
+    assert!(git(repo, &["init", "-q", "-b", "main"]).status.success());
+    assert!(git(repo, &["config", "user.email", "synthetic@example.test"]).status.success());
+    assert!(git(repo, &["config", "user.name", "Synthetic"]).status.success());
+    let creation = commit_file(repo, "base.txt", "base\n");
+
+    // The work branch adds two commits; the base then takes rebased copies of both (new shas, same patches).
+    assert!(git(repo, &["switch", "-q", "-c", "feature"]).status.success());
+    commit_file(repo, "a.txt", "a\n");
+    let tip = commit_file(repo, "b.txt", "b\n");
+    assert!(git(repo, &["switch", "-q", "main"]).status.success());
+    // The base moves past the creation point, so the copies take new shas instead of fast-forwarding.
+    commit_file(repo, "moved.txt", "moved\n");
+    let added = git(repo, &["rev-list", "--reverse", &format!("{creation}..feature")]);
+    let added = String::from_utf8(added.stdout).expect("git sha is UTF-8");
+    let mut pick = vec!["cherry-pick"];
+    pick.extend(added.lines());
+    assert!(git(repo, &pick).status.success());
+    let base_tip = String::from_utf8(git(repo, &["rev-parse", "HEAD"]).stdout).expect("git sha is UTF-8");
+    let base_tip = base_tip.trim().to_string();
+    assert_ne!(base_tip, tip);
+
+    let landed = git_verify_branch_landed(repo, "main", "feature", &tip, &creation).await;
+    assert_eq!(landed, Ok(base_tip.clone()));
+
+    // A variant whose first commit is the same patch and whose second changes the patch: the second is named.
+    assert!(git(repo, &["switch", "-q", "-c", "variant", &creation]).status.success());
+    commit_file(repo, "a.txt", "a\n");
+    let changed = commit_file(repo, "b.txt", "changed\n");
+    let refused = git_verify_branch_landed(repo, "main", "variant", &changed, &creation).await;
+    let reason = refused.expect_err("a commit without a patch-equivalent commit is not landed");
+    assert!(reason.contains(&changed), "{reason}");
+
+    // A tip that the target already holds is landed by ancestry, and the commit reported is the tip itself.
+    let own = git_verify_branch_landed(repo, "feature", "feature", &tip, &creation).await;
+    assert_eq!(own, Ok(tip));
   }
 
   #[test]

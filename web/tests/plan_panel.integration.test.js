@@ -77,9 +77,9 @@ function pageHtml() {
 ${PANEL_HTML}
 </div>
 <script>
-var SESSION_ID = ${JSON.stringify(SESSION_ID)};
-var SESSIONS_ROOT = ${JSON.stringify(SESSIONS_ROOT_PATH)};
-var tabs = {};
+window.SESSION_ID = ${JSON.stringify(SESSION_ID)};
+window.SESSIONS_ROOT = ${JSON.stringify(SESSIONS_ROOT_PATH)};
+const tabs = {};
 function registerTab(tab) { tabs[tab.id] = tab; }
 function switchTab(id) {
   document.getElementById('tab-plans').classList.toggle('hidden', id !== 'chat-plans');

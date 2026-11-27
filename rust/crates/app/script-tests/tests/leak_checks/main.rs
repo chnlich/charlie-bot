@@ -1,6 +1,6 @@
 //! The leak gate the improve round and the repository's git hooks run:
-//! `dev/improve/github-post.sh`, `dev/check-skills-host-leak.sh`, `dev/leak-patterns.sh` and
-//! `dev/git-hooks/`.
+//! `dev/improve/github-post.sh`, `dev/improve/merge-outside-round.sh`, `dev/check-skills-host-leak.sh`,
+//! `dev/leak-patterns.sh` and `dev/git-hooks/`.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -2164,6 +2164,190 @@ fn an_in_round_pr_merge_reenters_at_its_original_key_after_its_entry_disappears(
     run.describe()
   );
   assert_eq!(world.merge_calls(), ["pr merge --squash 5046"], "{}", run.describe());
+}
+
+/// The entry point that merges outside a round, in this repository.
+fn merge_outside_round() -> PathBuf {
+  harness::repo_root().join("dev/improve/merge-outside-round.sh")
+}
+
+/// The live revision of the round host in the entry point tests: the revision that its latest launch linked.
+const LIVE_REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
+
+/// A round host for the entry point: the round profile home with its leak patterns file, the runner's live link and
+/// tool directory for `LIVE_REVISION`, the skills directory of `KIT_REVISION`, and the evidence directory of a round
+/// that ran `KIT_REVISION`. The live kit's github-post.sh is a stub that writes its profile home, its PATH and its
+/// arguments to `calls`, one per line.
+struct RoundHost {
+  sandbox: Sandbox,
+  env: Env,
+  bin: PathBuf,
+  evidence: PathBuf,
+  record: PathBuf,
+  calls: PathBuf,
+}
+
+impl RoundHost {
+  fn new() -> RoundHost {
+    let sandbox = Sandbox::new();
+    let home = sandbox.root().to_path_buf();
+    let mut env = sandbox.env();
+    env.insert("HOME".to_string(), home.display().to_string());
+    env.remove("IMPROVE_LAUNCH_DIR");
+    let round_home = home.join("improve/home");
+    std::fs::create_dir_all(&round_home).unwrap();
+    let patterns = format!("{PATTERN_FILE_COMMENT}\n{PATTERN_TERM}\n");
+    std::fs::write(round_home.join("skills_leak_patterns.local.txt"), patterns).unwrap();
+    let bin = home.join("improve/runner/bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let live_cli = format!("charliebot-{LIVE_REVISION}");
+    harness::write_executable(&bin.join(&live_cli), "#!/usr/bin/env bash\nexit 0\n");
+    std::os::unix::fs::symlink(&live_cli, bin.join("charliebot")).unwrap();
+    let live_dir = bin.join(LIVE_REVISION);
+    std::fs::create_dir_all(&live_dir).unwrap();
+    std::os::unix::fs::symlink(format!("../{live_cli}"), live_dir.join("charliebot")).unwrap();
+    let calls = home.join("calls.txt");
+    assert!(!calls.display().to_string().contains('\''), "the calls path carries no quote");
+    let kit_script =
+      format!("#!/usr/bin/env bash\nprintf '%s\\n' \"$CHARLIEBOT_HOME\" \"$PATH\" \"$@\" > '{}'\n", calls.display());
+    let kit_dir = live_dir.join("kit/dev/improve");
+    std::fs::create_dir_all(&kit_dir).unwrap();
+    harness::write_executable(&kit_dir.join("github-post.sh"), kit_script);
+    std::fs::create_dir_all(bin.join(KIT_REVISION).join("skills")).unwrap();
+    let evidence = home.join("evidence");
+    std::fs::create_dir_all(&evidence).unwrap();
+    std::fs::write(evidence.join("inflight-files.txt"), "").unwrap();
+    std::fs::write(evidence.join("round-events.ndjson"), "").unwrap();
+    std::fs::write(evidence.join("kit-revision"), format!("{KIT_REVISION}\n")).unwrap();
+    let record = evidence.join("review-events.ndjson");
+    std::fs::write(&record, "").unwrap();
+    RoundHost { sandbox, env, bin, evidence, record, calls }
+  }
+
+  /// The entry point merging pull request 5046 with this host's evidence directory and review record.
+  fn merge(&self) -> Run {
+    let mut command = harness::command("bash", &self.env);
+    command
+      .arg(merge_outside_round())
+      .arg("--evidence-dir")
+      .arg(&self.evidence)
+      .arg("--review-record")
+      .arg(&self.record)
+      .arg("5046");
+    run_in(&mut command, self.sandbox.root())
+  }
+
+  /// The lines the live kit's stub received on its last call: the profile home, the PATH, then the arguments. Empty
+  /// when no call reached it.
+  fn calls(&self) -> Vec<String> {
+    std::fs::read_to_string(&self.calls).map_or_else(|_| Vec::new(), |text| text.lines().map(str::to_string).collect())
+  }
+}
+
+/// Asserts a refusal of the entry point: exit 2, the missing item named in stderr, and no call to the live kit.
+fn assert_refused(host: &RoundHost, run: &Run, item: &Path) {
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains(&item.display().to_string()), "{}", run.describe());
+  assert!(host.calls().is_empty(), "nothing may merge:\n{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_merge_outside_a_round_runs_the_live_kit_in_the_round_environment_when_every_item_is_present() {
+  let host = RoundHost::new();
+  let run = host.merge();
+  assert_eq!(run.code, 0, "{}", run.describe());
+  let calls = host.calls();
+  let round_home = host.sandbox.root().join("improve/home").display().to_string();
+  assert_eq!(calls[0], round_home, "{}", run.describe());
+  let live_tools = host.bin.join(LIVE_REVISION).display().to_string();
+  assert!(calls[1].starts_with(&format!("{live_tools}:")), "{}", run.describe());
+  let expected = [
+    "pr-merge".to_string(),
+    "--evidence-dir".to_string(),
+    host.evidence.display().to_string(),
+    "--review-record".to_string(),
+    host.record.display().to_string(),
+    "5046".to_string(),
+  ];
+  assert_eq!(&calls[2..], expected.as_slice(), "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_merge_outside_a_round_refuses_a_round_host_without_its_leak_patterns_file() {
+  let host = RoundHost::new();
+  let patterns = host.sandbox.root().join("improve/home/skills_leak_patterns.local.txt");
+  std::fs::remove_file(&patterns).unwrap();
+  let run = host.merge();
+  assert_refused(&host, &run, &patterns);
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_merge_outside_a_round_refuses_a_round_host_without_its_live_charliebot_link() {
+  let host = RoundHost::new();
+  let link = host.bin.join("charliebot");
+  std::fs::remove_file(&link).unwrap();
+  let run = host.merge();
+  assert_refused(&host, &run, &link);
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_merge_outside_a_round_refuses_a_live_charliebot_that_does_not_run() {
+  let host = RoundHost::new();
+  let live_binary = host.bin.join(LIVE_REVISION).join("charliebot");
+  let live_cli = host.bin.join(format!("charliebot-{LIVE_REVISION}"));
+  harness::write_executable(&live_cli, "#!/usr/bin/env bash\nexit 1\n");
+  let run = host.merge();
+  assert_refused(&host, &run, &live_binary);
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_merge_outside_a_round_refuses_a_round_host_without_its_live_kit_script() {
+  let host = RoundHost::new();
+  let kit_script = host.bin.join(LIVE_REVISION).join("kit/dev/improve/github-post.sh");
+  std::fs::remove_file(&kit_script).unwrap();
+  let run = host.merge();
+  assert_refused(&host, &run, &kit_script);
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_merge_outside_a_round_refuses_a_round_host_without_the_skills_of_the_evidence_kit_revision() {
+  let host = RoundHost::new();
+  let skills = host.bin.join(KIT_REVISION).join("skills");
+  std::fs::remove_dir_all(&skills).unwrap();
+  let run = host.merge();
+  assert_refused(&host, &run, &skills);
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_merge_outside_a_round_refuses_an_evidence_directory_that_lacks_a_round_fact() {
+  for fact in ["inflight-files.txt", "round-events.ndjson", "kit-revision"] {
+    let host = RoundHost::new();
+    let missing = host.evidence.join(fact);
+    std::fs::remove_file(&missing).unwrap();
+    let run = host.merge();
+    assert_refused(&host, &run, &missing);
+  }
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_merge_outside_a_round_refuses_to_run_inside_a_round() {
+  let host = RoundHost::new();
+  let mut env = host.env.clone();
+  env.insert("IMPROVE_LAUNCH_DIR".to_string(), host.evidence.display().to_string());
+  let mut command = harness::command("bash", &env);
+  command.arg(merge_outside_round()).arg("--evidence-dir").arg(&host.evidence).arg("5046");
+  let run = run_in(&mut command, host.sandbox.root());
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("IMPROVE_LAUNCH_DIR"), "{}", run.describe());
+  assert!(host.calls().is_empty(), "nothing may merge:\n{}", run.describe());
 }
 
 #[test]

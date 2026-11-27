@@ -27,7 +27,8 @@
 # pr-merge also refuses a merge whose round event log or review record reads a skill file outside the round's skills
 # directory; dev/improve/skill-reads.sh names each such path. Inside a round (IMPROVE_LAUNCH_DIR is set) the round's
 # facts are the live launch directory and IMPROVE_SKILLS_DIR. A merge outside a round takes them from the evidence
-# directory that --evidence-dir names, where the round kept its copies (see merge_facts).
+# directory that --evidence-dir names, where the round kept its copies (see merge_facts). The one way to run it outside
+# a round is dev/improve/merge-outside-round.sh, which checks the round host's items before this script runs.
 # After the merge, pr-merge reads the pull request back from GitHub and prints its number, reviewed head, merge commit
 # and state; a readback that does not show the merge at the reviewed head exits 4.
 #

@@ -24,7 +24,7 @@ A credential value never enters any text the round writes, and no write reaches 
 A leak-rule hit is the only hit the round rewrites: the round removes the matched content from the text, rewrites it, and runs the subcommand again.
 The script sends nothing on a hit, so the posted text is always text that passed.
 A credential hit stops the round. The kind that the check names is the round's stop reason, and the round writes no rewrite of the text.
-A merge goes through the posting script's `pr-merge`, which refuses a merge whose head lacks a clean verdict,
+Inside a round, a merge goes through the posting script's `pr-merge`, which refuses a merge whose head lacks a clean verdict,
 refuses a diff that changes a path that origin/main has and the Step 3 list names under another branch,
 refuses a web page change whose evidence directory fails the screenshot check, whose pull request body names no
 `View:` line, or whose review record shows no read of a screenshot that the body names, and carries the `View:` lines
@@ -541,13 +541,15 @@ A merge outside a round checks its claims against the in-flight list and its rou
 The round host is the improve host that ran the round.
 Its runner keeps the kit and skills directories of every kit revision under `~/improve/runner/bin/<kit revision>/`.
 A merge outside a round runs on the round host and reads the evidence directory there.
+The one way to merge outside a round is the kit entry point `dev/improve/merge-outside-round.sh`, run on the round host.
+It runs the merge in the round's environment: `CHARLIEBOT_HOME` is the round profile home, and the live revision's charliebot and kit do the merge.
+The live revision is the one that the runner's `bin/charliebot` link names, the revision of the latest launch.
+Before any call to GitHub, the entry point checks each item the merge needs, and a missing item stops it with a named refusal.
 
 - The merge names that directory with `--evidence-dir`. A merge outside a round needs it.
 - A pull request whose body names a screenshot file also passes `--review-record <that directory>/review-events.ndjson`.
   The check reads the record for a web page change, and it refuses a web page change whose body names no screenshot.
 - A pull request whose body names no screenshot file merges without `--review-record`.
-
-    $IMPROVE_KIT_DIR/dev/improve/github-post.sh pr-merge --evidence-dir <that directory> [--review-record <that directory>/review-events.ndjson] <PR>
 
 On success, pr-merge prints the PR number, the reviewed head, the merge commit and the state that GitHub reports after the merge. Exit 4 means the merge was sent and GitHub does not show it merged at the reviewed head.
 
@@ -557,7 +559,7 @@ Exit 75 inside a round means that bound was reached: the entry was removed, noth
 Outside a round, exit 75 means the merge is queued and nothing has merged yet; the queue merges it when the turn comes, and the wake carries the result.
 
 When the newest verdict comment has no `Round start:` line, or that directory is missing, or the body names a screenshot file and the record is missing, the merge needs a new review.
-A merge outside a round also needs a new review when that directory lacks one of the three facts; pr-merge names the missing file and sends nothing.
+A merge outside a round also needs a new review when that directory lacks one of the three facts; the entry point names the missing file and sends nothing.
 The round reviews the head again (Step 6) before the merge, and the merge then names this round's directory.
 When a merge outside a round needs that new review, it leaves the pull request open, and Step 2 of the next round adopts it.
 

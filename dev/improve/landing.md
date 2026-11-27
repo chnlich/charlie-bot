@@ -614,9 +614,8 @@ Before any call to GitHub, the entry point checks each item the merge needs, and
 On success, pr-merge prints the PR number, the reviewed head, the merge commit and the state that GitHub reports after the merge. Exit 4 means the merge was sent and GitHub does not show it merged at the reviewed head.
 
 Every merge holds the landing queue's turn, so merges reach the base branch in the order their checks passed.
-Inside a round the merge waits in the foreground for the turn, at most 780 seconds, below the round's 900-second foreground tool-call limit.
-Exit 75 inside a round means that bound was reached: the entry was removed, nothing was merged, and the pull request stays open with its clean verdict for the next adoption round, which names it.
-Outside a round, exit 75 means the merge is queued and nothing has merged yet; the queue merges it when the turn comes, and the wake carries the result.
+Inside and outside a round the merge waits in the foreground for the turn, at most 780 seconds, below the round's 900-second foreground tool-call limit.
+Exit 75 means that bound was reached: the entry was removed, nothing was merged, and the pull request stays open with its clean verdict. The next adoption round names it inside a round; outside a round the caller keeps the pull request open and retries the merge later.
 
 When the newest verdict comment has no `Round start:` line, or that directory is missing, or the body names a screenshot file and the record is missing, the merge needs a new review.
 A merge outside a round also needs a new review when that directory lacks one of the three facts; the entry point names the missing file and sends nothing.

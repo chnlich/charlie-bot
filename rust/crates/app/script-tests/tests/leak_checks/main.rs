@@ -2662,6 +2662,45 @@ fn an_in_round_pr_merge_that_reaches_its_bound_removes_its_entry_and_exits_75() 
 
 #[test]
 #[ignore = "integration"]
+fn an_outside_round_pr_merge_takes_the_turn_merges_and_releases_it() {
+  let world = MergeWorld::outside_round("rust/crates/x/src/lib.rs\n", "## Evidence\nno screenshot needed.\n");
+
+  let run = world.merge_from_evidence(&["5046"]);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert_eq!(world.merge_calls(), ["pr merge --squash 5046"], "{}", run.describe());
+  assert!(world.queue_refs().is_empty(), "the merge releases the turn and its entry: {:?}", world.queue_refs());
+}
+
+#[test]
+#[ignore = "integration"]
+fn an_outside_round_pr_merge_without_the_turn_exits_75_and_a_retry_merges_once_the_turn_frees() {
+  let world = MergeWorld::outside_round("rust/crates/x/src/lib.rs\n", "## Evidence\nno screenshot needed.\n");
+  world.hold_turn("another writer");
+  let evidence = world.evidence.display().to_string();
+  let args = ["--evidence-dir", evidence.as_str(), "5046"];
+  let mut bounded = FAST_QUEUE.to_vec();
+  bounded[2] = ("CHARLIEBOT_LAND_QUEUE_BOUND_SECS", "2");
+
+  let waited = run(&mut world.merge_command(&args, &bounded));
+
+  assert_eq!(waited.code, 75, "{}", waited.describe());
+  assert!(waited.stderr.contains("did not come within"), "{}", waited.describe());
+  assert!(world.merge_calls().is_empty(), "nothing may merge: {}", waited.describe());
+  assert!(world.entry_refs().is_empty(), "the bound removed the entry: {:?}", world.entry_refs());
+  assert_eq!(world.turn_holder().as_deref(), Some("another writer"), "another writer's turn is untouched");
+
+  // The caller retries later; the turn is free now, so the retry merges once.
+  world.delete_ref("refs/land-turn/main");
+  let retried = run(&mut world.merge_command(&args, &FAST_QUEUE));
+
+  assert_eq!(retried.code, 0, "{}", retried.describe());
+  assert_eq!(world.merge_calls(), ["pr merge --squash 5046"], "{}", retried.describe());
+  assert!(world.queue_refs().is_empty(), "the retry releases the turn and its entry: {:?}", world.queue_refs());
+}
+
+#[test]
+#[ignore = "integration"]
 fn a_signalled_in_round_pr_merge_removes_its_entry_on_exit() {
   let world = MergeWorld::new("rust/crates/x/src/lib.rs\n", "## Evidence\nno screenshot needed.\n");
   world.hold_turn("another writer");

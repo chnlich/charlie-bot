@@ -14,7 +14,8 @@
 # CHARLIEBOT_HOME set to the round profile home and the live revision's tool directory first on PATH. That call's exit
 # code is the script's own.
 #
-# Exit codes: 2 a refusal (nothing sent); otherwise pr-merge's exit code (4: sent, but GitHub does not show it merged).
+# Exit codes: 2 a refusal (nothing sent); otherwise pr-merge's exit code (75: no landing-queue turn within the wait,
+# nothing merged; 4: sent, but GitHub does not show it merged).
 set -euo pipefail
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)

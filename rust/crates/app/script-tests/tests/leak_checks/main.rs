@@ -1810,6 +1810,11 @@ impl MergeWorld {
     std::fs::write(&self.readback, readback.to_string()).unwrap();
   }
 
+  /// The merge is pinned to the head that passed the verdict and evidence checks.
+  fn expected_merge_call(&self) -> String {
+    format!("pr merge --squash 5046 --match-head-commit {}", self.head)
+  }
+
   /// Replaces the pull request's comments, oldest first.
   fn set_comments(&self, bodies: &[String]) {
     let comments: Vec<serde_json::Value> = bodies.iter().map(|body| serde_json::json!({ "body": body })).collect();
@@ -2183,7 +2188,7 @@ fn a_pr_merge_of_a_non_web_change_needs_no_evidence_directory() {
   let run = world.merge(&["5046"]);
 
   assert_eq!(run.code, 0, "{}", run.describe());
-  assert_eq!(world.merge_calls(), ["pr merge --squash 5046"], "{}", run.describe());
+  assert_eq!(world.merge_calls(), [world.expected_merge_call()], "{}", run.describe());
 }
 
 #[test]
@@ -2206,6 +2211,7 @@ fn a_pr_merge_carries_the_view_line_into_the_squash_message() {
   let calls = world.merge_calls();
   assert_eq!(calls.len(), 1, "{}", run.describe());
   assert!(calls[0].starts_with("pr merge --squash 5046"), "{}", calls[0]);
+  assert!(calls[0].contains(&format!("--match-head-commit {}", world.head)), "{}", calls[0]);
   assert!(calls[0].contains("--subject Improve the status panel"), "{}", calls[0]);
   let message = std::fs::read_to_string(&world.merge_body).expect("the squash message was written");
   // The View line moves out of the body copy to the message's end, so the switch's trailer read captures the view once.
@@ -2411,7 +2417,7 @@ fn a_pr_merge_passes_a_clean_verdict_on_the_head() {
   let run = world.merge(&["5046"]);
 
   assert_eq!(run.code, 0, "{}", run.describe());
-  assert_eq!(world.merge_calls(), ["pr merge --squash 5046"], "{}", run.describe());
+  assert_eq!(world.merge_calls(), [world.expected_merge_call()], "{}", run.describe());
 }
 
 #[test]
@@ -2425,7 +2431,7 @@ fn a_pr_merge_reads_the_newest_verdict_after_a_fix_and_its_rerun() {
   let run = world.merge(&["5046"]);
 
   assert_eq!(run.code, 0, "{}", run.describe());
-  assert_eq!(world.merge_calls(), ["pr merge --squash 5046"], "{}", run.describe());
+  assert_eq!(world.merge_calls(), [world.expected_merge_call()], "{}", run.describe());
 }
 
 #[test]
@@ -2472,7 +2478,7 @@ fn a_pr_merge_passes_a_round_and_review_that_read_only_their_skills_dir_and_cite
   let run = world.merge(&["--review-record", review.to_str().unwrap(), "5046"]);
 
   assert_eq!(run.code, 0, "{}", run.describe());
-  assert_eq!(world.merge_calls(), ["pr merge --squash 5046"], "{}", run.describe());
+  assert_eq!(world.merge_calls(), [world.expected_merge_call()], "{}", run.describe());
 }
 
 #[test]
@@ -2497,7 +2503,7 @@ fn a_pr_merge_outside_a_round_passes_a_clean_change_on_its_evidence_directory_al
   let run = world.merge_from_evidence(&["5046"]);
 
   assert_eq!(run.code, 0, "{}", run.describe());
-  assert_eq!(world.merge_calls(), ["pr merge --squash 5046"], "{}", run.describe());
+  assert_eq!(world.merge_calls(), [world.expected_merge_call()], "{}", run.describe());
 }
 
 #[test]
@@ -2639,7 +2645,7 @@ fn an_in_round_pr_merge_waits_with_heartbeats_for_the_turn_and_merges_when_it_fr
   world.delete_ref("refs/land-turn/main");
   let run = run.recv_timeout(Duration::from_secs(30)).expect("the merge finishes once the turn frees");
   assert_eq!(run.code, 0, "{}", run.describe());
-  assert_eq!(world.merge_calls(), ["pr merge --squash 5046"], "{}", run.describe());
+  assert_eq!(world.merge_calls(), [world.expected_merge_call()], "{}", run.describe());
   assert!(world.queue_refs().is_empty(), "the merge releases the turn and its entry: {:?}", world.queue_refs());
 }
 
@@ -2668,7 +2674,7 @@ fn an_outside_round_pr_merge_takes_the_turn_merges_and_releases_it() {
   let run = world.merge_from_evidence(&["5046"]);
 
   assert_eq!(run.code, 0, "{}", run.describe());
-  assert_eq!(world.merge_calls(), ["pr merge --squash 5046"], "{}", run.describe());
+  assert_eq!(world.merge_calls(), [world.expected_merge_call()], "{}", run.describe());
   assert!(world.queue_refs().is_empty(), "the merge releases the turn and its entry: {:?}", world.queue_refs());
 }
 
@@ -2695,7 +2701,7 @@ fn an_outside_round_pr_merge_without_the_turn_exits_75_and_a_retry_merges_once_t
   let retried = run(&mut world.merge_command(&args, &FAST_QUEUE));
 
   assert_eq!(retried.code, 0, "{}", retried.describe());
-  assert_eq!(world.merge_calls(), ["pr merge --squash 5046"], "{}", retried.describe());
+  assert_eq!(world.merge_calls(), [world.expected_merge_call()], "{}", retried.describe());
   assert!(world.queue_refs().is_empty(), "the retry releases the turn and its entry: {:?}", world.queue_refs());
 }
 
@@ -2752,7 +2758,7 @@ fn an_in_round_pr_merge_reenters_at_an_existing_entrys_original_key() {
   world.delete_ref("refs/land-turn/main");
   let run = run.recv_timeout(Duration::from_secs(30)).expect("the merge finishes once the turn frees");
   assert_eq!(run.code, 0, "{}", run.describe());
-  assert_eq!(world.merge_calls(), ["pr merge --squash 5046"], "{}", run.describe());
+  assert_eq!(world.merge_calls(), [world.expected_merge_call()], "{}", run.describe());
   assert!(world.queue_refs().is_empty(), "the merge releases the turn and its entry: {:?}", world.queue_refs());
 }
 
@@ -2775,7 +2781,7 @@ fn an_in_round_pr_merge_reenters_at_its_original_key_after_its_entry_disappears(
     "the re-entry is stated in the output: {}",
     run.describe()
   );
-  assert_eq!(world.merge_calls(), ["pr merge --squash 5046"], "{}", run.describe());
+  assert_eq!(world.merge_calls(), [world.expected_merge_call()], "{}", run.describe());
 }
 
 /// The entry point that merges outside a round, in this repository.
@@ -3968,7 +3974,7 @@ fn a_non_web_pr_naming_a_session_the_launch_record_lacks_merges_at_pr_merge() {
   let run = world.merge(&["5046"]);
 
   assert_eq!(run.code, 0, "{}", run.describe());
-  assert_eq!(world.merge_calls(), ["pr merge --squash 5046"], "{}", run.describe());
+  assert_eq!(world.merge_calls(), [world.expected_merge_call()], "{}", run.describe());
 }
 
 #[test]

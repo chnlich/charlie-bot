@@ -623,7 +623,7 @@ case "$subcommand" in
       printf ' nothing was merged.\n' >&2
       exit 2
     fi
-    merge_args=(pr merge --squash "$pr_selector" "${repo_args[@]}")
+    merge_args=(pr merge --squash "$pr_selector" --match-head-commit "$merge_head" "${repo_args[@]}")
     if [[ -n "$web_change" ]]; then
       pr_title=$(gh pr view "$pr_selector" "${repo_args[@]}" --json title --jq .title) || {
         printf 'Cannot read the title of PR %s; nothing was merged.\n' "$pr_selector" >&2

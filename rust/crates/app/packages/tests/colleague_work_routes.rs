@@ -19,6 +19,7 @@ use charliebot_registry::store_hooks::store_hooks;
 use charliebot_registry::{RegisterFn, Registry};
 use charliebot_store::Store;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
+use charliebot_triggers::triggers::TriggerManager;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -200,4 +201,59 @@ async fn one_test_refuses_every_agent_work_entry_with_403() {
     let refusal: Value = serde_json::from_slice(&bytes).expect("the refusal body is JSON");
     assert_eq!(refusal["detail"], REFUSAL, "{method} {path}");
   }
+}
+
+#[tokio::test]
+async fn trigger_registration_and_session_summary_share_the_pending_count() {
+  let server = Server::new();
+  let manager = Arc::new(TriggerManager::new(Arc::clone(&server.features)));
+  server.features.startup.insert(manager).expect("the trigger manager registers");
+  let app = server.app();
+
+  let detail = |app: Router| async move {
+    let request =
+      Request::builder().uri("/api/sessions/slack-thread").body(Body::empty()).expect("the detail request builds");
+    let response = app.oneshot(request).await.expect("the detail route answers");
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("the detail response reads");
+    serde_json::from_slice::<Value>(&bytes).expect("the detail response is JSON")
+  };
+
+  let before = detail(app.clone()).await;
+  assert_eq!(before["pending_trigger_count"], json!(0));
+
+  let request = Request::builder()
+    .method(Method::POST)
+    .uri("/api/internal/schedule-trigger")
+    .header(header::CONTENT_TYPE, "application/json")
+    .body(Body::from(
+      json!({
+        "session_id": "slack-thread",
+        "delay_seconds": 14400,
+        "message": "synthetic summary test",
+      })
+      .to_string(),
+    ))
+    .expect("the registration request builds");
+  let response = app.clone().oneshot(request).await.expect("the registration route answers");
+  assert_eq!(response.status(), StatusCode::OK);
+  let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("the registration response reads");
+  let registration: Value = serde_json::from_slice(&bytes).expect("the registration response is JSON");
+  let trigger_id = registration["trigger_id"].as_str().expect("registration returns the trigger id");
+
+  let pending = detail(app.clone()).await;
+  assert!(
+    pending["pending_trigger_count"].as_i64().expect("the summary count is an integer") >= 1,
+    "the summary includes the trigger registered by the CLI route: {pending}"
+  );
+
+  let request = Request::builder()
+    .method(Method::POST)
+    .uri(format!("/api/internal/triggers/slack-thread/{trigger_id}/cancel"))
+    .body(Body::empty())
+    .expect("the cancellation request builds");
+  let response = app.oneshot(request).await.expect("the cancellation route answers");
+  assert_eq!(response.status(), StatusCode::OK);
+  let after = detail(server.app()).await;
+  assert_eq!(after["pending_trigger_count"], before["pending_trigger_count"]);
 }

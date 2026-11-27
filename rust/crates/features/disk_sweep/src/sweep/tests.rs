@@ -466,6 +466,11 @@ async fn test_apply_archives_worktree_changes_before_removing_it() {
     assert_eq!(row.action, SweepAction::ArchiveDelete);
     assert!(!worktree.exists());
     assert!(archive.is_file());
+    assert_eq!(
+      fs::metadata(&archive).unwrap().mode() & 0o777,
+      0o600,
+      "the archive holds uncommitted content, so only its owner reads it"
+    );
     let files = tar_files(&archive);
     assert!(files.contains_key("tracked.patch"));
     match change {

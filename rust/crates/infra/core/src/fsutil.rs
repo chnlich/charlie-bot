@@ -43,14 +43,18 @@ fn write_sibling_then_rename(path: &Path, text: &str, sync: bool) -> std::io::Re
     Ok(())
   })();
   if result.is_err() {
-    // The write already failed; a leftover sibling only matters if it exists.
-    if let Err(error) = std::fs::remove_file(&temporary)
-      && error.kind() != std::io::ErrorKind::NotFound
-    {
-      tracing::warn!(path = %temporary.display(), error = %error, "atomic_write_cleanup_failed");
-    }
+    remove_sibling(&temporary);
   }
   result
+}
+
+/// Remove the sibling that a failed write left behind. A sibling that was never created is not an error.
+fn remove_sibling(temporary: &Path) {
+  if let Err(error) = std::fs::remove_file(temporary)
+    && error.kind() != std::io::ErrorKind::NotFound
+  {
+    tracing::warn!(path = %temporary.display(), error = %error, "atomic_write_cleanup_failed");
+  }
 }
 
 #[cfg(feature = "test-support")]
@@ -97,11 +101,8 @@ pub fn atomic_write_stream<E: From<std::io::Error>>(
     std::fs::rename(&temporary, path)?;
     Ok(())
   })();
-  if result.is_err()
-    && let Err(error) = std::fs::remove_file(&temporary)
-    && error.kind() != std::io::ErrorKind::NotFound
-  {
-    tracing::warn!(path = %temporary.display(), error = %error, "atomic_write_cleanup_failed");
+  if result.is_err() {
+    remove_sibling(&temporary);
   }
   result
 }
@@ -124,11 +125,34 @@ pub fn atomic_write_mode(path: &Path, bytes: &[u8], mode: u32) -> std::io::Resul
     std::fs::rename(&temporary, path)?;
     File::open(directory)?.sync_all()
   })();
-  if result.is_err()
-    && let Err(error) = std::fs::remove_file(&temporary)
-    && error.kind() != std::io::ErrorKind::NotFound
-  {
-    tracing::warn!(path = %temporary.display(), error = %error, "atomic_write_cleanup_failed");
+  if result.is_err() {
+    remove_sibling(&temporary);
+  }
+  result
+}
+
+/// Build `path` with `build`, which writes the new content to the sibling it is given. The sibling is created with the
+/// access bits `mode` before `build` runs, so a builder that creates or truncates it keeps `mode`: owner-only data
+/// passes `0o600`. The sibling is then swapped in by `rename` as [`atomic_write_text`] does, and removed when a step
+/// before the swap fails.
+pub fn atomic_build_mode<E: From<std::io::Error>>(
+  path: &Path,
+  mode: u32,
+  build: impl FnOnce(&Path) -> Result<(), E>,
+) -> Result<(), E> {
+  let name = path.file_name().expect("an atomic write target names a file").to_string_lossy();
+  let temporary = path.with_file_name(format!(".{name}.{}.tmp", uuid::Uuid::new_v4().simple()));
+  let result: Result<(), E> = (|| {
+    let file = std::fs::OpenOptions::new().write(true).create_new(true).mode(mode).open(&temporary)?;
+    // The creating umask can clear bits that `mode` sets, so the mode is applied to the open file.
+    file.set_permissions(std::fs::Permissions::from_mode(mode))?;
+    drop(file);
+    build(&temporary)?;
+    std::fs::rename(&temporary, path)?;
+    Ok(())
+  })();
+  if result.is_err() {
+    remove_sibling(&temporary);
   }
   result
 }
@@ -241,5 +265,16 @@ mod tests {
     );
     drop(held);
     lock_exclusive(&path).expect("the lock is granted once the first drops");
+  }
+
+  #[test]
+  fn a_built_file_keeps_the_mode_its_sibling_was_created_with() {
+    let directory = tempfile::tempdir().expect("the test directory is created");
+    let path = directory.path().join("owner-only.tar");
+    atomic_build_mode(&path, 0o600, |temporary| std::fs::write(temporary, b"owner data"))
+      .expect("the build publishes its file");
+    let mode = std::fs::metadata(&path).expect("the published file exists").permissions().mode();
+    assert_eq!(mode & 0o777, 0o600, "the published file keeps the owner-only mode");
+    assert_eq!(std::fs::read(&path).expect("the published file reads back"), b"owner data");
   }
 }

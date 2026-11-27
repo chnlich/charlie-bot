@@ -8,7 +8,9 @@
 //! - `refs/land-queue/<ci_passed_ms, 13 digits>-<pr>-<owner>` is one waiting landing.
 //!
 //! The owner is a session's `owner_token`, or a round's launch id as it is. No ref name and no heartbeat message
-//! carries a session id: the pushes pass the repository's leak scan, which refuses a session id outside a View line.
+//! carries a session id. The pre-push hook refuses a session id in a commit message outside a View line, but it checks
+//! a ref name only against the host patterns, so the queue's tests hold the ref-name guarantee, through
+//! `a_full_queue_cycle_pushes_only_text_the_leak_scan_passes`.
 //!
 //! Each ref points at a heartbeat commit: an empty commit whose parent is the commit to land, whose subject names the
 //! holder, and whose committer time is the last heartbeat. A ref whose heartbeat is older than `DEAD_AFTER_SECS` is

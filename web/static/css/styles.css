@@ -236,13 +236,17 @@
   background: #3b82f6;
 }
 body.resizing { cursor: col-resize; user-select: none; }
-/* The new-session backend selector shows its selected label whole. The template's inline max-width: 110px
-   sits three pixels under the width the label needs, so the native select cuts the word ("Release trial"
-   renders "Release tria"). Only an important rule beats an inline style. The selector is the sidebar
-   row's one statement of where a new session will run. The cap becomes a share of the row instead: at
-   55% the selector takes its own 113px at the default sidebar width. The New Session button beside it
-   keeps the rest. */
-#new-session-backend { max-width: 55% !important; }
+/* The New Session button keeps its whole label, and the new-session backend selector takes the row's leftover
+   width. The button reads "New Ses..." when the selector holds a fixed share of the row, because a pool label of
+   the live length (a group, tool, model and id) fills any share the row can give it and still cuts, while the
+   button's label — the row's one action — does not fit in what is left. The template's inline max-width: 110px
+   caps the selector before this sheet loads, so the rule that lifts it is important. The selector is a native
+   control that cuts a label longer than its box; the button is text this row draws itself, so the row gives the
+   selector every pixel the button does not need. A config with no pickable backend draws no selector, and the
+   button then takes the row's whole width as it did. */
+#new-session-btn { flex: 0 0 auto; }
+#new-session-btn:only-child { flex: 1 1 auto; }
+#new-session-backend { max-width: none !important; flex: 1 1 0; min-width: 0; }
 /* The session search's clear control (index.html): the field's 14 px × in a 24 px box at its right
    end, the pointer floor the sidebar's other controls hold. The glyph is the control's only mark, so
    it takes slate-400, which draws 5.71:1 on the field's slate-800 and stays the tone the field's

@@ -5,12 +5,13 @@ use std::sync::Arc;
 
 use charliebot_core::backend_types;
 use charliebot_registry::backend::{BackendTraits, BackendTypeRegistration, ResumeStyle};
-use charliebot_registry::usage::{NativeCacheRead, UsageSource};
+use charliebot_registry::usage::{NativeCacheRead, NativeInput, NativeScope, UsageSource};
 use charliebot_registry::{Registry, RegistryError, registration_step};
 
 use charliebot_agents::cli_base::CliHost;
 
-use crate::{factory, options};
+use crate::factory::CharlieCodeFactory;
+use crate::options;
 
 /// The ledger's source value and the usage page's card title for Charlie Code's usage.
 pub const USAGE_SOURCE: &str = "CLC";
@@ -39,7 +40,7 @@ pub fn register_with_host(registry: &mut Registry, host: CliHost) -> Result<(), 
       compact_hint: None,
     },
     option_model: options::option_model,
-    factory: Arc::new(factory::CharlieCodeFactory::new(host)),
+    factory: Arc::new(CharlieCodeFactory::new(host)),
     lifecycle: None,
     translate_fallback: false,
   })?;
@@ -48,8 +49,8 @@ pub fn register_with_host(registry: &mut Registry, host: CliHost) -> Result<(), 
     name: USAGE_SOURCE,
     id_prefixes: &["charlie-code-", "clc-"],
     run_logs_only: true,
-    native_input: charliebot_registry::usage::NativeInput::Inclusive,
-    native_scope: charliebot_registry::usage::NativeScope::PerRun,
+    native_input: NativeInput::Inclusive,
+    native_scope: NativeScope::PerRun,
     native_cache_read: NativeCacheRead::CachedTokens,
     implementation: None,
   })?;

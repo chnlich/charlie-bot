@@ -33,8 +33,9 @@ function paintDisplayedSession() {
   const headerName = document.getElementById('header-session-name');
   if (headerName) {
     headerName.textContent = displayedSessionName;
-    // The heading takes one line, so a long name ends in an ellipsis. Its hover text carries the full name,
-    // as the events heading and the sidebar rows do.
+    // The heading's line rule is the stylesheet's: up to 768px it wraps, so the whole name shows; from 769px it
+    // keeps one line, and a name longer than that line ends in an ellipsis. Its hover text carries the full
+    // name at every width, as the events heading and the sidebar rows do.
     headerName.title = displayedSessionName || '';
   }
   const headerPlatform = document.getElementById('header-session-platform');

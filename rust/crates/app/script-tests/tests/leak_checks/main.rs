@@ -77,6 +77,7 @@ printf '%s\n' "$*" >> "$GH_CALL_LOG"
   // check of pr-create and pr-merge reads it.
   let launch = sandbox.dir("round-launch");
   std::fs::write(launch.join("inflight-files.txt"), "").unwrap();
+  write_live_sessions(&launch, &["abc", LIVE_SESSION]);
   env.insert("IMPROVE_LAUNCH_DIR".to_string(), launch.display().to_string());
   // The round's direction selects pr-create's code-style rule check. A test that runs inside a round must not inherit
   // it; a test that needs a direction sets it.
@@ -3519,24 +3520,18 @@ fn write_live_sessions(dir: &Path, sessions: &[&str]) {
   std::fs::write(dir.join("live-sessions.tsv"), format!("read_at\t{RECORD_READ_AT}\n{lines}")).unwrap();
 }
 
-/// Stubs `charliebot` as the built binary, so the session check's `screenshots check` runs the real verb.
-fn stub_charliebot(sandbox: &Sandbox) {
-  let binary = harness::built_binary("charliebot").display().to_string();
-  assert!(!binary.contains('\''), "the binary path carries no quote: {binary}");
-  sandbox.stub("charliebot", &format!("exec '{binary}' \"$@\"\n"));
-}
-
 #[test]
 #[ignore = "integration"]
 fn a_web_pr_naming_a_session_the_launch_record_lists_is_sent_at_pr_create() {
   let sandbox = Sandbox::new();
   let (env, gh_log, _home) = post(&sandbox);
-  stub_charliebot(&sandbox);
   write_live_sessions(Path::new(&env["IMPROVE_LAUNCH_DIR"]), &[LIVE_SESSION]);
   let clone = push_repo_changing(&sandbox, &env, WEB_PATH);
-  let body = body_file(&sandbox, "body.md", &format!("## Evidence\nView: /?session={LIVE_SESSION}\n"));
+  let evidence = sandbox.dir("evidence");
+  let names = write_round_pair(&evidence);
+  let body = body_file(&sandbox, "body.md", &body_naming(&names, &format!("\nView: /?session={LIVE_SESSION}\n")));
 
-  let run = pr_create(&env, &clone, &body);
+  let run = pr_create_with_evidence(&env, &clone, &body, &evidence);
 
   assert_eq!(run.code, 0, "{}", run.describe());
   assert!(gh_log_lines(&gh_log).iter().any(|line| line.contains("pr create")), "{}", run.describe());
@@ -3547,12 +3542,13 @@ fn a_web_pr_naming_a_session_the_launch_record_lists_is_sent_at_pr_create() {
 fn a_web_pr_naming_a_session_the_launch_record_lacks_is_refused_at_pr_create() {
   let sandbox = Sandbox::new();
   let (env, gh_log, _home) = post(&sandbox);
-  stub_charliebot(&sandbox);
   write_live_sessions(Path::new(&env["IMPROVE_LAUNCH_DIR"]), &[LIVE_SESSION]);
   let clone = push_repo_changing(&sandbox, &env, WEB_PATH);
-  let body = body_file(&sandbox, "body.md", &format!("## Evidence\nView: /?session={ABSENT_SESSION}\n"));
+  let evidence = sandbox.dir("evidence");
+  let names = write_round_pair(&evidence);
+  let body = body_file(&sandbox, "body.md", &body_naming(&names, &format!("\nView: /?session={ABSENT_SESSION}\n")));
 
-  let run = pr_create(&env, &clone, &body);
+  let run = pr_create_with_evidence(&env, &clone, &body, &evidence);
 
   assert_eq!(run.code, 2, "{}", run.describe());
   assert!(run.stderr.contains(ABSENT_SESSION), "the refusal names the session: {}", run.describe());
@@ -3565,11 +3561,13 @@ fn a_web_pr_naming_a_session_the_launch_record_lacks_is_refused_at_pr_create() {
 fn a_web_pr_naming_a_session_with_no_launch_record_stops_at_pr_create() {
   let sandbox = Sandbox::new();
   let (env, gh_log, _home) = post(&sandbox);
-  stub_charliebot(&sandbox);
+  std::fs::remove_file(Path::new(&env["IMPROVE_LAUNCH_DIR"]).join("live-sessions.tsv")).unwrap();
   let clone = push_repo_changing(&sandbox, &env, WEB_PATH);
-  let body = body_file(&sandbox, "body.md", &format!("## Evidence\nView: /?session={LIVE_SESSION}\n"));
+  let evidence = sandbox.dir("evidence");
+  let names = write_round_pair(&evidence);
+  let body = body_file(&sandbox, "body.md", &body_naming(&names, &format!("\nView: /?session={LIVE_SESSION}\n")));
 
-  let run = pr_create(&env, &clone, &body);
+  let run = pr_create_with_evidence(&env, &clone, &body, &evidence);
 
   assert_eq!(run.code, 2, "{}", run.describe());
   assert!(run.stderr.contains("no live sessions record"), "the stop is named: {}", run.describe());
@@ -3581,7 +3579,6 @@ fn a_web_pr_naming_a_session_with_no_launch_record_stops_at_pr_create() {
 fn a_pr_that_alters_no_web_page_is_sent_whatever_sessions_its_views_name() {
   let sandbox = Sandbox::new();
   let (env, gh_log, _home) = post(&sandbox);
-  stub_charliebot(&sandbox);
   write_live_sessions(Path::new(&env["IMPROVE_LAUNCH_DIR"]), &[LIVE_SESSION]);
   let clone = push_repo_changing(&sandbox, &env, PLAIN_PATH);
   let body = body_file(&sandbox, "body.md", &format!("## Evidence\nView: /?session={ABSENT_SESSION}\n"));
@@ -3597,11 +3594,13 @@ fn a_pr_that_alters_no_web_page_is_sent_whatever_sessions_its_views_name() {
 fn a_web_pr_whose_views_name_no_session_is_sent_without_a_launch_record() {
   let sandbox = Sandbox::new();
   let (env, gh_log, _home) = post(&sandbox);
-  stub_charliebot(&sandbox);
+  std::fs::remove_file(Path::new(&env["IMPROVE_LAUNCH_DIR"]).join("live-sessions.tsv")).unwrap();
   let clone = push_repo_changing(&sandbox, &env, WEB_PATH);
-  let body = body_file(&sandbox, "body.md", "## Evidence\nView: /plans\n");
+  let evidence = sandbox.dir("evidence");
+  let names = write_round_pair(&evidence);
+  let body = body_file(&sandbox, "body.md", &body_naming(&names, "\nView: /plans\n"));
 
-  let run = pr_create(&env, &clone, &body);
+  let run = pr_create_with_evidence(&env, &clone, &body, &evidence);
 
   assert_eq!(run.code, 0, "{}", run.describe());
   assert!(gh_log_lines(&gh_log).iter().any(|line| line.contains("pr create")), "{}", run.describe());

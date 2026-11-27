@@ -12,6 +12,10 @@ use charliebot_registry::{FeatureContext, Registry, RegistryError};
 use charliebot_store::metadata::UtcDateTime;
 use serde_json::{Map, Value, json};
 
+use crate::route_paths::{
+  COLD_READ_CHECK_PATH, DIALOG_PATH, PATHS, REPLY_PATH, REPLY_UNREAD_PATH, STATUS_CONFIRM_PATH, STATUS_PATH,
+  STATUS_UNREAD_PATH,
+};
 use crate::turn_contribution::WebReplyTurnContribution;
 use crate::{api, sidebar};
 
@@ -109,27 +113,18 @@ fn normalize_web_status(value: &mut Value) -> bool {
 /// status path answers POST and GET, and the 405 body names the first route of the path, which is the POST route.
 pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
-    .route("/api/internal/web/reply", post_only(api::post_reply))
-    .route("/api/internal/web/reply/unread", post_only(api::post_reply_unread))
-    .route("/api/internal/web/cold-read-check", post_only(api::post_cold_read_check))
-    .route("/api/internal/web/dialog", get_only(api::get_dialog))
-    .route("/api/internal/web/status", refuse_other_methods(post(api::post_status).get(api::get_status), "POST"))
-    .route("/api/internal/web/status/confirm", post_only(api::post_status_confirm))
-    .route("/api/internal/web/status/unread", post_only(api::post_status_unread))
+    .route(REPLY_PATH, post_only(api::post_reply))
+    .route(REPLY_UNREAD_PATH, post_only(api::post_reply_unread))
+    .route(COLD_READ_CHECK_PATH, post_only(api::post_cold_read_check))
+    .route(DIALOG_PATH, get_only(api::get_dialog))
+    .route(STATUS_PATH, refuse_other_methods(post(api::post_status).get(api::get_status), "POST"))
+    .route(STATUS_CONFIRM_PATH, post_only(api::post_status_confirm))
+    .route(STATUS_UNREAD_PATH, post_only(api::post_status_unread))
     .with_state(Arc::clone(features))
 }
 
 /// Whether a path is one of the web reply routes, whatever the method. The server's trailing-slash redirect asks this
 /// of the slash-toggled path.
 fn matches(path: &str) -> bool {
-  matches!(
-    path,
-    "/api/internal/web/reply"
-      | "/api/internal/web/reply/unread"
-      | "/api/internal/web/cold-read-check"
-      | "/api/internal/web/dialog"
-      | "/api/internal/web/status"
-      | "/api/internal/web/status/confirm"
-      | "/api/internal/web/status/unread"
-  )
+  PATHS.contains(&path)
 }

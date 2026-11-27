@@ -53,9 +53,9 @@ fn local_text(moment: OffsetDateTime, format: LocalFormat) -> String {
 /// The abbreviation is the `%Z` field.
 fn local_zone(unix_seconds: i64) -> (i32, String) {
   let time = unix_seconds as libc::time_t;
-  // SAFETY: `tm` holds integers and pointers only, so the zeroed value is valid, and `localtime_r` fills the whole of
-  // it. The call reads `time` for its duration only.
+  // SAFETY: `tm` holds integers and pointers only, so the zeroed value is valid.
   let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+  // SAFETY: `localtime_r` reads `time` and fills `tm`, and both live for the call.
   let filled = unsafe { libc::localtime_r(&time, &mut tm) };
   assert!(!filled.is_null(), "localtime_r converts every instant the page renders");
   // SAFETY: a successful `localtime_r` points `tm_zone` at a NUL-terminated name in the C library's zone table, which

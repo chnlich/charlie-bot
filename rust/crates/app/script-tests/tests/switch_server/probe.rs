@@ -2,6 +2,7 @@
 //! answers with the behavior each test gives. A test starts its own server, because the turn runs once per server:
 //! a second turn would find the session of the first. Both probe waits are one second.
 
+use std::fs;
 use std::time::{Duration, Instant};
 
 use regex::Regex;
@@ -187,6 +188,34 @@ fn test_probe_archive_names_the_run_when_its_listing_answers_after_the_wait() {
 /// Whether the run's stdout holds a line matching `pattern`.
 fn stage_line(run: &Run, pattern: &str) -> bool {
   Regex::new(pattern).expect("the stage pattern").is_match(&run.stdout)
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_probe_create_names_the_probe_backend_the_config_names() {
+  let world = World::new();
+
+  let (run, _) = world.probe_turn(&[("run_state", json!("success")), ("output", json!("none"))]);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  // The create request names the backend `backends.calls.probe` of the home's config, so the probe cannot run on the
+  // server's new_session fallback.
+  assert_eq!(world.fake_server_bodies(), vec!["create claude-opus"], "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_probe_refuses_before_any_session_when_the_config_names_no_probe_backend() {
+  let world = World::new();
+  fs::write(world.home.join("config.yaml"), format!("server:\n  host: 127.0.0.1\n  port: {}\n", world.port))
+    .expect("the config without the probe call");
+
+  let (run, calls) = world.probe_turn(&[("run_state", json!("success")), ("output", json!("none"))]);
+
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(run.stdout.contains("probe: no check backend: backends.calls.probe is unset in"), "{}", run.describe());
+  // No session was created: the refusal came before the first request.
+  assert!(!calls.iter().any(|call| call.starts_with("POST /api/sessions/")), "{calls:?}");
 }
 
 /// Each probe stage logs one line that names its session and its run and gives the elapsed seconds.

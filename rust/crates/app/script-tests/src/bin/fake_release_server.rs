@@ -87,6 +87,9 @@ struct Behavior {
   refuses_config_key: String,
   /// The probe run's error event, written to its event log as the server writes a launch failure. Empty writes none.
   probe_error: String,
+  /// The probe session's assistant_error chat event, written to the session's chat events as the dispatch layer
+  /// writes a turn-level failure the run never launched for. Empty writes none.
+  probe_chat_error: String,
 }
 
 /// One run of the probe session, in the order the server created it.
@@ -297,6 +300,7 @@ impl Server {
     }
     if method == "POST" && path == session_routes::SESSIONS_PATH {
       let session = if request["name"] == "switch delegation" { PARENT_SESSION } else { PROBE_SESSION };
+      self.log_body_field("create", request)?;
       return Ok((200, json!({"id": session})));
     }
     if method == "POST" && MESSAGE_PATH.is_match(path) {
@@ -308,6 +312,7 @@ impl Server {
       }
       self.lock().runs.push(RunRecord { id: "probe-run".to_string(), state: self.behavior.run_state.clone() });
       self.write_probe_error()?;
+      self.write_probe_chat_error()?;
       return Ok((ACCEPTED, json!({(event_types::INPUT_EVENT_ID): "probe-input"})));
     }
     if method == "GET" && RUNS_LISTING.is_match(path) {
@@ -338,6 +343,32 @@ impl Server {
       run_dir.join(RUN_EVENTS_NAME),
       event_line(&json!({"type": "error", "message": self.behavior.probe_error})),
     )
+  }
+
+  /// The probe session's assistant_error chat event, when the behavior names one: the session's chat log is where the
+  /// dispatch layer writes a turn-level failure the run never launched for, so the run's log holds nothing.
+  fn write_probe_chat_error(&self) -> io::Result<()> {
+    if self.behavior.probe_chat_error.is_empty() {
+      return Ok(());
+    }
+    let session = sessions_dir_in(&self.home).join(PROBE_SESSION);
+    fs::create_dir_all(layout::data_dir(&session))?;
+    fs::write(
+      layout::chat_events_path(&session),
+      event_line(&json!({
+        "type": event_types::ASSISTANT_ERROR,
+        "content": self.behavior.probe_chat_error,
+        "quota_exhausted": true,
+      })),
+    )
+  }
+
+  /// The request's `backend` field, appended to `bodies.log` beside the program as "KIND BACKEND-OR-UNSET". The tests
+  /// read it to hold the switch to the backend each create and delegate request names.
+  fn log_body_field(&self, kind: &str, request: &Value) -> io::Result<()> {
+    let backend = request.get("backend").and_then(Value::as_str).unwrap_or("unset");
+    let mut log = OpenOptions::new().create(true).append(true).open(self.dir.join("bodies.log"))?;
+    writeln!(log, "{kind} {backend}")
   }
 
   fn log_call(&self, method: &str, path: &str) -> io::Result<()> {
@@ -424,6 +455,7 @@ impl Server {
       if self.behavior.delegate == "refused" {
         return Ok((400, json!({"detail": "backend router failed: no backend is available"})));
       }
+      self.log_body_field("delegate", request)?;
       let task = self.start_task(string_field(request, REPO_PATH_FIELD)?)?;
       self.lock().task = Some(task);
       return Ok((

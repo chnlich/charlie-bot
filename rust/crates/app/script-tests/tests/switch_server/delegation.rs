@@ -52,6 +52,9 @@ fn test_delegation_passes_when_the_run_succeeds_and_its_worktree_exists() {
 
   assert_eq!(run.code, 0, "{}", run.describe());
   assert!(run.stdout.contains("delegation: passed: run task-run ended success; worktree "), "{}", run.describe());
+  // Both sessions the check creates name the backend `backends.calls.probe` of the home's config: the parent session's
+  // create, and the delegate request the child session's run takes.
+  assert_eq!(world.fake_server_bodies(), vec!["create claude-opus", "delegate claude-opus"], "{}", run.describe());
   assert_eq!(calls.iter().filter(|call| **call == DELEGATE).count(), 1, "{calls:?}");
   // A run that ended needs no stop.
   assert!(!calls.iter().any(|call| call.ends_with("/cancel")), "{calls:?}");
@@ -226,12 +229,22 @@ fn test_model_side_error_distinguishes_usage_quota_from_host_failures() {
     ("Usage quota exceeded", true),
     ("usage-quota exhausted", true),
     ("Digital service usage quota exceeded", true),
+    // The backend pool's own exhaustion text, plain "quota exhausted" and its "quota_error" spelling.
+    (
+      "pool 'claude-opus-5' has no selectable member:\n- claude-opus-5: quota exhausted, resets at 2026-11-27T08:09+00:00",
+      true,
+    ),
+    (
+      "pool 'fast' has no selectable member:\n- claude-code-deepseek-flash: quota_error, recovers at 2026-11-27T03:10+00:00",
+      true,
+    ),
     ("Disk quota exceeded", false),
     ("Disk usage quota exceeded", false),
     ("EDQUOT: usage quota exceeded", false),
     ("cgroup resource_exhausted", false),
     ("spawn failed: resource_exhausted", false),
     ("git failed: resource_exhausted", false),
+    ("git failed: quota exhausted", false),
   ];
   let mut command = harness::command("bash", &sandbox.env());
   command
@@ -343,6 +356,34 @@ fn test_switch_switches_back_when_a_disk_quota_error_fails_the_delegation_run() 
   assert!(report.contains(&format!("switched back: rust {} serves port {}", world.old_sha, world.port)), "{report}");
   world.assert_untouched();
   assert_eq!(release_calls(&world, &world.new_sha).iter().filter(|call| **call == DELEGATE).count(), 1, "{report}");
+}
+
+/// One dispatch-layer refusal: the fallback backend's pool has no selectable member, and the only record of the
+/// failure is the session's chat event, for the run never launched to write an event log of its own.
+const POOL_EXHAUSTED_ERROR: &str =
+  "pool 'claude-opus-5' has no selectable member:\n- claude-opus-5: quota exhausted, resets at 2026-11-27T08:09+00:00";
+
+#[test]
+#[ignore = "integration"]
+fn test_switch_retries_the_probe_when_only_the_session_record_holds_the_pool_exhaustion() {
+  // The probe run never launched, so its event log holds no error and the failure text sits in the session's chat
+  // events alone. That text is the model side's class: the check is retried once, and the same refusal on the retry
+  // keeps the new release serving instead of switching back.
+  let mut world = World::new();
+  let run = switch_to_new_release(
+    &mut world,
+    &[("run_state", json!("failed")), ("output", json!("none")), ("probe_chat_error", json!(POOL_EXHAUSTED_ERROR))],
+  );
+
+  assert_eq!(run.code, 6, "{}", world.report(&run));
+  let report = world.report(&run);
+  assert!(report.contains("probe_turn: model-side error on attempt 1"), "{report}");
+  assert!(
+    report.contains("SWITCH KEPT, MODEL CHECK FAILED: probe_turn failed on both attempts (pool 'claude-opus-5'"),
+    "{report}"
+  );
+  assert!(world.serves_release(&world.new_sha), "{report}");
+  assert_eq!(fs::read_link(world.releases.join("current")).expect("current"), PathBuf::from(&world.new_sha));
 }
 
 #[test]

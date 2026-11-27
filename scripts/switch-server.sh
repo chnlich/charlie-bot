@@ -55,10 +55,10 @@
 # The checks that need a model run after the readback, on the new server and the production home, so the release path
 # ends at server_ready: the probe turn and the delegation check. Each wait is bounded from the measured times (see
 # PROBE_WAIT_S and DELEGATION_WAIT_S below). A check that fails because the model service or the gateway failed —
-# their error text names a 5xx, a rate limit, exhausted usage quota or an overloaded service — is a model-side failure.
-# It is retried once, and a second such failure keeps the new release serving and exits 6, which leaves the decision to
-# the release's operator. A check that fails any other way is a server-side failure, and the switch switches back. A
-# check that hangs fails the same way, on its wait's bound.
+# their error text names a 5xx, a rate limit, exhausted usage quota, an exhausted pool or an overloaded service — is a
+# model-side failure. It is retried once, and a second such failure keeps the new release serving and exits 6, which
+# leaves the decision to the release's operator. A check that fails any other way is a server-side failure, and the
+# switch switches back. A check that hangs fails the same way, on its wait's bound.
 #
 # After the checks pass and before it reports SWITCH COMPLETE, the forward switch runs the live capture stage,
 # `scripts/live-capture.sh`, over OLD_SHA..TARGET_SHA. The stage captures the live page of each `View:` trailer a
@@ -83,14 +83,17 @@
 # release that serves the switch supplies the binary. When neither release has the reads, the preflight exits 2 before
 # it changes anything.
 #
-# The probe turn runs after the readback, in a session of its own. It passes once the run records its first assistant
+# The probe turn runs after the readback, in a session of its own. That session and every session the delegation check
+# opens name the backend `backends.calls.probe` of the home's config, so none falls back to the `new_session` backend
+# the server would otherwise give them; the preflight refuses a config that names no such backend before it stops
+# anything. The probe passes once the run records its first assistant
 # output (a message or a tool call) or ends success. The archive then stops every run of the session that has not ended,
 # and repeats the stop and the archive while the server answers 409: a follow-up run, such as the web reply nudge, can
 # start after the turn. It reads run states and message roles only, so the model's text cannot fail a healthy server.
 #
 # The delegation check runs after the probe turn. The probe proves that the server answers. The check proves that the
 # server creates a worktree on a repository, which the probe does not exercise. The check opens a session of its own,
-# then delegates one script-run task on the runtime clone, with base branch main. It waits up to
+# then delegates one script-run task on the runtime clone, with base branch main and the probe backend. It waits up to
 # CHARLIEBOT_SWITCH_DELEGATION_WAIT_S for a pass. The run's event log gives the first tool result: the check passes as
 # soon as that result is a Bash command that
 # did not error and ran in a worktree of the runtime clone, without waiting for the run to end. It also passes when the
@@ -207,6 +210,7 @@ case "$MODE" in
 esac
 PANE=""
 DETACHED_LOG=""
+CHECK_BACKEND="" # the backend every check session the switch creates names, read by the preflight and the checks
 APPROVE_UNACCOUNTED_RUNS=0 # 1 when the user approved a restart over runs that check A cannot account for
 DIED_RUNS=0   # no switch back can recover an ended run, so keep count until the switch exits 4
 OLD_STOPPED=0 # the server that served the port before the switch has stopped
@@ -574,10 +578,12 @@ check_log() {
 
 # check_note_model_error STATE: a check's run ended with STATE. When it failed and its last error names a model service
 # failure, the check's failure is a model-side one: it records the error text in CHECK_ERROR and the class in
-# CHECK_MODEL_ERROR, which run_check reads to retry the check once. Any other end leaves the failure to the server.
+# CHECK_MODEL_ERROR, which run_check reads to retry the check once. The text comes from the run's event log, and when
+# the run never wrote one — a dispatch-layer refusal — from the session's chat events. Any other end leaves the failure
+# to the server.
 check_note_model_error() {
   [ "$1" = failed ] || return 0
-  CHECK_ERROR="$(run_error "$CHECK_SESSION")"
+  CHECK_ERROR="$(check_error "$CHECK_SESSION")"
   model_side_error "$CHECK_ERROR" && CHECK_MODEL_ERROR=1
   return 0
 }
@@ -763,6 +769,75 @@ check_archive() {
   done
 }
 
+# json_quote TEXT: TEXT as one JSON string literal. The fields this script puts in a request body hold ids and names
+# the config and the script write, so the escape covers the quote and the backslash.
+json_quote() {
+  local text=${1//\\/\\\\}
+  printf '"%s"' "${text//\"/\\\"}"
+}
+
+# read_probe_backend: the `backends.calls.probe` id from the home's config.yaml, printed on stdout. A key that is
+# absent, or an id no backends.options or backends.pools entry holds, prints the refusal on stdout and exits 1. Every
+# check session the switch creates names this backend, so a probe turn cannot fall back to the server's `new_session`
+# backend, whose pool can sit exhausted while the probe's own backend would answer. The read is an awk walk over the
+# file's own nesting: the scalar under backends > calls > probe, and the ids under backends' options and pools.
+read_probe_backend() {
+  awk -v config="$HOME_DIR/config.yaml" '
+    {
+      line = $0
+      sub(/[[:space:]]+$/, "", line)
+      if (match(line, /[[:space:]]#/)) line = substr(line, 1, RSTART - 1)
+      if (match(line, /[^ ]/) == 0) next
+      indent = RSTART - 1
+      line = substr(line, RSTART)
+      if (line ~ /^#/) next
+      if (line ~ /^- /) { indent += 2; line = substr(line, 3) }
+      else if (line == "-") next
+      colon = index(line, ":")
+      if (colon == 0) next
+      key = substr(line, 1, colon - 1)
+      value = substr(line, colon + 1)
+      sub(/^[[:space:]]+/, "", value)
+      sub(/[[:space:]]+$/, "", value)
+      if ((value ~ /^".*"$/ || value ~ /^'\''.*'\''$/) && length(value) >= 2) value = substr(value, 2, length(value) - 2)
+      if (indent == 0) {
+        in_backends = key == "backends"
+        in_calls = 0
+      } else if (in_backends && indent <= 2) {
+        in_calls = key == "calls"
+      } else if (in_backends && in_calls) {
+        if (key == "probe" && value != "") probe = value
+      } else if (in_backends && key == "id" && value != "") {
+        ids[value] = 1
+      }
+    }
+    END {
+      if (probe == "") {
+        printf "backends.calls.probe is unset in %s; the switch check sessions need it\n", config
+        exit 1
+      }
+      if (!(probe in ids)) {
+        printf "backends.calls.probe names %s, which is no backends.options or backends.pools id in %s\n", probe, config
+        exit 1
+      }
+      print probe
+    }
+  ' "$HOME_DIR/config.yaml"
+}
+
+# require_probe_backend: CHECK_BACKEND, the backend every check session the switch creates names. The preflight reads
+# it first, so a switch reaches its checks only with the key set; a check that runs without it fails here, before it
+# creates a session.
+require_probe_backend() {
+  [ -n "$CHECK_BACKEND" ] && return 0
+  local backend
+  backend="$(read_probe_backend)" || {
+    check_log "no check backend: $backend"
+    return 1
+  }
+  CHECK_BACKEND="$backend"
+}
+
 # probe_turn: runs the stages in a session of its own and archives that session whatever the stages found, so the live
 # home keeps no open probe session.
 probe_turn() {
@@ -772,7 +847,8 @@ probe_turn() {
   CHECK_SESSION=""
   CHECK_RUN=""
   CHECK_STATE=""
-  api POST /api/sessions/ '{"name":"switch probe"}'
+  require_probe_backend || return 1
+  api POST /api/sessions/ "{\"name\":\"switch probe\",\"backend\":$(json_quote "$CHECK_BACKEND")}"
   [ "$API_STATUS" = 200 ] || {
     log "probe: creating a session answered $API_STATUS"
     return 1
@@ -794,10 +870,13 @@ delegation_fail() {
   check_log "step $1 failed: $2"
 }
 
-# delegation_body: the delegate request that starts the task in CHECK_SESSION, as JSON. The base branch is main, and
+# delegation_body: the delegate request that starts the task in CHECK_SESSION, as JSON. The base branch is main, the
+# backend is the probe backend the child session's run takes, and
 # keep_worktree keeps the worktree after the run so the judgment can find it.
 delegation_body() {
-  helper delegation-body "$CHECK_SESSION" "$REPO_ROOT" "$DELEGATION_TASK"
+  local body
+  body="$(helper delegation-body "$CHECK_SESSION" "$REPO_ROOT" "$DELEGATION_TASK")" || return 1
+  printf '%s\n' "${body%\}},\"backend\":$(json_quote "$CHECK_BACKEND")}"
 }
 
 # run_error SESSION: the message of the last error event in the check's run, read from the run's event log. Each line of
@@ -806,11 +885,41 @@ run_error() {
   helper run-error "$HOME_DIR" "$1" "$CHECK_RUN"
 }
 
+# session_error SESSION: the message of the session's last assistant_error chat event. The dispatch layer records a
+# turn-level failure only there — a run the pool refuses never launches, so its run event log holds nothing. Each line
+# of the chat log is one JSON object; a line that is not one yet, the line still being written, reads as no error.
+# Empty when the session holds no such event.
+session_error() {
+  local events="$HOME_DIR/sessions/$1/data/chat_events.jsonl" line
+  [ -f "$events" ] || return 0
+  tac "$events" > "$WORK/chat-events" || return 0
+  while IFS= read -r line; do
+    printf '%s\n' "$line" > "$WORK/chat-event"
+    [ "$(helper json-field "$WORK/chat-event" type 2> /dev/null)" = assistant_error ] || continue
+    helper json-field "$WORK/chat-event" content || return 1
+    return 0
+  done < "$WORK/chat-events"
+}
+
+# check_error SESSION: the failed run's error text for the classifier: the run's event log first, the session's chat
+# events second, where the dispatch layer writes what the run never did. Empty when neither holds an error.
+check_error() {
+  local text
+  text="$(run_error "$1")" || return 1
+  if [ -n "$text" ]; then
+    printf '%s\n' "$text"
+    return 0
+  fi
+  session_error "$1"
+}
+
 # model_side_error TEXT: TEXT, a run's error message, names a failure of the model service rather than of the server.
 # The measured false alarms since 2026-10-30 were the gateway's 5xx and the model service's errors (a BadGatewayError
 # and Error code: 520, findings.md §2a), and the class the release decision keeps without a switch back is a gateway
-# 5xx, a rate limit, exhausted usage quota or resources, or a model-call error. A spawn failure, a cgroup failure,
-# a disk quota failure and a git timeout read as the server's.
+# 5xx, a rate limit, exhausted usage quota or resources, an exhausted backend pool, or a model-call error. The pool's
+# own exhaustion text is plain "quota exhausted" ("pool '<id>' has no selectable member: - <member>: quota exhausted,
+# resets at …") or "quota_error, recovers at …", so the plain wordings classify model-side too. A spawn failure, a
+# cgroup failure, a disk quota failure and a git timeout read as the server's.
 model_side_error() {
   local text
   text="$(tr '[:upper:]' '[:lower:]' <<<"$1")"
@@ -824,7 +933,7 @@ model_side_error() {
   case "$text" in
     *disk* | *edquot* | *cgroup* | *spawn*) ;;
     *resource_exhausted* | *"usage quota"*exhausted* | *"usage quota"*exceeded* | \
-      *"usage-quota"*exhausted* | *"usage-quota"*exceeded*)
+      *"usage-quota"*exhausted* | *"usage-quota"*exceeded* | *"quota exhausted"* | *quota_error*)
       [[ "$text" =~ (^|[^[:alnum:]_])git([^[:alnum:]_]|$) ]] || return 0
       ;;
   esac
@@ -865,7 +974,7 @@ delegation_timeout() {
 
 # delegation_open: creates the session that holds the task. The archive closes the session.
 delegation_open() {
-  api POST /api/sessions/ '{"name":"switch delegation"}'
+  api POST /api/sessions/ "{\"name\":\"switch delegation\",\"backend\":$(json_quote "$CHECK_BACKEND")}"
   [ "$API_STATUS" = 200 ] || {
     delegation_fail session "creating a session answered $API_STATUS"
     return 1
@@ -914,7 +1023,7 @@ delegation_run() {
   IFS=$'\x1f' read -r worktree repo <<<"$fields"
   if [ "$CHECK_STATE" != success ]; then
     check_note_model_error "$CHECK_STATE"
-    error="$(run_error "$CHECK_SESSION")"
+    error="$(check_error "$CHECK_SESSION")"
     delegation_fail run "run $CHECK_RUN ended $CHECK_STATE; the server's error: ${error:-none recorded}"
     return 1
   fi
@@ -985,6 +1094,7 @@ delegation_check() {
   FIRST_CWD=""
   FIRST_RESULT=""
   RUN_BACKEND=""
+  require_probe_backend || return 1
   delegation_open && delegation_run || verdict=1
   delegation_cleanup || verdict=1
   return "$verdict"
@@ -1557,6 +1667,10 @@ preflight() {
   CONFIG="$(home_helper config)" || fail "cannot read $HOME_DIR/config.yaml and credentials.yaml"
   PORT="$(sed -n 1p <<<"$CONFIG")"
   KEY="$(sed -n 2p <<<"$CONFIG")"
+  # The check sessions' backend must resolve before the switch stops anything: a probe turn without it would run on the
+  # server's new_session fallback, whose pool can sit exhausted while the switch reads an empty error and switches back.
+  CHECK_BACKEND="$(read_probe_backend)" || fail "$CHECK_BACKEND"
+  log "check backend: backends.calls.probe names $CHECK_BACKEND"
   [ "$(listener_pids | grep -c .)" -eq 1 ] || fail "expected one server listening on port $PORT"
   LISTENER="$(listener_pids)"
   OLD_IMPL="$(impl_of_pid "$LISTENER")"

@@ -297,6 +297,43 @@ fn build_sha<'a>(world: &'a World, name: &str) -> &'a str {
   }
 }
 
+// ---- preflight: the check sessions' backend --------------------------------------------------------------------------
+
+#[test]
+#[ignore = "integration"]
+fn test_preflight_refuses_a_probe_backend_no_backend_entry_names() {
+  let world = World::new();
+  fs::write(
+    world.home.join("config.yaml"),
+    format!("server:\n  host: 127.0.0.1\n  port: {}\nbackends:\n  calls:\n    probe: retired-id\n", world.port),
+  )
+  .expect("the config");
+
+  let run = world.stubbed_preflight(&format!("rust {}", world.old_sha), "rust", &world.rust_sha);
+
+  assert_eq!(run.code, 1, "{}", world.report(&run));
+  assert!(
+    run.stdout.contains(
+      "preflight failed: backends.calls.probe names retired-id, which is no backends.options or backends.pools id"
+    ),
+    "{}",
+    run.describe()
+  );
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_preflight_refuses_a_config_that_names_no_probe_backend() {
+  let world = World::new();
+  fs::write(world.home.join("config.yaml"), format!("server:\n  host: 127.0.0.1\n  port: {}\n", world.port))
+    .expect("the config");
+
+  let run = world.stubbed_preflight(&format!("rust {}", world.old_sha), "rust", &world.rust_sha);
+
+  assert_eq!(run.code, 1, "{}", world.report(&run));
+  assert!(run.stdout.contains("preflight failed: backends.calls.probe is unset in"), "{}", run.describe());
+}
+
 // ---- preflight: a live run from the build before the grouping -------------------------------------------------------
 
 #[test]

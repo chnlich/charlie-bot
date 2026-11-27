@@ -46,8 +46,9 @@ const GIT_IDENTITY: [(&str, &str); 4] = [
 const BACKENDS_OF_BUILDS: [(&str, &str, bool); 3] =
   [("opencode", "opencode", false), ("antigravity", "antigravity", false), ("claude_code", "cc-claude", true)];
 
-/// The backends that the test config names, with the types the scan maps them to.
-const BACKEND_OPTIONS: &str = "backends:\n  options:\n  - id: oc-deepseek-flash\n    type: opencode\n  - id: agy-gemini-flash\n    type: antigravity\n  - id: claude-opus\n    type: cc-claude\n";
+/// The backends that the test config names, with the types the scan maps them to, and the probe call the check
+/// sessions read.
+const BACKEND_OPTIONS: &str = "backends:\n  calls:\n    probe: claude-opus\n  options:\n  - id: oc-deepseek-flash\n    type: opencode\n  - id: agy-gemini-flash\n    type: antigravity\n  - id: claude-opus\n    type: cc-claude\n";
 
 /// The fake agents slice cgroup the weight-controller check reads, at the path the switch derives on the host.
 fn world_agents_slice(cgroups: &Path) -> PathBuf {
@@ -337,6 +338,16 @@ impl World {
     let mut command = harness::command("bash", &self.env);
     command.arg(self.switch_script()).args(args);
     harness::run(&mut command)
+  }
+
+  /// The `backend` field of each create and delegate request the stand-in server served, as "kind backend-or-unset"
+  /// lines, oldest first. The stand-in is the one a probe or delegation check started, in the server directory.
+  pub fn fake_server_bodies(&self) -> Vec<String> {
+    let path = self.root().join("server").join("bodies.log");
+    if !path.is_file() {
+      return Vec::new();
+    }
+    fs::read_to_string(path).expect("the bodies log").lines().map(String::from).collect()
   }
 
   /// The readback's adoption check, over the run records in `runs_file` and one launch's output.
@@ -1218,6 +1229,7 @@ fn behavior_defaults() -> Map<String, Value> {
     "reaches_ready": true,
     "refuses_config_key": "",
     "probe_error": "",
+    "probe_chat_error": "",
   }) else {
     unreachable!("an object literal");
   };

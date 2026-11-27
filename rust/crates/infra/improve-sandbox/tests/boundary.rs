@@ -2,7 +2,8 @@
 //! permission error. A signal to a process outside the round fails with EPERM and leaves the process alive, while a
 //! signal to the round's own child succeeds. The program runs with a scratch HOME, so every allow-list path resolves
 //! inside it. The tests need a kernel that enforces Landlock ABI 6 and fail on one that does not, so a host without the
-//! boundary is never reported as passing.
+//! boundary is never reported as passing. The refusal of a direction without a clone needs no boundary: the program
+//! refuses before it starts one, so that test runs on every kernel.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -24,17 +25,27 @@ fn remove_tmp_directories(direction: &str) {
   }
 }
 
+/// The scratch HOME of one direction's round. The round's protocol makes the clone before the round starts, so the
+/// scratch HOME holds one too: the program refuses a direction without its clone.
+fn scratch_home_with_clone(direction: &str) -> tempfile::TempDir {
+  let home = tempfile::tempdir_in("/tmp").expect("the scratch HOME");
+  fs::create_dir_all(home.path().join("improve").join(direction).join("charlie-bot")).expect("the direction clone");
+  home
+}
+
 #[ignore = "integration"]
 #[test]
 fn a_write_inside_the_allow_list_succeeds_and_one_outside_fails_with_a_permission_error() {
   // The canary must sit outside the allow-list. The allow-list opens all of /dev/shm, where a build host's TMPDIR can
   // live, and leaves /tmp closed outside the direction's own two directories.
-  let home = tempfile::tempdir_in("/tmp").expect("the scratch HOME");
-  // A direction of this process only, so the `/tmp` directories that the program creates are this test's own.
-  let direction = format!("probe{}", std::process::id());
+  // A direction of this test only, so the `/tmp` directories that the program creates are this test's own: the tests
+  // run in parallel, and two of them that shared a direction would remove each other's directories.
+  let direction = format!("allowlist{}", std::process::id());
+  let home = scratch_home_with_clone(&direction);
   fs::create_dir_all(home.path().join("canary-outside")).expect("the canary directory");
   let script = format!(
     "printf inside >\"$HOME/improve/{direction}/evidence/inside.txt\"; \
+     printf clone >\"$HOME/improve/{direction}/charlie-bot/inside.txt\"; \
      printf outside >\"$HOME/canary-outside/outside.txt\""
   );
 
@@ -50,10 +61,16 @@ fn a_write_inside_the_allow_list_succeeds_and_one_outside_fails_with_a_permissio
   let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
   let context = format!("{}; stderr: {stderr}", kernel_summary());
   let inside = home.path().join("improve").join(&direction).join("evidence/inside.txt");
+  let clone_inside = home.path().join("improve").join(&direction).join("charlie-bot/inside.txt");
   assert_eq!(
     fs::read_to_string(&inside).ok().as_deref(),
     Some("inside"),
     "the write inside the allow-list failed: {context}"
+  );
+  assert_eq!(
+    fs::read_to_string(&clone_inside).ok().as_deref(),
+    Some("clone"),
+    "the write inside the direction clone failed: {context}"
   );
   assert!(
     !home.path().join("canary-outside/outside.txt").exists(),
@@ -68,9 +85,9 @@ fn a_write_inside_the_allow_list_succeeds_and_one_outside_fails_with_a_permissio
 fn a_signal_to_a_process_outside_the_round_fails_with_eperm_and_one_to_the_rounds_own_child_succeeds() {
   // The process outside the round is a sleep that this test starts, so only the signal scope stands between the
   // sandboxed shell and it. The round's own child is a sleep that the sandboxed shell starts.
-  let home = tempfile::tempdir_in("/tmp").expect("the scratch HOME");
-  // A direction of this process only, so the `/tmp` directories that the program creates are this test's own.
-  let direction = format!("probe{}", std::process::id());
+  // A direction of this test only, so the `/tmp` directories that the program creates are this test's own.
+  let direction = format!("signal{}", std::process::id());
+  let home = scratch_home_with_clone(&direction);
   let mut outside = Command::new("sleep").arg("60").spawn().expect("the process outside the round");
   let outside_pid = outside.id();
   let script = format!(
@@ -111,9 +128,9 @@ fn a_signal_to_a_process_outside_the_round_fails_with_eperm_and_one_to_the_round
 fn a_write_under_the_golden_scratch_directory_succeeds_and_a_neighbouring_path_fails() {
   // `golden_cases` writes under the fixed `/tmp/charliebot-golden`. The neighbour is a sibling of that directory, not a
   // child, so the allow-list must refuse it. The neighbour carries this process's id, so a concurrent run keeps its own.
-  let home = tempfile::tempdir_in("/tmp").expect("the scratch HOME");
   // A direction of this test only, so the `/tmp` directories that the program creates are this test's own.
   let direction = format!("golden{}", std::process::id());
+  let home = scratch_home_with_clone(&direction);
   let scratch = Path::new("/tmp/charliebot-golden").join(&direction);
   let neighbour = PathBuf::from(format!("/tmp/charliebot-golden-other-{}", std::process::id()));
   fs::create_dir_all(&neighbour).expect("the neighbouring directory");
@@ -145,4 +162,31 @@ fn a_write_under_the_golden_scratch_directory_succeeds_and_a_neighbouring_path_f
   assert!(!outside_written, "the write to the neighbouring path succeeded: {context}");
   assert!(stderr.contains("Permission denied"), "the refused write named no permission error: {context}");
   assert!(!output.status.success(), "the command succeeded although its neighbouring write failed: {context}");
+}
+
+/// A direction without a clone is refused before any command runs. The refusal names the missing clone, and the program
+/// creates no clone path. The refusal starts no boundary, so this test runs on every kernel.
+#[test]
+fn a_direction_without_a_clone_is_refused_before_any_command_and_creates_no_clone() {
+  let home = tempfile::tempdir_in("/tmp").expect("the scratch HOME");
+  // A direction of this test only, so the `/tmp` directories that the program would create are this test's own.
+  let direction = format!("noclone{}", std::process::id());
+  let clone = home.path().join("improve").join(&direction).join("charlie-bot");
+  let marker = home.path().join("command-ran");
+  let script = format!("touch \"{}\"", marker.display());
+
+  let output = Command::new(env!("CARGO_BIN_EXE_improve-sandbox"))
+    .env_clear()
+    .env("HOME", home.path())
+    .env("PATH", "/usr/bin:/bin")
+    .args([direction.as_str(), "--", "sh", "-c", script.as_str()])
+    .output()
+    .expect("the sandbox starts");
+  remove_tmp_directories(&direction);
+
+  let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+  assert!(!output.status.success(), "the sandbox accepted a direction without a clone: stderr: {stderr}");
+  assert!(stderr.contains(&clone.display().to_string()), "the refusal named no clone path: stderr: {stderr}");
+  assert!(!marker.exists(), "the command ran although the clone is missing: stderr: {stderr}");
+  assert!(!clone.exists(), "the sandbox created the clone path: stderr: {stderr}");
 }

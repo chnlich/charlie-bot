@@ -10,8 +10,10 @@
 //! signal only the processes that the round started, so a `kill`, `pkill` or `killall` at another worker's process
 //! fails with EPERM. Every process the round starts inherits the domain, so the round still stops what it started.
 //!
-//! The program creates each missing allow-list directory, because the rules bind to objects that exist when it
-//! starts. It stops with an error when the kernel cannot enforce Landlock ABI 6, since an unguarded round could write
+//! The program creates each missing directory that the boundary owns, because the rules bind to objects that exist when
+//! it starts. The round's clone is the one path it never creates: the round's protocol makes the clone and checks its
+//! identity before the round, so a direction without a clone stops the program before it creates a directory or runs a
+//! command. It stops with an error when the kernel cannot enforce Landlock ABI 6, since an unguarded round could write
 //! anywhere on the host or signal any process of the host. On success it replaces itself with the command, so the
 //! command's exit code is the program's exit code.
 
@@ -19,6 +21,7 @@ use std::collections::BTreeSet;
 use std::ffi::{CString, OsString};
 use std::fs;
 use std::io;
+use std::iter;
 use std::mem;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
@@ -110,7 +113,16 @@ fn parse_argv(args: &[OsString]) -> Result<(&str, &[OsString])> {
   Ok((direction, command))
 }
 
-/// The creation of each missing allow-list directory, after checking that every device path exists.
+/// The round's clone must already be a directory. The round's protocol makes it and checks its identity before the
+/// round starts, so a missing clone stops the program here, before any directory or command is made.
+fn require_clone(clone: &Path) -> Result<()> {
+  if !clone.is_dir() {
+    bail!("the direction clone is missing or not a directory: {}", clone.display());
+  }
+  Ok(())
+}
+
+/// The creation of each missing boundary-owned directory, after checking that every device path exists.
 fn create_writable_directories(paths: &[PathBuf]) -> Result<()> {
   for device in DEVICE_PATHS {
     if !Path::new(device).exists() {
@@ -199,12 +211,13 @@ fn main() -> Result<()> {
   let args: Vec<OsString> = std::env::args_os().skip(1).collect();
   let (direction, command) = parse_argv(&args)?;
   let home = std::env::home_dir().context("the home directory is unknown")?;
-  let (round_paths, shared_paths) = direction_paths(&home, direction);
-  let writable: Vec<PathBuf> = round_paths.into_iter().chain(shared_paths).collect();
-  create_writable_directories(&writable)?;
+  let paths = direction_paths(&home, direction);
+  require_clone(&paths.clone)?;
+  create_writable_directories(&paths.owned)?;
 
   let mut write_allowed = BTreeSet::new();
-  for path in writable.iter().map(PathBuf::as_path).chain(DEVICE_PATHS.iter().map(Path::new)) {
+  let writable = iter::once(&paths.clone).chain(&paths.owned).map(PathBuf::as_path);
+  for path in writable.chain(DEVICE_PATHS.iter().map(Path::new)) {
     write_allowed.insert(fs::canonicalize(path).with_context(|| format!("cannot resolve {}", path.display()))?);
   }
   let abi = restrict(&write_allowed)?;

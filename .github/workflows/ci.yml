@@ -244,3 +244,9 @@ jobs:
       - name: Backend check
         working-directory: rust
         run: cargo run --locked -p charliebot-cli --bin charliebot -- backend check
+
+      # Fails on a kill that the external kill can misparse into every process of the user: a Command::new("kill") in
+      # Rust, or a negative pid before `--` in shell. Each refusal names its file:line and the safe form.
+      - name: Kill-signal check
+        working-directory: rust
+        run: cargo run --locked -p charliebot-cli --bin charliebot -- kill-check

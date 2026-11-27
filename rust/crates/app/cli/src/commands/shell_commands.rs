@@ -1,11 +1,20 @@
-//! Reads a Bash command line into its command positions, for the kill guard.
+//! Reads a shell command text into its command positions, for the kill guard and the kill-signal check.
 //!
 //! The reader follows POSIX word rules closely enough to tell a command word from an argument. Quotes and escapes are
-//! removed. A `$(...)` or backtick body is a command of its own. A heredoc body is data, except that an unquoted
-//! delimiter runs the body's substitutions. A command word that holds a variable or a substitution has no known name,
-//! so it reads as `Invocation::Dynamic`.
+//! removed. A `$(...)` or backtick body is a command of its own. A `case` arm's pattern is no command, so the reader
+//! reads through the arm's `)`. A heredoc body is data, except that an unquoted delimiter runs the body's substitutions;
+//! `Bodies::Script` also reads the body of a heredoc that a shell or `ssh` runs as a script. A command word that holds a
+//! variable or a substitution has no known name, so it reads as `Invocation::Dynamic`. Each command reads with the line
+//! its first word is on.
 
-/// The commands the kill guard classifies.
+/// How a heredoc body reads: as text, or, when a shell or `ssh` runs it, as a script.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Bodies {
+  Data,
+  Script,
+}
+
+/// The commands the readers classify.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Killer {
   Pkill,
@@ -14,11 +23,11 @@ pub enum Killer {
   Kill,
 }
 
-/// One command position: a command the guard classifies, or a command word whose name the reader cannot know.
+/// One command position: a command the reader classifies, or a command word whose name the reader cannot know.
 #[derive(Debug)]
 pub enum Invocation {
   Dynamic,
-  Call { killer: Killer, args: Vec<String> },
+  Call { killer: Killer, args: Vec<String>, line: usize },
 }
 
 /// Stands in for a command substitution inside a word. The shell fills in the word's value only when it runs the text.
@@ -33,23 +42,38 @@ const WRAPPERS: &[&str] = &[
 /// The shells whose `-c` argument is a command text.
 const SHELLS: &[&str] = &["bash", "dash", "ksh", "sh", "zsh"];
 
+/// Whether a command runs the text it is given as a script: a shell, or `ssh`, which hands its input to a remote shell.
+fn runs_script(words: &[String]) -> bool {
+  let runner = |word: &str| SHELLS.contains(&base_name(word)) || base_name(word) == "ssh";
+  let Some(start) = command_start(words) else {
+    return false;
+  };
+  let name = &words[start];
+  runner(name) || (WRAPPERS.contains(&base_name(name)) && words[start + 1..].iter().any(|word| runner(word)))
+}
+
 /// The reserved words that can stand before a command word.
 const KEYWORDS: &[&str] = &["!", "{", "}", "do", "done", "elif", "else", "fi", "if", "then", "until", "while"];
 
 /// Every command position in a text: the commands at its top level, inside its substitutions and heredocs, and in the
-/// text of a shell's `-c` argument or of `eval`.
-pub fn invocations(text: &str) -> Result<Vec<Invocation>, String> {
-  let mut reader = Reader::new(text);
+/// text of a shell's `-c` argument or of `eval`. The text's first line is line 1.
+pub fn invocations(text: &str, bodies: Bodies) -> Result<Vec<Invocation>, String> {
+  invocations_from(text, 1, bodies)
+}
+
+/// `invocations` for a text whose first line is line `first_line` of its file, such as a shell's `-c` argument.
+pub fn invocations_from(text: &str, first_line: usize, bodies: Bodies) -> Result<Vec<Invocation>, String> {
+  let mut reader = Reader::new(text, first_line, bodies);
   reader.read_list(None)?;
   let mut found = Vec::new();
-  for words in &reader.simples {
-    call(words, &mut found)?;
+  for simple in &reader.simples {
+    call(&simple.words, simple.line, bodies, &mut found)?;
   }
   Ok(found)
 }
 
 /// Classifies one simple command: its command word, and the command that a wrapper runs.
-fn call(words: &[String], found: &mut Vec<Invocation>) -> Result<(), String> {
+fn call(words: &[String], line: usize, bodies: Bodies, found: &mut Vec<Invocation>) -> Result<(), String> {
   let Some(start) = command_start(words) else {
     return Ok(());
   };
@@ -61,14 +85,14 @@ fn call(words: &[String], found: &mut Vec<Invocation>) -> Result<(), String> {
   let name = base_name(command);
   let arguments = &words[start + 1..];
   if let Some(killer) = killer_named(name) {
-    found.push(Invocation::Call { killer, args: arguments.to_vec() });
+    found.push(Invocation::Call { killer, args: arguments.to_vec(), line });
   } else if name == "eval" {
-    found.extend(invocations(&arguments.join(" "))?);
+    found.extend(invocations_from(&arguments.join(" "), line, bodies)?);
   } else if SHELLS.contains(&name) {
     if let Some(flag) = arguments.iter().position(|word| is_c_flag(word))
       && let Some(script) = arguments.get(flag + 1)
     {
-      found.extend(invocations(script)?);
+      found.extend(invocations_from(script, line, bodies)?);
     }
   } else if WRAPPERS.contains(&name) {
     if name == "command" && is_command_query(arguments) {
@@ -80,7 +104,7 @@ fn call(words: &[String], found: &mut Vec<Invocation>) -> Result<(), String> {
         break;
       }
       if is_command_name(word) {
-        call(&arguments[offset..], found)?;
+        call(&arguments[offset..], line, bodies, found)?;
         break;
       }
     }
@@ -140,6 +164,20 @@ fn killer_named(name: &str) -> Option<Killer> {
   }
 }
 
+/// The words of one simple command, and the line its first word is on.
+#[derive(Default)]
+struct Simple {
+  line: usize,
+  words: Vec<String>,
+}
+
+/// The `case` constructs whose arms the reader is inside, and whether the next word is an arm's pattern.
+#[derive(Default)]
+struct Arms {
+  open: usize,
+  pattern: bool,
+}
+
 /// A heredoc whose body starts on the line after its opener.
 struct Heredoc {
   delimiter: String,
@@ -147,21 +185,47 @@ struct Heredoc {
   expands: bool,
   /// Whether the opener is `<<-`, which strips leading tabs from each body line before the delimiter test.
   strips_tabs: bool,
+  /// Whether the command the opener belongs to runs the body as a script.
+  runs_script: bool,
 }
 
 struct Reader {
   chars: Vec<char>,
+  /// The index in `chars` of each newline, ascending.
+  newlines: Vec<usize>,
+  /// The line of `chars[0]`.
+  first_line: usize,
+  bodies: Bodies,
   pos: usize,
   heredocs: Vec<Heredoc>,
-  /// The simple commands read so far, each as its words. Substitutions and heredoc bodies add theirs here too.
-  simples: Vec<Vec<String>>,
+  /// The simple commands read so far. Substitutions and heredoc bodies add theirs here too.
+  simples: Vec<Simple>,
   /// Set by a redirection operator. The next word is its target, which is not a command word.
   drop_next_word: bool,
+  /// The `case` state of the list being read. A nested list keeps its own and restores this one when it ends.
+  arms: Arms,
 }
 
 impl Reader {
-  fn new(text: &str) -> Self {
-    Reader { chars: text.chars().collect(), pos: 0, heredocs: Vec::new(), simples: Vec::new(), drop_next_word: false }
+  fn new(text: &str, first_line: usize, bodies: Bodies) -> Self {
+    let chars: Vec<char> = text.chars().collect();
+    let newlines = chars.iter().enumerate().filter(|(_, character)| **character == '\n').map(|(at, _)| at).collect();
+    Reader {
+      chars,
+      newlines,
+      first_line,
+      bodies,
+      pos: 0,
+      heredocs: Vec::new(),
+      simples: Vec::new(),
+      drop_next_word: false,
+      arms: Arms::default(),
+    }
+  }
+
+  /// The line of the character at index `at`.
+  fn line_at(&self, at: usize) -> usize {
+    self.first_line + self.newlines.partition_point(|&newline| newline < at)
   }
 
   fn bump(&mut self) -> Option<char> {
@@ -180,7 +244,14 @@ impl Reader {
   /// `close` is `)` inside `$(...)` and a backtick inside a backtick substitution. A `)` that closes no group ends
   /// the list only when `close` is `)`.
   fn read_list(&mut self, close: Option<char>) -> Result<(), String> {
-    let mut words: Vec<String> = Vec::new();
+    let outer = std::mem::take(&mut self.arms);
+    let result = self.read_commands(close);
+    self.arms = outer;
+    result
+  }
+
+  fn read_commands(&mut self, close: Option<char>) -> Result<(), String> {
+    let mut words = Simple::default();
     let mut word: Option<String> = None;
     let mut groups = 0usize;
     loop {
@@ -194,13 +265,30 @@ impl Reader {
       match character {
         ' ' | '\t' => self.finish_word(&mut word, &mut words),
         '\n' => {
-          self.end(&mut word, &mut words);
-          self.read_heredocs()?;
+          if self.arms.pattern {
+            self.finish_word(&mut word, &mut words);
+          } else {
+            self.end(&mut word, &mut words);
+            self.read_heredocs()?;
+          }
         }
-        ';' | '&' | '|' => self.end(&mut word, &mut words),
-        '(' => {
+        '&' | '|' => self.separate(&mut word, &mut words),
+        ';' => {
           self.end(&mut word, &mut words);
-          groups += 1;
+          self.arm_terminator();
+        }
+        '(' => {
+          if self.arms.pattern {
+            self.finish_word(&mut word, &mut words);
+          } else {
+            self.end(&mut word, &mut words);
+            groups += 1;
+          }
+        }
+        ')' if self.arms.pattern => {
+          self.finish_word(&mut word, &mut words);
+          words.words.clear();
+          self.arms.pattern = false;
         }
         ')' => {
           self.end(&mut word, &mut words);
@@ -314,27 +402,68 @@ impl Reader {
     }
   }
 
-  fn end(&mut self, word: &mut Option<String>, words: &mut Vec<String>) {
+  /// A separator that ends a command. Inside an arm's pattern it only ends the word, so `|` joins alternatives.
+  fn separate(&mut self, word: &mut Option<String>, words: &mut Simple) {
+    if self.arms.pattern {
+      self.finish_word(word, words);
+    } else {
+      self.end(word, words);
+    }
+  }
+
+  /// Reads the rest of an arm's terminator after its first `;`: `;;`, `;;&` or `;&`. The next word then starts an
+  /// arm's pattern.
+  fn arm_terminator(&mut self) {
+    match self.peek() {
+      Some(';') => {
+        self.bump();
+        if self.peek() == Some('&') {
+          self.bump();
+        }
+      }
+      Some('&') => {
+        self.bump();
+      }
+      _ => return,
+    }
+    self.arms.pattern = self.arms.open > 0;
+  }
+
+  fn end(&mut self, word: &mut Option<String>, words: &mut Simple) {
     self.finish_word(word, words);
-    if !words.is_empty() {
+    if !words.words.is_empty() {
       self.simples.push(std::mem::take(words));
     }
   }
 
-  fn finish_word(&mut self, word: &mut Option<String>, words: &mut Vec<String>) {
+  fn finish_word(&mut self, word: &mut Option<String>, words: &mut Simple) {
     let Some(finished) = word.take() else {
       return;
     };
     if self.drop_next_word {
       self.drop_next_word = false;
-    } else {
-      words.push(finished);
+      return;
     }
+    if words.words.is_empty() && self.arms.open > 0 && finished == "esac" {
+      self.arms.open -= 1;
+      self.arms.pattern = false;
+      return;
+    }
+    if finished == "in" && words.words.len() == 2 && words.words[0] == "case" {
+      words.words.clear();
+      self.arms.open += 1;
+      self.arms.pattern = true;
+      return;
+    }
+    if words.words.is_empty() {
+      words.line = self.line_at(self.pos.saturating_sub(1));
+    }
+    words.words.push(finished);
   }
 
   /// A redirection operator and its target. A descriptor number before the operator, such as `2>`, is part of the
   /// operator, so it is not a command word.
-  fn redirect(&mut self, first: char, word: &mut Option<String>, words: &mut Vec<String>) {
+  fn redirect(&mut self, first: char, word: &mut Option<String>, words: &mut Simple) {
     if word.as_ref().is_some_and(|text| text.chars().all(|digit| digit.is_ascii_digit())) {
       *word = None;
     }
@@ -345,13 +474,13 @@ impl Reader {
       self.bump();
     }
     match operator.as_str() {
-      "<<" => self.read_heredoc_opener(false),
-      "<<-" => self.read_heredoc_opener(true),
+      "<<" => self.read_heredoc_opener(false, runs_script(&words.words)),
+      "<<-" => self.read_heredoc_opener(true, runs_script(&words.words)),
       _ => self.drop_next_word = true,
     }
   }
 
-  fn read_heredoc_opener(&mut self, strips_tabs: bool) {
+  fn read_heredoc_opener(&mut self, strips_tabs: bool, runs_script: bool) {
     while matches!(self.peek(), Some(' ' | '\t')) {
       self.bump();
     }
@@ -373,13 +502,14 @@ impl Reader {
         _ => delimiter.push(character),
       }
     }
-    self.heredocs.push(Heredoc { delimiter, expands, strips_tabs });
+    self.heredocs.push(Heredoc { delimiter, expands, strips_tabs, runs_script });
   }
 
   /// Reads the bodies of the heredocs that the finished line opened. A body runs to its delimiter line, or to the
   /// end of the text when no such line exists.
   fn read_heredocs(&mut self) -> Result<(), String> {
     for heredoc in std::mem::take(&mut self.heredocs) {
+      let body_line = self.line_at(self.pos);
       let mut body = String::new();
       while self.pos < self.chars.len() {
         let start = self.pos;
@@ -394,8 +524,12 @@ impl Reader {
         body.push_str(&line);
         body.push('\n');
       }
-      if heredoc.expands {
-        let mut expansions = Reader::new(&body);
+      if self.bodies == Bodies::Script && heredoc.runs_script {
+        let mut script = Reader::new(&body, body_line, Bodies::Script);
+        script.read_list(None)?;
+        self.simples.extend(script.simples);
+      } else if heredoc.expands {
+        let mut expansions = Reader::new(&body, body_line, self.bodies);
         expansions.read_expansions()?;
         self.simples.extend(expansions.simples);
       }

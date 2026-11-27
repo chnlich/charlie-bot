@@ -8,15 +8,13 @@
 //! it names its target. A command that names one of the three commands and that the reader cannot parse is refused,
 //! so a parse failure never lets such a command through.
 
-mod parse;
-
 use std::ffi::OsString;
 use std::io::{Read, Write};
 
 use charliebot_cli_common::exit::CliExit;
-use parse::{Invocation, Killer, invocations};
 
 use super::bash_hook::run_bash_guard;
+use super::shell_commands::{Bodies, Invocation, Killer, invocations};
 
 /// The command names whose presence sends a command to the reader. A command with none of them passes unread.
 const KILL_NAMES: [&str; 3] = ["pkill", "killall", "pgrep"];
@@ -76,7 +74,7 @@ fn refuses(command: &str) -> bool {
   if !KILL_NAMES.iter().any(|name| command.contains(name)) {
     return false;
   }
-  let Ok(found) = invocations(command) else {
+  let Ok(found) = invocations(command, Bodies::Data) else {
     return true;
   };
   let mut pgrep_unscoped = false;
@@ -84,12 +82,12 @@ fn refuses(command: &str) -> bool {
   for invocation in &found {
     match invocation {
       Invocation::Dynamic | Invocation::Call { killer: Killer::Killall, .. } => return true,
-      Invocation::Call { killer: Killer::Pkill, args } => {
+      Invocation::Call { killer: Killer::Pkill, args, .. } => {
         if !scoped(args) {
           return true;
         }
       }
-      Invocation::Call { killer: Killer::Pgrep, args } => pgrep_unscoped |= !scoped(args),
+      Invocation::Call { killer: Killer::Pgrep, args, .. } => pgrep_unscoped |= !scoped(args),
       Invocation::Call { killer: Killer::Kill, .. } => kill_seen = true,
     }
   }
@@ -174,6 +172,7 @@ mod tests {
       "pgrep -f x | xargs kill",
       "kill $(pgrep -f x)",
       "pkill -f 'sleep -s 60'",
+      "case $x in a) pkill -f x;; esac",
       "pkill -f -- -s",
       "pkill -u -s x",
       "pkill --signal -P x",

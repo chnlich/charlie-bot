@@ -17,7 +17,7 @@ use charliebot_cli_common::json_out;
 
 /// The subcommand vocabulary, sorted: every registered command with a
 /// caller. A caller-less name is an unknown name here.
-const COMMANDS: [&str; 36] = [
+const COMMANDS: [&str; 37] = [
   "artifact",
   "backend",
   "backup",
@@ -32,6 +32,7 @@ const COMMANDS: [&str; 36] = [
   "github",
   "google",
   "improve",
+  "kill-check",
   "kill-guard",
   "land",
   "linear",
@@ -118,6 +119,7 @@ fn run_subcommand(
     "github" => charliebot_github::cli::main(args),
     "google" => charliebot_google::cli::main(args),
     "improve" => charliebot_improve::cli::improve_main(args),
+    "kill-check" => commands::kill_check::main(args),
     "kill-guard" => commands::kill_guard::main(args),
     "land" => commands::land::main(args),
     "linear" => commands::linear::main(args),

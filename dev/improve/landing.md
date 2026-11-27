@@ -119,6 +119,29 @@ driver makes every request and process read through that trial's server.
 The driver writes each screenshot into the round's evidence directory (Step 5). Its other raw output goes to
 `IMPROVE_SIDE_OUTPUT`, and the side record stays in the round's evidence directory.
 
+### A side past one tool call
+
+A side can outlast one foreground tool call, which ends at 15 minutes. Start the side in the background, keep its pid,
+and wait for it in calls that each end before the limit:
+
+    dev/improve/trial-side.sh scripts/release/trial.sh --serve <commit> <server binary> -- <driver command> \
+      >"$side_out" 2>&1 &
+    echo "$!" >"$side_pid"
+
+    timeout 780 bash -c 'while kill -0 "$(cat "$1")" 2>/dev/null; do sleep 5; done' _ "$side_pid"
+
+A wait that ends first leaves the side running, and the next call waits again. The side's exit status is in its side
+record, and its stderr is in `$side_out`.
+
+To stop a side, send SIGTERM to its pid. A side started in the background by a non-interactive shell ignores SIGINT,
+so send TERM. The side forwards the signal to its trial, waits up to `IMPROVE_TRIAL_STOP_WAIT_SECONDS` (120 by default)
+for the trial's processes to end, releases the lock, records `exit_status=143` and exits 143.
+
+A `timeout` around the side stops its trial the same way: the signal that timeout sends reaches the side, and the side
+stops the trial and exits after the trial has ended. A foreground `timeout N trial-side.sh ...` therefore ends after N
+plus up to the stop bound, so N must leave room for it; a side that can run past one call uses the background form.
+A SIGKILL cannot be caught: a side that receives one leaves its trial running, so no caller sends KILL to a side.
+
 ### The lock of a side
 
 Only an improve-ux side runs beside the bench lock. Its entry runs with `IMPROVE_TRIAL_USE_LOCK=0`, and

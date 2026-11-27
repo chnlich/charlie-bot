@@ -73,6 +73,26 @@ jobs:
         if: always() && github.event_name == 'workflow_dispatch'
         run: dev/check-unit-test-time.mjs --runner node --junit web/target/node-test/junit.xml --parallel-limit 0.05
 
+  # The key-file growth guard: a pull request whose diff adds more lines to a key file than the guard allows fails the
+  # job. The diff needs the base commit, so this job checks out the full history; it installs nothing.
+  key-file-growth:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check key-file growth self-test
+        run: dev/check-key-file-growth.sh --self-test
+
+      - name: Check key-file growth
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: dev/check-key-file-growth.sh "$BASE_SHA"
+
   # The image is pinned by name. The live host runs Ubuntu 24.04 with glibc 2.39, and a binary built against a
   # newer glibc does not start there.
   release-build:

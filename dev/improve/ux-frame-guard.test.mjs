@@ -1,6 +1,6 @@
 // Tests of the improve-ux WebSocket write guard. The guard's source runs in a fresh VM context whose WebSocket is a
 // subclass of a fake socket, so each case patches its own prototype and sees only its own frames. A test file's name
-// ends in .test.mjs, so the bench-lock naming check in dev/poor-network/lock.test.mjs reads it as a test.
+// ends in .test.mjs, so the bench-lock naming check in dev/poor-network/lock.integration.test.mjs reads it as a test.
 
 import assert from 'node:assert/strict';
 import vm from 'node:vm';

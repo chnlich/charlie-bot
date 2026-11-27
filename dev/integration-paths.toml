@@ -60,7 +60,7 @@ rust = "binary_id(charliebot-script-tests::setup_scripts)"
 [[entry]]
 paths = ["dev/improve/**"]
 rust = "binary_id(charliebot-script-tests::improve_remote) + binary_id(charliebot-script-tests::leak_checks) + binary_id(charliebot-script-tests::no_python)"
-node = ["dev/poor-network/lock.test.mjs"]
+node = ["dev/poor-network/lock.integration.test.mjs"]
 
 [[entry]]
 paths = ["dev/git-hooks/**", "dev/leak-patterns.sh", "dev/check-skills-host-leak.sh"]
@@ -112,7 +112,7 @@ node = ["web/tests/icon_rule.integration.test.js"]
 
 [[entry]]
 paths = ["dev/poor-network/**"]
-node = ["dev/poor-network/*.integration.test.*", "dev/poor-network/lock.test.mjs"]
+node = ["dev/poor-network/*.integration.test.*", "dev/poor-network/lock.integration.test.mjs"]
 
 # web/tests/frontend_structure.integration.test.js runs web/tests/frontend_structure_graph.js, which reads the
 # server's package registry to learn the package load order. The table lives in entry.rs; lib.rs stays listed because

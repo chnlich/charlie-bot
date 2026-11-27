@@ -1,7 +1,7 @@
 // Tests of the improve trial side record and its check. Each case runs dev/improve/trial-side.sh, the record check
 // and dev/improve/github-post.sh for real, with a stub trial, a stub measurement and a stub gh, all under one scratch
 // directory. The bench lock is a scratch file, so no case takes the host's lock. A test file's name ends in .test.mjs,
-// so the bench-lock naming check in dev/poor-network/lock.test.mjs reads it as a test.
+// so the bench-lock naming check in dev/poor-network/lock.integration.test.mjs reads it as a test.
 
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';

@@ -4,8 +4,8 @@
 // that the lock is free and that the side record shows the stop. The tree tests check that the trial's own cleanup
 // removes the trial tree after a stop, so the next side for the commit starts, and that the stop line names a tree that
 // a SIGKILL left. The bench lock is a scratch file, so no case takes the host's lock.
-// A test file's name ends in .test.mjs, so the bench-lock naming check in dev/poor-network/lock.test.mjs reads it as
-// a test.
+// A test file's name ends in .test.mjs, so the bench-lock naming check in
+// dev/poor-network/lock.integration.test.mjs reads it as a test.
 
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';

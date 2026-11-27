@@ -224,12 +224,9 @@ impl TaskFacts {
     if outcome == "None" && !self.run_outcome_string_none_ids.contains(run_id) {
       return Ok(None);
     }
-    match outcome.as_str() {
-      "success" => Ok(Some(RunOutcomeKind::Success)),
-      "failed" => Ok(Some(RunOutcomeKind::Failed)),
-      "interrupted" => Ok(Some(RunOutcomeKind::Interrupted)),
-      value => Err(StoreError::new(format!("run {run_id} has unknown terminal outcome {value:?}"))),
-    }
+    RunOutcomeKind::parse(outcome)
+      .map(Some)
+      .ok_or_else(|| StoreError::new(format!("run {run_id} has unknown terminal outcome {outcome:?}")))
   }
 }
 

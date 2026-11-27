@@ -428,7 +428,9 @@ impl TaskExecutionAdapter {
         if facts.runs.terminal_outcome(run_id)?.is_some() {
           tracing::info!(target: "charliebot_tasks", session_id, run_id, "run_launch_refused_by_facts");
           return Ok(LaunchSettlement {
-            outcome: Some(outcome_text(facts.runs.terminal_outcome(run_id)?.expect("the terminal fact was checked"))),
+            outcome: Some(
+              facts.runs.terminal_outcome(run_id)?.expect("the terminal fact was checked").as_str().to_string(),
+            ),
             withheld: None,
           });
         }
@@ -1585,7 +1587,9 @@ impl TaskExecutionAdapter {
         ]),
       )
       .await?;
-    let mut finish = RunOutcome::new(parse_outcome(&outcome));
+    let outcome_kind =
+      RunOutcomeKind::parse(&outcome).unwrap_or_else(|| unreachable!("worker outcome comes from a durable run result"));
+    let mut finish = RunOutcome::new(outcome_kind);
     finish.exit_code = Some(if error.is_empty() { exit_code } else { -1 });
     finish.ended_at = ended_at;
     self.dispatch.finish_run(session_id, run_id, finish).await?;
@@ -1602,7 +1606,7 @@ impl TaskExecutionAdapter {
       let translate = self.fresh_translate(option, Some(run_dir));
       let (_, result, _) = charliebot_agents::transport::recovery::scan_result_exit(&raw_path, translate)?;
       if result.as_ref().is_some_and(result_success) {
-        return Ok("success".to_string());
+        return Ok(RunOutcomeKind::Success.as_str().to_string());
       }
     }
     let events_path = run_dir.join(run_records::RUN_EVENTS_NAME);
@@ -1612,10 +1616,10 @@ impl TaskExecutionAdapter {
         .await
         .context("joining run result reader")??
       {
-        return Ok("success".to_string());
+        return Ok(RunOutcomeKind::Success.as_str().to_string());
       }
     }
-    Ok("failed".to_string())
+    Ok(RunOutcomeKind::Failed.as_str().to_string())
   }
 
   async fn native_session_id(&self, raw_path: &Path, option: &BackendOption) -> anyhow::Result<Option<String>> {
@@ -1846,7 +1850,7 @@ impl TaskExecutionAdapter {
       return Ok(());
     }
     let body = self.cold_read_report(meta, run, ColdReadOutcome::AllFailed)?;
-    self.report_failure_to_parent(session_id, run, "failed", Some(&body)).await
+    self.report_failure_to_parent(session_id, run, RunOutcomeKind::Failed.as_str(), Some(&body)).await
   }
 
   /// The success report, then the automatic completion closes the child (`_complete_cold_read`).
@@ -2982,7 +2986,8 @@ impl TaskExecutionAdapter {
           .store
           .read_run_sync(session_id, run_id)?
           .ok_or_else(|| StoreError::not_found(run_records::run_not_found_in_task_text(run_id, session_id)))?;
-        let durable = self.terminal_outcome(session_id, run_id)?.unwrap_or_else(|| "failed".to_string());
+        let durable =
+          self.terminal_outcome(session_id, run_id)?.unwrap_or_else(|| RunOutcomeKind::Failed.as_str().to_string());
         self.after_worker_run(meta, &run, &durable).await?;
       }
       Ok::<(), anyhow::Error>(())
@@ -3076,7 +3081,8 @@ impl TaskExecutionAdapter {
   }
 
   fn terminal_outcome(&self, session_id: &str, run_id: &str) -> StoreResult<Option<String>> {
-    Ok(self.features.store.node_state(session_id)?.runs.terminal_outcome(run_id)?.map(outcome_text))
+    let outcome = self.features.store.node_state(session_id)?.runs.terminal_outcome(run_id)?;
+    Ok(outcome.map(|outcome| outcome.as_str().to_string()))
   }
 
   fn note_launch_out_of_space(&self, session_id: &str, run_id: &str) {
@@ -3446,15 +3452,6 @@ fn worker_failover_source(
   Ok(switched.then_some((previous, from)))
 }
 
-fn parse_outcome(outcome: &str) -> RunOutcomeKind {
-  match outcome {
-    "success" => RunOutcomeKind::Success,
-    "failed" => RunOutcomeKind::Failed,
-    "interrupted" => RunOutcomeKind::Interrupted,
-    _ => unreachable!("worker outcome comes from a durable run result"),
-  }
-}
-
 fn result_success(event: &Value) -> bool {
   charliebot_agents::transport::recovery::result_exit_code(std::slice::from_ref(event)) == 0
 }
@@ -3518,15 +3515,6 @@ fn native_anchor_matches(meta: &SessionMetadata, prompt_hash: &str, backend: &st
       visible: true,
     },
   )
-}
-
-fn outcome_text(outcome: RunOutcomeKind) -> String {
-  match outcome {
-    RunOutcomeKind::Success => "success",
-    RunOutcomeKind::Failed => "failed",
-    RunOutcomeKind::Interrupted => "interrupted",
-  }
-  .to_string()
 }
 
 /// Build the task execution runtime before recovery begins.

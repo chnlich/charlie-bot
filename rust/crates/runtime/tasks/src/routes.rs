@@ -1203,11 +1203,7 @@ async fn cancel_run(
     Ok(result) => result,
     Err(error) => return task_http_error(error),
   };
-  let outcome = result.outcome.map(|outcome| match outcome {
-    RunOutcomeKind::Success => "success",
-    RunOutcomeKind::Failed => "failed",
-    RunOutcomeKind::Interrupted => "interrupted",
-  });
+  let outcome = result.outcome.map(RunOutcomeKind::as_str);
   responses::json(
     StatusCode::OK,
     &json!({ "run_id": result.run_id, "stop_requested": result.stop_requested, "outcome": outcome }),

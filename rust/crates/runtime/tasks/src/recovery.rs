@@ -1182,7 +1182,7 @@ async fn replay_followups_with_records(
         }
         Some(controller) => {
           let tree = sequence_tree(features, adapter)?;
-          if controller.recover_run(session_id, run, outcome.map(outcome_name), &tree).await? {
+          if controller.recover_run(session_id, run, outcome.map(RunOutcomeKind::as_str), &tree).await? {
             counters.followups += 1;
           }
         }
@@ -1238,16 +1238,16 @@ async fn replay_followups_with_records(
         match outcome {
           RunOutcomeKind::Success => {
             completion.replay_run_finished(session_id, &run.id).await?;
-            adapter.after_cold_read_run(&meta, run, outcome_name(outcome)).await?;
+            adapter.after_cold_read_run(&meta, run, outcome.as_str()).await?;
           }
           RunOutcomeKind::Failed => {
             let later_work = run_records[run_index + 1..].iter().any(|later| later.kind == RunKind::Work);
             if !later_work {
-              adapter.after_cold_read_run(&meta, run, outcome_name(outcome)).await?;
+              adapter.after_cold_read_run(&meta, run, outcome.as_str()).await?;
             }
           }
           RunOutcomeKind::Interrupted => {
-            adapter.report_failure_to_parent(session_id, run, outcome_name(outcome), None).await?;
+            adapter.report_failure_to_parent(session_id, run, outcome.as_str(), None).await?;
           }
         }
         continue;
@@ -1276,7 +1276,7 @@ async fn replay_followups_with_records(
       }) {
         continue;
       }
-      adapter.after_worker_run(&meta, run, outcome_name(outcome)).await?;
+      adapter.after_worker_run(&meta, run, outcome.as_str()).await?;
     } else if run.kind == RunKind::Review {
       counters.followups += 1;
       let failover_retry_id = TaskExecutionAdapter::failover_retry_id(session_id, &run.id);
@@ -1285,7 +1285,7 @@ async fn replay_followups_with_records(
       }) {
         continue;
       }
-      adapter.after_review_run(&meta, run, outcome_name(outcome), RunEnd::Replay, None, Vec::new()).await?;
+      adapter.after_review_run(&meta, run, outcome.as_str(), RunEnd::Replay, None, Vec::new()).await?;
     }
   }
   Ok(())
@@ -1787,14 +1787,6 @@ const UNLANDED_SEQUENCE_KINDS: &[&str] = &["improve"];
 /// The error of a replay step whose owning task has not landed: the node pass fails and names the owner.
 pub(crate) fn owner_not_landed(owner: &str, step: &str) -> anyhow::Error {
   anyhow!("{step} is owned by the {owner} task, which has not landed; the node pass cannot replay it")
-}
-
-fn outcome_name(outcome: RunOutcomeKind) -> &'static str {
-  match outcome {
-    RunOutcomeKind::Success => "success",
-    RunOutcomeKind::Failed => "failed",
-    RunOutcomeKind::Interrupted => "interrupted",
-  }
 }
 
 /// A file time as the store's UTC timestamp, truncated to microseconds.

@@ -8,6 +8,7 @@
 
 use std::path::PathBuf;
 
+use charliebot_core::str_methods::universal_newlines;
 use charliebot_core::text_repr;
 use minijinja::value::ValueKind;
 use minijinja::{AutoEscape, Environment, Error, ErrorKind, Output, State, Value};
@@ -64,7 +65,7 @@ fn load_template(directories: &[PathBuf], name: &str) -> Result<Option<String>, 
       let text = String::from_utf8(bytes).map_err(|error| {
         Error::new(ErrorKind::InvalidOperation, format!("UnicodeDecodeError: template {}: {error}", path.display()))
       })?;
-      return Ok(Some(text.replace("\r\n", "\n").replace('\r', "\n")));
+      return Ok(Some(universal_newlines(&text)));
     }
   }
   Ok(None)

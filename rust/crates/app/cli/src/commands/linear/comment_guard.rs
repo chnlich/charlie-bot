@@ -9,6 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::fsutil::atomic_write_text;
 use charliebot_core::home::state_dir;
+use charliebot_core::str_methods::universal_newlines;
 use charliebot_store::control_events::sha256_hex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -495,7 +496,7 @@ impl<'a> GraphqlCursor<'a> {
 
 /// Applies the GraphQL block-string indentation stripping algorithm.
 fn dedent_block_string(raw: &str) -> String {
-  let normalized = raw.replace("\r\n", "\n").replace('\r', "\n");
+  let normalized = universal_newlines(raw);
   let lines: Vec<&str> = normalized.split('\n').collect();
   let mut common_indent: Option<usize> = None;
   for line in lines.iter().skip(1) {

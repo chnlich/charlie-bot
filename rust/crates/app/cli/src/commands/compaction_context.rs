@@ -39,6 +39,7 @@ use charliebot_core::paths;
 use charliebot_core::regex_classes::compile_regex;
 use charliebot_core::repo_root;
 use charliebot_core::session_memo::SESSION_MEMO_NOTE;
+use charliebot_core::str_methods::universal_newlines;
 use charliebot_core::text_repr::{is_truthy, str_repr};
 use charliebot_store::chat_events::{self, LineRule, LogReadError};
 use charliebot_store::layout;
@@ -364,26 +365,6 @@ fn decode_utf8(bytes: &[u8]) -> Result<String, String> {
   std::str::from_utf8(bytes).map(str::to_string).map_err(|error| json_loads::utf8_error_text(bytes, &error))
 }
 
-/// Universal newlines: `\r\n` and `\r` become `\n`.
-fn newlines(text: &str) -> String {
-  if !text.contains('\r') {
-    return text.to_string();
-  }
-  let mut out = String::with_capacity(text.len());
-  let mut chars = text.chars().peekable();
-  while let Some(character) = chars.next() {
-    if character == '\r' && chars.peek() == Some(&'\n') {
-      chars.next();
-    }
-    if character == '\r' {
-      out.push('\n');
-    } else {
-      out.push(character);
-    }
-  }
-  out
-}
-
 // ---------------------------------------------------------------------------
 // Error text: the OS error string and the JSON parser's message.
 // ---------------------------------------------------------------------------
@@ -687,7 +668,7 @@ fn read_text(path: &Path) -> Result<String, String> {
   let bytes =
     std::fs::read(path).map_err(|error| charliebot_core::os_error::text(&error, &str_repr(&paths::display(path))))?;
   let text = decode_utf8(&bytes)?;
-  Ok(newlines(&text))
+  Ok(universal_newlines(&text))
 }
 
 fn skill_block(skill: &SkillText) -> String {

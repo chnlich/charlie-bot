@@ -118,7 +118,7 @@ impl TurnContribution for WebReplyTurnContribution {
 /// missing or unreadable doc fails.
 fn rules_text(path: &Path) -> anyhow::Result<String> {
   let text = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-  Ok(str_methods::strip(&text.replace("\r\n", "\n").replace('\r', "\n")).to_string())
+  Ok(str_methods::strip(&str_methods::universal_newlines(&text)).to_string())
 }
 
 /// The chat line of a `web_reply` event.

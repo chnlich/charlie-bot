@@ -1106,7 +1106,7 @@ impl Store {
     })?;
     // Universal newlines: `\r\n` and a lone `\r` end a line as `\n` does. `split_terminator` keeps a final line
     // without a terminator and drops the empty tail after a terminated one.
-    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    let normalized = str_methods::universal_newlines(text);
     let mut archived_raw = Vec::new();
     let mut kept_raw = Vec::new();
     let mut split_reached = false;
@@ -1667,7 +1667,7 @@ fn parse_universal_newline_lines(path: &Path, bytes: &[u8]) -> StoreResult<Vec<O
   while let Some(offset) = memchr2(b'\n', b'\r', &bytes[pos..]) {
     let index = pos + offset;
     let segment = &bytes[start..index];
-    // A `\r` immediately before the `\n` folds into one terminator, as `replace("\r\n", "\n")` does.
+    // A `\r` immediately before the `\n` folds into one terminator, as `str_methods::universal_newlines` does.
     pos = if bytes[index] == b'\r' && bytes.get(index + 1) == Some(&b'\n') { index + 2 } else { index + 1 };
     lines.push(ndjson::parse_line_compact(segment).map(Arc::new));
     start = pos;

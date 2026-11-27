@@ -118,11 +118,11 @@ fn list(args: &[OsString]) -> Result<(), CliExit> {
   }
   for (position, (name, beat)) in view.entries.iter().enumerate() {
     println!(
-      "{} {} PR {} session {} ci passed {}s ago, heartbeat {}s old",
+      "{} {} PR {} owner {} ci passed {}s ago, heartbeat {}s old",
       position + 1,
       name.refname(),
       name.pr,
-      name.session_id,
+      name.owner,
       now - i64::try_from(name.ci_passed_ms / 1000).unwrap_or(i64::MAX),
       now - beat.beat_at
     );
@@ -263,7 +263,7 @@ fn acquire(args: &[OsString]) -> Result<(), CliExit> {
         .long("owner")
         .value_name("ID")
         .required(true)
-        .help("The session id or the round's launch id: the entry carries it, and re-entry finds it"),
+        .help("The round's launch id: the entry carries it as it is, and re-entry finds it"),
     )
     .arg(
       Arg::new("bound")
@@ -325,7 +325,7 @@ fn release(args: &[OsString]) -> Result<(), CliExit> {
         .long("owner")
         .value_name("ID")
         .required(true)
-        .help("The session id or the round's launch id that the entry and the turn carry"),
+        .help("The round's launch id that the entry and the turn carry, as it is"),
     );
   let matches = parse("release", "Remove this owner's entry and the turn after the merge", args, command)?;
   let pr = pr_arg(&matches)?;

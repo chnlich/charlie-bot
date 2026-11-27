@@ -5,7 +5,10 @@
 //! host or in the server, and a host restart leaves nothing behind that a later client cannot read:
 //!
 //! - `refs/land-turn/main` names the holder of the turn;
-//! - `refs/land-queue/<ci_passed_ms, 13 digits>-<pr>-<session_id>` is one waiting landing.
+//! - `refs/land-queue/<ci_passed_ms, 13 digits>-<pr>-<owner>` is one waiting landing.
+//!
+//! The owner is a session's `owner_token`, or a round's launch id as it is. No ref name and no heartbeat message
+//! carries a session id: the pushes pass the repository's leak scan, which refuses a session id outside a View line.
 //!
 //! Each ref points at a heartbeat commit: an empty commit whose parent is the commit to land, whose subject names the
 //! holder, and whose committer time is the last heartbeat. A ref whose heartbeat is older than `DEAD_AFTER_SECS` is
@@ -21,6 +24,7 @@ use charliebot_store::layout;
 use charliebot_store::metadata::read_metadata_value;
 use charliebot_store::trigger_files;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -82,8 +86,8 @@ pub struct Site {
   pub worktree: PathBuf,
 }
 
-/// The session that owns a waiting entry and its wake: the entry name carries the session id, and the wake is a trigger
-/// in the session's directory, registered and cancelled through `program` (`charliebot`).
+/// The session that owns a waiting entry and its wake: the entry name carries the session's `owner_token`, and the wake
+/// is a trigger in the session's directory, registered and cancelled through `program` (`charliebot`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Owner {
   pub session_id: String,
@@ -92,22 +96,39 @@ pub struct Owner {
   pub program: PathBuf,
 }
 
-/// One waiting entry's name: its CI pass time in milliseconds, the PR, and the session. The derived order is the queue
-/// order: earliest CI pass first, then the lower PR number, then the session id.
+impl Owner {
+  /// The owner key of this session's entries and turn: `owner_token` of its id.
+  pub fn token(&self) -> anyhow::Result<String> {
+    owner_token(&self.session_id)
+  }
+}
+
+/// The owner token of a session: the first 16 hex digits of the SHA-256 of its id. The queue writes the token into its
+/// ref names and heartbeat messages in place of the id, so the pushed text carries no session id. Sixteen digits, 64
+/// bits, keep the entries of distinct sessions apart. An empty id names no session, so it is an error.
+pub fn owner_token(session_id: &str) -> anyhow::Result<String> {
+  anyhow::ensure!(!session_id.is_empty(), "the landing queue needs a session id to name its entry; nothing was queued");
+  let digest = Sha256::digest(session_id.as_bytes());
+  Ok(digest[..8].iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+/// One waiting entry's name: its CI pass time in milliseconds, the PR, and its owner key, which is a session's token
+/// or a round's launch id as it is. The derived order is the queue order: earliest CI pass first, then the lower PR
+/// number, then the owner key.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct EntryName {
   pub ci_passed_ms: u64,
   pub pr: u64,
-  pub session_id: String,
+  pub owner: String,
 }
 
 impl EntryName {
-  pub fn new(ci_passed_ms: u64, pr: u64, session_id: &str) -> Self {
-    Self { ci_passed_ms, pr, session_id: session_id.to_string() }
+  pub fn new(ci_passed_ms: u64, pr: u64, owner: &str) -> Self {
+    Self { ci_passed_ms, pr, owner: owner.to_string() }
   }
 
   pub fn refname(&self) -> String {
-    format!("{ENTRY_PREFIX}{:013}-{}-{}", self.ci_passed_ms, self.pr, self.session_id)
+    format!("{ENTRY_PREFIX}{:013}-{}-{}", self.ci_passed_ms, self.pr, self.owner)
   }
 
   /// The entry a ref name spells; a name that is not this form is an error, never skipped.
@@ -115,14 +136,14 @@ impl EntryName {
     let rest =
       refname.strip_prefix(ENTRY_PREFIX).ok_or_else(|| anyhow::anyhow!("{refname} is not a landing queue entry"))?;
     let (ms, rest) = rest.split_once('-').ok_or_else(|| anyhow::anyhow!("{refname} has no CI pass time"))?;
-    let (pr, session_id) = rest.split_once('-').ok_or_else(|| anyhow::anyhow!("{refname} has no PR number"))?;
-    if ms.len() != 13 || session_id.is_empty() {
-      anyhow::bail!("{refname} is not <13-digit ms>-<pr>-<session_id>");
+    let (pr, owner) = rest.split_once('-').ok_or_else(|| anyhow::anyhow!("{refname} has no PR number"))?;
+    if ms.len() != 13 || owner.is_empty() {
+      anyhow::bail!("{refname} is not <13-digit ms>-<pr>-<owner>");
     }
     Ok(Self {
       ci_passed_ms: ms.parse().with_context(|| format!("{refname} has a bad CI pass time"))?,
       pr: pr.parse().with_context(|| format!("{refname} has a bad PR number"))?,
-      session_id: session_id.to_string(),
+      owner: owner.to_string(),
     })
   }
 }
@@ -151,10 +172,16 @@ pub struct QueueView {
 }
 
 impl QueueView {
-  /// The live entry of `pr` that `session_id` owns, when it waits.
-  pub fn entry_of(&self, pr: u64, session_id: &str) -> Option<&(EntryName, Beat)> {
-    self.entries.iter().find(|(name, _)| name.pr == pr && name.session_id == session_id)
+  /// The live entry of `pr` that `owner` (an owner key) owns, when it waits.
+  pub fn entry_of(&self, pr: u64, owner: &str) -> Option<&(EntryName, Beat)> {
+    self.entries.iter().find(|(name, _)| name.pr == pr && name.owner == owner)
   }
+}
+
+/// Whether the turn that `holder` names belongs to `owner` (an owner key) on `pr`. The holder of an entry's turn is
+/// that entry's ref name; a direct writer's holder (`direct pr <PR>`) is no entry, so it belongs to no owner.
+pub fn turn_belongs_to(holder: &str, pr: u64, owner: &str) -> bool {
+  EntryName::parse(holder).is_ok_and(|name| name.pr == pr && name.owner == owner)
 }
 
 /// Whether a client may take the turn now. The turn must be free; with waiting entries, only the earliest may take it,
@@ -424,7 +451,7 @@ impl Claim {
   /// PR and owner keeps its place, and one that points at an older commit moves to `parent`.
   pub async fn enter_or_resume(site: &Site, name: &EntryName, parent: &str) -> anyhow::Result<Claim> {
     let view = site.read().await?;
-    let Some((_, beat)) = view.entry_of(name.pr, &name.session_id) else {
+    let Some((_, beat)) = view.entry_of(name.pr, &name.owner) else {
       return Claim::enter(site, name, parent).await;
     };
     if beat.parent == parent {
@@ -683,7 +710,7 @@ pub async fn arm_landing(site: &Site, owner: &Owner, pr: u64, sha: &str) -> anyh
     owner.cancel(&wake.id).await?;
   }
   let view = site.read().await?;
-  if let Some((name, beat)) = view.entry_of(pr, &owner.session_id)
+  if let Some((name, beat)) = view.entry_of(pr, &owner.token()?)
     && beat.parent != sha
   {
     let change = Change::Delete { refname: name.refname(), from: beat.sha.clone() };
@@ -783,8 +810,9 @@ pub async fn pr_merge_gate(
   }
   let owner = owner
     .ok_or_else(|| anyhow::anyhow!("pr-merge refuses to enqueue without CHARLIEBOT_SESSION_ID; nothing was merged"))?;
+  let key = owner.token()?;
   let mut replaced = false;
-  if let Some((name, beat)) = view.entry_of(pr, &owner.session_id)
+  if let Some((name, beat)) = view.entry_of(pr, &key)
     && beat.parent != head
   {
     let change = Change::Delete { refname: name.refname(), from: beat.sha.clone() };
@@ -796,8 +824,8 @@ pub async fn pr_merge_gate(
     }
     replaced = true;
   }
-  if replaced || view.entry_of(pr, &owner.session_id).is_none() {
-    let name = EntryName::new(ci_passed_ms, pr, &owner.session_id);
+  if replaced || view.entry_of(pr, &key).is_none() {
+    let name = EntryName::new(ci_passed_ms, pr, &key);
     Claim::enter(site, &name, head).await?;
   }
   let message = pr_merge_wake(pr);
@@ -815,12 +843,12 @@ pub async fn run_pr_merge_queued(
   merge_cmd: &str,
   cadence: Cadence,
 ) -> anyhow::Result<i32> {
-  let mut claim = claim_of_entry(site, &owner.session_id, pr).await?;
+  let mut claim = claim_of_entry(site, &owner.token()?, pr).await?;
   wait_for_turn(&mut claim, cadence).await?;
   run_under_turn(&mut claim, merge_cmd, cadence).await
 }
 
-/// The claim of `owner`'s live waiting entry for `pr`, which a queued command resumes.
+/// The claim of the live waiting entry that the owner key `owner` holds for `pr`, which a queued command resumes.
 pub async fn claim_of_entry(site: &Site, owner: &str, pr: u64) -> anyhow::Result<Claim> {
   let view = site.read().await?;
   let (name, beat) = view
@@ -838,9 +866,10 @@ pub enum Acquired {
   BoundReached,
 }
 
-/// The foreground wait of a round's pull request merge or a direct writer: enters or resumes `owner`'s entry for `pr`
-/// at the head's CI pass time, keeps its heartbeat, and returns `Held` once it holds the turn or `BoundReached` when
-/// `bound` runs out and it has removed the entry. No server is involved, so this runs on a host without one.
+/// The foreground wait of a round's pull request merge: enters or resumes the entry of `owner` for `pr` at the head's
+/// CI pass time, keeps its heartbeat, and returns `Held` once it holds the turn or `BoundReached` when `bound` runs out
+/// and it has removed the entry. `owner` is the round's launch id, which the entry carries as it is. No server is
+/// involved, so this runs on a host without one.
 pub async fn acquire(
   site: &Site,
   owner: &str,
@@ -883,8 +912,8 @@ pub async fn acquire(
   }
 }
 
-/// Removes `owner`'s queue refs for `pr`: its waiting entry and, when it names that entry, the turn. A ref another
-/// client moved is left in place; a refusal with this owner's refs still in place is an error.
+/// Removes the queue refs of the owner key `owner` for `pr`: its waiting entry and, when the turn belongs to it, the
+/// turn. A ref another client moved is left in place; a refusal with this owner's refs still in place is an error.
 pub async fn release(site: &Site, owner: &str, pr: u64) -> anyhow::Result<()> {
   let view = site.read().await?;
   let mut claim = match view.entry_of(pr, owner) {
@@ -900,7 +929,7 @@ pub async fn release(site: &Site, owner: &str, pr: u64) -> anyhow::Result<()> {
   };
   if claim.turn.is_none()
     && let Some(turn) = &view.turn
-    && EntryName::parse(&turn.holder).is_ok_and(|name| name.pr == pr && name.session_id == owner)
+    && turn_belongs_to(&turn.holder, pr, owner)
   {
     claim.holder = turn.holder.clone();
     claim.parent = turn.parent.clone();
@@ -1037,6 +1066,47 @@ mod tests {
     assert!(EntryName::parse("refs/land-queue/1795000000500-5530-").is_err());
     assert!(EntryName::parse("refs/land-queue/1795000000500-x-sess").is_err());
     assert!(EntryName::parse("refs/heads/main").is_err());
+  }
+
+  #[test]
+  fn a_session_token_names_no_session_and_keeps_two_sessions_apart() {
+    let session = "5e551011-6f0a-4c1d-9b2e-0a1b2c3d4e5f";
+    let token = owner_token(session).expect("a session id names a token");
+    assert_eq!(token.len(), 16, "the token is 16 hex digits: {token}");
+    assert!(token.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)), "lowercase hex: {token}");
+    assert_eq!(owner_token(session).expect("the same id names the same token"), token);
+    let other = owner_token("0d0e1e2a-7b3c-4d4e-8f5a-6b7c8d9e0f1a").expect("a session id names a token");
+    let first = EntryName::new(1_795_000_000_000, 5530, &token);
+    let second = EntryName::new(1_795_000_000_000, 5530, &other);
+    assert!(!first.refname().contains(session), "the entry names no session id: {}", first.refname());
+    assert_ne!(first.refname(), second.refname(), "two sessions with the same PR timing get distinct entries");
+    assert_eq!(EntryName::parse(&first.refname()).expect("the entry parses"), first);
+    assert!(owner_token("").is_err(), "an empty session id names no entry");
+  }
+
+  #[test]
+  fn a_round_entry_keeps_its_launch_id_as_it_is() {
+    let launch = "20261127T083000Z-12345-23456";
+    let entry = EntryName::new(1_795_000_000_000, 5530, launch);
+    assert_eq!(entry.refname(), "refs/land-queue/1795000000000-5530-20261127T083000Z-12345-23456");
+    assert_eq!(EntryName::parse(&entry.refname()).expect("the entry parses"), entry);
+  }
+
+  #[test]
+  fn the_owner_check_accepts_its_own_token_and_refuses_another() {
+    let mine = owner_token("5e551011-6f0a-4c1d-9b2e-0a1b2c3d4e5f").expect("a session id names a token");
+    let theirs = owner_token("0d0e1e2a-7b3c-4d4e-8f5a-6b7c8d9e0f1a").expect("a session id names a token");
+    let entry = EntryName::new(1_795_000_000_000, 5530, &mine);
+    let holder = entry.refname();
+    assert!(turn_belongs_to(&holder, 5530, &mine), "the holder's own token accepts it");
+    assert!(!turn_belongs_to(&holder, 5530, &theirs), "another session's token is refused");
+    assert!(!turn_belongs_to(&holder, 5531, &mine), "the same owner on another PR holds another turn");
+    assert!(!turn_belongs_to("direct pr 5530", 5530, &mine), "a direct writer's holder belongs to no owner");
+    let beat =
+      Beat { refname: holder.clone(), sha: "a".repeat(40), parent: "b".repeat(40), beat_at: 0, holder: holder.clone() };
+    let view = QueueView { turn: None, entries: vec![(entry, beat)] };
+    assert!(view.entry_of(5530, &mine).is_some(), "the owner finds its own entry");
+    assert!(view.entry_of(5530, &theirs).is_none(), "another owner finds no entry of this one");
   }
 
   #[test]

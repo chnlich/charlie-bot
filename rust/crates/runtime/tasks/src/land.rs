@@ -1169,7 +1169,7 @@ async fn queued_landing<R: LandRemote>(
     Some(at) => rfc3339_millis(at)?,
     None => u64::try_from(OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000)?,
   };
-  let name = land_queue::EntryName::new(ci_passed_ms, pr, &owner.session_id);
+  let name = land_queue::EntryName::new(ci_passed_ms, pr, &owner.token()?);
   let mut claim = land_queue::Claim::enter_or_resume(&site, &name, &round.sha).await?;
   let read = round.snapshot.take().unwrap_or_else(CiSnapshot::unread);
   let mut waiting = stopped_record(&lane, &round, STATE_WAITING, &read);
@@ -3943,7 +3943,8 @@ exit 0
       land_queue::Armed::Registered
     );
     let view = site.read().await.expect("the queue reads");
-    assert!(view.entry_of(301, "session-c").is_none(), "the replaced head's entry was removed");
+    let session_c = land_queue::owner_token("session-c").expect("the session id names a token");
+    assert!(view.entry_of(301, &session_c).is_none(), "the replaced head's entry was removed");
     assert!(matches!(run.await.expect("the old command ends"), QueueEnd::Superseded), "the moved head supersedes it");
   }
 
@@ -4087,7 +4088,8 @@ exit 0
       .expect("the gate answers");
     assert_eq!(gate, land_queue::MergeGate::Queued);
     let view = site.read().await.expect("the queue reads");
-    let (entry, _) = view.entry_of(601, "queued-session").expect("the queued merge entered the queue").clone();
+    let queued_key = land_queue::owner_token("queued-session").expect("the session id names a token");
+    let (entry, _) = view.entry_of(601, &queued_key).expect("the queued merge entered the queue").clone();
     let mut runner = Box::pin(land_queue::run_pr_merge_queued(&site, &queued_owner, 601, &queued_cmd, CADENCE));
     tokio::select! {
       result = &mut runner => panic!("the merge ran before the turn was free: {:?}", result.err().map(|error| format!("{error:#}"))),

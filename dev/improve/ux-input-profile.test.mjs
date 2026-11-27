@@ -245,6 +245,11 @@ function orders(items) {
     .map((rest) => [item, ...rest]));
 }
 
+const BROWSER_ORDERS = [
+  ...orders(WINDOW_SIZES),
+  [WINDOW_SIZES[0], WINDOW_SIZES[1], WINDOW_SIZES[2], WINDOW_SIZES[0]],
+];
+
 // A CDP session over the browser's pipes. Each message ends with a NUL byte, as the driver's session reads them.
 class PipeCdp {
   constructor(writable, readable) {
@@ -329,7 +334,7 @@ async function openPage(browserPath, url) {
   };
 }
 
-for (const order of orders(WINDOW_SIZES)) {
+for (const order of BROWSER_ORDERS) {
   test(`the input profile takes effect at each size in the order ${order.map(sizeKey).join(' -> ')}`, {
     timeout: 120000,
   }, async () => {

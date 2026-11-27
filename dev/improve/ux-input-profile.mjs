@@ -21,8 +21,8 @@
 // captures only after the check returns.
 //
 // `send` is the CDP session's send(method, params), as dev/improve/ux-frame-guard.mjs takes it. The kit does not launch
-// the driver, so loading this module is the driver's duty. `node --test dev/improve/ux-input-profile.test.mjs` runs the
-// profile against a fake page.
+// the driver, so loading this module is the driver's duty. `node --test dev/improve/ux-input-profile.test.mjs` runs tests
+// against a fake page and a real browser; the real-browser tests need `IMPROVE_BROWSER` to name the pinned Chrome.
 
 // The window sizes that `charliebot land --help` lists for the Web UI Screenshots rule, each with its device's input
 // mode. A touch size is a phone.

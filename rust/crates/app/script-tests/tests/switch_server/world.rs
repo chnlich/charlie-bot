@@ -27,10 +27,10 @@ use uuid::Uuid;
 pub const ACCESS_KEY: &str = "switch-test-key";
 pub const SESSION: &str = "11111111-2222-3333-4444-555555555555";
 /// The prior switch's record and runs file. Its stop line is the switch's last server stop, and check A takes the first
-/// server log launched after that stop.
+/// server log that holds a launch at or after that stop, by the launch line that the launcher appends to its log.
 const PRIOR_SWITCH_LOG: &str = "switch_20250101_000000.log";
 const PRIOR_SWITCH_RUNS: &str = "switch_20250101_000000.runs";
-const NEW_SERVER_STAMP: &str = "20250101_000002";
+const NEW_SERVER_LAUNCH: &str = "2025-01-01 00:00:02.000";
 const PRIOR_SWITCH_START: &str = "2025-01-01 00:00:00.000";
 const PRIOR_SWITCH_STOP: &str = "2025-01-01 00:00:01.000";
 const PRIOR_SWITCH_READBACK: &str = "2025-01-01 00:00:05.000";
@@ -38,7 +38,7 @@ const PRIOR_SWITCH_END: &str = "2025-01-01 00:00:09.000";
 /// A prior switch that its caller's kill ended after the stop: its last line, and the server its pane launched after
 /// that line, as switch 7's log ended four seconds before its server launched.
 const KILLED_SWITCH_READBACK: &str = "2025-01-01 00:00:02.000";
-const KILLED_SWITCH_SERVER_STAMP: &str = "20250101_000004";
+const KILLED_SWITCH_SERVER_LAUNCH: &str = "2025-01-01 00:00:04.000";
 
 const GIT_IDENTITY: [(&str, &str); 4] = [
   ("GIT_AUTHOR_NAME", "switch-test"),
@@ -823,7 +823,13 @@ preflight
   /// Its runs file lists `runs` as live. Its log holds the old server's stop, then `readback` after it, then the
   /// completion line.
   pub fn seed_prior_switch(&self, readback: &[&str], runs: &[&str]) {
-    let mut lines = self.prior_switch_start_and_stop();
+    self.seed_prior_switch_stopped_at(PRIOR_SWITCH_STOP, readback, runs);
+  }
+
+  /// The record of a prior switch whose old server stop is at `stop` (YYYY-MM-DD HH:MM:SS.mmm), otherwise as
+  /// `seed_prior_switch` writes it.
+  pub fn seed_prior_switch_stopped_at(&self, stop: &str, readback: &[&str], runs: &[&str]) {
+    let mut lines = self.prior_switch_start_and_stop(stop);
     lines.extend(readback.iter().map(|line| format!("{PRIOR_SWITCH_READBACK} switch: {line}")));
     lines.push(format!("{PRIOR_SWITCH_END} switch: SWITCH COMPLETE: rust {} serves port {}", self.rust_sha, self.port));
     self.write_prior_switch(&lines, runs);
@@ -832,7 +838,7 @@ preflight
   /// The record of a prior switch that its caller's kill ended after the stop: `readback` is its last line, and no
   /// completion line follows. Check A reads its runs from this record, and the server its pane launched comes after it.
   pub fn seed_prior_switch_killed_after_stop(&self, readback: &[&str], runs: &[&str]) {
-    let mut lines = self.prior_switch_start_and_stop();
+    let mut lines = self.prior_switch_start_and_stop(PRIOR_SWITCH_STOP);
     lines.extend(readback.iter().map(|line| format!("{KILLED_SWITCH_READBACK} switch: {line}")));
     self.write_prior_switch(&lines, runs);
   }
@@ -840,20 +846,17 @@ preflight
   /// The record of a prior switch that its caller's kill ended before the old server's stop. Its log holds the
   /// preflight line alone, so the switch stopped no server.
   pub fn seed_prior_switch_killed_before_stop(&self, runs: &[&str]) {
-    let lines = self.prior_switch_start_and_stop();
+    let lines = self.prior_switch_start_and_stop(PRIOR_SWITCH_STOP);
     self.write_prior_switch(&lines[..1], runs);
   }
 
-  fn prior_switch_start_and_stop(&self) -> Vec<String> {
+  fn prior_switch_start_and_stop(&self, stop: &str) -> Vec<String> {
     vec![
       format!(
         "{PRIOR_SWITCH_START} switch: preflight passed: rust {} -> rust {}; clone at {}",
         self.old_sha, self.rust_sha, self.old_sha
       ),
-      format!(
-        "{PRIOR_SWITCH_STOP} switch: stopping the old server, pid 1 (rust {}): SIGTERM, 60s budget",
-        self.old_sha
-      ),
+      format!("{stop} switch: stopping the old server, pid 1 (rust {}): SIGTERM, 60s budget", self.old_sha),
     ]
   }
 
@@ -874,17 +877,20 @@ preflight
 
   /// The log of the server that the prior switch started: a task_recovery_resume record for each run in `records`.
   pub fn seed_new_server_log(&self, records: &[(&str, &str)]) {
-    self.seed_server_log_at(NEW_SERVER_STAMP, records);
+    self.seed_server_log_launched_at(NEW_SERVER_LAUNCH, records);
   }
 
   /// The log of the server that a prior switch's pane launched after that switch was killed.
   pub fn seed_killed_switch_server_log(&self, records: &[(&str, &str)]) {
-    self.seed_server_log_at(KILLED_SWITCH_SERVER_STAMP, records);
+    self.seed_server_log_launched_at(KILLED_SWITCH_SERVER_LAUNCH, records);
   }
 
-  /// A server log launched at `stamp` (YYYYMMDD_HHMMSS, the local clock), with a record line for each of `records`.
-  pub fn seed_server_log_at(&self, stamp: &str, records: &[(&str, &str)]) {
-    let text: String = records
+  /// A server launched at `launch` (YYYY-MM-DD HH:MM:SS.mmm, the local clock), as scripts/start-server.sh logs it: its
+  /// launcher line, then a record line for each of `records`. The log is named for the launch's second, and a launch in
+  /// that second appends to the same log, as the launcher's `tee -a` does.
+  pub fn seed_server_log_launched_at(&self, launch: &str, records: &[(&str, &str)]) {
+    let name = format!("server_{}_{}.log", launch[..10].replace('-', ""), launch[11..19].replace(':', ""));
+    let lines: String = records
       .iter()
       .map(|(event, run)| {
         format!(
@@ -893,7 +899,8 @@ preflight
         )
       })
       .collect();
-    fs::write(self.logs.join(format!("server_{stamp}.log")), text).expect("the server log");
+    let mut file = OpenOptions::new().create(true).append(true).open(self.logs.join(name)).expect("the server log");
+    file.write_all(format!("{launch} launcher: implementation=rust\n{lines}").as_bytes()).expect("the server log");
   }
 
   /// A Run record whose process is alive, as the server left it before a restart.

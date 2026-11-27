@@ -156,6 +156,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # The runner image's packages.microsoft.com apt source answers 403, so the script removes it. Keep this step
+      # before the apt-get update: the update must not contact that host.
+      - name: Remove the runner image's Microsoft apt source
+        run: dev/remove-microsoft-apt-source.sh
+
       # The terminal tests start tmux, the release tests' gh stub applies gh's --jq with jq, and the
       # failure-triage tests rank LESSONS entries with rg.
       - name: Install system tools

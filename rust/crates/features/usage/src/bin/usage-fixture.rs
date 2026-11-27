@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -6,10 +6,12 @@ use std::sync::Arc;
 
 use anyhow::{Context, anyhow, bail};
 use charliebot_core::backend_types;
-use charliebot_core::config::{self, ConfigSchema};
-use charliebot_registry::Registry;
-use charliebot_registry::usage::{NativeCacheRead, RecordKind, UsageOps, UsageRecord, UsageSource, UsageSourceImpl};
-use charliebot_usage_page::{UsageLedger, capture_usage};
+use charliebot_core::config::{self, CharlieBotConfig, ConfigSchema};
+use charliebot_registry::usage::{
+  NativeCacheRead, NativeInput, NativeScope, RecordKind, UsageOps, UsageRecord, UsageSource, UsageSourceImpl,
+};
+use charliebot_registry::{Registry, RegistryError};
+use charliebot_usage_page::{LedgerRow, UsageLedger, capture_usage};
 use serde_json::{Value, json};
 
 struct FixtureSource {
@@ -21,7 +23,7 @@ impl UsageSourceImpl for FixtureSource {
     UsageOps { logs: true, read: true, live_cli_sessions: self.codex_rule, quota_accounts: false, sweep: false }
   }
 
-  fn logs(&self, _config: &charliebot_core::config::CharlieBotConfig) -> anyhow::Result<Vec<(PathBuf, String)>> {
+  fn logs(&self, _config: &CharlieBotConfig) -> anyhow::Result<Vec<(PathBuf, String)>> {
     Ok(Vec::new())
   }
 
@@ -41,13 +43,13 @@ impl UsageSourceImpl for FixtureSource {
   }
 }
 
-fn register_fixture_sources(registry: &mut Registry) -> Result<(), charliebot_registry::RegistryError> {
+fn register_fixture_sources(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.usage_source(UsageSource {
     name: "CLC",
     id_prefixes: &["charlie-code-", "clc-"],
     run_logs_only: true,
-    native_input: charliebot_registry::usage::NativeInput::Inclusive,
-    native_scope: charliebot_registry::usage::NativeScope::PerRun,
+    native_input: NativeInput::Inclusive,
+    native_scope: NativeScope::PerRun,
     native_cache_read: NativeCacheRead::CachedTokens,
     implementation: None,
   })?;
@@ -56,8 +58,8 @@ fn register_fixture_sources(registry: &mut Registry) -> Result<(), charliebot_re
     name: "Codex",
     id_prefixes: &["codex-"],
     run_logs_only: false,
-    native_input: charliebot_registry::usage::NativeInput::Inclusive,
-    native_scope: charliebot_registry::usage::NativeScope::PerRun,
+    native_input: NativeInput::Inclusive,
+    native_scope: NativeScope::PerRun,
     native_cache_read: NativeCacheRead::CachedTokens,
     implementation: Some(Arc::new(FixtureSource { codex_rule: true })),
   })?;
@@ -66,8 +68,8 @@ fn register_fixture_sources(registry: &mut Registry) -> Result<(), charliebot_re
     name: "Claude Code",
     id_prefixes: &["claude-"],
     run_logs_only: false,
-    native_input: charliebot_registry::usage::NativeInput::Inclusive,
-    native_scope: charliebot_registry::usage::NativeScope::PerRun,
+    native_input: NativeInput::Inclusive,
+    native_scope: NativeScope::PerRun,
     native_cache_read: NativeCacheRead::CachedTokens,
     implementation: Some(Arc::new(FixtureSource { codex_rule: false })),
   })?;
@@ -158,10 +160,7 @@ fn capture(home: &Path, ledger_path: &Path) -> anyhow::Result<Value> {
   Ok(json!({"sources": sources, "rows": rows_value(rows, starts)}))
 }
 
-fn rows_value(
-  rows: Vec<charliebot_usage_page::LedgerRow>,
-  starts: std::collections::BTreeMap<String, String>,
-) -> Value {
+fn rows_value(rows: Vec<LedgerRow>, starts: BTreeMap<String, String>) -> Value {
   let rows = rows
     .into_iter()
     .map(|row| {

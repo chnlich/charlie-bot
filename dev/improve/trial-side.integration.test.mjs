@@ -1,6 +1,8 @@
 // Tests of dev/improve/trial-side.sh beside the bench lock: a lockless side never waits for the lock and never
 // refuses to run because of its holder. A holder read that fails is recorded as unreadable, with the reader's reason,
-// and the side's exit code stays its command's. The bench lock is a scratch file, so no case takes the host's lock.
+// and the side's exit code stays its command's. The stop tests send SIGTERM to a side and check that its trial ends,
+// that the lock is free and that the side record shows the stop. The bench lock is a scratch file, so no case takes
+// the host's lock.
 // A test file's name ends in .test.mjs, so the bench-lock naming check in dev/poor-network/lock.test.mjs reads it as
 // a test.
 
@@ -202,6 +204,177 @@ test('a holder that becomes unreadable at the side end keeps the command\'s exit
     assert.equal(failed.pid, heldLockPids(lockFile)[0], `the end record names another holder: ${end}`);
     assert.equal(failed.descriptor, lockFile, `the end record names another lock file: ${end}`);
   } finally {
+    fs.writeFileSync(`${marker}.release`, '');
+    await holder.exited;
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The stop tests. A serve side runs a stub as its trial: the stub stands in for scripts/release/trial.sh, runs one
+// child process, writes both pids under STUB_DIR, and on TERM ends its child, writes a teardown mark and exits 143, as
+// trial.sh does. With STUB_IGNORE_TERM=1 it ignores TERM, so only a SIGKILL ends it.
+const STOP_COMMIT = '0123456789abcdef0123456789abcdef01234567';
+const TRIAL_STUB = [
+  '#!/usr/bin/env bash',
+  'if [[ ${STUB_IGNORE_TERM:-0} == 1 ]]; then',
+  "  trap '' TERM",
+  'else',
+  '  teardown() {',
+  '    kill -TERM "$child" 2>/dev/null',
+  '    wait "$child"',
+  '    : > "$STUB_DIR/teardown"',
+  '    exit 143',
+  '  }',
+  '  trap teardown TERM',
+  'fi',
+  'sleep 60 &',
+  'child=$!',
+  'printf "%s\\n" "$$" > "$STUB_DIR/trial.pid"',
+  'printf "%s\\n" "$child" > "$STUB_DIR/child.pid"',
+  'wait "$child"',
+  '',
+].join('\n');
+
+let stopCount = 0;
+
+// A serve side that runs the stub as its trial, with its stderr collected. Each side names its own direction, so its
+// marker directory in /tmp is its own.
+function startStopSide(home, dir, extraEnv = {}) {
+  const binary = path.join(dir, 'server');
+  fs.writeFileSync(binary, 'server binary');
+  const stub = path.join(dir, 'trial.sh');
+  fs.writeFileSync(stub, TRIAL_STUB, { mode: 0o755 });
+  stopCount += 1;
+  const direction = `stop${process.pid}x${stopCount}`;
+  const child = spawn('bash', [TRIAL_SIDE, stub, '--serve', STOP_COMMIT, binary, '--', 'driver'], {
+    env: {
+      ...scratchEnv(home),
+      IMPROVE_DIRECTION: direction,
+      CHARLIEBOT_RELEASE_RUN_DIR: path.join(dir, 'evidence'),
+      STUB_DIR: dir,
+      ...extraEnv,
+    },
+    stdio: ['ignore', 'ignore', 'pipe'],
+  });
+  let stderr = '';
+  child.stderr.on('data', (chunk) => {
+    stderr += chunk;
+  });
+  return { child, direction, stderr: () => stderr };
+}
+
+// Whether a process runs: a zombie has ended, and a process whose stat file is gone has ended.
+function processAlive(pid) {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    return !/^\d+ \(.*\) [ZX] /.test(stat);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return false;
+    }
+    throw error;
+  }
+}
+
+function pidFile(dir, name) {
+  return Number(fs.readFileSync(path.join(dir, name), 'utf8'));
+}
+
+// Whether another process holds the bench lock: flock -n fails while it does.
+function lockFree(lockFile) {
+  return spawnSync('flock', ['-n', lockFile, 'true']).status === 0;
+}
+
+// The lines of the one side record in an evidence directory.
+function sideRecordLines(evidence) {
+  const records = fs.readdirSync(evidence).filter((name) => name.startsWith('side-record-'));
+  assert.equal(records.length, 1, `expected one side record in ${evidence}, found ${records.length}`);
+  return fs.readFileSync(path.join(evidence, records[0]), 'utf8').trim().split('\n');
+}
+
+test('a SIGTERM to a running side stops its trial, frees the lock and records the stop', {
+  timeout: 60000,
+}, async () => {
+  const home = scratch('improve-trial-home-');
+  const dir = scratch('improve-trial-run-');
+  const lockFile = path.join(home, LOCK_FILE);
+  const side = startStopSide(home, dir);
+  try {
+    await waitFor(() => fs.existsSync(path.join(dir, 'child.pid')));
+    const trialPid = pidFile(dir, 'trial.pid');
+    const childPid = pidFile(dir, 'child.pid');
+    assert.equal(heldLockPids(lockFile).length, 1, 'the running trial does not hold the bench lock');
+
+    side.child.kill('SIGTERM');
+    const [code] = await once(side.child, 'close');
+    assert.equal(code, 143, side.stderr());
+    assert.match(side.stderr(), new RegExp(`improve trial side stopped by TERM: trial pid ${trialPid};`));
+    assert.equal(fs.existsSync(path.join(dir, 'teardown')), true, 'the trial did not run its teardown');
+    await waitFor(() => !processAlive(trialPid) && !processAlive(childPid));
+    assert.equal(lockFree(lockFile), true, 'the side left the bench lock held');
+    const record = sideRecordLines(path.join(dir, 'evidence'));
+    assert.ok(record.includes('exit_status=143'), `the side record does not show the stop: ${record.join(' | ')}`);
+  } finally {
+    fs.rmSync(path.join('/tmp', `improve-${side.direction}`), { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a trial that ignores SIGTERM is SIGKILLed at the stop bound, and its side still stops', {
+  timeout: 60000,
+}, async () => {
+  const home = scratch('improve-trial-home-');
+  const dir = scratch('improve-trial-run-');
+  const lockFile = path.join(home, LOCK_FILE);
+  const side = startStopSide(home, dir, { STUB_IGNORE_TERM: '1', IMPROVE_TRIAL_STOP_WAIT_SECONDS: '2' });
+  try {
+    await waitFor(() => fs.existsSync(path.join(dir, 'child.pid')));
+    const trialPid = pidFile(dir, 'trial.pid');
+    const childPid = pidFile(dir, 'child.pid');
+
+    side.child.kill('SIGTERM');
+    const [code] = await once(side.child, 'close');
+    assert.equal(code, 143, side.stderr());
+    assert.match(side.stderr(), new RegExp(
+      `improve trial side stopped by TERM: trial pid ${trialPid};.*did not end within 2 s, so SIGKILL`,
+    ));
+    await waitFor(() => !processAlive(trialPid) && !processAlive(childPid));
+    assert.equal(lockFree(lockFile), true, 'the side left the bench lock held');
+    const record = sideRecordLines(path.join(dir, 'evidence'));
+    assert.ok(record.includes('exit_status=143'), `the side record does not show the stop: ${record.join(' | ')}`);
+  } finally {
+    fs.rmSync(path.join('/tmp', `improve-${side.direction}`), { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a SIGTERM while a side waits for the bench lock starts no trial and leaves the holder its lock', {
+  timeout: 60000,
+}, async () => {
+  const home = scratch('improve-trial-home-');
+  const dir = scratch('improve-trial-run-');
+  const marker = path.join(dir, 'held');
+  const lockFile = path.join(home, LOCK_FILE);
+  const holder = startHolder(home, marker);
+  let side = null;
+  try {
+    await waitFor(() => fs.existsSync(marker));
+    side = startStopSide(home, dir, { IMPROVE_TRIAL_LOCK_WAIT_SECONDS: '60' });
+    // The side is waiting for the lock whether or not its wait has begun, so the stop has the same outcome either way.
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    side.child.kill('SIGTERM');
+    const [code] = await once(side.child, 'close');
+    assert.equal(code, 143, side.stderr());
+    assert.match(side.stderr(), /improve trial side stopped by TERM: trial pid none;/);
+    assert.equal(fs.existsSync(path.join(dir, 'trial.pid')), false, 'a trial started during the lock wait');
+    assert.equal(lockFree(lockFile), false, 'the stop freed the lock the holder keeps');
+  } finally {
+    if (side !== null) {
+      fs.rmSync(path.join('/tmp', `improve-${side.direction}`), { recursive: true, force: true });
+    }
     fs.writeFileSync(`${marker}.release`, '');
     await holder.exited;
     fs.rmSync(home, { recursive: true, force: true });

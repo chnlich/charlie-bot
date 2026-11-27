@@ -11,7 +11,8 @@
 #   commit=<the full sha that the trial serves: its <commit> argument>
 #   binary_sha256=<sha256 of its <server binary>, taken as the trial command starts>
 #   output=<the side's raw output directory, new for each side run>
-#   exit_status=<the side's exit status: the command's, or 75 when the lock wait runs out>
+#   exit_status=<the side's exit status: the command's, 75 when the lock wait runs out, or 128 plus the signal number
+#   when a signal stopped the side>
 #
 # The command runs with IMPROVE_SIDE_OUTPUT and CHARLIEBOT_RELEASE_RUN_DIR set to the output directory, and it writes
 # its raw output there. The commit and the binary come from the trial's own arguments, so the record names the binary
@@ -31,6 +32,14 @@
 # Lock-free serve sides in one round share a lock in the round's record directory. A side holds it through the trial
 # command, so the next side starts after the previous trial has stopped its server and scope.
 #
+# A signal stops the side. SIGTERM, SIGINT or SIGHUP goes once to each process of the trial, and the lock helper, which
+# holds the lock until the trial has ended, gets the signal only while no trial process runs. The side waits
+# IMPROVE_TRIAL_STOP_WAIT_SECONDS (default 120) for the trial's processes to end, then SIGKILLs them; the helper ends
+# after its trial and releases the lock. The side records exit_status as 128 plus the signal number, prints one line
+# that names the signal and the trial pid (none when the trial had not started), and exits with that status: 143 for
+# SIGTERM. SIGKILL cannot be caught, so a SIGKILL to this script leaves its trial running. landing.md's "A side past
+# one tool call" section names the form that runs a side past one tool call.
+#
 # The side's marker lives in /tmp/improve-<IMPROVE_DIRECTION>, the round's own scratch directory, which the round runner
 # exports as IMPROVE_DIRECTION. The marker is not under TMPDIR: the round's TMPDIR lost a side's marker while the side
 # waited for the lock (improve-ux 20261120T1726Z), and a side outside a round has no direction to name.
@@ -42,6 +51,9 @@ source "$SCRIPT_DIR/side-record.sh"
 # The variables let the lock test shorten the wait and switch the lock; a round leaves them unset.
 readonly IMPROVE_TRIAL_LOCK_WAIT_SECONDS=${IMPROVE_TRIAL_LOCK_WAIT_SECONDS:-900}
 readonly IMPROVE_TRIAL_USE_LOCK=${IMPROVE_TRIAL_USE_LOCK-1}
+# A stop waits this long for the trial's processes to end after its signal, then SIGKILLs them. The stop test shortens
+# it.
+readonly IMPROVE_TRIAL_STOP_WAIT_SECONDS=${IMPROVE_TRIAL_STOP_WAIT_SECONDS:-120}
 # trial.sh's default port range is the bench's. A side that runs beside the bench serves on this range instead, unless
 # its caller names a range of its own.
 readonly BESIDE_BENCH_PORT_MIN=18670
@@ -52,10 +64,21 @@ SIDE_COMMIT=
 SIDE_BINARY=
 SIDE_RECORD=
 SIDE_OUTPUT=
+# The bench-lock record of a side that runs beside the lock (IMPROVE_TRIAL_USE_LOCK=0). Empty for a locked side.
+SIDE_LOCKLESS_RECORD=
+# SIDE_JOB is the background job that runs the side's command. It heads a session of its own, so its pid is the session
+# id and the process group id of its processes. The job is a helper whose one child is the trial: the flock helper of a
+# locked side, or the shell that runs the command of a side without the lock.
+SIDE_JOB=
 
 if [[ ! $IMPROVE_TRIAL_LOCK_WAIT_SECONDS =~ ^[1-9][0-9]*$ ]]; then
   printf 'improve trial side: IMPROVE_TRIAL_LOCK_WAIT_SECONDS must be a positive number of seconds, got %s\n' \
     "$IMPROVE_TRIAL_LOCK_WAIT_SECONDS" >&2
+  exit 2
+fi
+if [[ ! $IMPROVE_TRIAL_STOP_WAIT_SECONDS =~ ^[1-9][0-9]*$ ]]; then
+  printf 'improve trial side: IMPROVE_TRIAL_STOP_WAIT_SECONDS must be a positive number of seconds, got %s\n' \
+    "$IMPROVE_TRIAL_STOP_WAIT_SECONDS" >&2
   exit 2
 fi
 if [[ ! $IMPROVE_TRIAL_USE_LOCK =~ ^[01]$ ]]; then
@@ -133,6 +156,149 @@ close_side_record() {
   side_record_close "$SIDE_RECORD" "$1" || exit 1
 }
 
+# side_procs: print `<pid> <parent pid> <process group>` for each live process, one per line. A zombie is not live. The
+# scan reads /proc only, so it neither starts a process nor takes a lock.
+side_procs() {
+  local stat_path stat pid state ppid pgrp rest
+  for stat_path in /proc/[0-9]*/stat; do
+    # A process that exits during the scan has no stat file left, so its read fails and the scan skips it.
+    read -r stat 2>/dev/null <"$stat_path" || continue
+    pid=${stat_path#/proc/}
+    pid=${pid%/stat}
+    # The command name in field 2 is in parentheses, so the fields start after its last ")".
+    rest=${stat##*\) }
+    read -r state ppid pgrp _ <<<"$rest"
+    if [[ $state == [ZX] ]]; then
+      continue
+    fi
+    printf '%s %s %s\n' "$pid" "$ppid" "$pgrp"
+  done
+}
+
+# side_group_pids: print the pid of each live process of the side's group, the job included. The job heads its own
+# session, so its group is the session's: a process that leaves the group is not listed.
+side_group_pids() {
+  local pid ppid pgrp
+  while read -r pid ppid pgrp; do
+    if [[ $pgrp == "$SIDE_JOB" ]]; then
+      printf '%s\n' "$pid"
+    fi
+  done < <(side_procs)
+}
+
+# side_trial_pid: print the trial's pid, which is the job's child. It prints nothing before the trial starts.
+side_trial_pid() {
+  local pid ppid pgrp
+  while read -r pid ppid pgrp; do
+    if [[ $ppid == "$SIDE_JOB" ]]; then
+      printf '%s\n' "$pid"
+    fi
+  done < <(side_procs)
+}
+
+# side_trial_members: print the pid of each live process of the side's session except the job, the lock helper. These
+# are the trial's processes; the helper holds the lock until they have ended.
+side_trial_members() {
+  local pid
+  while read -r pid; do
+    if [[ $pid != "$SIDE_JOB" ]]; then
+      printf '%s\n' "$pid"
+    fi
+  done < <(side_group_pids)
+}
+
+# side_wait_group <seconds>: wait until no process of the side's session is left. The job holds the lock until it ends,
+# so an empty session means the lock is free. It fails when processes remain at the bound.
+side_wait_group() {
+  local deadline=$((SECONDS + $1))
+  while [[ -n $(side_group_pids) ]]; do
+    if (( SECONDS >= deadline )); then
+      return 1
+    fi
+    sleep 0.1
+  done
+}
+
+# side_finish <exit status>: write the side's bench-lock end record, end its side record with the status, and exit.
+side_finish() {
+  local status=$1
+  if [[ -n $SIDE_LOCKLESS_RECORD ]]; then
+    bench_lock_record "$SIDE_LOCKLESS_RECORD" end || status=1
+  fi
+  close_side_record "$status"
+  exit "$status"
+}
+
+# side_stop <signal name> <signal number>: stop the side for a signal. Each process of the trial gets the signal once,
+# and the lock helper gets it once while no trial process runs. The side watches the session until it is empty; at the
+# bound, it SIGKILLs the trial's processes, and the helper ends after its trial, which frees the lock. The stop line
+# names the trial pid, and the side records the stop with its exit status.
+side_stop() {
+  local name=$1 status=$(( 128 + $2 )) trial detail pid adopted deadline escalated=0
+  local -a members=()
+  local -A sent=()
+  # A stop runs to its end: a second signal during it does not restart the sequence or interrupt its teardown.
+  trap '' INT TERM HUP
+  if [[ -z $SIDE_JOB ]]; then
+    # A signal can land between the job's start and the assignment of its pid. The side starts no other background
+    # process, so the side's only child is then the job.
+    adopted=$(pgrep -P "$$") || adopted=
+    SIDE_JOB=${adopted%%$'\n'*}
+  fi
+  if [[ -z $SIDE_JOB ]]; then
+    printf 'improve trial side stopped by %s: trial pid none; the side had no job to stop\n' "$name" >&2
+    side_finish "$status"
+  fi
+  trial=$(side_trial_pid)
+  detail='the trial ended after the signal'
+  if [[ -z $trial ]]; then
+    detail='the trial had not started'
+  fi
+  deadline=$((SECONDS + IMPROVE_TRIAL_STOP_WAIT_SECONDS))
+  while :; do
+    mapfile -t members < <(side_trial_members)
+    if (( ${#members[@]} > 0 )); then
+      for pid in "${members[@]}"; do
+        if [[ -z ${sent[$pid]-} ]]; then
+          sent[$pid]=1
+          # A member that ended since the scan needs no signal, so the kill's failure is not an error.
+          kill -s "$name" -- "$pid" 2>/dev/null
+        fi
+      done
+    elif [[ -z ${sent[$SIDE_JOB]-} ]]; then
+      sent[$SIDE_JOB]=1
+      kill -s "$name" -- "$SIDE_JOB" 2>/dev/null
+    fi
+    if [[ -z $(side_group_pids) ]]; then
+      break
+    fi
+    if (( SECONDS >= deadline )); then
+      escalated=1
+      break
+    fi
+    sleep 0.1
+  done
+  if (( escalated == 1 )); then
+    detail="the trial did not end within $IMPROVE_TRIAL_STOP_WAIT_SECONDS s, so SIGKILL ended its processes"
+    mapfile -t members < <(side_trial_members)
+    for pid in "${members[@]}"; do
+      # A member that ended since the scan needs no KILL, as in the signal loop above.
+      kill -s KILL -- "$pid" 2>/dev/null
+    done
+  fi
+  if ! side_wait_group 10; then
+    printf 'improve trial side: processes of the job %s remain after the stop\n' "$SIDE_JOB" >&2
+    status=1
+  fi
+  printf 'improve trial side stopped by %s: trial pid %s; %s\n' "$name" "${trial:-none}" "$detail" >&2
+  side_finish "$status"
+}
+
+# The stop traps are set before any side work, so a signal from the first line of the side reaches side_stop.
+trap 'side_stop TERM 15' TERM
+trap 'side_stop INT 2' INT
+trap 'side_stop HUP 1' HUP
+
 if (( IMPROVE_TRIAL_USE_LOCK == 0 )); then
   if [[ ${IMPROVE_DIRECTION:-} != ux ]]; then
     printf 'improve trial side: IMPROVE_TRIAL_USE_LOCK=0 requires IMPROVE_DIRECTION=ux\n' >&2
@@ -145,8 +311,8 @@ if (( IMPROVE_TRIAL_USE_LOCK == 0 )); then
   export TRIAL_PORT_MIN=${TRIAL_PORT_MIN:-$BESIDE_BENCH_PORT_MIN}
   export TRIAL_PORT_MAX=${TRIAL_PORT_MAX:-$BESIDE_BENCH_PORT_MAX}
   mkdir -p -- "$CHARLIEBOT_RELEASE_RUN_DIR" || exit 1
-  record=$(mktemp "$CHARLIEBOT_RELEASE_RUN_DIR/bench-lock-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX") || exit 1
-  bench_lock_record "$record" start || exit 1
+  SIDE_LOCKLESS_RECORD=$(mktemp "$CHARLIEBOT_RELEASE_RUN_DIR/bench-lock-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX") || exit 1
+  bench_lock_record "$SIDE_LOCKLESS_RECORD" start || exit 1
   open_side_record
   status=0
   if [[ -n $SIDE_RECORD ]]; then
@@ -154,15 +320,23 @@ if (( IMPROVE_TRIAL_USE_LOCK == 0 )); then
     if (( status == 0 )); then
       # Keep the lock in flock so a server left by failed cleanup cannot hold it from an inherited descriptor; the next
       # side must reach trial.sh's port-holder check and name the teardown defect.
-      CHARLIEBOT_RELEASE_RUN_DIR=$SIDE_OUTPUT \
-        flock -o -x "$CHARLIEBOT_RELEASE_RUN_DIR/.serve-side.lock" "$@" || status=$?
+      serve_lock="$CHARLIEBOT_RELEASE_RUN_DIR/.serve-side.lock"
+      (
+        trap - INT
+        CHARLIEBOT_RELEASE_RUN_DIR=$SIDE_OUTPUT exec setsid flock -o -x "$serve_lock" "$@"
+      ) &
+      SIDE_JOB=$!
+      wait "$SIDE_JOB" || status=$?
     fi
   else
-    "$@" || status=$?
+    (
+      trap - INT
+      exec setsid bash -c '"$@"; exit $?' improve-trial-side "$@"
+    ) &
+    SIDE_JOB=$!
+    wait "$SIDE_JOB" || status=$?
   fi
-  bench_lock_record "$record" end || status=1
-  close_side_record "$status"
-  exit "$status"
+  side_finish "$status"
 fi
 
 if [[ ! ${IMPROVE_DIRECTION:-} =~ ^[a-z][a-z0-9_]*$ ]]; then
@@ -199,20 +373,25 @@ trap cleanup_marker EXIT
 open_side_record
 
 status=0
-# The subshell keeps bench_lock_within's exec from replacing this script, so the stop reason can follow a timeout. Its
-# child takes the record's binary line once the lock is held, just before the command starts, so the hash names the
-# binary that the trial starts with, not one from before the wait.
-(bench_lock_within "$IMPROVE_TRIAL_LOCK_WAIT_SECONDS" bash -c \
-  'started=$1; module=$2; record=$3; binary=$4; shift 4; : > "$started" || exit $?
-   if [[ -n $record ]]; then
-     source "$module" || exit $?
-     side_record_take_binary "$record" "$binary" || exit $?
-     export CHARLIEBOT_RELEASE_RUN_DIR=$IMPROVE_SIDE_OUTPUT
-   fi
-   exec "$@"' improve-trial-side "$started_marker" "$SCRIPT_DIR/side-record.sh" "$SIDE_RECORD" "$SIDE_BINARY" "$@") \
-  || status=$?
-close_side_record "$status"
+# The job heads a session of its own: setsid runs a bash that loads lock.sh and calls bench_lock_within, which execs
+# flock in its place, so the lock's helper is the job. The helper's child takes the record's binary line once the lock
+# is held, just before the command starts, so the hash names the binary that the trial starts with, not one from before
+# the wait.
+(
+  trap - INT
+  exec setsid bash -c '. "$1"; shift; bench_lock_within "$@"' improve-trial-side-lock \
+    "$SCRIPT_DIR/../poor-network/lock.sh" "$IMPROVE_TRIAL_LOCK_WAIT_SECONDS" bash -c \
+    'started=$1; module=$2; record=$3; binary=$4; shift 4; : > "$started" || exit $?
+     if [[ -n $record ]]; then
+       source "$module" || exit $?
+       side_record_take_binary "$record" "$binary" || exit $?
+       export CHARLIEBOT_RELEASE_RUN_DIR=$IMPROVE_SIDE_OUTPUT
+     fi
+     exec "$@"' improve-trial-side "$started_marker" "$SCRIPT_DIR/side-record.sh" "$SIDE_RECORD" "$SIDE_BINARY" "$@"
+) &
+SIDE_JOB=$!
+wait "$SIDE_JOB" || status=$?
 if (( status == BENCH_LOCK_TIMEOUT_EXIT )) && [[ ! -e $started_marker ]]; then
   printf 'improve trial side stopped: the bench lock stayed held for %s s\n' "$IMPROVE_TRIAL_LOCK_WAIT_SECONDS" >&2
 fi
-exit "$status"
+side_finish "$status"

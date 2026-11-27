@@ -30,7 +30,7 @@ use crate::metadata::{
 };
 use crate::path_error;
 use crate::run_facts::{CachedRunFacts, RunFacts};
-use crate::run_records::{HostBoot, RunDisplayState, RunOutcomeKind};
+use crate::run_records::{HostBoot, RunDisplayState, RunOutcomeKind, RunRecord};
 use crate::task_reparent;
 #[cfg(test)]
 pub(crate) use crate::task_tree_state::IdentityStage;
@@ -151,11 +151,7 @@ impl NodeState {
     Ok(self.facts.task()?.task_state.as_str())
   }
 
-  pub fn display_state(
-    &self,
-    run: &crate::run_records::RunRecord,
-    boot: &mut HostBoot,
-  ) -> StoreResult<RunDisplayState> {
+  pub fn display_state(&self, run: &RunRecord, boot: &mut HostBoot) -> StoreResult<RunDisplayState> {
     self.runs.display_state(run, boot, || self.withheld_reason(&run.id))
   }
 

@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use charliebot_core::fsutil::FileBytes;
 
-use crate::compact::CompactValue;
+use crate::compact::{CompactValue, ParseKeys};
 use crate::event_types::{ChatEvent, FileIdentity, SharedChatEvent};
 use crate::metadata::{SessionMetadata, UtcDateTime};
 use crate::run_facts::RunFacts;
@@ -75,7 +75,7 @@ pub(crate) struct EventIdBucket {
 
 /// One checkpoint line decoded to the value the fold keeps. The checkpoint writer owns the line format, so it hands
 /// its decoder to the readers instead of either reader depending on the other.
-pub(crate) type LineDecoder = fn(&[u8], &crate::compact::ParseKeys) -> Option<CompactValue>;
+pub(crate) type LineDecoder = fn(&[u8], &ParseKeys) -> Option<CompactValue>;
 
 /// One checkpoint's event lines and the sorted `(id hash, line offset)` table that points into them.
 #[derive(Debug)]
@@ -133,7 +133,7 @@ impl PrefixIndex {
       if value != hash {
         return None;
       }
-      let event = (self.decode)(self.line_at(entry), &crate::compact::ParseKeys::default())?;
+      let event = (self.decode)(self.line_at(entry), &ParseKeys::default())?;
       if event.get("id").and_then(CompactValue::as_str) == Some(id) {
         return Some(Arc::new(event));
       }

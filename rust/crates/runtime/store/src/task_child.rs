@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 
 use crate::control_events;
 use crate::layout;
+use crate::metadata::TaskProfile;
 use crate::run_records::RUN_METADATA_NAME;
 
 /// The v2 task-tree child that a request's stable identity binds to.
@@ -53,7 +54,7 @@ pub fn find_local_task_child(
   let metadata_matches = metadata.get("id").and_then(Value::as_str) == Some(child_id.as_str())
     && metadata.get("name").and_then(Value::as_str).is_some()
     && metadata.get(crate::metadata::TASK_PARENT_ID_FIELD).and_then(Value::as_str) == Some(session_id)
-    && metadata.get("profile").and_then(Value::as_str) == Some(crate::metadata::TaskProfile::Worker.as_str())
+    && metadata.get("profile").and_then(Value::as_str) == Some(TaskProfile::Worker.as_str())
     && goal_matches
     && recorded_task_type == task_type;
   if !metadata_matches {

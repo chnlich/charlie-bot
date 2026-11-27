@@ -27,8 +27,8 @@ use serde::de::{DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 use crate::compact::{CompactValue, KeySource, ObjectEntry, ParseKeys};
 use crate::control_events::REPORT_TO_FIELD;
 use crate::event_types::{FileIdentity, SharedChatEvent};
-use crate::events::WHOLE_LOG_LOGGED_BYTES;
-use crate::fact_checkpoint::{ArchiveMark, FactCheckpoint, ParsedCheckpoint};
+use crate::events::{LiveEventSnapshot, WHOLE_LOG_LOGGED_BYTES};
+use crate::fact_checkpoint::{ArchiveMark, CheckpointFile, CheckpointFold, FactCheckpoint, ParsedCheckpoint};
 use crate::lock::lock;
 use crate::ndjson;
 use crate::run_facts::RunFacts;
@@ -153,7 +153,7 @@ impl ScannedLiveFacts {
 /// events. The second applies when another reader loaded the cache before the scan took the session lock.
 pub(crate) enum ColdSnapshot {
   Scanned(ScannedLiveFacts),
-  Warm(crate::events::LiveEventSnapshot),
+  Warm(LiveEventSnapshot),
 }
 
 /// One node's fold, ready to memoize: the facts, the run facts, the newest prompt fact of each scope and the history
@@ -206,7 +206,7 @@ impl Store {
     let (facts, runs) = fold_scanned_history(session_id, &archive, &events, archived)?;
     let prompt_changes = LivePromptChanges::of(&events);
     let kept: Vec<&SharedChatEvent> = archive.iter().chain(events.iter()).collect();
-    let checkpoint = crate::fact_checkpoint::CheckpointFile::new(crate::fact_checkpoint::CheckpointFold {
+    let checkpoint = CheckpointFile::new(CheckpointFold {
       archived,
       covered: events.len(),
       archive_marks: &archive_marks,
@@ -345,7 +345,7 @@ impl Store {
 
   /// Write the checkpoint a scan left. A failure is logged rather than failing the scan. The file only makes the next
   /// boot faster. Its absence costs that boot a full scan and nothing else.
-  fn leave_checkpoint(&self, session_id: &str, checkpoint: Option<crate::fact_checkpoint::CheckpointFile>) {
+  fn leave_checkpoint(&self, session_id: &str, checkpoint: Option<CheckpointFile>) {
     let Some(checkpoint) = checkpoint else { return };
     let path = self.fact_checkpoint_path(session_id);
     if let Err(error) = checkpoint.write(&path) {

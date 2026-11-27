@@ -549,7 +549,6 @@ pub type PlanRegistryFn = fn(&Path) -> anyhow::Result<Option<Vec<Value>>>;
 #[derive(Clone, Debug)]
 pub struct OpenWaitingRow {
   pub session_id: String,
-  pub session_name: String,
   pub text: String,
   pub context: Option<String>,
   pub link: Option<String>,

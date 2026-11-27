@@ -373,8 +373,9 @@ fn sha256_file(path: &Path) -> String {
 /// The launching host's `charliebot`: `backend resolve --call improve_review` prints the answer that FAKE_RESOLVE_ANSWER
 /// names. Without that file the call class is unset, and the command fails as the CLI fails for an unset key.
 /// `release-helper endpoint-option` prints FAKE_PROBE_ANSWER, the endpoint member of `backends.calls.probe`, which the
-/// launch ships. The live server is FAKE_LIVE_TREE_DIR: `session tree` prints its roots.json, or children-<parent>.json
-/// for a `--root`, and a directory that is missing stands for a server that cannot be reached. `screenshots resolve`
+/// launch ships. The live server is FAKE_LIVE_TREE_DIR: `session tree --include-archived` prints its roots.json, or
+/// children-<parent>.json for a `--root`, and a directory that is missing stands for a server that cannot be reached.
+/// `screenshots resolve`
 /// answers 0 for each session that FAKE_LIVE_KNOWN lists, one per line, and refuses the others as the land check does.
 const RESOLVE_CHARLIEBOT: &str = r#"# Fake charliebot on the launching host: answer the review resolve, the probe endpoint and the live server from their
 # fixtures, or refuse as an unset call class.
@@ -396,11 +397,19 @@ if [[ ${1-} == session && ${2-} == tree ]]; then
     exit 1
   fi
   parent=
+  include_archived=0
   shift 2
   while [[ $# -gt 0 ]]; do
-    if [[ $1 == --root ]]; then parent=$2; fi
-    shift
+    case $1 in
+      --root) parent=$2; shift 2 ;;
+      --include-archived) include_archived=1; shift ;;
+      *) shift ;;
+    esac
   done
+  if [[ $include_archived -ne 1 ]]; then
+    printf 'session tree did not include archived rows\n' >&2
+    exit 1
+  fi
   page=$FAKE_LIVE_TREE_DIR/roots.json
   if [[ -n $parent ]]; then page=$FAKE_LIVE_TREE_DIR/children-$parent.json; fi
   if [[ -r $page ]]; then

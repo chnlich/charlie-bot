@@ -2,7 +2,7 @@
 # View lines are checked against it.
 #
 # The launcher (remote-launch.sh) writes the record on the agent-box side, the one host that reaches the live server. It
-# walks the server's active task tree with `charliebot session tree` and keeps each session that
+# walks the server's task tree, including archived rows, with `charliebot session tree` and keeps each session that
 # `charliebot screenshots resolve` resolves for `/?session=<id>`: the check that `charliebot land` makes, so both judge
 # "known" alike. The runner keeps a copy in the round's evidence directory with the other merge facts, and pr-create and
 # pr-merge read it. No round path reaches the live server.
@@ -12,9 +12,9 @@
 #
 # This file defines functions for the scripts that source it, and runs nothing.
 
-# live_sessions_record <file>: write the record of the live server's active sessions to <file>. The tree is walked from
-# its roots, a page of 500 rows at a time, and each row with children is walked in turn. A session that the tree lists
-# but the server does not resolve is left out. On a failure the function names it and writes no file.
+# live_sessions_record <file>: write the record of sessions the live server resolves to <file>. The tree is walked from
+# its roots, including archived rows, a page of 500 at a time, and each row with children is walked in turn. A session
+# that the tree lists but the server does not resolve is left out. On a failure the function names it and writes no file.
 live_sessions_record() {
   local out=$1 read_at parent cursor page rows children id name status err content
   local -a queue=("") args order=()
@@ -25,7 +25,7 @@ live_sessions_record() {
     queue=("${queue[@]:1}")
     cursor=
     while :; do
-      args=(session tree --limit 500)
+      args=(session tree --include-archived --limit 500)
       [[ -z $parent ]] || args+=(--root "$parent")
       [[ -z $cursor ]] || args+=(--cursor "$cursor")
       if ! page=$(charliebot "${args[@]}"); then

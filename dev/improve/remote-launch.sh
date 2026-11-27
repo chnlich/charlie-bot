@@ -27,7 +27,8 @@
 #     $CLAUDE_CONFIG_DIR/.credentials.json, or a codex member's login in ~/.codex/auth.json;
 #   - the leak pattern file $CHARLIEBOT_HOME/skills_leak_patterns.local.txt;
 #   - the in-flight files list, which dev/improve/inflight-files.sh prints here;
-#   - the live sessions record, which dev/improve/live-sessions.sh writes from the live server's active task tree;
+#   - the live sessions record, which dev/improve/live-sessions.sh writes from the live server's task tree, including
+#     archived rows;
 #   - the kit revision: HEAD of this checkout, whose dev/ tree the runner fetches as the round's kit;
 #   - the skills revision: HEAD of this checkout, whose skills/ tree the runner archives as the round's skills;
 #   - the worker session's metadata.json, for task_parent_id;

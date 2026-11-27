@@ -91,13 +91,13 @@ the clicks.
 ### The View session
 
 A `/?session=<id>` View line opens on the live server after the release switch, so its session must be one that the
-live server knows. The launcher reads the live server's active task tree when the round launches and writes the
-sessions it resolves to `live-sessions.tsv` in the round's launch directory. The runner keeps a copy beside the other
-merge facts in the round's evidence directory. That record is the only source of a View session: a round picks a
-session with long real content from it, by the session's name, and names the session's id in the View line. The record
-covers the active task tree, so a View line cannot name an archived session. A web page PR whose View line names a
-session that the record does not list is refused at `pr-create` and at `pr-merge`, and so is a web page PR that names a
-session when the record is missing. A View line that names no session is not checked against the record.
+live server knows. The launcher reads the live server's task tree, including archived rows, when the round launches and
+writes the sessions it resolves to `live-sessions.tsv` in the round's launch directory. The runner keeps a copy beside
+the other merge facts in the round's evidence directory. That record is the only source of a View session: a round picks
+a session with long real content from it, by the session's name, and names the session's id in the View line. A web page
+PR whose View line names a session that the record does not list is refused at `pr-create` and at `pr-merge`, and so is
+a web page PR that names a session when the record is missing. A View line that names no session is not checked against
+the record.
 
 ### The shared mock home
 

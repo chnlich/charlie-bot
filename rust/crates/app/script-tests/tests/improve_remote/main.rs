@@ -395,8 +395,9 @@ fn the_round_keeps_its_facts_in_the_evidence_directory_its_start_stamp_names() {
   }
 }
 
-/// The launch walks the live server's active task tree, roots and the children of a row with children alike, and keeps
-/// each session that the server resolves. The round keeps that record in its evidence directory with its other facts.
+/// The launch walks the live server's task tree, including archived rows, roots and the children of a row with children
+/// alike, and keeps each session that the server resolves. The round keeps that record in its evidence directory with
+/// its other facts.
 #[test]
 #[ignore = "integration"]
 fn the_launch_keeps_the_live_sessions_the_server_resolves_in_the_evidence_directory() {
@@ -407,7 +408,8 @@ fn the_launch_keeps_the_live_sessions_the_server_resolves_in_the_evidence_direct
     page(serde_json::json!([
       {"id": "parent-a", "name": "Parent A", "child_count": 1},
       {"id": "plain-b", "name": "Plain B", "child_count": 0},
-      {"id": "unknown-c", "name": "Unknown C", "child_count": 0}
+      {"id": "unknown-c", "name": "Unknown C", "child_count": 0},
+      {"id": "archived-d", "name": "Archived D", "child_count": 0, "archived": true}
     ])),
   )
   .expect("the live roots");
@@ -416,8 +418,8 @@ fn the_launch_keeps_the_live_sessions_the_server_resolves_in_the_evidence_direct
     page(serde_json::json!([{"id": "child-a1", "name": "Child A1", "child_count": 0}])),
   )
   .expect("the live children");
-  // The server resolves three of the four sessions the tree lists: `unknown-c` is listed but not resolved.
-  fs::write(&world.live_known, "parent-a\nplain-b\nchild-a1\n").expect("the resolved sessions");
+  // The server resolves four of the five sessions the tree lists: `unknown-c` is listed but not resolved.
+  fs::write(&world.live_known, "parent-a\nplain-b\narchived-d\nchild-a1\n").expect("the resolved sessions");
 
   let run = world.run(&world.env());
 
@@ -428,9 +430,14 @@ fn the_launch_keeps_the_live_sessions_the_server_resolves_in_the_evidence_direct
   for record in [remote.join("live-sessions.tsv"), world.local_evidence().join(&stamp).join("live-sessions.tsv")] {
     let text = fs::read_to_string(&record).unwrap_or_else(|error| panic!("{}: {error}", record.display()));
     let lines: Vec<&str> = text.lines().collect();
-    assert_eq!(lines.len(), 4, "{} holds the read time and three sessions:\n{text}", record.display());
+    assert_eq!(lines.len(), 5, "{} holds the read time and four sessions:\n{text}", record.display());
     assert!(lines[0].starts_with("read_at\t"), "{} opens with its read time:\n{text}", record.display());
-    assert_eq!(&lines[1..], ["parent-a\tParent A", "plain-b\tPlain B", "child-a1\tChild A1"], "{}", record.display());
+    assert_eq!(
+      &lines[1..],
+      ["parent-a\tParent A", "plain-b\tPlain B", "archived-d\tArchived D", "child-a1\tChild A1"],
+      "{}",
+      record.display()
+    );
   }
 }
 

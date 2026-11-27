@@ -1,6 +1,5 @@
 //! Claude CLI command settings and headless environment names.
 
-use anyhow::Context;
 /// The PreToolUse hook event: the backend registers the run guards under it, and the CLI answer must name it.
 pub use charliebot_core::hooks::PRE_TOOL_USE_HOOK_EVENT;
 use charliebot_registry::backend::Env;
@@ -232,39 +231,6 @@ fn headless_claude_settings_for(
     add_read_budget_hooks(&mut settings, session_id, run_id, agent_tool, can_delegate);
   }
   Ok(settings)
-}
-
-/// Remove the Claude Code foreground-cap entry from a command used by the Anthropic-compatible endpoint.
-pub(super) fn remove_foreground_cap_from_command(command: &mut [String]) -> anyhow::Result<()> {
-  let settings_index = command
-    .iter()
-    .position(|argument| argument == "--settings")
-    .context("Claude command has no --settings argument")?;
-  let settings_json = command.get_mut(settings_index + 1).context("Claude --settings argument has no value")?;
-  let mut settings: Map<String, Value> =
-    serde_json::from_str(settings_json).context("Claude --settings value is not a JSON object")?;
-  let hooks =
-    settings.get_mut("hooks").and_then(Value::as_object_mut).context("Claude --settings has no hooks object")?;
-  let pre_tool_use = hooks
-    .get_mut(PRE_TOOL_USE_HOOK_EVENT)
-    .and_then(Value::as_array_mut)
-    .context("Claude --settings has no PreToolUse hook list")?;
-  for entry in pre_tool_use.iter_mut() {
-    let commands =
-      entry.get_mut("hooks").and_then(Value::as_array_mut).context("Claude PreToolUse entry has no hooks array")?;
-    commands
-      .retain(|hook| hook.get("command").and_then(Value::as_str) != Some(charliebot_agents::foreground::HOOK_COMMAND));
-  }
-  pre_tool_use.retain(|entry| !entry.get("hooks").and_then(Value::as_array).is_some_and(Vec::is_empty));
-  if pre_tool_use.is_empty() {
-    hooks.remove(PRE_TOOL_USE_HOOK_EVENT);
-  }
-  let hooks_empty = hooks.is_empty();
-  if hooks_empty {
-    settings.remove("hooks");
-  }
-  *settings_json = Value::Object(settings).to_string();
-  Ok(())
 }
 
 /// Build the Claude headless environment from the server snapshot and run kind.

@@ -48,6 +48,13 @@
 }
 /* Specificity: plain .hidden cannot beat the id selector above. */
 #ext-usage-toggle.hidden { display: none; }
+/* The concurrency badge's panel opens from the header over the strip's top-right corner. Its right edge leaves 14 px
+   of the 44 px chip showing beside it while covering the chip's centre, so the chip shows as a half control with no
+   readable place of its own, and a press on that sliver acts twice: the chip toggles the strip, and the panel's
+   document-level click handler dismisses the open panel because the chip lies outside it. While the panel is open
+   the chip is hidden, so the sliver is not a control and no stray press dismisses the panel; the panel's close
+   brings the chip back. */
+body:has(#concurrency-panel:not([hidden])) #ext-usage-toggle { display: none; }
 /* Collapsed hides the detail rows, expanded hides the summary row. Both key
    off the strip's .collapsed class, which renderExtUsage reapplies from the
    in-memory boolean on every render: initial load, websocket push, 10-minute

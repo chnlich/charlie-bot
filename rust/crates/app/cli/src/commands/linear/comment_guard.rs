@@ -2,12 +2,11 @@
 //! `(issueId, body)` matches one already posted through this profile home within the dedup window.
 
 use std::collections::HashSet;
-use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use charliebot_cli_common::exit::CliExit;
-use charliebot_core::fsutil::atomic_write_text;
+use charliebot_core::fsutil::{ExclusiveLock, atomic_write_text, lock_exclusive};
 use charliebot_core::home::state_dir;
 use charliebot_core::str_methods::universal_newlines;
 use charliebot_store::control_events::sha256_hex;
@@ -35,7 +34,7 @@ pub(super) struct RecentComment {
 
 /// Exclusive guard held across the duplicate check, HTTP send, and ledger write for `commentCreate` requests.
 pub(super) struct PendingCommentGuard {
-  _lock: File,
+  _lock: ExclusiveLock,
   ledger_path: PathBuf,
   entries: Vec<RecentComment>,
   targets: Vec<(String, CommentCreateTarget)>,
@@ -67,14 +66,8 @@ impl PendingCommentGuard {
 
     let dir = state_dir(home);
     std::fs::create_dir_all(&dir).map_err(|error| CliExit::error(format!("could not create state dir: {error}")))?;
-    let lock_file = OpenOptions::new()
-      .create(true)
-      .read(true)
-      .write(true)
-      .truncate(false)
-      .open(dir.join(LOCK_FILENAME))
-      .map_err(|error| CliExit::error(format!("could not open Linear comment lock: {error}")))?;
-    lock_file.lock().map_err(|error| CliExit::error(format!("could not lock Linear comment ledger: {error}")))?;
+    let lock = lock_exclusive(&dir.join(LOCK_FILENAME))
+      .map_err(|error| CliExit::error(format!("could not lock Linear comment ledger: {error}")))?;
 
     let ledger_path = dir.join(LEDGER_FILENAME);
     let mut entries = load_ledger(&ledger_path)?;
@@ -88,7 +81,7 @@ impl PendingCommentGuard {
       }
     }
 
-    Ok(Some(PendingCommentGuard { _lock: lock_file, ledger_path, entries, targets: keyed_targets }))
+    Ok(Some(PendingCommentGuard { _lock: lock, ledger_path, entries, targets: keyed_targets }))
   }
 
   /// Records any `commentCreate` field whose response object did not report `success: false`.

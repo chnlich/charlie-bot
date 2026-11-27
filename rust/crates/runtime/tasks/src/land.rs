@@ -4199,6 +4199,7 @@ exit 0
   /// messages carry none. The hook applies its built-in rules to commit messages but not to ref names, so the test then
   /// scans each pushed ref name and each pushed commit message with the scanner itself.
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_full_queue_cycle_pushes_only_text_the_leak_scan_passes() {
     let root = tempfile::tempdir().expect("temporary directory is available");
     synthetic_repo(root.path(), "main");

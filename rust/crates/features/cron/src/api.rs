@@ -947,19 +947,20 @@ mod tests {
     std::fs::write(&prompt, "Synthetic scheduled prompt\n").unwrap();
     let router = routes(&features);
     let cases = [
-      ("99 * * * *", "America/Los_Angeles"),
-      ("@daily", "America/Los_Angeles"),
-      ("*/0 * * * *", "America/Los_Angeles"),
-      ("0 0 30 2 *", "America/Los_Angeles"),
-      ("0 8 * * *", "Mars/Olympus"),
-      ("0 8 * * *", ""),
+      ("99 * * * *", "America/Los_Angeles", "\"99\""),
+      ("@daily", "America/Los_Angeles", "\"@daily\""),
+      ("*/0 * * * *", "America/Los_Angeles", "\"*/0\""),
+      ("0 0 30 2 *", "America/Los_Angeles", "\"0 0 30 2 *\""),
+      ("0 8 * * *", "Mars/Olympus", "\"Mars/Olympus\""),
+      ("0 8 * * *", "", "\"\""),
     ];
-    for (index, (cron, timezone)) in cases.into_iter().enumerate() {
+    for (index, (cron, timezone, rejected)) in cases.into_iter().enumerate() {
       let name = format!("refused-{index}");
       let body = json!({"name": name, "cron": cron, "timezone": timezone, "prompt_file": prompt});
       let (status, response) = send(&router, "POST", "/api/cron/tasks", body).await;
       assert_eq!(status, StatusCode::BAD_REQUEST, "cron {cron:?} timezone {timezone:?}: {response}");
-      assert!(response["detail"].as_str().is_some_and(|detail| !detail.is_empty()));
+      let detail = response["detail"].as_str().unwrap_or_default();
+      assert!(detail.contains(rejected), "cron {cron:?} timezone {timezone:?} must name {rejected}: {response}");
     }
     assert!(cron_file_names(home.path()).is_empty(), "a refused create leaves the cron directory empty");
   }
@@ -986,13 +987,15 @@ mod tests {
     let before = std::fs::read_to_string(&path).unwrap();
     let router = routes(&features);
 
-    for body in [
-      json!({"cron": "99 * * * *"}),
-      json!({"timezone": "Mars/Olympus"}),
-      json!({"cron": "0 0 30 2 *", "timezone": "America/Los_Angeles"}),
+    for (body, rejected) in [
+      (json!({"cron": "99 * * * *"}), "\"99\""),
+      (json!({"timezone": "Mars/Olympus"}), "\"Mars/Olympus\""),
+      (json!({"cron": "0 0 30 2 *", "timezone": "America/Los_Angeles"}), "\"0 0 30 2 *\""),
     ] {
       let (status, response) = send(&router, "PUT", "/api/cron/tasks/held", body.clone()).await;
       assert_eq!(status, StatusCode::BAD_REQUEST, "{body}: {response}");
+      let detail = response["detail"].as_str().unwrap_or_default();
+      assert!(detail.contains(rejected), "{body} must name {rejected}: {response}");
       assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
     }
   }

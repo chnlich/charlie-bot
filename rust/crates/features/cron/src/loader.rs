@@ -15,6 +15,7 @@ use serde_json::{Map, Value};
 
 use crate::alert::fire_error_alert;
 use crate::config::{ScheduledTaskConfig, ScheduledTaskError};
+use crate::schedule::parse_timezone;
 
 /// One sorted read of every visible cron file.
 #[derive(Clone, Debug, Default)]
@@ -516,7 +517,7 @@ fn zone_of_localtime(localtime: &Path) -> Result<String, String> {
     .rsplit_once("/zoneinfo/")
     .map(|(_, name)| name)
     .ok_or_else(|| format!("no '/zoneinfo/' segment in {text:?}"))?;
-  name.parse::<chrono_tz::Tz>().map_err(|error| format!("{name:?}: {error}"))?;
+  parse_timezone(name).map_err(|error| format!("{error:#}"))?;
   Ok(name.to_string())
 }
 

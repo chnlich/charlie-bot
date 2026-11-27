@@ -9,13 +9,24 @@ use std::collections::HashSet;
 use charliebot_store::metadata::UtcDateTime;
 use chrono::{Datelike, Offset};
 
-/// The next cron occurrence in the configured time zone.
+/// The IANA zone a task names. An unknown name fails with the name in the message; the parser's own error carries
+/// only its fixed text, so it is not repeated.
+pub(crate) fn parse_timezone(name: &str) -> anyhow::Result<chrono_tz::Tz> {
+  name.parse::<chrono_tz::Tz>().map_err(|_| anyhow::anyhow!("unknown timezone {name:?}"))
+}
+
+/// The next cron occurrence in the configured time zone. Every error names the value it rejected.
 pub(crate) fn next_fire_iso(expression: &str, timezone: &str, now_utc: UtcDateTime) -> anyhow::Result<String> {
-  let timezone = timezone.parse::<chrono_tz::Tz>()?;
+  let zone = parse_timezone(timezone)?;
   let inner = now_utc.into_inner();
   let now = chrono::DateTime::<chrono::Utc>::from_timestamp(inner.unix_timestamp(), inner.nanosecond())
-    .ok_or_else(|| anyhow::anyhow!("UTC timestamp is outside the supported range"))?;
-  isoformat_text(&CronExpression::parse(expression)?.next_after(now.with_timezone(&timezone))?)
+    .ok_or_else(|| anyhow::anyhow!("UTC timestamp {} is outside the supported range", inner.unix_timestamp()))?;
+  let next = CronExpression::parse(expression)?.next_after(now.with_timezone(&zone))?;
+  isoformat_text(&next).map_err(|error| {
+    anyhow::anyhow!(
+      "cron expression {expression:?} in timezone {timezone:?} has a fire time that cannot be formatted: {error}"
+    )
+  })
 }
 
 /// The one schedule check: a five-field cron expression that has a fire inside the eight-year horizon, in an IANA
@@ -53,6 +64,7 @@ struct CronSearchWork {
 const NEXT_FIRE_HORIZON_DAYS: i64 = 8 * 366;
 
 pub(crate) struct CronExpression {
+  source: String,
   minute: CronField,
   hour: CronField,
   day: CronField,
@@ -67,6 +79,7 @@ impl CronExpression {
       anyhow::bail!("cron expression must have five fields: {expression:?}");
     }
     Ok(Self {
+      source: expression.to_string(),
       minute: parse_field(fields[0], 0, 59, &[])?,
       hour: parse_field(fields[1], 0, 23, &[])?,
       day: parse_field(fields[2], 1, 31, &[])?,
@@ -151,7 +164,7 @@ impl CronExpression {
         }
       }
     }
-    let next = best.ok_or_else(|| anyhow::anyhow!("cron expression has no fire within eight years"));
+    let next = best.ok_or_else(|| anyhow::anyhow!("cron expression {:?} has no fire within eight years", self.source));
     (next, work)
   }
 
@@ -232,7 +245,22 @@ fn parse_cron_value(value: &str, names: &[(&str, u32)]) -> anyhow::Result<u32> {
 mod tests {
   use chrono::{TimeZone, Timelike, Utc};
 
-  use super::{CronExpression, isoformat_text};
+  use super::{CronExpression, isoformat_text, validate_schedule};
+
+  #[test]
+  fn every_validator_error_names_the_value_it_rejected() {
+    let cases = [
+      ("0 9 1 1 *", "Mars/Olympus", "\"Mars/Olympus\""),
+      ("0 9 1 1", "America/New_York", "\"0 9 1 1\""),
+      ("99 * * * *", "America/New_York", "\"99\""),
+      ("0 9 x * *", "America/New_York", "\"x\""),
+      ("0 0 30 2 *", "America/New_York", "\"0 0 30 2 *\""),
+    ];
+    for (cron, timezone, value) in cases {
+      let error = validate_schedule(cron, timezone).unwrap_err();
+      assert!(error.contains(value), "cron {cron:?} in {timezone:?} must name {value}: {error}");
+    }
+  }
 
   #[test]
   fn cron_expression_uses_minute_grid_and_croniter_day_union() {

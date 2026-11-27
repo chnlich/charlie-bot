@@ -906,7 +906,11 @@ async fn land_in(
   fetch_base(&ctx.worktree, published).await?;
   let landed_head = head_sha(&ctx.worktree).await?;
   let prev = read_landing_record(&ctx.session_dir)?;
-  if let Some(record) = prev.as_ref().filter(|record| record.sha == landed_head && is_landed(&record.state)) {
+  // A queued landing rebases its head onto a moved main, so a landed head can hold the landed patch under its old sha:
+  // the head's commits that main lacks decide whether anything is left to land.
+  if let Some(record) = prev.as_ref().filter(|record| is_landed(&record.state))
+    && (record.sha == landed_head || !has_unlanded_commits(&ctx.worktree, &base_ref).await?)
+  {
     return Ok(record.clone());
   }
   if let Some(record) = prev.as_ref().filter(|record| record.sha == landed_head && record.state == STATE_WAITING) {
@@ -1037,6 +1041,16 @@ async fn land_in(
 /// Whether a landing state means the head is on the base branch.
 fn is_landed(state: &str) -> bool {
   state == STATE_LANDED || state == STATE_LANDED_NO_CI
+}
+
+/// Whether `HEAD` holds a commit whose patch `base_ref` lacks. `git cherry` marks a commit whose patch the base already
+/// holds with `-`, so a commit that landed under another sha reads as landed.
+async fn has_unlanded_commits(worktree: &Path, base_ref: &str) -> anyhow::Result<bool> {
+  let (ok, out, err) = git::git_stdout(worktree, &["cherry", base_ref, "HEAD"], GIT_READ_TIMEOUT, "git cherry").await;
+  if !ok {
+    anyhow::bail!("git cherry {base_ref} HEAD failed in {}: {err}", worktree.display());
+  }
+  Ok(out.lines().any(|line| line.starts_with('+')))
 }
 
 /// One CI read of a head sha: the verdict, the check rows and the latest completed check time.
@@ -4000,6 +4014,7 @@ printf '%s\n' "$input" | '{scanner}'
   const SESSION_NEW_COMMIT: &str = "00000000-0000-4000-8000-000000000014";
   const SESSION_CI_FAILED: &str = "00000000-0000-4000-8000-000000000015";
   const SESSION_SIGNAL: &str = "00000000-0000-4000-8000-000000000016";
+  const SESSION_LANDED_REPEAT: &str = "00000000-0000-4000-8000-000000000017";
   /// The environment that hands `queued_landing_child` its paths: the profile home, the queued sha, the remote's work
   /// clone, and the file the child writes its outcome to.
   const CHILD_HOME_ENV: &str = "CHARLIEBOT_LAND_TEST_CHILD_HOME";
@@ -4243,8 +4258,8 @@ printf '%s\n' "$input" | '{scanner}'
     assert_eq!(landed_record(end, "the queued landing").state, STATE_LANDED_NO_CI);
   }
 
-  /// A queued command's record is written only while the session's record still names its head, so a stale command never
-  /// overwrites the record of the newer call that replaced it.
+  /// A queued command's record is written only while the session's record still names its head, so a stale command
+  /// never overwrites the record of the newer call that replaced it.
   #[test]
   fn a_queued_record_never_overwrites_a_newer_calls_record() {
     let session = tempfile::tempdir().expect("temporary directory is available");
@@ -4470,6 +4485,48 @@ printf '%s\n' "$input" | '{scanner}'
     );
     assert_eq!(head(&work), sha, "the session's worktree keeps its head");
     holder.release().await.expect("the holder releases the turn");
+  }
+
+  /// A repeat `land` call after a landing returns the landed record. The queued command rebased the head onto a moved
+  /// main, so the session's head still holds the landed patch under its old sha and must not start another landing.
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_repeat_land_call_after_a_landing_returns_the_landed_record() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    let repo = synthetic_queue_repo(root.path(), "main");
+    let origin_url = format!("file://{}", root.path().join("origin.git").display());
+    git_ok(&repo, &["remote", "set-url", "origin", &origin_url]);
+    let work = task_clone(root.path(), "task");
+    git_ok(&repo, &["fetch", "-q", "origin", "task"]);
+    let remote_work = task_clone(root.path(), "remote-work");
+    // The profile home is the root, as in the repeat-call test above.
+    let home = root.path();
+    write_task_session(home, SESSION_LANDED_REPEAT, &repo, &work, "task");
+    let mut ctx = TaskLanding::load(home, SESSION_LANDED_REPEAT).await.expect("the task session loads");
+    let sha = head(&work);
+    write_landing_record(&ctx.session_dir, &queue_record(801, &sha)).expect("the landing record is written");
+    let (owner, program_log) = stub_owner(root.path(), &work, SESSION_LANDED_REPEAT);
+    ctx.queue_program = owner.program.clone();
+    // Main moves before the queued landing, so the landed commit is the head rebased onto it.
+    push_main_commit(&remote_work).await.expect("the other landing moves main");
+    let remote = QueueRemote::new(&remote_work, &[], "2026-11-27T00:00:09Z");
+    let registry = Registry::new();
+    let landed = landed_record(
+      queued_landing(&ctx, &registry, home, &sha, &remote, CADENCE, Duration::from_secs(60)).await,
+      "the queued landing",
+    );
+    assert_eq!(landed.state, STATE_LANDED_NO_CI);
+    assert_ne!(landed.sha, sha, "the landed commit is the head rebased onto the moved main");
+
+    let repeated = land_in(&ctx, &registry, home, &LandOptions::default()).await.expect("the repeat call returns");
+    assert_eq!((repeated.state.as_str(), repeated.sha.as_str()), (STATE_LANDED_NO_CI, landed.sha.as_str()));
+    assert_eq!(head(&work), sha, "the session's worktree keeps its head");
+    let registered = if program_log.exists() {
+      fs::read_to_string(&program_log).expect("the program log reads")
+    } else {
+      String::new()
+    };
+    assert!(!registered.contains("session trigger"), "no second command was registered: {registered}");
   }
 
   #[tokio::test]

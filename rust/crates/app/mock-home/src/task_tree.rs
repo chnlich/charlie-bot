@@ -157,8 +157,6 @@ const FIXTURE_ROW_BACKEND: &str = "claude-code-deepseek-flash";
 /// The Waiting on you item of the serve fixture's rows. It paints the row's own waiting box and, on the row's parent,
 /// the subtree box.
 const FIXTURE_WAITING_TEXT: &str = "Approve the sidebar row's layout change";
-/// The summary of the close that keeps the fixture's worker child active: a completed close reports to its parent.
-const FIXTURE_CLOSE_SUMMARY: &str = "Work delivered";
 
 /// A session's activity lasts from one hour to this long after its start.
 const ACTIVITY_SECONDS: u64 = 3 * 86_400;
@@ -274,6 +272,9 @@ struct SessionPlan {
   name: Option<&'static str>,
   /// The backend id its row shows. The serve fixture's row names a long one, so its label wraps under the date.
   backend: &'static str,
+  /// Whether the log holds its task boundary and no turn. The serve fixture's worker child is an open task that never
+  /// ran, so its log carries nothing a start could dispatch.
+  log_boundary_only: bool,
 }
 
 /// How a closed session closed: the request, who closed it and how, and the plan index of the parent it reported to.
@@ -415,13 +416,11 @@ impl HomePlan {
     Self { sessions, reports, serve_fixture }
   }
 
-  /// The serve shape's fixture: its row, that row's worker child, the row's counted child and the decoy root.
+  /// The serve shape's fixture: its row, that row's worker child, the row's manager child and the decoy root.
   ///
-  /// The row is the first open manager task that is a root with a worker child whose newest run finished and a manager
-  /// child. A closed task is archived in the derived sidebar tree, so a child shows only when its task is open (the
-  /// manager child, which the fixture opens) or closed as completed (the worker child, which the fixture closes on its
-  /// run's automatic request). `None` for a plan that holds no such task, which only a plan far smaller than the shared
-  /// home can be.
+  /// The row is the first open manager task that is a root with a worker child and a manager child. The sidebar's
+  /// derived tree archives every task that is not open, and with it the task's subtree, so both children are made open
+  /// tasks: the manager child keeps its planned runs, and the worker child is an open task that never ran.
   fn serve_fixture(sessions: &[SessionPlan]) -> Option<ServeFixture> {
     let mut children: Vec<Vec<usize>> = vec![Vec::new(); sessions.len()];
     for (index, session) in sessions.iter().enumerate() {
@@ -429,24 +428,15 @@ impl HomePlan {
         children[parent].push(index);
       }
     }
-    let finished_work_run = |session: &SessionPlan| {
-      session.runs.last().is_some_and(|run| run.end == RunEnd::Finished && run.kind == RunKind::Work)
-    };
     let row = (0..sessions.len()).find(|index| {
       let session = &sessions[*index];
       session.reason == Some(KeepReason::StateOpen)
         && session.parent.is_none()
-        && children[*index]
-          .iter()
-          .any(|child| sessions[*child].profile == TaskProfile::Worker && finished_work_run(&sessions[*child]))
+        && children[*index].iter().any(|child| sessions[*child].profile == TaskProfile::Worker)
         && children[*index].iter().any(|child| sessions[*child].profile == TaskProfile::Manager)
     })?;
-    let paused_worker = children[row]
-      .iter()
-      .copied()
-      .find(|child| sessions[*child].profile == TaskProfile::Worker && finished_work_run(&sessions[*child]))?;
-    let counted =
-      children[row].iter().copied().find(|child| sessions[*child].profile == TaskProfile::Manager)?;
+    let paused_worker = children[row].iter().copied().find(|child| sessions[*child].profile == TaskProfile::Worker)?;
+    let counted = children[row].iter().copied().find(|child| sessions[*child].profile == TaskProfile::Manager)?;
     let decoy = (0..sessions.len()).find(|index| {
       let session = &sessions[*index];
       session.reason == Some(KeepReason::StateOpen) && session.parent.is_none() && *index != row
@@ -468,32 +458,17 @@ impl HomePlan {
     row.pending_triggers += 1;
     row.name = Some(FIXTURE_ROW_NAME);
     row.backend = FIXTURE_ROW_BACKEND;
-    // The counted child stays active in the sidebar's derived tree only while its task is open. An open task whose
-    // runs confirmed every input dispatches nothing, the same state the plan gives every other open task.
+    // A child stays in the sidebar's active listing only while its task is open: the derived tree archives every other
+    // task and its subtree. The manager child keeps its planned runs, whose finishes confirmed every input, so an open
+    // task dispatches nothing — the state the plan gives every other open task.
     sessions[fixture.counted].close = None;
-    // The worker child stays active while its task closed as completed rather than archived. Its close reports to the
-    // fixture row, which a finished run there confirms, as the plan confirms every child report.
+    // The worker child is an open task that never ran: its log holds its task boundary alone, so no run exists to
+    // deliver work to the fixture row and no input waits for a turn. Its pending trigger paints the paused-worker
+    // stand-in that the row above shows as the spinner.
     let paused_worker = &mut sessions[fixture.paused_worker];
-    let run_id = paused_worker
-      .runs
-      .last()
-      .expect("the fixture's worker child holds the finished run the fixture selects it for")
-      .id
-      .clone();
-    if let Some(close) = &mut paused_worker.close {
-      close.request_id = format!("auto:{run_id}");
-      close.actor = ACTOR_SYSTEM;
-      close.outcome = "completed";
-      close.report_to = Some(fixture.row);
-    } else {
-      paused_worker.close = Some(ClosePlan {
-        request_id: format!("auto:{run_id}"),
-        actor: ACTOR_SYSTEM,
-        outcome: "completed",
-        summary: FIXTURE_CLOSE_SUMMARY,
-        report_to: Some(fixture.row),
-      });
-    }
+    paused_worker.close = None;
+    paused_worker.runs.clear();
+    paused_worker.log_boundary_only = true;
     paused_worker.waiting = true;
     paused_worker.pending_triggers += 1;
   }
@@ -727,6 +702,7 @@ impl HomePlan {
       waiting: false,
       name: None,
       backend: MOCK_BACKEND,
+      log_boundary_only: false,
     }
   }
 
@@ -843,6 +819,10 @@ fn write_task_log(
     Some(&event_id),
     Some(created_at),
   ))?;
+  if session.log_boundary_only {
+    let (bytes, _) = log.finish()?;
+    return Ok(TaskLog { bytes, run_inputs: Vec::new() });
+  }
   let spans = session.runs.len().max(1);
   // Each child report lands in a span whose run finished, so that run's finish confirms it as an input.
   let finish_spans: Vec<usize> =
@@ -1415,30 +1395,22 @@ mod tests {
       children.iter().any(|child| child.profile == TaskProfile::Worker),
       "a worker child's pending trigger paints the spinner"
     );
-    assert!(
-      children.iter().any(|child| child.profile != TaskProfile::Worker),
-      "a manager child draws the child count"
-    );
+    assert!(children.iter().any(|child| child.profile != TaskProfile::Worker), "a manager child draws the child count");
     let paused_worker = &plan.sessions[fixture.paused_worker];
     assert_eq!(paused_worker.parent, Some(fixture.row));
     assert_eq!(paused_worker.profile, TaskProfile::Worker);
     assert!(paused_worker.waiting, "the child's Waiting on you item paints the row's subtree box");
     assert!(paused_worker.pending_triggers > 0, "the child's pending trigger makes it the paused worker");
-    // A closed task is archived in the sidebar's derived tree, so each child keeps its task out of that state.
-    let close = paused_worker.close.as_ref().expect("the worker child closes on its run's automatic request");
-    assert_eq!(close.outcome, "completed", "a completed close stays in the active listing");
-    assert_eq!(close.report_to, Some(fixture.row), "the close reports to the fixture row");
-    assert_eq!(
-      close.request_id,
-      format!("auto:{}", paused_worker.runs.last().expect("the child's newest run").id)
-    );
+    // The sidebar's derived tree archives every task that is not open, so each child stays an open task.
+    assert!(paused_worker.close.is_none(), "an open task stays in the active listing");
+    assert!(paused_worker.runs.is_empty() && paused_worker.log_boundary_only, "the child never ran");
     let counted = &plan.sessions[fixture.counted];
     assert_eq!(counted.parent, Some(fixture.row));
     assert_eq!(counted.profile, TaskProfile::Manager);
     assert!(counted.close.is_none(), "an open task stays in the active listing");
     assert!(
-      plan.reports[fixture.row].iter().any(|report| report.child_id == paused_worker.id),
-      "the fixture row's log holds the worker child's report"
+      !plan.reports[fixture.row].iter().any(|report| report.child_id == paused_worker.id),
+      "a child that never ran reports nothing"
     );
 
     // The chat page's redirect opens the listing's first row, so the decoy takes it and the fixture row follows.

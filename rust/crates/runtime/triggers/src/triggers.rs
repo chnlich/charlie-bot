@@ -447,7 +447,8 @@ impl TriggerManager {
     });
     let results = join_all(probes).await;
     let mut bad = Vec::new();
-    for (target, outcome) in targets.iter().zip(results) {
+    let target_outcomes = targets.iter().zip(results);
+    for (target, outcome) in target_outcomes {
       if outcome.status != ProbeStatus::Alive {
         bad.push(format!(
           "{}:{} -> {} ({})",
@@ -481,7 +482,8 @@ impl TriggerManager {
     let results = join_all(probes).await;
     let mut observed = Map::new();
     let mut bad = Vec::new();
-    for (host, reading) in hosts.iter().zip(results) {
+    let host_readings = hosts.iter().zip(results);
+    for (host, reading) in host_readings {
       if let Some(error) = &reading.error {
         bad.push(format!("{host} -> {error}"));
         continue;
@@ -1209,7 +1211,8 @@ impl TriggerManager {
           });
           let results = join_all(probes).await;
           let mut keep = Vec::new();
-          for ((host, pid, target), outcome) in remaining.into_iter().zip(results) {
+          let remaining_outcomes = remaining.into_iter().zip(results);
+          for ((host, pid, target), outcome) in remaining_outcomes {
             if outcome.status == ProbeStatus::Dead {
               let (finish, end) =
                 self.remote_finish(&target, &trigger.id, &outcome, time::OffsetDateTime::now_utc()).await;

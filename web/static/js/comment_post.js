@@ -7,6 +7,8 @@ function commentRequestBody(content, requestId) {
   return JSON.stringify({content, uploaded_files: [], request_id: requestId});
 }
 
+// A network error or a 502, 503 or 504 is a lost connection or a server restart: the post retries with the same
+// request_id, which the server dedupes. Every other failure throws at once, so the caller shows it and Send runs again.
 async function postCommentMessage(sessionId, content) {
   const requestId = crypto.randomUUID();
   const body = commentRequestBody(content, requestId);
@@ -28,7 +30,7 @@ async function postCommentMessage(sessionId, content) {
       await waitBeforeRetry();
       continue;
     }
-    if (response.status >= 500) {
+    if (response.status === 502 || response.status === 503 || response.status === 504) {
       await waitBeforeRetry();
       continue;
     }

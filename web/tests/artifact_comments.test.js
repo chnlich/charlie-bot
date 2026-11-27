@@ -1681,8 +1681,8 @@ function postsOf(calls) {
   return calls.filter((call) => call.method === 'POST');
 }
 
-// A timer list the test runs by hand: the post's network-error and 5xx retries wait on it, and the test decides when
-// each retry runs.
+// A timer list the test runs by hand: the post's network-error and HTTP 502/503/504 retries wait on it, and the test
+// decides when each retry runs.
 function manualTimers() {
   const timers = [];
   return {timers, setTimeout: (callback) => { timers.push(callback); return timers.length; }};
@@ -1802,7 +1802,7 @@ test('a pick and a comment stay pending across a reload, each on its own questio
   assert.equal(pressedOf(pickButton(forksOf(second.body)[0], 'drop')), true, 'the pick is back on its question');
 });
 
-test('a 5xx holds the tray on Sending through the retry, then the entries leave and the question keeps its answer',
+test('a 503 holds the tray on Sending through the retry, then the entries leave and the question keeps its answer',
   async () => {
     const clock = manualTimers();
     let posts = 0;
@@ -1848,6 +1848,34 @@ test('a 4xx shows the error, keeps the entries pending, and lets Send run again'
   clickElement(traySend(body));
   await flushPromises(5);
   assert.equal(trayItemsOf(body).length, 1, 'the pick stays pending');
+  assert.equal(traySend(body).disabled, false, 'Send runs again');
+});
+
+test('a 500 shows the error at once, posts once, and lets Send run again', async () => {
+  const clock = manualTimers();
+  let posts = 0;
+  const fetch = async (url) => {
+    if (!url.endsWith('/message')) return {ok: true, status: 200, async json() { return {name: ''}; }};
+    posts += 1;
+    return {ok: false, status: 500};
+  };
+  const {body} = loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
+    hash: '#cbsession=viewer',
+    bodyChildren: [pickForkOne()],
+    serverSessionId: 'owner',
+    fetch,
+    setTimeout: clock.setTimeout,
+  });
+  clickElement(pickButton(forksOf(body)[0], 'keep'));
+  clickElement(traySend(body));
+  await flushPromises(5);
+  assert.equal(posts, 1, 'a 500 is not retried');
+  assert.equal(clock.timers.length, 0, 'no retry is scheduled');
+  assert.equal(trayItemsOf(body).length, 1, 'the pick stays pending');
+  assert.match(
+    findChildByClass(trayOf(body), '__cbc-tray-status').textContent,
+    /Not sent: Comment post failed: HTTP 500\./,
+    'the tray shows the error');
   assert.equal(traySend(body).disabled, false, 'Send runs again');
 });
 

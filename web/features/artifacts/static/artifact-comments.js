@@ -118,7 +118,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     var NOT_A_QUESTION_ANSWER_PREFIX = NOT_A_QUESTION_LABEL + ' ' + String.fromCharCode(0x2192) + ' ';
     var NOT_A_QUESTION_REC_LABEL = 'Recommended: ';
     // The tray stage names each step of a send. Editing changes the pending list. Checking confirms the target can
-    // take a message before the post. In sending the post is in flight, retried on a network error or 5xx. Entries
+    // take a message before the post. In sending, the post retries on network errors and HTTP 502, 503 or 504. Entries
     // leave the list when the post lands.
     var trayStage = 'editing';
     // The session the send in flight posts to, fixed at the click, and the outcome of the last send
@@ -1271,7 +1271,8 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       }
       if (trayStage === 'sending') {
         return {
-          text: 'Sending to ' + sessionLabelOf(sendTarget) + '. A lost connection is retried until the server answers.',
+          text: 'Sending to ' + sessionLabelOf(sendTarget) +
+            '. A lost connection or a server restart is retried until the server answers.',
           error: false,
         };
       }

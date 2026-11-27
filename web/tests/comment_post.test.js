@@ -134,12 +134,14 @@ test('buildClickMessage owns the shared numbered reference and answer format', (
   ].join('\n'));
 });
 
-test('postCommentMessage retries a network error and a 5xx with one request id', async () => {
+test('postCommentMessage retries a network error and a 502, 503 or 504 with one request id', async () => {
   const calls = [];
   const context = loadCommentPost(async (url, options = {}) => {
     calls.push({url, options});
     if (calls.length === 1) throw new TypeError('offline');
-    if (calls.length === 2) return {ok: false, status: 503};
+    if (calls.length === 2) return {ok: false, status: 502};
+    if (calls.length === 3) return {ok: false, status: 503};
+    if (calls.length === 4) return {ok: false, status: 504};
     return {ok: true, status: 202, json: async () => ({})};
   });
   const delays = [];
@@ -147,11 +149,24 @@ test('postCommentMessage retries a network error and a 5xx with one request id',
 
   await context.postCommentMessage('s', 'c');
 
-  assert.deepEqual(delays, [1000, 2000]);
-  assert.equal(calls.length, 3);
+  assert.deepEqual(delays, [1000, 2000, 4000, 8000]);
+  assert.equal(calls.length, 5);
   assert.deepEqual(calls.map((call) => JSON.parse(call.options.body).request_id), [
-    'comment-request-1', 'comment-request-1', 'comment-request-1',
+    'comment-request-1', 'comment-request-1', 'comment-request-1', 'comment-request-1', 'comment-request-1',
   ]);
+});
+
+test('postCommentMessage fails a 500 at once, with one POST and the HTTP message', async () => {
+  let attempts = 0;
+  const context = loadCommentPost(async () => {
+    attempts += 1;
+    return {ok: false, status: 500};
+  });
+  // A scheduled retry throws here, so a regression fails at once instead of looping on immediate timers.
+  context.setTimeout = () => { throw new Error('a 500 schedules a retry'); };
+
+  await assert.rejects(context.postCommentMessage('s', 'c'), {message: 'Comment post failed: HTTP 500'});
+  assert.equal(attempts, 1);
 });
 
 test('postCommentMessage treats a 202 dispatch_error as accepted without retry', async () => {

@@ -17,7 +17,7 @@ pub mod text_scan;
 pub mod vocabulary;
 
 pub use api::{PROFILE_SCAN_DIRS, default_paths, scan};
-pub use exemptions::Exemption;
+pub use exemptions::{Exemption, RootKind};
 pub use rules::Class;
 pub use types::{Hit, Roots};
 pub use vocabulary::Vocabulary;

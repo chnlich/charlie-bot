@@ -50,7 +50,8 @@ enum BackendCommand {
 #[derive(Args)]
 struct CheckArgs {
   /// The files or directories to scan. With none, the git repository the working directory is in and the profile's
-  /// machinery directories.
+  /// machinery directories. With some, the repository is the work tree that holds them, and the working directory is
+  /// not read.
   #[arg(value_name = "PATH")]
   paths: Vec<PathBuf>,
 }
@@ -119,15 +120,16 @@ pub fn main(args: &[OsString], lazy_host: &LazyHost) -> Result<(), CliExit> {
 fn check_command(args: CheckArgs) -> Result<(), CliExit> {
   let registry = charliebot_packages::registry().map_err(|error| CliExit::error(format!("{error:#}")))?;
   let home = home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
-  let repo = git_toplevel()?;
-  let paths = if args.paths.is_empty() {
+  let (repo, paths) = if args.paths.is_empty() {
+    let repo = working_tree()?;
     let paths = charliebot_backend_check::default_paths(repo.as_deref(), &home);
     if paths.is_empty() {
       return Err(CliExit::usage("no repository and no profile machinery to scan; name the paths to scan"));
     }
-    paths
+    (repo, paths)
   } else {
-    args.paths
+    let repo = gate::named_repo(&args.paths, &home).map_err(|error| CliExit::error(format!("{error:#}")))?;
+    (repo, args.paths)
   };
   let roots = gate::roots(repo.as_deref(), &home).map_err(|error| CliExit::error(format!("{error:#}")))?;
   let vocab =
@@ -142,18 +144,11 @@ fn check_command(args: CheckArgs) -> Result<(), CliExit> {
   Ok(())
 }
 
-/// The root of the git repository that the working directory is in, or `None` outside one.
-fn git_toplevel() -> Result<Option<PathBuf>, CliExit> {
+/// The git work tree that the working directory is in, or `None` outside one.
+fn working_tree() -> Result<Option<PathBuf>, CliExit> {
   let cwd =
     std::env::current_dir().map_err(|error| CliExit::error(format!("cannot read the working directory: {error}")))?;
-  let output = charliebot_core::git::output(&cwd, &["rev-parse", "--show-toplevel"], &[])
-    .map_err(|error| CliExit::error(format!("cannot run git: {error}")))?;
-  if !output.status.success() {
-    return Ok(None);
-  }
-  let root = String::from_utf8(output.stdout)
-    .map_err(|error| CliExit::error(format!("the git repository root is not UTF-8: {error}")))?;
-  Ok(Some(PathBuf::from(root.trim_end())))
+  gate::work_tree(&cwd).map_err(|error| CliExit::error(format!("{error:#}")))
 }
 
 /// The resolve answer the server returns: `{"option": <record>, "claude_config_dir"?: <dir>}`.

@@ -93,7 +93,7 @@ pub(crate) fn scan_file(vocab: &Vocabulary, roots: &Roots, path: &Path, hits: &m
   };
   let key = key_path(roots, path);
   for site in found {
-    let exempt = key.and_then(|key| exemptions::find(key, site.class, &site.value));
+    let exempt = key.and_then(|(kind, key)| exemptions::find(kind, key, site.class, &site.value));
     hits.push(Hit { path: path.to_path_buf(), line: site.line, class: site.class, value: site.value, exempt });
   }
   Ok(())
@@ -187,8 +187,11 @@ fn module_dir(file: &Path) -> PathBuf {
   }
 }
 
-/// The path of a file under the first root that holds it, which is the path an exemption row names.
-fn key_path<'a>(roots: &Roots, path: &'a Path) -> Option<&'a str> {
-  let relative = roots.repo.iter().chain(std::iter::once(&roots.home)).find_map(|root| path.strip_prefix(root).ok())?;
-  relative.to_str()
+/// The path of a file under the first root that holds it, with that root's kind: the path an exemption row names, and
+/// the rows that the path is read against.
+fn key_path<'a>(roots: &Roots, path: &'a Path) -> Option<(exemptions::RootKind, &'a str)> {
+  let repo = roots.repo.iter().map(|repo| (exemptions::RootKind::Repo, repo));
+  let home = std::iter::once((exemptions::RootKind::Home, &roots.home));
+  let (kind, relative) = repo.chain(home).find_map(|(kind, root)| Some((kind, path.strip_prefix(root).ok()?)))?;
+  Some((kind, relative.to_str()?))
 }

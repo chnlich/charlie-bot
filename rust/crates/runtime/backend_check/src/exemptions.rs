@@ -1,5 +1,6 @@
 //! The exemption table: the reviewed sites that a class matches and that stay as they are. It has one row per owned
-//! value, and one row for the backend crates, which own their own harness names.
+//! value, and one row for the backend crates, which own their own harness names. The rows are split by root kind: the
+//! repository rows exempt repository files, and the host rows exempt files under the profile home.
 //!
 //! A row exempts a hit by its path and its value, never by its line, so another value in the same file still refuses.
 //! A row's path is a file, or a directory that ends in `/` and covers every file under it. Each row names the owner that
@@ -9,6 +10,14 @@
 //! scanned. Code comments are left unread (`text_scan`, `rust_scan`).
 
 use crate::rules::Class;
+
+/// The kind of root that a scanned file lies under. Each kind has its own exemption rows: a file of the repository is
+/// exempt only by a repository row, and a file under the profile home only by a host row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RootKind {
+  Repo,
+  Home,
+}
 
 /// The directory of the backend crates. Each crate under it is one backend type, and its directory name is its type.
 const BACKEND_CRATES: &str = "rust/crates/backends/";
@@ -40,17 +49,13 @@ pub struct Exemption {
   pub owner: &'static str,
 }
 
-/// The reviewed rows. Each row's values are the sites that the match definition finds and that the owner keeps.
-static EXEMPTIONS: [Exemption; 8] = [
+/// The repository's reviewed rows. Each row's values are the sites that the match definition finds and that the owner
+/// keeps. A row exempts a file of the repository, and no file under the profile home.
+static REPO_EXEMPTIONS: [Exemption; 7] = [
   Exemption {
     path: "scripts/sync-skills.sh",
     values: Values::Invocation { command: "claude", marker: "-p" },
     owner: "skill discovery probe: tests the local Claude Code's skill discovery, with no model",
-  },
-  Exemption {
-    path: "scripts/host-auth/claude_host2_readback.py",
-    values: Values::Invocation { command: "claude", marker: "-p" },
-    owner: "host login readback: one turn on the local login, with no model",
   },
   Exemption {
     path: "rust/crates/infra/core/src/backend_types.rs",
@@ -89,9 +94,25 @@ static EXEMPTIONS: [Exemption; 8] = [
   },
 ];
 
-/// The row that exempts a site, or `None` when the site must be fixed. `path` is the site's file under its root.
-pub fn find(path: &str, class: Class, value: &str) -> Option<&'static Exemption> {
-  EXEMPTIONS.iter().find(|row| row.covers(path, class, value))
+/// The profile home's reviewed rows: the host's files that the owner keeps. No repository row exempts them.
+static HOME_EXEMPTIONS: [Exemption; 1] = [Exemption {
+  path: "scripts/host-auth/claude_host2_readback.py",
+  values: Values::Invocation { command: "claude", marker: "-p" },
+  owner: "host login readback: one turn on the local login, with no model",
+}];
+
+/// The rows of a root kind. This is the one place that a root's kind picks its exemption set.
+fn rows(root: RootKind) -> &'static [Exemption] {
+  match root {
+    RootKind::Repo => &REPO_EXEMPTIONS,
+    RootKind::Home => &HOME_EXEMPTIONS,
+  }
+}
+
+/// The row that exempts a site, or `None` when the site must be fixed. `path` is the site's file under the root of
+/// kind `root`.
+pub fn find(root: RootKind, path: &str, class: Class, value: &str) -> Option<&'static Exemption> {
+  rows(root).iter().find(|row| row.covers(path, class, value))
 }
 
 impl Exemption {
@@ -139,17 +160,19 @@ fn command_of(value: &str) -> &str {
 mod tests {
   use super::*;
 
-  /// The row for `path` exempts `value` of `class` in its file, and each refused site of the same file stays a hit.
-  fn assert_row(path: &str, class: Class, value: &str, refused: &[(Class, &str)]) {
-    assert!(find(path, class, value).is_some(), "{path} should exempt {value}");
+  /// The row of `root`'s kind for `path` exempts `value` of `class` in its file, and each refused site of the same
+  /// file stays a hit.
+  fn assert_row(root: RootKind, path: &str, class: Class, value: &str, refused: &[(Class, &str)]) {
+    assert!(find(root, path, class, value).is_some(), "{path} should exempt {value}");
     for (refused_class, refused_value) in refused {
-      assert!(find(path, *refused_class, refused_value).is_none(), "{path} must still refuse {refused_value}");
+      assert!(find(root, path, *refused_class, refused_value).is_none(), "{path} must still refuse {refused_value}");
     }
   }
 
   #[test]
   fn sync_skills_probe_row_exempts_its_invocation_only() {
     assert_row(
+      RootKind::Repo,
       "scripts/sync-skills.sh",
       Class::FixedCommand,
       "claude -p",
@@ -164,6 +187,7 @@ mod tests {
   #[test]
   fn host_login_readback_row_exempts_its_invocation_only() {
     assert_row(
+      RootKind::Home,
       "scripts/host-auth/claude_host2_readback.py",
       Class::FixedCommand,
       "claude -p",
@@ -171,16 +195,27 @@ mod tests {
     );
   }
 
+  /// A row exempts only the files of its own root kind. A repository row does not exempt the same path under the
+  /// profile home, and a host row does not exempt the repository's file at its path.
+  #[test]
+  fn rows_exempt_only_the_files_of_their_root_kind() {
+    let readback = "scripts/host-auth/claude_host2_readback.py";
+    assert!(find(RootKind::Repo, "scripts/sync-skills.sh", Class::FixedCommand, "claude -p").is_some());
+    assert!(find(RootKind::Home, "scripts/sync-skills.sh", Class::FixedCommand, "claude -p").is_none());
+    assert!(find(RootKind::Repo, readback, Class::FixedCommand, "claude -p").is_none());
+  }
+
   #[test]
   fn backend_type_names_row_exempts_each_type_name() {
     let path = "rust/crates/infra/core/src/backend_types.rs";
-    assert_row(path, Class::FixedCommand, "charlie-code", &[(Class::FixedCommand, "claude")]);
-    assert_row(path, Class::FixedCommand, "codex", &[(Class::FixedCommand, "claude")]);
+    assert_row(RootKind::Repo, path, Class::FixedCommand, "charlie-code", &[(Class::FixedCommand, "claude")]);
+    assert_row(RootKind::Repo, path, Class::FixedCommand, "codex", &[(Class::FixedCommand, "claude")]);
   }
 
   #[test]
   fn profile_directory_name_row_exempts_its_word_only() {
     assert_row(
+      RootKind::Repo,
       "rust/crates/infra/core/src/home.rs",
       Class::FixedCommand,
       "opencode",
@@ -191,6 +226,7 @@ mod tests {
   #[test]
   fn usage_kind_row_exempts_the_claude_word_only() {
     assert_row(
+      RootKind::Repo,
       "rust/crates/runtime/registry/src/usage.rs",
       Class::FixedCommand,
       "claude",
@@ -203,9 +239,12 @@ mod tests {
   #[test]
   fn price_table_row_exempts_its_model_spellings_only() {
     let path = "rust/crates/infra/core/src/list_price.rs";
-    assert_row(path, Class::ModelId, "gemini-4-argon-high", &[(Class::FixedCommand, "claude")]);
-    assert_row(path, Class::OptionId, "claude-fable-5-2", &[(Class::FixedCommand, "claude")]);
-    assert!(find("rust/crates/infra/core/src/list_price_extra.rs", Class::OptionId, "claude-fable-5-2").is_none());
+    assert_row(RootKind::Repo, path, Class::ModelId, "gemini-4-argon-high", &[(Class::FixedCommand, "claude")]);
+    assert_row(RootKind::Repo, path, Class::OptionId, "claude-fable-5-2", &[(Class::FixedCommand, "claude")]);
+    assert!(
+      find(RootKind::Repo, "rust/crates/infra/core/src/list_price_extra.rs", Class::OptionId, "claude-fable-5-2")
+        .is_none()
+    );
   }
 
   /// A backend crate names its own harness, argv and usage kind: its directory names the program. Another backend's
@@ -214,20 +253,24 @@ mod tests {
   fn backend_crates_own_their_harness_names() {
     let codex = "rust/crates/backends/codex/src/factory.rs";
     assert_row(
+      RootKind::Repo,
       codex,
       Class::FixedCommand,
       "codex -p",
       &[(Class::FixedCommand, "claude -p"), (Class::ModelId, "codex-x")],
     );
     let claude = "rust/crates/backends/claude_code/src/usage_quota.rs";
-    assert_row(claude, Class::FixedCommand, "claude", &[(Class::FixedCommand, "codex -p")]);
+    assert_row(RootKind::Repo, claude, Class::FixedCommand, "claude", &[(Class::FixedCommand, "codex -p")]);
     assert_row(
+      RootKind::Repo,
       "rust/crates/backends/charlie_code/src/charlie_code_cli.rs",
       Class::FixedCommand,
       "charlie-code",
       &[(Class::FixedCommand, "claude")],
     );
-    assert!(find("rust/crates/app/cli/src/commands/backend.rs", Class::FixedCommand, "codex -p").is_none());
+    assert!(
+      find(RootKind::Repo, "rust/crates/app/cli/src/commands/backend.rs", Class::FixedCommand, "codex -p").is_none()
+    );
   }
 
   #[test]
@@ -235,19 +278,21 @@ mod tests {
     let path = "k8s/environ/fpt-k8s/helmfile.yaml";
     for value in ["muse-bundle-eval", "muse-launcher", "muse-bundle-eval.values.yaml"] {
       assert_row(
+        RootKind::Repo,
         path,
         Class::ModelId,
         value,
         &[(Class::ModelId, "muse-voice-transcribe-1.0"), (Class::OptionId, value), (Class::DefaultValue, value)],
       );
-      assert!(find("k8s/environ/xinjiang/helmfile.yaml", Class::ModelId, value).is_none());
+      assert!(find(RootKind::Repo, "k8s/environ/xinjiang/helmfile.yaml", Class::ModelId, value).is_none());
     }
   }
 
-  /// Every row names an owner, and the reviewed rows are eight: seven owned values and the backend crates.
+  /// Every row names an owner, and the reviewed rows are eight: seven repository rows and the host's one row.
   #[test]
   fn every_row_names_its_owner() {
-    assert_eq!(EXEMPTIONS.len(), 8);
-    assert!(EXEMPTIONS.iter().all(|row| !row.owner.is_empty()));
+    assert_eq!(REPO_EXEMPTIONS.len(), 7);
+    assert_eq!(HOME_EXEMPTIONS.len(), 1);
+    assert!(REPO_EXEMPTIONS.iter().chain(&HOME_EXEMPTIONS).all(|row| !row.owner.is_empty()));
   }
 }

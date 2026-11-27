@@ -7,6 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
+use charliebot_core::git;
 
 use crate::{Hit, Roots, Vocabulary, scan};
 
@@ -22,6 +23,43 @@ pub fn roots(repo: Option<&Path>, home: &Path) -> anyhow::Result<Roots> {
     home.to_path_buf()
   };
   Ok(Roots { repo, home })
+}
+
+/// The git work tree that holds `dir`, or `None` when `dir` lies in no work tree.
+pub fn work_tree(dir: &Path) -> anyhow::Result<Option<PathBuf>> {
+  let output = git::output(dir, &["rev-parse", "--show-toplevel"], &[])
+    .with_context(|| format!("cannot run git in {}", dir.display()))?;
+  if !output.status.success() {
+    return Ok(None);
+  }
+  let top =
+    String::from_utf8(output.stdout).with_context(|| format!("the work tree of {} is not UTF-8", dir.display()))?;
+  Ok(Some(PathBuf::from(top.trim_end())))
+}
+
+/// The repository that a call over `paths` names: the work tree that holds each path, except a path under the profile
+/// home `home`, which is host machinery and names no repository. The working directory plays no part, so a call gives
+/// the same result from anywhere. One call scans one repository, so the paths that name one must name the same one.
+pub fn named_repo(paths: &[PathBuf], home: &Path) -> anyhow::Result<Option<PathBuf>> {
+  let home = roots(None, home)?.home;
+  let mut repo: Option<PathBuf> = None;
+  for path in paths {
+    let path = fs::canonicalize(path).with_context(|| format!("cannot read {}", path.display()))?;
+    if path.starts_with(&home) {
+      continue;
+    }
+    let dir = if path.is_dir() { path.as_path() } else { path.parent().unwrap_or(&path) };
+    let Some(tree) = work_tree(dir)? else { continue };
+    if let Some(named) = repo.as_ref().filter(|named| **named != tree) {
+      anyhow::bail!(
+        "the paths name two repositories, {} and {}; one call scans one repository",
+        named.display(),
+        tree.display()
+      );
+    }
+    repo = Some(tree);
+  }
+  Ok(repo)
 }
 
 /// The sites of `paths` that no exemption keeps, under `vocab`. A path that cannot be read is an error: no gate reads a
@@ -133,5 +171,65 @@ mod tests {
     let model_hits = open_hits(&vocab, &scan_roots, &[helmfile]).unwrap();
     assert_eq!(model_hits.len(), 1, "{model_hits:?}");
     assert_eq!((model_hits[0].class, model_hits[0].value.as_str()), (Class::ModelId, "muse-voice-transcribe-1.0"));
+  }
+
+  fn git_init(dir: &Path) {
+    let status = std::process::Command::new("git").args(["init", "-q"]).current_dir(dir).status().unwrap();
+    assert!(status.success(), "git init in {}", dir.display());
+  }
+
+  /// A call names its repository by its paths. A repository path names the work tree that holds it, a path under the
+  /// profile home names none, and two repositories in one call are refused. The working directory is not read.
+  #[test]
+  fn named_repo_is_the_work_tree_of_the_named_paths() {
+    let root = tempfile::tempdir().unwrap();
+    let base = fs::canonicalize(root.path()).unwrap();
+    let repo = base.join("repo");
+    let other = base.join("other");
+    let home = base.join("home");
+    for dir in [&repo, &other, &home] {
+      fs::create_dir_all(dir).unwrap();
+    }
+    git_init(&repo);
+    git_init(&other);
+    fs::create_dir_all(home.join("improve")).unwrap();
+    fs::write(home.join("improve/run.sh"), "echo\n").unwrap();
+    fs::create_dir_all(repo.join("scripts")).unwrap();
+    fs::write(repo.join("scripts/run.sh"), "echo\n").unwrap();
+
+    let file = repo.join("scripts/run.sh");
+    assert_eq!(named_repo(std::slice::from_ref(&file), &home).unwrap(), Some(repo.clone()));
+    assert_eq!(named_repo(&[repo.clone(), home.join("improve")], &home).unwrap(), Some(repo.clone()));
+    assert_eq!(named_repo(&[home.join("improve")], &home).unwrap(), None);
+    let error = named_repo(&[repo.clone(), other], &home).unwrap_err();
+    assert!(format!("{error:#}").contains("two repositories"), "{error:#}");
+  }
+
+  /// One check over a repository root and a host root keeps each root's rows. The repository's exempt file and the host
+  /// file with no literal give no hit. A literal in the host file is the one hit, under that host file.
+  #[test]
+  fn one_check_over_a_repo_root_and_a_host_root_keeps_each_roots_rows() {
+    let root = tempfile::tempdir().unwrap();
+    let base = fs::canonicalize(root.path()).unwrap();
+    let repo = base.join("repo");
+    let home = base.join("home");
+    let price_dir = repo.join("rust/crates/infra/core/src");
+    fs::create_dir_all(&price_dir).unwrap();
+    fs::write(price_dir.join("list_price.rs"), "static P: &str = \"claude-opus-5-5\";\n").unwrap();
+    fs::create_dir_all(home.join("improve")).unwrap();
+    let host_file = home.join("improve/run.sh");
+    fs::write(&host_file, "echo ok\n").unwrap();
+
+    let vocab = Vocabulary::load(&Registry::new(), &home, None).unwrap();
+    let scan_roots = roots(Some(&repo), &home).unwrap();
+    let paths = [repo.clone(), home.join("improve")];
+    let hits = open_hits(&vocab, &scan_roots, &paths).unwrap();
+    assert!(hits.is_empty(), "{hits:?}");
+
+    fs::write(&host_file, "model=claude-opus-5-5\n").unwrap();
+    let hits = open_hits(&vocab, &scan_roots, &paths).unwrap();
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert_eq!(hits[0].path, host_file);
+    assert_eq!((hits[0].line, hits[0].class), (1, Class::ModelId));
   }
 }

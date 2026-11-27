@@ -21,6 +21,7 @@ use crate::config::{BrowserLoginConfig, login_bound_to};
 use crate::host_auth::{self, State};
 use crate::login_state::{self, LinkMatch, LoginState, LoginStatus};
 use crate::probe::ProbeStatus;
+use crate::route_paths::{LOGIN_INPUT_PATH, LOGIN_START_PATH, ROW_CHECK_PATH, ROW_PATH};
 use crate::timestamps::{self, LocalFormat, isoformat};
 
 /// The detail of a row whose link probe found no approval link.
@@ -384,12 +385,12 @@ fn row_json(row: &Row, now: OffsetDateTime) -> anyhow::Result<Value> {
     "last_output": last_output,
     "busy": busy.as_str(),
     "busy_text": busy_text,
-    "check_url": format!("/api/host-auth/rows/{}/check", row.id),
-    "row_url": format!("/api/host-auth/rows/{}", row.id),
-    "start_url": login.map(|login| format!("/api/host-auth/logins/{}/start", login.name)),
+    "check_url": ROW_CHECK_PATH.replace("{id}", &row.id),
+    "row_url": ROW_PATH.replace("{id}", &row.id),
+    "start_url": login.map(|login| LOGIN_START_PATH.replace("{name}", &login.name)),
     "input_url": login
       .filter(|login| login.input_prompt.is_some())
-      .map(|login| format!("/api/host-auth/logins/{}/input", login.name)),
+      .map(|login| LOGIN_INPUT_PATH.replace("{name}", &login.name)),
   }))
 }
 

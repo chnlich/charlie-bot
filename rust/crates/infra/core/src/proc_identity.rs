@@ -1,8 +1,10 @@
-//! Process identity reads shared by run stores and task-tree liveness checks, and the `/proc/<pid>/stat` text that the
-//! readback and renderer process trees read for their parent and process group.
+//! Process identity reads shared by run stores and task-tree liveness checks, and the `/proc/<pid>/stat` text and its
+//! fields that the readback and renderer process trees read for their parent and process group.
 
+use std::fmt;
 use std::fs;
 use std::io;
+use std::num::ParseIntError;
 
 use procfs::process::Process;
 use procfs::{CurrentSI, KernelStats};
@@ -33,8 +35,57 @@ pub fn read_stat_text(pid: u32) -> io::Result<String> {
 /// The fields of a stat text that follow the command name, or `None` when the text has no `)`. The command name sits
 /// in parentheses and may hold spaces, so the fields start after its last `)`: the state, then the parent pid, then
 /// the process group, in the kernel's order.
-pub fn stat_fields_after_command(stat: &str) -> Option<&str> {
+fn stat_fields_after_command(stat: &str) -> Option<&str> {
   stat.rsplit_once(')').map(|(_, fields)| fields)
+}
+
+/// The fields of a `/proc/<pid>/stat` text that the process-tree readers use. The numbers are the field numbers that
+/// `proc(5)` gives.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StatFields {
+  /// Field 3: the state letter, such as `R`, `S` or `Z`.
+  pub state: char,
+  /// Field 4: the parent pid.
+  pub parent_pid: u32,
+  /// Field 22: the start tick, which tells a process from an earlier one that held the same pid.
+  pub start_tick: u64,
+}
+
+/// Why a stat text does not give its [`StatFields`]. Each message completes a sentence that names the stat file.
+#[derive(Debug)]
+pub enum StatFieldError {
+  NoCommandDelimiter,
+  MissingState,
+  MissingParentPid,
+  InvalidParentPid(ParseIntError),
+  MissingStartTick,
+  InvalidStartTick(ParseIntError),
+}
+
+impl fmt::Display for StatFieldError {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    match self {
+      StatFieldError::NoCommandDelimiter => write!(f, "has no command delimiter"),
+      StatFieldError::MissingState => write!(f, "has no process state"),
+      StatFieldError::MissingParentPid => write!(f, "has no parent pid"),
+      StatFieldError::InvalidParentPid(error) => write!(f, "has an invalid parent pid: {error}"),
+      StatFieldError::MissingStartTick => write!(f, "has no process start time"),
+      StatFieldError::InvalidStartTick(error) => write!(f, "has an invalid process start time: {error}"),
+    }
+  }
+}
+
+/// The [`StatFields`] of a `/proc/<pid>/stat` text. Every field the struct names must be present and parse, because the
+/// kernel writes each one on every line.
+pub fn parse_stat_fields(stat: &str) -> Result<StatFields, StatFieldError> {
+  let fields: Vec<&str> =
+    stat_fields_after_command(stat).ok_or(StatFieldError::NoCommandDelimiter)?.split_whitespace().collect();
+  let state = fields.first().and_then(|field| field.chars().next()).ok_or(StatFieldError::MissingState)?;
+  let parent_pid: u32 =
+    fields.get(1).ok_or(StatFieldError::MissingParentPid)?.parse().map_err(StatFieldError::InvalidParentPid)?;
+  let start_tick: u64 =
+    fields.get(19).ok_or(StatFieldError::MissingStartTick)?.parse().map_err(StatFieldError::InvalidStartTick)?;
+  Ok(StatFields { state, parent_pid, start_tick })
 }
 
 /// The host boot time from `/proc/stat`'s `btime` line.
@@ -78,6 +129,14 @@ mod tests {
   use std::time::{Duration, Instant};
 
   use super::*;
+
+  #[test]
+  fn parses_the_fields_after_a_command_name_that_holds_spaces_and_parentheses() {
+    // The fields after `(chrome (renderer) x)`: state `S`, parent pid 4321, and start tick 98765 at field 22.
+    let stat = "1234 (chrome (renderer) x) S 4321 1234 1234 0 -1 4194560 1 2 3 4 5 6 7 8 9 10 11 12 98765 0";
+    let fields = parse_stat_fields(stat).unwrap();
+    assert_eq!(fields, StatFields { state: 'S', parent_pid: 4321, start_tick: 98765 });
+  }
 
   #[ignore = "integration"]
   #[test]

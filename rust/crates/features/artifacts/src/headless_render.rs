@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow};
 use charliebot_core::cgroup::CRASHPAD_HANDLER_EXE;
-use charliebot_core::proc_identity::{read_stat_text, stat_fields_after_command};
+use charliebot_core::proc_identity::{parse_stat_fields, read_stat_text};
 use charliebot_core::str_methods;
 use charliebot_core::text_repr;
 use charliebot_registry::FeatureContext;
@@ -825,25 +825,16 @@ fn read_process_record(pid: u32) -> anyhow::Result<ProcessRead> {
     Ok(stat) => stat,
     Err(error) => return field_read_failure(pid, "stat", error),
   };
-  let fields: Vec<&str> = stat_fields_after_command(&stat)
-    .ok_or_else(|| anyhow!("/proc/{pid}/stat has no command delimiter"))?
-    .split_whitespace()
-    .collect();
-  let state = fields
-    .first()
-    .and_then(|field| field.chars().next())
-    .ok_or_else(|| anyhow!("/proc/{pid}/stat has no process state"))?;
-  let parent_pid = fields
-    .get(1)
-    .ok_or_else(|| anyhow!("/proc/{pid}/stat has no parent pid"))?
-    .parse()
-    .with_context(|| format!("/proc/{pid}/stat has an invalid parent pid"))?;
-  let start_time = fields
-    .get(19)
-    .ok_or_else(|| anyhow!("/proc/{pid}/stat has no process start time"))?
-    .parse()
-    .with_context(|| format!("/proc/{pid}/stat has an invalid process start time"))?;
-  Ok(ProcessRead::Record(ProcessRecord { pid, parent_pid, start_time, state, exe_name, argv }))
+  let fields = parse_stat_fields(&stat).map_err(|error| anyhow!("/proc/{pid}/stat {error}"))?;
+  let record = ProcessRecord {
+    pid,
+    parent_pid: fields.parent_pid,
+    start_time: fields.start_tick,
+    state: fields.state,
+    exe_name,
+    argv,
+  };
+  Ok(ProcessRead::Record(record))
 }
 
 fn is_load_event(value: &Value) -> bool {
@@ -1019,7 +1010,7 @@ mod tests {
   /// Whether `pid` still runs. A zombie has exited, and a missing `/proc` entry has been reaped.
   fn process_alive(pid: i32) -> bool {
     let Some(stat) = u32::try_from(pid).ok().and_then(|pid| read_stat_text(pid).ok()) else { return false };
-    let state = stat_fields_after_command(&stat).and_then(|fields| fields.trim_start().chars().next());
+    let state = parse_stat_fields(&stat).map(|fields| fields.state).ok();
     !matches!(state, Some('Z' | 'X'))
   }
 

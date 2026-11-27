@@ -10,7 +10,7 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
-use charliebot_core::proc_identity::{read_stat_text, stat_fields_after_command};
+use charliebot_core::proc_identity::{parse_stat_fields, read_stat_text};
 
 pub const SUPERVISOR_ARG: &str = "--host-auth-readback-supervisor";
 pub const ROUTE_ERROR_PREFIX: &str = "\0host-auth-readback-route-error: ";
@@ -139,21 +139,16 @@ fn parent_of(pid: u32) -> io::Result<Option<u32>> {
     Err(error) if is_gone(&error) => return Ok(None),
     Err(error) => return Err(error),
   };
-  // The parent is the second field after the command name.
-  let fields = stat_fields_after_command(&stat).unwrap_or_default();
-  let parent = fields
-    .split_whitespace()
-    .nth(1)
-    .and_then(|field| field.parse::<u32>().ok())
-    .ok_or_else(|| io::Error::other(format!("the stat of process {pid} has no parent field")))?;
-  Ok(Some(parent))
+  let fields =
+    parse_stat_fields(&stat).map_err(|error| io::Error::other(format!("the stat of process {pid} {error}")))?;
+  Ok(Some(fields.parent_pid))
 }
 
 /// Whether `pid` still runs. A zombie has ended, so it does not count.
 #[cfg(test)]
 pub(crate) fn is_running(pid: u32) -> bool {
   match read_stat_text(pid) {
-    Ok(stat) => stat_fields_after_command(&stat).is_some_and(|fields| !fields.trim_start().starts_with('Z')),
+    Ok(stat) => parse_stat_fields(&stat).is_ok_and(|fields| fields.state != 'Z'),
     Err(error) if is_gone(&error) => false,
     Err(error) => panic!("reading the stat of process {pid} failed: {error}"),
   }

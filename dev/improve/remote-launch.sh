@@ -27,6 +27,8 @@
 #     $CLAUDE_CONFIG_DIR/.credentials.json, or a codex member's login in ~/.codex/auth.json;
 #   - the leak pattern file $CHARLIEBOT_HOME/skills_leak_patterns.local.txt;
 #   - the in-flight files list, which dev/improve/inflight-files.sh prints here;
+#   - the live sessions record, which dev/improve/live-sessions.sh writes from the live server's task tree, including
+#     archived rows;
 #   - the kit revision: HEAD of this checkout, whose dev/ tree the runner fetches as the round's kit;
 #   - the skills revision: HEAD of this checkout, whose skills/ tree the runner archives as the round's skills;
 #   - the worker session's metadata.json, for task_parent_id;
@@ -130,6 +132,7 @@ fail_ssh_call() {
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 readonly SCRIPT_DIR=$script_dir
+source "$SCRIPT_DIR/live-sessions.sh"
 readonly HOME_DIR=${HOME:-}
 [[ $HOME_DIR == /* ]] || fail 1 'HOME must be an absolute path'
 readonly PROFILE_HOME=${CHARLIEBOT_HOME:-$HOME_DIR/.charliebot}
@@ -604,6 +607,14 @@ if ! sed -n '/^inflight-files: dropped worktree /p' "$inflight_stderr" >"$payloa
   fail 1 'cannot collect dropped worktree notices'
 fi
 cat -- "$inflight_stderr" >&2
+
+# The live sessions record, which only this host can read: the live server is reachable from here alone. A failed read
+# sends no record and names why. The round still starts, and a web page PR of the round that names a session stops at
+# pr-create for the missing record.
+if ! live_sessions_record "$payload/live-sessions.tsv" 2>"$failure_dir/live-sessions.stderr"; then
+  cat -- "$failure_dir/live-sessions.stderr" >&2
+  printf '%s no live sessions record was sent for this round\n' "$STDERR_PREFIX" >&2
+fi
 
 # The forwarded variables: the gateway and model settings of this backend, which start with
 # ANTHROPIC_ or CLAUDE_, and the two Bash timeouts the round needs. CLAUDE_CONFIG_DIR is the

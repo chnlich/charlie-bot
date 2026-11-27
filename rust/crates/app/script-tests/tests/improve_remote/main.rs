@@ -395,6 +395,74 @@ fn the_round_keeps_its_facts_in_the_evidence_directory_its_start_stamp_names() {
   }
 }
 
+/// The launch walks the live server's task tree, including archived rows, roots and the children of a row with children
+/// alike, and keeps each session that the server resolves. The round keeps that record in its evidence directory with
+/// its other facts.
+#[test]
+#[ignore = "integration"]
+fn the_launch_keeps_the_live_sessions_the_server_resolves_in_the_evidence_directory() {
+  let world = World::new();
+  let page = |items: serde_json::Value| serde_json::json!({"items": items, "next_cursor": null}).to_string();
+  fs::write(
+    world.live_tree.join("roots.json"),
+    page(serde_json::json!([
+      {"id": "parent-a", "name": "Parent A", "child_count": 1},
+      {"id": "plain-b", "name": "Plain B", "child_count": 0},
+      {"id": "unknown-c", "name": "Unknown C", "child_count": 0},
+      {"id": "archived-d", "name": "Archived D", "child_count": 0, "archived": true}
+    ])),
+  )
+  .expect("the live roots");
+  fs::write(
+    world.live_tree.join("children-parent-a.json"),
+    page(serde_json::json!([{"id": "child-a1", "name": "Child A1", "child_count": 0}])),
+  )
+  .expect("the live children");
+  // The server resolves four of the five sessions the tree lists: `unknown-c` is listed but not resolved.
+  fs::write(&world.live_known, "parent-a\nplain-b\narchived-d\nchild-a1\n").expect("the resolved sessions");
+
+  let run = world.run(&world.env());
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(world.claude_ran(), "the round did not start:\n{}", run.describe());
+  let stamp = world.claude_environment().get("IMPROVE_ROUND_START").cloned().expect("the round's start stamp");
+  let remote = world.remote_home.join("improve").join(DIRECTION).join("evidence").join(&stamp);
+  for record in [remote.join("live-sessions.tsv"), world.local_evidence().join(&stamp).join("live-sessions.tsv")] {
+    let text = fs::read_to_string(&record).unwrap_or_else(|error| panic!("{}: {error}", record.display()));
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 5, "{} holds the read time and four sessions:\n{text}", record.display());
+    assert!(lines[0].starts_with("read_at\t"), "{} opens with its read time:\n{text}", record.display());
+    assert_eq!(
+      &lines[1..],
+      ["parent-a\tParent A", "plain-b\tPlain B", "archived-d\tArchived D", "child-a1\tChild A1"],
+      "{}",
+      record.display()
+    );
+  }
+}
+
+/// A launch whose live server cannot be read sends no record and names why, and the round still starts. A web page PR
+/// of that round that names a session then stops at pr-create for the missing record.
+#[test]
+#[ignore = "integration"]
+fn a_launch_whose_live_server_cannot_be_read_sends_no_record_and_the_round_still_starts() {
+  let world = World::new();
+  let mut env = world.env();
+  env.insert("FAKE_LIVE_TREE_DIR".to_string(), world.sandbox.root().join("no-live-server").display().to_string());
+
+  let run = world.run(&env);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(world.claude_ran(), "the round did not start:\n{}", run.describe());
+  assert!(run.stderr.contains("cannot reach the live server"), "the read's failure is named:\n{}", run.describe());
+  assert!(run.stderr.contains("no live sessions record was sent"), "{}", run.describe());
+  let stamp = world.claude_environment().get("IMPROVE_ROUND_START").cloned().expect("the round's start stamp");
+  let remote = world.remote_home.join("improve").join(DIRECTION).join("evidence").join(&stamp);
+  for evidence in [remote, world.local_evidence().join(&stamp)] {
+    assert!(!evidence.join("live-sessions.tsv").exists(), "{} holds no record", evidence.display());
+  }
+}
+
 /// The round's tools and the repository's browser tests start the browser that the start check ran: the round
 /// environment names that browser in each input that reads a Chrome binary, so no test or tool resolves one of its own
 /// inside a round.

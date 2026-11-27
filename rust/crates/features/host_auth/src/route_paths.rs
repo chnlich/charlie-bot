@@ -1,5 +1,9 @@
-//! The paths of the host-auth routes, each spelled once. `api` mounts every route from its const, and `rows` derives
-//! the standing page's URLs from the same consts, so a route rename has one spelling to change.
+//! The paths of the four host-auth row and login routes, each spelled once. `api` mounts these routes from the consts,
+//! and `rows` derives the standing page's URLs from the same consts.
+//!
+//! The module holds no other host-auth path. `api` still mounts the page, status and probe routes from inline literals,
+//! and its trailing-slash redirect spells the row and login prefixes and action names itself. The page's URL builders
+//! also substitute the `{id}` and `{name}` placeholders, so a route rename changes those sites as well.
 
 /// The route of a row's status JSON; `{id}` stands for the row's id.
 pub const ROW_PATH: &str = "/api/host-auth/rows/{id}";

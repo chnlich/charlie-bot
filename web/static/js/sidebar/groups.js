@@ -349,7 +349,7 @@ function renderSessionRowShell(s, {filter, title, activeClass, options, indicato
      class="session-row group flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${activeClass}${extraClass}" ondblclick="sidebarControl('startRename', event, '${s.id}')"
      onclick="event.preventDefault(); sidebarControl('switchSession', '${s.id}')"
      id="session-${s.id}"${extraAttrs}>
-    ${indicators}
+    <span class="session-lead">${indicators}</span>
     <span class="session-row-name flex-1 min-w-0">
       <span class="flex items-center gap-1.5 min-w-0">
         <span class="truncate flex-1 min-w-0 session-name" title="${escapeHtmlAttr(s.name)}">${escapeHtml(title)}</span>

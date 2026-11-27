@@ -447,6 +447,14 @@ main > header > .header-controls { flex: 0 1 auto; min-width: 0; margin-left: au
    from the row's padding edge right-to-left in reverse DOM order.
    nth-last-of-type keeps non-button trailing spans out of the count. */
 .session-row { position: relative; }
+/* The row's lead marks (chevron, child count, activity, unread, bell and waiting marks) share a column at most 44px
+   wide. Marks that fit that width stay on one line; further marks wrap onto lines below it. The column keeps the
+   name and meta lines wide. A lead with no shown mark takes no column. */
+.session-row > .session-lead {
+  display: flex; flex-wrap: wrap; align-items: center; align-content: center; gap: 4px;
+  flex-shrink: 0; max-width: 44px;
+}
+.session-row > .session-lead:not(:has(> :not(.hidden))) { display: none; }
 .session-row > button { position: absolute; right: 12px; pointer-events: none; }
 /* The name follows the row's leading marks, and the row's action buttons come last. */
 .session-row > .session-row-name { order: 1; }

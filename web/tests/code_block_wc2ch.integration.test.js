@@ -386,7 +386,7 @@ test('wrapWideCharsCached serves one wrap per distinct input and stays byte-iden
   }
   // The growing tail's shape: a per-paint append re-wraps (miss) and the
   // result still matches the direct wrap's bytes.
-  var grown = '';
+  let grown = '';
   for (let i = 0; i < 5; i++) {
     grown += 'x';
     assert.equal(context.wrapWideCharsCached(grown), context.wrapWideChars(grown));

@@ -1502,8 +1502,8 @@ fn ordinal_named_scan(context: &Context<'_>) -> anyhow::Result<(HashSet<String>,
         }
         let opening = before.rfind(['（', '(']);
         let closing = before.rfind(['）', ')']);
-        if opening.is_some_and(|opening| Some(opening) > closing)
-          && str_methods::strip(&before[..opening.unwrap()]).chars().count() >= 2
+        if opening
+          .is_some_and(|opening| Some(opening) > closing && str_methods::strip(&before[..opening]).chars().count() >= 2)
         {
           named.insert(ordinal_label(kind));
           continue;

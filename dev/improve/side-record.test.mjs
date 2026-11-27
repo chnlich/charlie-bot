@@ -30,6 +30,8 @@ const STUB_BODY = path.join(ROOT, 'stub-body.md');
 const GH_LOG = path.join(ROOT, 'gh.log');
 const LAUNCH = path.join(ROOT, 'launch');
 const WORK = path.join(ROOT, 'work');
+// The round's skills directory, named by IMPROVE_SKILLS_DIR for every post: pr-merge inside a round refuses without it.
+const SKILLS = path.join(ROOT, 'skills');
 
 after(() => {
   fs.rmSync(ROOT, { recursive: true, force: true });
@@ -52,6 +54,7 @@ fs.writeFileSync(MEASURE, '#!/usr/bin/env bash\nprintf \'%s\\n\' "$1" >"$IMPROVE
 // The stub gh logs each call. It answers the draft-state and body reads of pr-merge from STUB_BODY_FILE, and it answers
 // the head and the verdict reads with a clean verdict on HEAD_SHA, so a merge reaches the side record check.
 fs.mkdirSync(STUB_BIN);
+fs.mkdirSync(SKILLS);
 fs.writeFileSync(
   path.join(STUB_BIN, 'gh'),
   [
@@ -181,6 +184,7 @@ function post(args, body = '') {
     env: {
       ...process.env,
       IMPROVE_LAUNCH_DIR: LAUNCH,
+      IMPROVE_SKILLS_DIR: SKILLS,
       PATH: `${STUB_BIN}:${process.env.PATH}`,
       GH_LOG,
       STUB_BODY_FILE: STUB_BODY,

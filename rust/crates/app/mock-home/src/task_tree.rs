@@ -27,6 +27,13 @@
 //! Linux's PID_MAX_LIMIT, a parent is a root, a sequence run names an unconfigured cron task, and a pending trigger
 //! fires on 2030-01-01. No worker is a cold read, whose replay can start a run. The boot marker and every file time are
 //! fixed around `marker_time()`, so `reset` restores them from the seed's plan.
+//!
+//! The serve shape also writes one fixture row (`ServeFixture`): a sidebar row that carries six of the row indicators
+//! a ux round captures, with a long display name and a long backend name. Its inputs are store facts of three sessions:
+//! the row's own unread flag, Waiting on you item and pending trigger, its worker child's pending wake-up trigger, and
+//! the decoy root that the chat page's redirect opens so the fixture row keeps its unread dot. The row's own spinner
+//! stays unlit: the sidebar paints it for a live run or a busy turn, and a home file carries neither. The loader, which
+//! the same row paints for that paused child, holds the spinner's place in the row's lead column.
 
 use std::fs::{self, File};
 use std::path::Path;
@@ -138,6 +145,21 @@ const ARCHIVE_FILE_NAME: &str = "chat_events.2026-W44.jsonl";
 /// The lowest pid a launched run carries: Linux's PID_MAX_LIMIT on 64-bit hosts, which no process id reaches.
 const STALE_PID_FLOOR: u32 = 1 << 22;
 
+/// The backend every generated session names, except the serve fixture's row, which names a backend of the real label
+/// length family so its label wraps under the row's date.
+const MOCK_BACKEND: &str = "mock-backend";
+
+/// The display name of the serve fixture's row: the wrapping case a ux round captures. It starts with the live row's
+/// "1652: Char" and runs long enough to fill the row's name line at every sidebar width.
+const FIXTURE_ROW_NAME: &str =
+  "1652: CharlieBot improve round sidebar row with a long display name that fills the line";
+/// The backend of the serve fixture's row: an option id of the real label length family, so the row's backend label
+/// cannot share the date's line and moves under it.
+const FIXTURE_ROW_BACKEND: &str = "claude-code-deepseek-flash";
+/// The Waiting on you item of the serve fixture's rows. It paints the row's own waiting box and, on the row's parent,
+/// the subtree box.
+const FIXTURE_WAITING_TEXT: &str = "Approve the sidebar row's layout change";
+
 /// A session's activity lasts from one hour to this long after its start.
 const ACTIVITY_SECONDS: u64 = 3 * 86_400;
 /// The reference start came this long after its marker, so files after the marker fall in this window.
@@ -244,6 +266,17 @@ struct SessionPlan {
   fired_triggers: usize,
   /// Whether the log's first `ARCHIVE_FRACTION` of bytes sits in an archive file, and the metadata names its events.
   archived: bool,
+  /// The metadata's `has_unread`, which paints the row's unread dot.
+  unread: bool,
+  /// Whether the metadata carries one unanswered Waiting on you item, which paints the row's waiting box.
+  waiting: bool,
+  /// The display name its row shows, when the serve fixture sets one; every other row takes a generated title.
+  name: Option<&'static str>,
+  /// The backend id its row shows. The serve fixture's row names a long one, so its label wraps under the date.
+  backend: &'static str,
+  /// Whether the log holds its task boundary and no turn. The serve fixture's worker child is an open task that never
+  /// ran, so its log carries nothing a start could dispatch.
+  log_boundary_only: bool,
 }
 
 /// How a closed session closed: the request, who closed it and how, and the plan index of the parent it reported to.
@@ -269,6 +302,35 @@ struct HomePlan {
   sessions: Vec<SessionPlan>,
   /// The child reports each parent's log holds, by plan index, in child order.
   reports: Vec<Vec<ReportPlan>>,
+  /// The serve shape's fixture row and the two sessions whose facts paint it, which the other shapes leave out.
+  serve_fixture: Option<ServeFixture>,
+}
+
+/// The serve home's fixture row: one existing session's sidebar row, which carries six of the row indicators a ux
+/// round captures, with a long display name and a long backend name. The facts behind the six are:
+///
+/// - the child count, from a child whose profile is not `worker`;
+/// - the activity loader, from the worker child's pending wake-up trigger: a worker with a pending trigger and no live
+///   run is the paused worker whose ancestor row paints the loader. The row's own spinner stays unlit, because it reads
+///   a live run (`has_running_tasks`) or a busy turn (`thinking_since`), and no home file carries either;
+/// - the unread dot, from the row's own `has_unread`;
+/// - the pending-trigger bell, from the row's own pending trigger;
+/// - the own waiting box, from the row's own unanswered Waiting on you item;
+/// - the subtree waiting box, from the worker child's Waiting on you item while the row stays folded.
+struct ServeFixture {
+  /// The fixture row: an open manager task at the listing order's second place, with a worker child and a manager
+  /// child.
+  row: usize,
+  /// The worker child whose pending trigger paints the row's loader, and whose Waiting on you item paints its subtree
+  /// waiting box. The fixture opens it, so it stays in the sidebar's active listing.
+  paused_worker: usize,
+  /// The manager child whose non-worker profile draws the row's child count. The fixture opens it, so it stays in the
+  /// sidebar's active listing.
+  counted: usize,
+  /// The decoy root at the listing order's first place. The chat page's `/` redirect opens the first row, and an open
+  /// session's row renders without its unread mark; the decoy takes that place so the fixture row keeps its dot, and
+  /// takes the redirect so the fixture row stays folded.
+  decoy: usize,
 }
 
 /// The boot marker: the start of the last clean walk before the planned server start.
@@ -345,8 +407,75 @@ impl HomePlan {
     if shape == Shape::TaskTree {
       Self::plant_live_runs(&mut sessions);
     }
+    let serve_fixture = match shape {
+      Shape::ServeTaskTree => Self::serve_fixture(&sessions),
+      _ => None,
+    };
+    if let Some(fixture) = &serve_fixture {
+      Self::plant_serve_fixture(&mut sessions, fixture);
+    }
+    // The reports follow the closes above, the fixture's rewrites included.
     let reports = Self::reports(&sessions);
-    Self { sessions, reports }
+    Self { sessions, reports, serve_fixture }
+  }
+
+  /// The serve shape's fixture: its row, that row's worker child, the row's manager child and the decoy root.
+  ///
+  /// The row is the first open manager task that is a root with a worker child and a manager child. The sidebar's
+  /// derived tree archives every task that is not open, and with it the task's subtree, so both children are made open
+  /// tasks: the manager child keeps its planned runs, and the worker child is an open task that never ran. The plan
+  /// never keeps a worker open (an open session is a manager), so the fixture always reopens the worker child, and both
+  /// reopened children join the active listing.
+  fn serve_fixture(sessions: &[SessionPlan]) -> Option<ServeFixture> {
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); sessions.len()];
+    for (index, session) in sessions.iter().enumerate() {
+      if let Some(parent) = session.parent {
+        children[parent].push(index);
+      }
+    }
+    let row = (0..sessions.len()).find(|index| {
+      let session = &sessions[*index];
+      session.reason == Some(KeepReason::StateOpen)
+        && session.parent.is_none()
+        && children[*index].iter().any(|child| sessions[*child].profile == TaskProfile::Worker)
+        && children[*index].iter().any(|child| sessions[*child].profile == TaskProfile::Manager)
+    })?;
+    let paused_worker = children[row].iter().copied().find(|child| sessions[*child].profile == TaskProfile::Worker)?;
+    let counted = children[row].iter().copied().find(|child| sessions[*child].profile == TaskProfile::Manager)?;
+    let decoy = (0..sessions.len()).find(|index| {
+      let session = &sessions[*index];
+      session.reason == Some(KeepReason::StateOpen) && session.parent.is_none() && *index != row
+    })?;
+    Some(ServeFixture { row, paused_worker, counted, decoy })
+  }
+
+  /// Gives the fixture row and its two children the facts their sidebar rows paint, and puts the row at the listing
+  /// order's second place behind the decoy. Both times sit above every planned file time, and both sessions are open
+  /// tasks, so their files after the marker keep the full pass their state already takes. The row's own state stays
+  /// idle, which the loader stand-in needs.
+  fn plant_serve_fixture(sessions: &mut [SessionPlan], fixture: &ServeFixture) {
+    // The listing orders its rows by `updated_at`, newest first, so these two times sit above every planned file time.
+    sessions[fixture.decoy].modified_at = marker_time() + seconds(4 * 86_400);
+    sessions[fixture.row].modified_at = marker_time() + seconds(3 * 86_400);
+    let row = &mut sessions[fixture.row];
+    row.unread = true;
+    row.waiting = true;
+    row.pending_triggers += 1;
+    row.name = Some(FIXTURE_ROW_NAME);
+    row.backend = FIXTURE_ROW_BACKEND;
+    // A child stays in the sidebar's active listing only while its task is open: the derived tree archives every other
+    // task and its subtree. The manager child keeps its planned runs, whose finishes confirmed every input, so an open
+    // task dispatches nothing — the state the plan gives every other open task.
+    sessions[fixture.counted].close = None;
+    // The worker child is an open task that never ran: its log holds its task boundary alone, so no run exists to
+    // deliver work to the fixture row and no input waits for a turn. Its pending trigger makes it the paused worker
+    // that the row above stands in for with the loader.
+    let paused_worker = &mut sessions[fixture.paused_worker];
+    paused_worker.close = None;
+    paused_worker.runs.clear();
+    paused_worker.log_boundary_only = true;
+    paused_worker.waiting = true;
+    paused_worker.pending_triggers += 1;
   }
 
   /// Whether each session is the parent of another session.
@@ -574,6 +703,11 @@ impl HomePlan {
       pending_triggers: 0,
       fired_triggers: 0,
       archived: false,
+      unread: false,
+      waiting: false,
+      name: None,
+      backend: MOCK_BACKEND,
+      log_boundary_only: false,
     }
   }
 
@@ -690,6 +824,10 @@ fn write_task_log(
     Some(&event_id),
     Some(created_at),
   ))?;
+  if session.log_boundary_only {
+    let (bytes, _) = log.finish()?;
+    return Ok(TaskLog { bytes, run_inputs: Vec::new() });
+  }
   let spans = session.runs.len().max(1);
   // Each child report lands in a span whose run finished, so that run's finish confirms it as an input.
   let finish_spans: Vec<usize> =
@@ -809,6 +947,12 @@ fn task_spec(profile: TaskProfile, task_type: Option<TaskType>, rng: &mut Rng, l
   }
 }
 
+/// The `web_status` of a session that holds the fixture's unanswered Waiting on you item: it paints the row's own
+/// waiting box, and the subtree waiting box of the row above it.
+fn waiting_status() -> Value {
+  json!({"waiting": [{"text": FIXTURE_WAITING_TEXT}]})
+}
+
 fn run_record(session_id: &str, run: &RunPlan, inputs: Vec<String>, worktrees: &Path) -> RunRecord {
   let work = run.kind == RunKind::Work;
   let finished = run.end == RunEnd::Finished;
@@ -822,7 +966,7 @@ fn run_record(session_id: &str, run: &RunPlan, inputs: Vec<String>, worktrees: &
     prompt_snapshot_ref: None,
     retry_of_run_id: None,
     review_of_run_id: None,
-    backend: Some("mock-backend".to_string()),
+    backend: Some(MOCK_BACKEND.to_string()),
     model: Some("mock-model".to_string()),
     native_session_id: None,
     pid: Some(run.pid),
@@ -925,6 +1069,12 @@ pub(crate) fn write_home(
 ) -> Result<u64> {
   let (mut rng, text, sizes) = session::planned_home(sessions, seed, language);
   let plan = HomePlan::new(&sizes, seed, language, shape);
+  if shape == Shape::ServeTaskTree && plan.serve_fixture.is_none() {
+    bail!(
+      "this {sessions}-session plan holds no open manager task that is a root with both a worker child and a \
+       non-worker child, which the serve home's fixture row needs; generate the shared home at a larger count"
+    );
+  }
   let worktrees = home.join(WORKTREES_DIR);
   fs::create_dir(staging.join(WORKTREES_DIR)).context("cannot create the worktree directory")?;
   let mut manifest_sessions = Vec::with_capacity(sessions);
@@ -942,17 +1092,17 @@ pub(crate) fn write_home(
     let metadata = NodeMetadata {
       session: SessionMetadata {
         id: id.clone(),
-        name: text::title(&mut rng, language),
+        name: session.name.map_or_else(|| text::title(&mut rng, language), str::to_string),
         status: "active",
         profile: session.profile.as_str(),
-        backend: "mock-backend",
+        backend: session.backend,
         created_at: session::stamp(session.started_at),
         updated_at: session::stamp(session.modified_at),
         schema_version: 2,
-        has_unread: false,
+        has_unread: session.unread,
         starred: false,
         task: None,
-        web_status: None,
+        web_status: session.waiting.then(waiting_status),
       },
       task_parent_id: session.parent.map(|parent| plan.sessions[parent].id.clone()),
       task: session.has_task.then(|| task_spec(session.profile, session.task_type, &mut rng, language)),
@@ -1015,7 +1165,7 @@ fn write_imported_chat(staging: &Path, shape: Shape) -> Result<()> {
       name: "Imported chat".to_string(),
       status: "active",
       profile: "manager",
-      backend: "mock-backend",
+      backend: MOCK_BACKEND,
       created_at: stamp.clone(),
       updated_at: stamp,
       schema_version: 2,
@@ -1223,6 +1373,62 @@ mod tests {
     };
     assert_eq!(live_runs(Shape::TaskTree), LIVE_RUN_SESSIONS);
     assert_eq!(live_runs(Shape::ServeTaskTree), 0);
+  }
+
+  /// The serve shape's fixture row carries six row indicators from store facts — the child count, the unread dot, the
+  /// pending-trigger bell, its own and its subtree's waiting boxes, and the loader its paused child paints in the
+  /// spinner's place — with the long display name and backend name of the wrapping case, at the listing order's second
+  /// place. The lab shape plants no fixture, and neither shape adds a session.
+  #[test]
+  fn the_serve_shape_marks_one_row_with_every_indicator() {
+    let sessions = SCALED_SESSIONS;
+    let (_, _, sizes) = session::planned_home(sessions, 1, Language::Mixed);
+    let plan = HomePlan::new(&sizes, 1, Language::Mixed, Shape::ServeTaskTree);
+    let fixture = plan.serve_fixture.expect("the serve plan holds its fixture row");
+    assert_eq!(plan.sessions.len(), sessions, "the fixture adds no session");
+    let row = &plan.sessions[fixture.row];
+    assert_eq!(row.reason, Some(KeepReason::StateOpen), "an open task keeps its own full pass");
+    assert_eq!(row.profile, TaskProfile::Manager);
+    assert!(row.parent.is_none(), "the fixture row is a root");
+    assert!(row.unread, "the row's own unread flag paints the dot");
+    assert!(row.waiting, "the row's own Waiting on you item paints its waiting box");
+    assert!(row.pending_triggers > 0, "a pending trigger paints the bell");
+    assert_eq!(row.name, Some(FIXTURE_ROW_NAME));
+    assert_eq!(row.backend, FIXTURE_ROW_BACKEND);
+    let children: Vec<&SessionPlan> =
+      plan.sessions.iter().filter(|session| session.parent == Some(fixture.row)).collect();
+    assert!(children.iter().any(|child| child.profile != TaskProfile::Worker), "a manager child draws the child count");
+    // The loader stands in for the spinner. The spinner reads a live run or a busy turn, and no home file carries either,
+    // so the spinner stays unlit and the paused worker's pending trigger paints the loader in the spinner's slot.
+    let paused_worker = &plan.sessions[fixture.paused_worker];
+    assert_eq!(paused_worker.parent, Some(fixture.row));
+    assert_eq!(paused_worker.profile, TaskProfile::Worker);
+    assert!(
+      paused_worker.pending_triggers > 0,
+      "the paused worker's pending trigger paints the loader, which stands in for the spinner"
+    );
+    assert!(paused_worker.waiting, "the child's Waiting on you item paints the row's subtree box");
+    // The sidebar's derived tree archives every task that is not open, so each child stays an open task.
+    assert!(paused_worker.close.is_none(), "an open task stays in the active listing");
+    assert!(paused_worker.runs.is_empty() && paused_worker.log_boundary_only, "the child never ran");
+    let counted = &plan.sessions[fixture.counted];
+    assert_eq!(counted.parent, Some(fixture.row));
+    assert_eq!(counted.profile, TaskProfile::Manager);
+    assert!(counted.close.is_none(), "an open task stays in the active listing");
+    assert!(
+      !plan.reports[fixture.row].iter().any(|report| report.child_id == paused_worker.id),
+      "a child that never ran reports nothing"
+    );
+
+    // The chat page's redirect opens the listing's first row, so the decoy takes it and the fixture row follows.
+    let mut order: Vec<usize> = (0..sessions).collect();
+    order.sort_by_key(|index| std::cmp::Reverse(plan.sessions[*index].modified_at));
+    assert_eq!(order[..2], [fixture.decoy, fixture.row]);
+
+    assert!(
+      HomePlan::new(&sizes, 1, Language::Mixed, Shape::TaskTree).serve_fixture.is_none(),
+      "the lab shape writes no fixture"
+    );
   }
 
   /// The plan deals every keep reason at its scaled reference count, so a lab start's full-pass distribution lands

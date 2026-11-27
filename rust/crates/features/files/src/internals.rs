@@ -1,8 +1,10 @@
-//! The file server's routes and answers: the file views, the directory listing, and the file and run-log answers.
+//! The file server's routes and answers: the file views, the directory listing, the file and run-log answers, and the
+//! readable page that refuses a path the reader cannot open.
 //!
 //! The public surface is `api.rs`, which hands the routes and the matcher to the registry.
 
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::{Arc, LazyLock};
 
@@ -23,6 +25,7 @@ use charliebot_store::run_logs;
 use http::{HeaderMap, Method, StatusCode, header};
 use serde_json::json;
 
+use crate::error_page;
 use crate::listing::{self, FailureKind, ListingError};
 use crate::mount::MOUNT;
 
@@ -79,8 +82,8 @@ fn listing_icons(startup: &StartupState) -> Result<Arc<Icons>, String> {
   templating.icons().map_err(|error| error.to_string())
 }
 
-/// The answer below the file views, on the blocking pool: a directory listing, a file, or the error the route
-/// raises for the path.
+/// The answer below the file views, on the blocking pool: a directory listing, a file, or the readable page that
+/// refuses the path.
 fn answer_from_disk(
   path: &str,
   method: &Method,
@@ -90,23 +93,37 @@ fn answer_from_disk(
   // The path joined under the root, then resolved to its real path.
   let fs_path = paths::realpath(&FsPath::new("/").join(path));
   let url_prefix = if path.is_empty() { MOUNT.to_string() } else { format!("{MOUNT}/{path}") };
+  let display = fs_path.display().to_string();
   match listing::dir_listing_page(&fs_path, &url_prefix, load_icons) {
     Ok(Some(page)) => return responses::html(page),
     Ok(None) => {}
     // A missing path is 404 unless the compaction stored a run log here as `<name>.zst`.
     Err(ListingError::Missing) => return answer_compressed_run_log(&fs_path, method).unwrap_or_else(not_found),
-    Err(ListingError::PermissionDenied) => return permission_denied(),
+    Err(ListingError::PermissionDenied) => return denied(&fs_path, &display, &url_prefix),
     Err(ListingError::Failed { kind, detail }) => return responses::internal_error(kind.as_str(), detail),
   }
-  // Not a directory. The metadata read decides between 404 and the file answer.
+  // Not a directory. The metadata read decides between 404, the refusal of a path that is not a regular file, and the
+  // file answer.
   match fs::metadata(&fs_path) {
     Err(_) => not_found(),
-    Ok(metadata) if !metadata.is_file() => responses::internal_error(
-      FailureKind::RuntimeError.as_str(),
-      format!("File at path {} is not a file.", fs_path.display()),
-    ),
-    Ok(_) => answer_file(&fs_path, method, headers),
+    Ok(metadata) if !metadata.is_file() => {
+      error_page::refusal(error_page::Refusal::NotRegularFile, &display, &url_prefix)
+    }
+    // The open tells whether the reader may read the file, before the static answer opens it for its own read.
+    Ok(_) => match fs::File::open(&fs_path) {
+      Ok(_) => answer_file(&fs_path, method, headers),
+      Err(error) if error.kind() == ErrorKind::PermissionDenied => denied(&fs_path, &display, &url_prefix),
+      Err(error) => responses::internal_error(FailureKind::OSError.as_str(), format!("{display}: {error}")),
+    },
   }
+}
+
+/// The refusal of a path whose permissions deny the reader. A directory is refused as unlistable. Any other entry is
+/// refused as unreadable, including an entry under a directory the reader cannot search: its metadata is denied too.
+fn denied(fs_path: &FsPath, display: &str, url_prefix: &str) -> Response {
+  let is_dir = fs::metadata(fs_path).is_ok_and(|metadata| metadata.is_dir());
+  let refusal = if is_dir { error_page::Refusal::DirectoryDenied } else { error_page::Refusal::EntryDenied };
+  error_page::refusal(refusal, display, url_prefix)
 }
 
 /// The file answer for a regular file. It honors only the `Range` headers, so the conditional
@@ -143,10 +160,6 @@ fn answer_compressed_run_log(fs_path: &FsPath, method: &Method) -> Option<Respon
 
 fn not_found() -> Response {
   responses::json(StatusCode::NOT_FOUND, &json!({"detail": "Not found"}))
-}
-
-fn permission_denied() -> Response {
-  responses::json(StatusCode::FORBIDDEN, &json!({"detail": "Permission denied"}))
 }
 
 #[cfg(test)]
@@ -336,7 +349,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn an_unreadable_file_is_500_on_get_and_its_headers_answer_on_head() {
+  async fn an_unreadable_file_is_a_403_page_on_get_and_on_head() {
     let dir = tempfile::tempdir().expect("a temp dir");
     let locked = dir.path().join("locked.bin");
     fs::write(&locked, b"secret").expect("the file writes");
@@ -346,33 +359,42 @@ mod tests {
     let (status, body) = answer_text(&features, &parts(Method::GET, &[]), &path).await;
     let head = answer(&features, &parts(Method::HEAD, &[]), &path).await;
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o644)).expect("the mode restores");
-    assert_eq!((status, body.as_str()), (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error"));
-    assert_eq!(head.status(), StatusCode::OK);
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(body.contains(error_page::Refusal::EntryDenied.reason()), "{body}");
+    assert_eq!(head.status(), StatusCode::FORBIDDEN);
   }
 
   #[tokio::test]
-  async fn an_unlistable_directory_is_403_with_the_permission_detail() {
+  async fn an_unlistable_directory_and_an_entry_under_it_are_403_pages() {
     let dir = tempfile::tempdir().expect("a temp dir");
     let locked = dir.path().join("locked");
     fs::create_dir(&locked).expect("the dir creates");
+    fs::write(locked.join("child.txt"), "x").expect("the child writes");
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).expect("the mode sets");
     let (_home, features) = test_features(Registry::new());
-    let outcome = answer_text(&features, &parts(Method::GET, &[]), &below(&dir, "locked")).await;
+    let get = parts(Method::GET, &[]);
+    let listing = answer_text(&features, &get, &below(&dir, "locked")).await;
+    let entry = answer_text(&features, &get, &below(&dir, "locked/child.txt")).await;
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).expect("the mode restores");
-    assert_eq!(outcome, (StatusCode::FORBIDDEN, r#"{"detail":"Permission denied"}"#.to_string()));
+    assert_eq!(listing.0, StatusCode::FORBIDDEN);
+    assert!(listing.1.contains(error_page::Refusal::DirectoryDenied.reason()), "{}", listing.1);
+    assert_eq!(entry.0, StatusCode::FORBIDDEN);
+    assert!(entry.1.contains(error_page::Refusal::EntryDenied.reason()), "{}", entry.1);
   }
 
   #[tokio::test]
-  async fn a_fifo_is_500_for_get_and_for_head() {
+  async fn a_fifo_is_a_403_page_with_a_parent_link_on_get_and_on_head() {
     let dir = tempfile::tempdir().expect("a temp dir");
     let fifo = dir.path().join("pipe");
     nix::unistd::mkfifo(&fifo, Mode::S_IRWXU).expect("the fifo makes");
     let (_home, features) = test_features(Registry::new());
     let path = below(&dir, "pipe");
     let (status, body) = answer_text(&features, &parts(Method::GET, &[]), &path).await;
-    assert_eq!((status, body.as_str()), (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error"));
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(body.contains(error_page::Refusal::NotRegularFile.reason()), "{body}");
+    assert!(body.contains(r#"class="parent""#), "{body}");
     let head = answer(&features, &parts(Method::HEAD, &[]), &path).await;
-    assert_eq!(head.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(head.status(), StatusCode::FORBIDDEN);
   }
 
   #[tokio::test]

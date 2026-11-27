@@ -16,6 +16,7 @@ use charliebot_registry::icons::Icons;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use time::OffsetDateTime;
 
+use crate::document::document;
 use crate::human_size;
 
 const FILENAME_SET: &AsciiSet = &NON_ALPHANUMERIC.remove(b'_').remove(b'.').remove(b'-').remove(b'~');
@@ -137,49 +138,16 @@ fn row(child: &Child, base: &str, icons: &Icons) -> Result<String, ListingError>
   ))
 }
 
-/// The page around the rows. The format reads the markup's doubled braces as single ones.
-///
-/// Below 600 px each row is a grid: the icon beside the name, and the size and modified time beneath the name. The
-/// viewport meta makes a phone use its own width, so the query matches the screen and not a 980 px desktop layout.
+/// The directory page: the listing's heading and table in the shared document.
 fn page(display_path: &str, rows: &str) -> String {
-  format!(
-    r#"<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Index of {display_path}</title>
-<style>
-  body {{ font-family: monospace; margin: 2em; }}
-  table {{ border-collapse: collapse; }}
-  td, th {{ padding: 4px 12px; text-align: left; }}
-  td.size {{ text-align: right; }}
-  /* Inline, the icon sits on the text baseline, and the line box below the baseline makes the
-     cell taller than a text row. Block drops that line box; the negative vertical margin keeps the
-     16 px icon's box from making the row taller than the text line beside it. */
-  td.icon > .cb-icon {{ display: block; margin: -1px 0; }}
-  a {{ text-decoration: none; color: #0366d6; }}
-  a:hover {{ text-decoration: underline; }}
-  @media (max-width: 600px) {{
-    body {{ margin: 1em; }}
-    h2 {{ overflow-wrap: anywhere; }}
-    table, tbody {{ display: block; }}
-    tr {{ display: grid; grid-template-columns: 2em 6em minmax(0, 1fr); padding: 6px 0; border-bottom: 1px solid #e1e4e8; }}
-    tr.head {{ display: none; }}
-    td {{ padding: 0; }}
-    td.icon {{ grid-row: 1 / span 2; }}
-    td.name {{ grid-column: 2 / span 2; overflow-wrap: anywhere; }}
-    td.size {{ grid-column: 2; grid-row: 2; text-align: left; }}
-    td.modified {{ grid-column: 3; grid-row: 2; }}
-  }}
-</style>
-</head>
-<body>
-<h2>Index of {display_path}</h2>
+  let body = format!(
+    r#"<h2>Index of {display_path}</h2>
 <table>
 <tr class="head"><th></th><th>Name</th><th>Size</th><th>Modified</th></tr>
 {rows}
-</table>
-</body>
-</html>"#
-  )
+</table>"#
+  );
+  document(&format!("Index of {display_path}"), &body)
 }
 
 /// The modified minute of a timestamp, printed as `"%Y-%m-%d %H:%M"` in UTC. The fraction rounds to whole

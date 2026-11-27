@@ -26,7 +26,7 @@ pub const AGENT_STDOUT_LOG_NAME: &str = "agent.stdout.log";
 pub const COMPRESSED_SUFFIX: &str = ".zst";
 
 /// Whether `event` is a Claude Code thinking-token progress event. A run log's JSON and the store's parsed chat events
-/// answer alike, so the For-you scan and the run-log writers share this test.
+/// answer alike, so the For-you scan, the run-log writers and the manager event callback share this test.
 pub fn is_thinking_tokens_event<E: EventFields>(event: &E) -> bool {
   event.field("type").and_then(EventFields::as_str_field) == Some(SYSTEM)
     && event.field("subtype").and_then(EventFields::as_str_field) == Some("thinking_tokens")

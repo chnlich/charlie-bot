@@ -378,7 +378,7 @@ pub fn load_prompt_doc(repo: &RepoRoot, name: &str, likely_cause: &str) -> anyho
 /// UTF-8 fail with the doc's path.
 fn prompt_doc_text(bytes: Vec<u8>, path: &Path) -> anyhow::Result<String> {
   let text = String::from_utf8(bytes).with_context(|| format!("{} is not UTF-8", path.display()))?;
-  Ok(str_methods::strip(&text.replace("\r\n", "\n").replace('\r', "\n")).to_string())
+  Ok(str_methods::strip(&str_methods::universal_newlines(&text)).to_string())
 }
 
 /// The platform's scope doc and the path it was read from (`load_scope_doc`). The path is the host file's absolute

@@ -3,12 +3,14 @@
 use std::io::Read as _;
 use std::path::Path;
 
+use charliebot_core::str_methods::universal_newlines;
+
 use crate::exit::CliExit;
 
 /// The file's UTF-8 text with text-mode line endings, where `\r\n` and a lone `\r` read as `\n`.
 pub fn read_text_mode(path: &Path) -> Result<String, CliExit> {
   let content = std::fs::read_to_string(path).map_err(|error| CliExit::error(error.to_string()))?;
-  Ok(content.replace("\r\n", "\n").replace('\r', "\n"))
+  Ok(universal_newlines(&content))
 }
 
 /// A required text file, a usage error on a missing or empty one. The text carries text-mode line

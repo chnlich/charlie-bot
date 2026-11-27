@@ -10,6 +10,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::SystemTime;
 
 use charliebot_compat::json::fast_json_bytes;
+use charliebot_core::fsutil;
 use charliebot_core::text_repr::{self, is_truthy, type_name, value_str};
 use charliebot_core::timefmt;
 use charliebot_registry::FeatureContext;
@@ -21,7 +22,6 @@ use serde::Serialize;
 use serde_json::ser::Formatter;
 use serde_json::{Map, Number, Serializer, Value};
 use sha2::{Digest, Sha256};
-use tempfile::Builder;
 use tokio::sync::watch::Receiver;
 use tokio::sync::{Mutex, Semaphore, watch};
 
@@ -196,19 +196,11 @@ async fn await_flight(mut receiver: Receiver<Option<FlightResult>>) -> FlightRes
 }
 
 fn build_cached(plan: &BuildPlan) -> FlightResult {
-  let temp_file = Builder::new().suffix(".tmp").tempfile_in(&plan.cache_dir).map_err(io_failure)?;
-  let (file, temp_path) = temp_file.into_parts();
-  drop(file);
-  let temp_path_buf = temp_path.to_path_buf();
-  let built = match plan.mode {
-    BuildMode::DirectPass => direct_pass(&plan.paths[0], &temp_path_buf),
-    BuildMode::Merge => merge_artifact(&plan.paths, &temp_path_buf, plan.shape),
-  };
-  if let Err(error) = built {
-    drop(temp_path);
-    return Err(error);
-  }
-  temp_path.persist(&plan.cache_path).map_err(|error| io_failure(error.error))?;
+  // The cached artifact is owner-only: it is published with mode 0600.
+  fsutil::atomic_build_mode(&plan.cache_path, 0o600, |temporary| match plan.mode {
+    BuildMode::DirectPass => direct_pass(&plan.paths[0], temporary),
+    BuildMode::Merge => merge_artifact(&plan.paths, temporary, plan.shape),
+  })?;
   prune_cache(&plan.cache_dir, &plan.cache_path)?;
   Ok(plan.cache_path.clone())
 }
@@ -286,6 +278,12 @@ fn prune_cache(cache_dir: &Path, fresh_path: &Path) -> Result<(), BuildFailure> 
 
 fn io_failure(error: std::io::Error) -> BuildFailure {
   BuildFailure::Failed(error.to_string())
+}
+
+impl From<std::io::Error> for BuildFailure {
+  fn from(error: std::io::Error) -> Self {
+    io_failure(error)
+  }
 }
 
 pub(super) fn is_json_trace(path: &Path) -> Result<bool, BuildFailure> {

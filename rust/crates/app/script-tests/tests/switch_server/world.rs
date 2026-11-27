@@ -27,7 +27,7 @@ use uuid::Uuid;
 pub const ACCESS_KEY: &str = "switch-test-key";
 pub const SESSION: &str = "11111111-2222-3333-4444-555555555555";
 /// The prior switch's record and runs file. Its stop line is the switch's last server stop, and check A takes the first
-/// server log launched at or after that stop, by the launch time on each log's first line.
+/// server log that holds a launch at or after that stop, by the launch line that the launcher appends to its log.
 const PRIOR_SWITCH_LOG: &str = "switch_20250101_000000.log";
 const PRIOR_SWITCH_RUNS: &str = "switch_20250101_000000.runs";
 const NEW_SERVER_LAUNCH: &str = "2025-01-01 00:00:02.000";

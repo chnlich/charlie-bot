@@ -5,6 +5,9 @@
 pub use charliebot_packages::{registry, seed_default_cron_tasks};
 
 #[cfg(test)]
+mod ended_run_token_tests;
+
+#[cfg(test)]
 mod thread_rules_tests;
 
 #[cfg(test)]

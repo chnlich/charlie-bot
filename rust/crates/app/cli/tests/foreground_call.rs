@@ -90,6 +90,7 @@ fn run_call(session: &TestSession, command: &str) -> Output {
       STOP_SECS,
     ])
     .env(SESSION_CGROUP_ENV, &session.dir)
+    .env("DBUS_SESSION_BUS_ADDRESS", "disabled:")
     .output()
     .expect("the charliebot binary runs")
 }
@@ -161,6 +162,7 @@ fn the_deadline_holds_after_the_starting_process_is_killed() {
       STOP_SECS,
     ])
     .env(SESSION_CGROUP_ENV, &session.dir)
+    .env("DBUS_SESSION_BUS_ADDRESS", "disabled:")
     .spawn()
     .expect("the charliebot binary starts");
   let started = Instant::now();

@@ -79,6 +79,9 @@ fn call_id() -> io::Result<String> {
 /// not run.
 fn start_guard(spec: &CallSpec, unit: &str, call_dir: &Path) -> io::Result<()> {
   let output = Command::new("systemd-run")
+    // Agent processes disable the session bus so their tools cannot start arbitrary user units. This trusted client
+    // must reach the user manager to start the deadline guard.
+    .env_remove("DBUS_SESSION_BUS_ADDRESS")
     .args(["--user", "--quiet", "--collect"])
     .arg(format!("--unit={unit}"))
     .arg("--")

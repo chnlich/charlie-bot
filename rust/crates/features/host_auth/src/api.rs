@@ -21,6 +21,7 @@ use crate::browser_login::{self, InputRefused, StartFailed};
 use crate::config::{self, BrowserLoginConfig};
 use crate::host_auth::{self, RoundSlot};
 use crate::page;
+use crate::route_paths::{LOGIN_INPUT_PATH, LOGIN_START_PATH, ROW_CHECK_PATH, ROW_PATH};
 use crate::rows;
 use crate::timestamps;
 
@@ -28,15 +29,6 @@ use crate::timestamps;
 use crate::probe::probe_host_fresh as host_probe;
 #[cfg(test)]
 use crate::test_support::bound_probe as host_probe;
-
-/// The route of a row's status JSON; `{id}` stands for the row's id.
-pub const ROW_PATH: &str = "/api/host-auth/rows/{id}";
-/// The route that checks one row now; `{id}` stands for the row's id.
-pub const ROW_CHECK_PATH: &str = "/api/host-auth/rows/{id}/check";
-/// The route that starts a login's browser flow; `{name}` stands for the login's config name.
-pub const LOGIN_START_PATH: &str = "/api/host-auth/logins/{name}/start";
-/// The route that serves a login's input page; `{name}` stands for the login's config name.
-pub const LOGIN_INPUT_PATH: &str = "/api/host-auth/logins/{name}/input";
 
 /// The host-auth routes, registered with the application feature context as shared state.
 pub fn routes(features: &Arc<FeatureContext>) -> Router {

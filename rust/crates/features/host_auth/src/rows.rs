@@ -15,13 +15,13 @@ use anyhow::{Context, bail};
 use serde_json::{Map, Value, json};
 use time::{Duration, OffsetDateTime};
 
-use crate::api::{LOGIN_INPUT_PATH, LOGIN_START_PATH, ROW_CHECK_PATH, ROW_PATH};
 use crate::attention::{Finding, RowState, classify_row_attention};
 use crate::browser_login::{self, LiveAttempt, Readback, timeout_text};
 use crate::config::{BrowserLoginConfig, login_bound_to};
 use crate::host_auth::{self, State};
 use crate::login_state::{self, LinkMatch, LoginState, LoginStatus};
 use crate::probe::ProbeStatus;
+use crate::route_paths::{LOGIN_INPUT_PATH, LOGIN_START_PATH, ROW_CHECK_PATH, ROW_PATH};
 use crate::timestamps::{self, LocalFormat, isoformat};
 
 /// The detail of a row whose link probe found no approval link.

@@ -14,6 +14,7 @@ mod poller;
 mod probe;
 mod process_tree;
 mod readers;
+mod route_paths;
 mod rows;
 mod ssh_config;
 mod state_file;

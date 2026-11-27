@@ -774,6 +774,7 @@ impl World {
       "inflight-files.sh",
       "clone-check.sh",
       "codex-skill-roots.sh",
+      "target-cache.sh",
       "member_kinds.txt",
       "gh-shim.sh",
       "github-post.sh",
@@ -1362,6 +1363,7 @@ impl World {
     harness::copy_file(&self.repo.join("dev/improve/member_kinds.txt"), &launch.join("member_kinds.txt"));
     harness::copy_file(&self.repo.join("dev/improve/clone-check.sh"), &launch.join("clone-check.sh"));
     harness::copy_file(&self.repo.join("dev/improve/codex-skill-roots.sh"), &launch.join("codex-skill-roots.sh"));
+    harness::copy_file(&self.repo.join("dev/improve/target-cache.sh"), &launch.join("target-cache.sh"));
     harness::copy_file(&self.resolve_answer, &launch.join("review/option.json"));
     harness::copy_file(&self.probe_answer, &launch.join("probe/option.json"));
     // The launcher names the revision of the kit and of the skills the runner fetches, which is the commit its charliebot

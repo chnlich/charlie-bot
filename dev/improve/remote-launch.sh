@@ -585,6 +585,8 @@ cp -- "$SCRIPT_DIR/inflight-files.sh" "$payload/inflight-files.sh"
 cp -- "$SCRIPT_DIR/clone-check.sh" "$payload/clone-check.sh"
 # The runner sources a codex round's skill roots from this copy: its codex home lists only the round's skills.
 cp -- "$SCRIPT_DIR/codex-skill-roots.sh" "$payload/codex-skill-roots.sh"
+# The runner sources the round's target cache trim from this copy, in the round's scope before its agent starts.
+cp -- "$SCRIPT_DIR/target-cache.sh" "$payload/target-cache.sh"
 # The runner clones its own checkout from this origin, so the round tools are built from the
 # runtime clone's repository and not from the direction clone's configuration.
 runtime_origin=$(git -C "$SCRIPT_DIR/../.." remote get-url origin 2>/dev/null) || runtime_origin=

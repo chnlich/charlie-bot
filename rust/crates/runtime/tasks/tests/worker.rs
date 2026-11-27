@@ -376,6 +376,7 @@ impl Root {
   fn new() -> anyhow::Result<Self> {
     let root = Self { dir: tempfile::tempdir()? };
     fs::create_dir_all(root.work())?;
+    fs::create_dir_all(root.events_log().parent().unwrap())?;
     Ok(root)
   }
 
@@ -392,7 +393,12 @@ impl Root {
   }
 
   fn events_log(&self) -> PathBuf {
-    self.path().join("data").join("events.jsonl")
+    self.home().join("sessions/s1/data/runs/t1/events.jsonl")
+  }
+
+  /// The run directory the worker writes its files in: the events log's directory.
+  fn data_dir(&self) -> PathBuf {
+    self.events_log().parent().unwrap().to_path_buf()
   }
 
   fn claude(&self, label: &str) -> PathBuf {
@@ -1130,7 +1136,7 @@ async fn test_a_resumed_worker_run_rejected_on_main_relays_to_ext1_and_completes
   let config = pooled_config(&root, &["main", "ext-1"], &[], &scripts.token)?;
   let setup = Setup::new(&root, scripted_registry(&state)?, &config)?;
   // The held process wrote its rejection to the raw log and exited, so the follow reads the log to its end.
-  let data = root.path().join("data");
+  let data = root.data_dir();
   fs::create_dir_all(&data)?;
   let mut raw = String::new();
   for event in [assistant_text("working"), rate_limit("rejected", 1.0), rejected_result()] {
@@ -1160,7 +1166,7 @@ fn reattach_run(
   events: &[Value],
   keyed: bool,
 ) -> anyhow::Result<(Worker, Arc<AtomicUsize>)> {
-  let data = root.path().join("data");
+  let data = root.data_dir();
   fs::create_dir_all(&data)?;
   let mut raw = String::new();
   for event in events {
@@ -1778,10 +1784,7 @@ async fn test_claude_resume_launch_still_passes_the_run_instructions_file() -> a
   assert_eq!(cmd[resume + 1], "held-conversation");
   let instructions =
     cmd.iter().position(|arg| arg == "--append-system-prompt-file").context("instructions are passed")?;
-  assert_eq!(
-    cmd[instructions + 1],
-    root.path().join("data").join(worker::HARNESS_INSTRUCTIONS_NAME).display().to_string()
-  );
+  assert_eq!(cmd[instructions + 1], root.data_dir().join(worker::HARNESS_INSTRUCTIONS_NAME).display().to_string());
   assert!(!cmd.iter().any(|arg| arg == "--input-format"));
   assert!(!cmd.iter().any(|arg| arg == "--replay-user-messages"));
   Ok(())
@@ -1807,7 +1810,7 @@ async fn test_worker_writes_hang_diagnostics_and_emits_event() -> anyhow::Result
 
   // The runner reports the signal that ended the process; no fake with status 143 is injected.
   assert_eq!(exit_code, -15, "the hang path ends the process with SIGTERM");
-  let diag_path = root.path().join("data").join(worker::HANG_DIAGNOSTICS_NAME);
+  let diag_path = root.data_dir().join(worker::HANG_DIAGNOSTICS_NAME);
   let written: Value = serde_json::from_str(&fs::read_to_string(&diag_path)?)?;
   assert!(written.is_object(), "the diagnostics the runner captured are written as an object");
   let logged = read_events(&root.events_log())?;
@@ -1840,7 +1843,7 @@ async fn test_worker_no_hang_diagnostics_does_not_write_file() -> anyhow::Result
 
   assert_eq!(task_worker.run().await?, 0);
 
-  assert!(!root.path().join("data").join(worker::HANG_DIAGNOSTICS_NAME).exists());
+  assert!(!root.data_dir().join(worker::HANG_DIAGNOSTICS_NAME).exists());
   Ok(())
 }
 
@@ -1854,7 +1857,7 @@ async fn test_resumed_run_captures_diagnostics_and_kills_its_live_process() -> a
   let config = config_text(&root, &[], &[], &[option_yaml("worker", "worker_script", Some(&scripts.token), None)])?;
   let setup = Setup::new(&root, scripted_registry(&Arc::new(ClaudeAccountState::new()))?, &config)?;
   let mut frames = setup.features.store.subscribe("t1");
-  let data = root.path().join("data");
+  let data = root.data_dir();
   fs::create_dir_all(&data)?;
   // The agent writes its result to the raw log, then stays alive. `exec` leaves the sleep as the group's only process.
   let result_line = serde_json::to_string(&result())?;

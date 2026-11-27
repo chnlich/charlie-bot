@@ -14,7 +14,7 @@ use std::io::{Read, Write};
 use charliebot_cli_common::exit::CliExit;
 
 use super::bash_hook::run_bash_guard;
-use super::shell_commands::{Bodies, Invocation, Killer, invocations};
+use super::shell_commands::{Bodies, Invocation, Killer, invocations, killer_named};
 
 /// The command names whose presence sends a command to the reader. A command with none of them passes unread.
 const KILL_NAMES: [&str; 3] = ["pkill", "killall", "pgrep"];
@@ -74,21 +74,24 @@ fn refuses(command: &str) -> bool {
   if !KILL_NAMES.iter().any(|name| command.contains(name)) {
     return false;
   }
-  let Ok(found) = invocations(command, Bodies::Data) else {
+  let Ok(found) = invocations(command, Bodies::Data, &[]) else {
     return true;
   };
   let mut pgrep_unscoped = false;
   let mut kill_seen = false;
   for invocation in &found {
-    match invocation {
-      Invocation::Dynamic | Invocation::Call { killer: Killer::Killall, .. } => return true,
-      Invocation::Call { killer: Killer::Pkill, args, .. } => {
+    let Invocation::Call { words, .. } = invocation else { return true };
+    let Some(killer) = killer_named(&words[0]) else { continue };
+    let args = &words[1..];
+    match killer {
+      Killer::Killall => return true,
+      Killer::Pkill => {
         if !scoped(args) {
           return true;
         }
       }
-      Invocation::Call { killer: Killer::Pgrep, args, .. } => pgrep_unscoped |= !scoped(args),
-      Invocation::Call { killer: Killer::Kill, .. } => kill_seen = true,
+      Killer::Pgrep => pgrep_unscoped |= !scoped(args),
+      Killer::Kill => kill_seen = true,
     }
   }
   pgrep_unscoped && kill_seen

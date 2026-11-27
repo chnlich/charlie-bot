@@ -22,7 +22,7 @@ use charliebot_cli_common::exit::CliExit;
 use charliebot_core::git;
 use proc_macro2::{Delimiter, Literal, TokenStream, TokenTree};
 
-use super::shell_commands::{Bodies, Invocation, Killer, invocations};
+use super::shell_commands::{Bodies, Invocation, Killer, invocations, killer_named};
 
 /// The shells whose scripts the check reads.
 const SHELLS: &[&str] = &["bash", "dash", "ksh", "sh", "zsh"];
@@ -102,11 +102,12 @@ fn is_shell_shebang(text: &str) -> bool {
 }
 
 fn scan_shell(path: &str, text: &str, refusals: &mut Vec<Refusal>) -> anyhow::Result<()> {
-  let found =
-    invocations(text, Bodies::Script).map_err(|error| anyhow::anyhow!("{path} does not read as shell: {error}"))?;
+  let found = invocations(text, Bodies::Script, &[])
+    .map_err(|error| anyhow::anyhow!("{path} does not read as shell: {error}"))?;
   for invocation in found {
-    if let Invocation::Call { killer: Killer::Kill, args, line } = invocation
-      && let Some(operand) = negative_pid(&args)
+    if let Invocation::Call { words, line } = invocation
+      && killer_named(&words[0]) == Some(Killer::Kill)
+      && let Some(operand) = negative_pid(&words[1..])
     {
       refusals.push(Refusal { path: path.to_string(), line, message: shell_message(operand) });
     }
@@ -181,14 +182,15 @@ fn check_string_literal(path: &str, literal: &Literal, refusals: &mut Vec<Refusa
   if !value.contains("kill") {
     return;
   }
-  let Ok(found) = invocations(&value, Bodies::Script) else {
+  let Ok(found) = invocations(&value, Bodies::Script, &[]) else {
     return;
   };
   let first_line = literal.span().start().line;
   let spans_lines = literal.to_string().contains('\n');
   for invocation in found {
-    if let Invocation::Call { killer: Killer::Kill, args, line } = invocation
-      && let Some(operand) = negative_pid(&args)
+    if let Invocation::Call { words, line } = invocation
+      && killer_named(&words[0]) == Some(Killer::Kill)
+      && let Some(operand) = negative_pid(&words[1..])
     {
       let line = if spans_lines { first_line + line - 1 } else { first_line };
       refusals.push(Refusal { path: path.to_string(), line, message: shell_message(operand) });

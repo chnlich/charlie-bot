@@ -1,11 +1,12 @@
-//! Reads a shell command text into its command positions, for the kill guard and the kill-signal check.
+//! Reads a shell command text into its command positions, for the kill guard, the kill-signal check and the wait guard.
 //!
 //! The reader follows POSIX word rules closely enough to tell a command word from an argument. Quotes and escapes are
 //! removed. A `$(...)` or backtick body is a command of its own. A `case` arm's pattern is no command, so the reader
 //! reads through the arm's `)`. A heredoc body is data, except that an unquoted delimiter runs the body's substitutions;
 //! `Bodies::Script` also reads the body of a heredoc that a shell or `ssh` runs as a script. A command word that holds a
 //! variable or a substitution has no known name, so it reads as `Invocation::Dynamic`. Each command reads with the line
-//! its first word is on.
+//! its first word is on. A wrapper such as `sudo` or `timeout` runs the command named by one of its arguments, so the
+//! caller names the commands it classifies, and the reader descends into a wrapper's argument that names one.
 
 /// How a heredoc body reads: as text, or, when a shell or `ssh` runs it, as a script.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,11 +24,16 @@ pub enum Killer {
   Kill,
 }
 
-/// One command position: a command the reader classifies, or a command word whose name the reader cannot know.
+/// One command position: a command with its words, or a command word whose name the reader cannot know.
 #[derive(Debug)]
 pub enum Invocation {
   Dynamic,
-  Call { killer: Killer, args: Vec<String>, line: usize },
+  /// The command's words from its name on, and the line its first word is on. A wrapper that runs the command is not
+  /// among them.
+  Call {
+    words: Vec<String>,
+    line: usize,
+  },
 }
 
 /// Stands in for a command substitution inside a word. The shell fills in the word's value only when it runs the text.
@@ -56,26 +62,39 @@ fn runs_script(words: &[String]) -> bool {
 const KEYWORDS: &[&str] = &["!", "{", "}", "do", "done", "elif", "else", "fi", "if", "then", "until", "while"];
 
 /// Every command position in a text: the commands at its top level, inside its substitutions and heredocs, and in the
-/// text of a shell's `-c` argument or of `eval`. The text's first line is line 1.
-pub fn invocations(text: &str, bodies: Bodies) -> Result<Vec<Invocation>, String> {
-  invocations_from(text, 1, bodies)
+/// text of a shell's `-c` argument or of `eval`. A wrapper argument that names one of `classified` is the command the
+/// wrapper runs, so the position is that command's, and the wrapper itself is not a position. The text's first line is
+/// line 1.
+pub fn invocations(text: &str, bodies: Bodies, classified: &[&str]) -> Result<Vec<Invocation>, String> {
+  invocations_from(text, 1, bodies, classified)
 }
 
 /// `invocations` for a text whose first line is line `first_line` of its file, such as a shell's `-c` argument.
-pub fn invocations_from(text: &str, first_line: usize, bodies: Bodies) -> Result<Vec<Invocation>, String> {
+pub fn invocations_from(
+  text: &str,
+  first_line: usize,
+  bodies: Bodies,
+  classified: &[&str],
+) -> Result<Vec<Invocation>, String> {
   let mut reader = Reader::new(text, first_line, bodies);
   reader.read_list(None)?;
   // The old kill-guard reader refused `case` syntax as unparseable. Keep that fail-closed behavior while allowing
   // callers such as kill-check to inspect the commands that the shared reader can now parse inside each arm.
   let mut found = if reader.saw_case { vec![Invocation::Dynamic] } else { Vec::new() };
   for simple in &reader.simples {
-    call(&simple.words, simple.line, bodies, &mut found)?;
+    call(&simple.words, simple.line, bodies, classified, &mut found)?;
   }
   Ok(found)
 }
 
 /// Classifies one simple command: its command word, and the command that a wrapper runs.
-fn call(words: &[String], line: usize, bodies: Bodies, found: &mut Vec<Invocation>) -> Result<(), String> {
+fn call(
+  words: &[String],
+  line: usize,
+  bodies: Bodies,
+  classified: &[&str],
+  found: &mut Vec<Invocation>,
+) -> Result<(), String> {
   let Some(start) = command_start(words) else {
     return Ok(());
   };
@@ -86,15 +105,13 @@ fn call(words: &[String], line: usize, bodies: Bodies, found: &mut Vec<Invocatio
   }
   let name = base_name(command);
   let arguments = &words[start + 1..];
-  if let Some(killer) = killer_named(name) {
-    found.push(Invocation::Call { killer, args: arguments.to_vec(), line });
-  } else if name == "eval" {
-    found.extend(invocations_from(&arguments.join(" "), line, bodies)?);
+  if name == "eval" {
+    found.extend(invocations_from(&arguments.join(" "), line, bodies, classified)?);
   } else if SHELLS.contains(&name) {
     if let Some(flag) = arguments.iter().position(|word| is_c_flag(word))
       && let Some(script) = arguments.get(flag + 1)
     {
-      found.extend(invocations_from(script, line, bodies)?);
+      found.extend(invocations_from(script, line, bodies, classified)?);
     }
   } else if WRAPPERS.contains(&name) {
     if name == "command" && is_command_query(arguments) {
@@ -105,11 +122,13 @@ fn call(words: &[String], line: usize, bodies: Bodies, found: &mut Vec<Invocatio
         found.push(Invocation::Dynamic);
         break;
       }
-      if is_command_name(word) {
-        call(&arguments[offset..], line, bodies, found)?;
+      if is_classified(word, classified) {
+        call(&arguments[offset..], line, bodies, classified, found)?;
         break;
       }
     }
+  } else {
+    found.push(Invocation::Call { words: words[start..].to_vec(), line });
   }
   Ok(())
 }
@@ -143,21 +162,25 @@ fn is_dynamic(text: &str) -> bool {
   text.contains(['$', SUBSTITUTION])
 }
 
-fn is_command_name(text: &str) -> bool {
+/// Whether a wrapper's argument names a command that the wrapper runs: one of the callers' `classified` names, a
+/// killer, or a shell or `eval`, whose text is read as commands.
+fn is_classified(text: &str, classified: &[&str]) -> bool {
   let name = base_name(text);
-  killer_named(name).is_some() || name == "eval" || SHELLS.contains(&name)
+  killer_named(name).is_some() || classified.contains(&name) || name == "eval" || SHELLS.contains(&name)
 }
 
 fn is_c_flag(text: &str) -> bool {
   text.len() > 1 && text.starts_with('-') && !text.starts_with("--") && text.contains('c')
 }
 
-fn base_name(text: &str) -> &str {
+/// The name of a command word without its directory.
+pub fn base_name(text: &str) -> &str {
   text.rsplit_once('/').map_or(text, |(_, name)| name)
 }
 
-fn killer_named(name: &str) -> Option<Killer> {
-  match name {
+/// The killer that a command word names, if it names one.
+pub fn killer_named(text: &str) -> Option<Killer> {
+  match base_name(text) {
     "pkill" => Some(Killer::Pkill),
     "pgrep" => Some(Killer::Pgrep),
     "killall" => Some(Killer::Killall),

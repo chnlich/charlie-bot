@@ -3099,6 +3099,109 @@ fn a_pre_push_credential_hit_writes_the_hit_file_and_github_post_passes_3() {
   assert!(!ls_remote(&env, &clone).contains("improve/perf/topic-slug"), "nothing was pushed");
 }
 
+#[test]
+#[ignore = "integration"]
+fn the_pre_push_hook_skips_published_main_commits_after_rebase_and_checks_new_ones() {
+  let sandbox = Sandbox::new();
+  let (env, _gh_log, _home) = post(&sandbox);
+  let clone = hooked_clone(&sandbox, &env);
+  let branch = "improve/perf/topic-slug";
+  git(&env, &clone, &["push", "-q", "-u", "origin", branch]);
+  let initial_remote_tip = git(&env, &clone, &["rev-parse", "HEAD"]);
+
+  // Advance origin/main from a separate clone with a commit whose message matches the local pattern file.
+  let origin = sandbox.root().join("origin.git");
+  let other = sandbox.dir("other-clone");
+  git(&env, sandbox.root(), &["clone", "-q", "-b", "main", origin.to_str().unwrap(), other.to_str().unwrap()]);
+  std::fs::write(other.join("main.txt"), "main move\n").unwrap();
+  git(&env, &other, &["add", "main.txt"]);
+  git(&env, &other, &["commit", "-q", "-m", &format!("main move {PATTERN_TERM}")]);
+  git(&env, &other, &["push", "-q", "origin", "main"]);
+
+  // Rebase the already-pushed task branch onto the moved origin/main and push with --force-with-lease.
+  git(&env, &clone, &["fetch", "-q", "origin", "main"]);
+  git(&env, &clone, &["rebase", "-q", "origin/main"]);
+  let mut force_push = harness::command("git", &env);
+  force_push.args(["push", "-q", "--force-with-lease", "origin", branch]);
+  let passed = run_in(&mut force_push, &clone);
+  assert_eq!(passed.code, 0, "rebased push should skip published main commit: {}", passed.describe());
+  let rebased_tip = git(&env, &clone, &["rev-parse", "HEAD"]);
+  assert_ne!(rebased_tip, initial_remote_tip);
+  assert!(
+    git(&env, &clone, &["ls-remote", "origin", &format!("refs/heads/{branch}")]).contains(&rebased_tip),
+    "rebased tip should be on origin"
+  );
+
+  // A new local commit with a leaking message on the rebased branch is refused and named.
+  git(&env, &clone, &["commit", "-q", "--allow-empty", "-m", &format!("local {PATTERN_TERM}")]);
+  let bad_msg_sha = git(&env, &clone, &["rev-parse", "HEAD"]);
+  let mut bad_msg_push = harness::command("git", &env);
+  bad_msg_push.args(["push", "-q", "--force-with-lease", "origin", branch]);
+  let refused = run_in(&mut bad_msg_push, &clone);
+  assert_ne!(refused.code, 0, "{}", refused.describe());
+  assert!(refused.stdout.contains(&bad_msg_sha), "{}", refused.describe());
+  assert!(
+    git(&env, &clone, &["ls-remote", "origin", &format!("refs/heads/{branch}")]).contains(&rebased_tip),
+    "remote tip must not move on message leak"
+  );
+
+  // A new local commit with a leaking diff on the rebased branch is also refused and named.
+  git(&env, &clone, &["reset", "--hard", "-q", "HEAD~1"]);
+  std::fs::write(clone.join("leak.txt"), format!("value {PATTERN_TERM}\n")).unwrap();
+  git(&env, &clone, &["add", "leak.txt"]);
+  git(&env, &clone, &["commit", "-q", "-m", "clean message"]);
+  let bad_diff_sha = git(&env, &clone, &["rev-parse", "HEAD"]);
+  let mut bad_diff_push = harness::command("git", &env);
+  bad_diff_push.args(["push", "-q", "--force-with-lease", "origin", branch]);
+  let refused = run_in(&mut bad_diff_push, &clone);
+  assert_ne!(refused.code, 0, "{}", refused.describe());
+  assert!(refused.stdout.contains(&bad_diff_sha), "{}", refused.describe());
+  assert!(
+    git(&env, &clone, &["ls-remote", "origin", &format!("refs/heads/{branch}")]).contains(&rebased_tip),
+    "remote tip must not move on diff leak"
+  );
+
+  // An ordinary fast-forward push passes when clean and refuses when a new commit leaks.
+  git(&env, &clone, &["reset", "--hard", "-q", "HEAD~1"]);
+  std::fs::write(clone.join("ff.txt"), "clean fast-forward\n").unwrap();
+  git(&env, &clone, &["add", "ff.txt"]);
+  git(&env, &clone, &["commit", "-q", "-m", "clean ff"]);
+  let ff_tip = git(&env, &clone, &["rev-parse", "HEAD"]);
+  let mut ff_push = harness::command("git", &env);
+  ff_push.args(["push", "-q", "origin", branch]);
+  let ff_passed = run_in(&mut ff_push, &clone);
+  assert_eq!(ff_passed.code, 0, "{}", ff_passed.describe());
+  assert!(
+    git(&env, &clone, &["ls-remote", "origin", &format!("refs/heads/{branch}")]).contains(&ff_tip),
+    "fast-forward tip should be on origin"
+  );
+
+  // Even without a local tracking ref for the branch, the existing remote tip itself is still excluded.
+  git(&env, &other, &["fetch", "-q", "origin", &format!("{branch}:{branch}")]);
+  git(&env, &other, &["checkout", "-q", branch]);
+  git(&env, &other, &["commit", "-q", "--allow-empty", "-m", &format!("published elsewhere {PATTERN_TERM}")]);
+  git(&env, &other, &["push", "-q", "origin", branch]);
+  git(&env, &clone, &["fetch", "-q", "origin", branch]);
+  git(&env, &clone, &["reset", "--hard", "-q", "FETCH_HEAD"]);
+  git(&env, &clone, &["update-ref", "-d", &format!("refs/remotes/origin/{branch}")]);
+  git(&env, &clone, &["commit", "-q", "--allow-empty", "-m", "clean atop remote tip"]);
+  let mut unref_ff_push = harness::command("git", &env);
+  unref_ff_push.args(["push", "-q", "origin", branch]);
+  let unref_ff_passed = run_in(&mut unref_ff_push, &clone);
+  assert_eq!(unref_ff_passed.code, 0, "{}", unref_ff_passed.describe());
+
+  // A new branch keeps scanning commits not reachable from any remote ref.
+  git(&env, &clone, &["switch", "-q", "-c", "new-topic", "origin/main"]);
+  git(&env, &clone, &["commit", "-q", "--allow-empty", "-m", &format!("new branch {PATTERN_TERM}")]);
+  let new_bad_sha = git(&env, &clone, &["rev-parse", "HEAD"]);
+  let mut new_bad_push = harness::command("git", &env);
+  new_bad_push.args(["push", "-q", "-u", "origin", "new-topic"]);
+  let new_refused = run_in(&mut new_bad_push, &clone);
+  assert_ne!(new_refused.code, 0, "{}", new_refused.describe());
+  assert!(new_refused.stdout.contains(&new_bad_sha), "{}", new_refused.describe());
+  assert!(!ls_remote(&env, &clone).contains("new-topic"));
+}
+
 // -- github-post.sh push and the required pattern file --
 
 #[test]

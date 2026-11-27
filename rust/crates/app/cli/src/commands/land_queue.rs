@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use charliebot_cli_common::args::with_infer_long_args;
-use charliebot_cli_common::exit::CliExit;
+use charliebot_cli_common::exit::{CliExit, charliebot_home_or_exit};
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::resolve;
 use charliebot_core::config;
@@ -21,8 +21,6 @@ use charliebot_tasks::land::{LandState, QueueEnd};
 use charliebot_tasks::land_queue::{self, Cadence, Owner, Site};
 use clap::{Arg, ArgAction, Command};
 use serde_json::json;
-
-use crate::commands::session::home_dir;
 
 /// The exit code of a `run --sha` whose head moved on: a newer landing call owns the landing now.
 const SUPERSEDED_EXIT: i32 = 9;
@@ -74,7 +72,7 @@ fn working_dir() -> Result<PathBuf, CliExit> {
 
 /// The owner a session names: its waiting entries and its wakes.
 fn owner_of(session_id: String, worktree: &Path) -> Result<Owner, CliExit> {
-  let home = home_dir()?;
+  let home = charliebot_home_or_exit()?;
   let session_dir = config::sessions_dir_in(&home).join(&session_id);
   Ok(Owner { session_id, session_dir, worktree: worktree.to_path_buf(), program: PathBuf::from("charliebot") })
 }
@@ -172,7 +170,7 @@ fn run(args: &[OsString]) -> Result<(), CliExit> {
 }
 
 fn run_landing(session_id: &str, sha: &str) -> Result<(), CliExit> {
-  let home = home_dir()?;
+  let home = charliebot_home_or_exit()?;
   let registry = charliebot_packages::registry().map_err(|error| CliExit::error(format!("{error:#}")))?;
   let ci_wait = Duration::from_secs(u64::try_from(charliebot_tasks::land::HOLDER_CI_WAIT_SECS).unwrap_or(u64::MAX));
   let end = runtime()?

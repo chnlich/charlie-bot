@@ -276,7 +276,7 @@ pub fn run(matches: &ArgMatches) -> Result<(), CliExit> {
   // Before `--cmd` starts anything: a round refuses here, so no command runs that the registration cannot watch.
   base_url::refuse_in_round()?;
   let session_id = resolve::resolve_from_env(args.session.as_deref())?;
-  let sessions_dir = config::sessions_dir_in(&home_dir()?);
+  let sessions_dir = config::sessions_dir_in(&charliebot_home_or_exit()?);
   match &args.cmd {
     Some(cmd) => start_and_register(&sessions_dir, &session_id, &args, cmd),
     None => register_watch(&sessions_dir, &session_id, &args),
@@ -383,7 +383,7 @@ fn cancel_trigger(matches: &ArgMatches) -> Result<(), CliExit> {
   base_url::refuse_in_round()?;
   let session_id = resolve::resolve_from_env(None)?;
   let trigger_id = matches.get_one::<String>("trigger-id").expect("clap requires the trigger id").clone();
-  let sessions_dir = config::sessions_dir_in(&home_dir()?);
+  let sessions_dir = config::sessions_dir_in(&charliebot_home_or_exit()?);
   let endpoint = route::fill(triggers::CANCEL_TRIGGER_PATH, &[session_id.as_str(), trigger_id.as_str()]);
   let record = trigger_files::trigger_path(&sessions_dir.join(&session_id), &trigger_id);
   client::post(&endpoint, json!({}), Some(Box::new(move || Ok(cancelled_on_disk(&record)))), &[])?;
@@ -477,10 +477,6 @@ fn io_failure(error: io::Error) -> CliExit {
 
 fn response_field<'a>(response: &'a Value, key: &str) -> Result<&'a Value, CliExit> {
   response.get(key).ok_or_else(|| CliExit::error(format!("the response lacks {key}")))
-}
-
-fn home_dir() -> Result<PathBuf, CliExit> {
-  charliebot_home_or_exit()
 }
 
 /// Refuses a wait past the trigger cap here, before `--cmd` starts anything the registration would have to kill.

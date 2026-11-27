@@ -423,7 +423,9 @@ impl HomePlan {
   ///
   /// The row is the first open manager task that is a root with a worker child and a manager child. The sidebar's
   /// derived tree archives every task that is not open, and with it the task's subtree, so both children are made open
-  /// tasks: the manager child keeps its planned runs, and the worker child is an open task that never ran.
+  /// tasks: the manager child keeps its planned runs, and the worker child is an open task that never ran. The plan
+  /// never keeps a worker open (an open session is a manager), so the fixture always reopens the worker child, and both
+  /// reopened children join the active listing.
   fn serve_fixture(sessions: &[SessionPlan]) -> Option<ServeFixture> {
     let mut children: Vec<Vec<usize>> = vec![Vec::new(); sessions.len()];
     for (index, session) in sessions.iter().enumerate() {
@@ -1374,9 +1376,9 @@ mod tests {
   }
 
   /// The serve shape's fixture row carries six row indicators from store facts — the child count, the unread dot, the
-  /// pending-trigger bell, its own and its subtree's waiting boxes, and the loader its paused child paints — with the
-  /// long display name and backend name of the wrapping case, at the listing order's second place. The lab shape plants
-  /// no fixture, and neither shape adds a session.
+  /// pending-trigger bell, its own and its subtree's waiting boxes, and the loader its paused child paints in the
+  /// spinner's place — with the long display name and backend name of the wrapping case, at the listing order's second
+  /// place. The lab shape plants no fixture, and neither shape adds a session.
   #[test]
   fn the_serve_shape_marks_one_row_with_every_indicator() {
     let sessions = SCALED_SESSIONS;
@@ -1395,16 +1397,17 @@ mod tests {
     assert_eq!(row.backend, FIXTURE_ROW_BACKEND);
     let children: Vec<&SessionPlan> =
       plan.sessions.iter().filter(|session| session.parent == Some(fixture.row)).collect();
-    assert!(
-      children.iter().any(|child| child.profile == TaskProfile::Worker),
-      "a worker child's pending trigger paints the loader"
-    );
     assert!(children.iter().any(|child| child.profile != TaskProfile::Worker), "a manager child draws the child count");
+    // The loader stands in for the spinner. The spinner reads a live run or a busy turn, and no home file carries either,
+    // so the spinner stays unlit and the paused worker's pending trigger paints the loader in the spinner's slot.
     let paused_worker = &plan.sessions[fixture.paused_worker];
     assert_eq!(paused_worker.parent, Some(fixture.row));
     assert_eq!(paused_worker.profile, TaskProfile::Worker);
+    assert!(
+      paused_worker.pending_triggers > 0,
+      "the paused worker's pending trigger paints the loader, which stands in for the spinner"
+    );
     assert!(paused_worker.waiting, "the child's Waiting on you item paints the row's subtree box");
-    assert!(paused_worker.pending_triggers > 0, "the child's pending trigger makes it the paused worker");
     // The sidebar's derived tree archives every task that is not open, so each child stays an open task.
     assert!(paused_worker.close.is_none(), "an open task stays in the active listing");
     assert!(paused_worker.runs.is_empty() && paused_worker.log_boundary_only, "the child never ran");

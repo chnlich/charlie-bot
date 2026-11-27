@@ -7,8 +7,8 @@
 # committed and uncommitted paths of each worktree branch with a live claimant. A claimed
 # path that origin/main has no object at carries a third field, `absent-on-origin-main`.
 # Work that origin does not carry, on a path origin/main has, carries the third field `local-only`: uncommitted work,
-# and every committed path of a branch whose origin copy is not at the commit this checkout holds. No merge on origin
-# can test that work, so the claim check refuses it (dev/improve/claim-check.sh).
+# and every committed path of a branch whose origin copy does not contain the commit this checkout holds. No merge on
+# origin can test that work, so the claim check refuses it (dev/improve/claim-check.sh).
 # The branch is the one that carries the path: uncommitted work prints with the branch of
 # its dirty worktree, a path that an unmerged commit changes prints with that commit's
 # branch, and an open pull request's files print with its head branch. A path whose
@@ -98,15 +98,15 @@ print_claim() {
   fi
 }
 
-# branch_local_only <root> <branch>: set branch_is_local_only to yes when origin does not carry the branch at the commit
-# that this checkout holds for it, and to no when it does. A commit that origin lacks has no merge on origin to test. An
-# unreadable branch or origin stops the script. The result is a variable, not printed output, so the exit stops the
-# script rather than a subshell.
+# branch_local_only <root> <branch>: set branch_is_local_only to yes when origin does not contain the commit this
+# checkout holds for the branch, and to no when it does. A remote branch may have advanced while still carrying that
+# commit. A commit origin lacks has no merge on origin to test. An unreadable branch or origin stops the script. The
+# result is a variable, not printed output, so the exit stops the script rather than a subshell.
 branch_is_local_only=no
 branch_local_only() {
   local root=$1
   local branch=$2
-  local tip listing sha ref remote_tip=
+  local tip listing sha ref remote_tip= remote_ref comparison status
   if ! tip=$(git -C "$root" rev-parse --verify --quiet "refs/heads/$branch^{commit}"); then
     printf 'cannot read the commit of branch %s in %s\n' "$branch" "$root" >&2
     exit 1
@@ -120,10 +120,37 @@ branch_local_only() {
       remote_tip=$sha
     fi
   done <<<"$listing"
+  if [[ -z $remote_tip ]]; then
+    branch_is_local_only=yes
+    return
+  fi
   if [[ $remote_tip == "$tip" ]]; then
     branch_is_local_only=no
+    return
+  fi
+  remote_ref="refs/improve/inflight-origin/$BASHPID/$branch"
+  if ! git -C "$root" fetch --quiet --no-tags --no-write-fetch-head origin \
+    "+refs/heads/$branch:$remote_ref"; then
+    printf 'cannot fetch branch %s from origin in %s\n' "$branch" "$root" >&2
+    exit 1
+  fi
+  if comparison=$(git -C "$root" merge-base --is-ancestor "$tip" "$remote_ref" 2>&1); then
+    status=0
   else
+    status=$?
+  fi
+  if ! git -C "$root" update-ref -d "$remote_ref"; then
+    printf 'cannot remove temporary claim ref %s in %s\n' "$remote_ref" "$root" >&2
+    exit 1
+  fi
+  if (( status == 0 )); then
+    branch_is_local_only=no
+  elif (( status == 1 )); then
     branch_is_local_only=yes
+  else
+    printf 'cannot compare branch %s with origin in %s: git merge-base exited %s: %s\n' \
+      "$branch" "$root" "$status" "$comparison" >&2
+    exit 1
   fi
 }
 

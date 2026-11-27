@@ -402,7 +402,7 @@ Each refusal names the claimed path and its claimant, and nothing is sent or mer
 The list is the launch's snapshot, so a claim made after the launch is not in it.
 A path whose only changes are landed commits is not listed. Every listed path prints as `path<TAB>branch`, naming the branch that carries it, with a third field in two cases: `absent-on-origin-main` when origin/main has no object at the path, and `local-only` when origin does not carry the claim's work on a path origin/main has. Other claims have no third field:
 - uncommitted work, with the branch of its dirty worktree (`local-only`);
-- an unmerged commit's path, with that commit's branch, which is `local-only` when origin's copy of the branch is not at the commit the worktree holds;
+- an unmerged commit's path, with that commit's branch, which is `local-only` when origin's copy of the branch does not contain the commit the worktree holds;
 - an open pull request's file, with its head branch.
 
 A claim on a path absent from origin/main does not block a topic; the list marks it `absent-on-origin-main`.

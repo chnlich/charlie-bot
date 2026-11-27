@@ -3870,6 +3870,43 @@ fn a_branch_whose_commit_origin_does_not_carry_names_its_claim_local_only() {
   }
 }
 
+#[test]
+#[ignore = "integration"]
+fn a_stale_worktree_branch_is_not_local_only_when_origin_contains_its_commit() {
+  let world = World::new();
+  fs::write(world.repo.join("shared.md"), "main\n").expect("the shared file on main");
+  world.git(&world.repo, &["add", "-A"]);
+  world.git(&world.repo, &["commit", "-q", "-m", "add the shared file on main"]);
+  world.git(&world.repo, &["push", "-q", "origin", "main"]);
+
+  let stale = world.sandbox.root().join("stale");
+  world.git(&world.repo, &["worktree", "add", "-q", &stale.display().to_string(), "-b", "charliebot/stale"]);
+  fs::write(stale.join("shared.md"), "claim edit\n").expect("the claim's edit");
+  world.git(&stale, &["add", "-A"]);
+  world.git(&stale, &["commit", "-q", "-m", "synthetic claim edit"]);
+  world.git(&stale, &["push", "-q", "origin", "charliebot/stale"]);
+
+  let advanced = world.sandbox.root().join("advanced");
+  world.git(
+    &world.repo,
+    &["worktree", "add", "-q", &advanced.display().to_string(), "-b", "charliebot/stale-advanced", "charliebot/stale"],
+  );
+  fs::write(advanced.join("advanced.md"), "origin advanced\n").expect("the origin-only change");
+  world.git(&advanced, &["add", "-A"]);
+  world.git(&advanced, &["commit", "-q", "-m", "advance the claimant branch"]);
+  world.git(&advanced, &["push", "-q", "origin", "HEAD:refs/heads/charliebot/stale"]);
+  world.git(&advanced, &["push", "-q", "origin", "charliebot/stale-advanced"]);
+
+  let run = run_inflight_list(&world);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(
+    run.stdout.lines().any(|line| line == "shared.md\tcharliebot/stale"),
+    "origin contains the stale worktree's commit, so the claim must be merge-testable:\n{}",
+    run.describe()
+  );
+}
+
 /// One landed branch with dirty, staged and untracked paths, as a task worktree can hold after its commits land.
 fn landed_worktree_with_uncommitted_state(world: &World, name: &str) -> std::path::PathBuf {
   let checkout = world.sandbox.root().join(name);

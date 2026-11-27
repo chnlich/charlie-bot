@@ -36,6 +36,7 @@ use charliebot_tasks::execution::TaskExecutionAdapter;
 use charliebot_tasks::{git, prompts, spawner_prompt};
 use serde_json::{Map, Value, json};
 
+use crate::LOG_TARGET;
 use crate::command::{self, ImproveState, LoopStatus};
 use crate::judgment::{
   ITERATION_SUMMARIES_HEADING, LOOP_FAILURE_ERROR_PREFIX, RUNNER_FALLBACK_REPORT_MARKER, ReportValidity,
@@ -316,7 +317,7 @@ pub async fn run_improve_sequence(
     Progress { goal: spec.goal.to_string(), previous_summaries: Vec::new(), blocked: None, completed_iterations: 0 };
   if let Err(error) = run_loop(spec, cfg, tree, repo_root, pool, adapter, &mut progress).await {
     tracing::error!(
-      target: "charliebot_improve",
+      target: LOG_TARGET,
       session = spec.session_id,
       loop_id = spec.loop_id,
       error = format!("{error:#}").as_str(),
@@ -345,16 +346,16 @@ async fn settle_failure(
         _ => controller_error,
       });
       if let Err(save_error) = command::save_loop_state(cfg, spec.session_id, &state) {
-        tracing::error!(target: "charliebot_improve", session = spec.session_id, error = format!("{save_error:#}").as_str(), "improve_sequence_state_save_failed");
+        tracing::error!(target: LOG_TARGET, session = spec.session_id, error = format!("{save_error:#}").as_str(), "improve_sequence_state_save_failed");
       }
     }
     Ok(None) => {}
     Err(load_error) => {
-      tracing::error!(target: "charliebot_improve", session = spec.session_id, error = format!("{load_error:#}").as_str(), "improve_sequence_state_load_failed");
+      tracing::error!(target: LOG_TARGET, session = spec.session_id, error = format!("{load_error:#}").as_str(), "improve_sequence_state_load_failed");
     }
   }
   if let Err(clear_error) = command::clear_active_loop_lock(cfg, spec.session_id) {
-    tracing::error!(target: "charliebot_improve", session = spec.session_id, error = format!("{clear_error:#}").as_str(), "improve_sequence_lock_clear_failed");
+    tracing::error!(target: LOG_TARGET, session = spec.session_id, error = format!("{clear_error:#}").as_str(), "improve_sequence_lock_clear_failed");
   }
   let report = json!({
     "type": IMPROVE_FAILED,
@@ -363,7 +364,7 @@ async fn settle_failure(
     "iterations_completed": progress.completed_iterations,
   });
   if let Err(report_error) = tree.deliver_to_successor(spec.session_id, report).await {
-    tracing::error!(target: "charliebot_improve", session = spec.session_id, error = %report_error, "improve_sequence_failure_report_failed");
+    tracing::error!(target: LOG_TARGET, session = spec.session_id, error = %report_error, "improve_sequence_failure_report_failed");
   }
   close_ended_loop_child(tree, cfg, spec.session_id, spec.loop_id).await;
 }
@@ -394,7 +395,7 @@ async fn run_loop(
       failed.end_error = Some(format!("{WORKTREE_CREATE_ERROR_PREFIX}{error:#}"));
       command::save_loop_state(cfg, spec.session_id, &failed)?;
       command::clear_active_loop_lock(cfg, spec.session_id)?;
-      tracing::error!(target: "charliebot_improve", session = spec.session_id, loop_id = spec.loop_id, error = format!("{error:#}").as_str(), "improve_sequence_worktree_failed");
+      tracing::error!(target: LOG_TARGET, session = spec.session_id, loop_id = spec.loop_id, error = format!("{error:#}").as_str(), "improve_sequence_worktree_failed");
       tree
         .deliver_to_successor(
           spec.session_id,
@@ -526,7 +527,7 @@ async fn run_loop(
         }
       } else if let Some(reason) = blocker_reason {
         tracing::warn!(
-          target: "charliebot_improve",
+          target: LOG_TARGET,
           session = spec.session_id,
           loop_id = spec.loop_id,
           iteration,
@@ -645,7 +646,7 @@ async fn settle_withheld_iteration(
   command::save_loop_state(cfg, spec.session_id, &state)?;
   command::clear_active_loop_lock(cfg, spec.session_id)?;
   tracing::warn!(
-    target: "charliebot_improve",
+    target: LOG_TARGET,
     session = spec.session_id,
     loop_id = spec.loop_id,
     iteration,
@@ -761,11 +762,11 @@ async fn deliver_iteration_report(
   judgment: &IterationJudgment,
 ) -> anyhow::Result<()> {
   let Some(meta) = tree.load_meta(spec.child_id).await? else {
-    tracing::warn!(target: "charliebot_improve", session = spec.session_id, child = spec.child_id, "improve_sequence_report_no_parent");
+    tracing::warn!(target: LOG_TARGET, session = spec.session_id, child = spec.child_id, "improve_sequence_report_no_parent");
     return Ok(());
   };
   let Some(parent) = meta.task_parent_id.clone() else {
-    tracing::warn!(target: "charliebot_improve", session = spec.session_id, child = spec.child_id, "improve_sequence_report_no_parent");
+    tracing::warn!(target: LOG_TARGET, session = spec.session_id, child = spec.child_id, "improve_sequence_report_no_parent");
     return Ok(());
   };
   let events = tree.load_events_sync(spec.child_id)?;
@@ -811,7 +812,7 @@ async fn deliver_iteration_report(
     )
     .await?;
   tracing::info!(
-    target: "charliebot_improve",
+    target: LOG_TARGET,
     session = spec.session_id,
     child = spec.child_id,
     loop_id = spec.loop_id,
@@ -828,7 +829,7 @@ async fn deliver_iteration_report(
 pub async fn close_ended_loop_child(tree: &dyn SequenceTree, cfg: &CharlieBotConfig, session_id: &str, loop_id: i64) {
   if let Err(error) = close_ended_loop_child_inner(tree, cfg, session_id, loop_id).await {
     tracing::error!(
-      target: "charliebot_improve",
+      target: LOG_TARGET,
       session = session_id,
       loop_id,
       error = format!("{error:#}").as_str(),
@@ -896,7 +897,7 @@ async fn close_ended_loop_child_inner(
     }
   }
   tracing::info!(
-    target: "charliebot_improve",
+    target: LOG_TARGET,
     session = session_id,
     child = child_id.as_str(),
     loop_id,
@@ -1094,7 +1095,7 @@ pub async fn reconcile_interrupted_sequences(
         }
         repaired += 1;
         tracing::warn!(
-          target: "charliebot_improve",
+          target: LOG_TARGET,
           session = session_id.as_str(),
           loop_id,
           recorded_pid,

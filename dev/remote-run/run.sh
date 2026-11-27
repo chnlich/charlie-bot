@@ -305,13 +305,30 @@ if [[ "$existing_record" != '__NO_LOCAL_ROOT_RECORD__' ]]; then
       "$tree_name" "$REMOTE_RUN_OWNER_HOST" "$REMOTE_RUN_OWNER_ROOT" "$REMOTE_RUN_CALLER_HOST" "$sync_root" >&2
     exit 2
   fi
-  remote_stop=$(remote_run_stop_tree_command \
+  remote_check=$(remote_run_check_tree_command \
     "$REMOTE_RUN_CALLER_HOST" "$base/trees/$tree_name" "$encoded_root")
-  if remote_run_capture "$remote_stop"; then
-    :
+  if remote_run_capture "$remote_check"; then
+    case "$REMOTE_RUN_OUTPUT" in
+      ready|absent)
+        ;;
+      kept-locked)
+        printf 'sync: kept build host tree %s because its activity lock is held\n' "$tree_name" >&2
+        exit 2
+        ;;
+      kept-in-use:*)
+        printf 'sync: kept build host tree %s because process %s uses it\n' \
+          "$tree_name" "${REMOTE_RUN_OUTPUT#kept-in-use:}" >&2
+        exit 2
+        ;;
+      *)
+        printf 'sync: build host tree %s returned an unknown pre-sync check outcome: %q\n' \
+          "$tree_name" "$REMOTE_RUN_OUTPUT" >&2
+        exit 2
+        ;;
+    esac
   else
     status=$?
-    printf 'sync: failed to stop processes in build host tree %s (status %s): %s\n' \
+    printf 'sync: failed to check build host tree %s before replacing it (status %s): %s\n' \
       "$tree_name" "$status" "$REMOTE_RUN_OUTPUT" >&2
     exit "$status"
   fi

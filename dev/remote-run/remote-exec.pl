@@ -14,9 +14,8 @@
 #
 # A command run makes this process a child subreaper, so tmux servers and other daemons are adopted
 # instead of reparented away. It stops descendants when the command exits, receives a signal, or
-# loses its SSH output channel. The sync's tree stop checks cwd and executable paths before it replaces a tree.
-# The sweep never stops a process: it keeps a tree that its activity lock or a process (cwd, exe, open fd or
-# command line) holds.
+# loses its SSH output channel. Before a sync replaces a tree, its check keeps the tree when the activity lock or a
+# process (cwd, exe, open fd or command line) holds it. The sweep uses the same checks and never stops a process.
 # A shell cannot make itself a child subreaper, which is why this program is perl.
 #
 # A tree's owner record and the tree change together under the tree owner lock: a claim writes the record and
@@ -273,7 +272,7 @@ sub try_lock_tree_activity {
   my ($name, $create) = @_;
   my $lock_dir = "$base/tree-locks";
   if ($create && !-d $lock_dir) {
-    mkdir $lock_dir, 0700 or fail(2, "cannot create tree activity lock directory $lock_dir: $!");
+    mkdir $lock_dir, 0700 or -d $lock_dir or fail(2, "cannot create tree activity lock directory $lock_dir: $!");
   }
   my $path = tree_activity_lock_path($name);
   return unless -e $path || -l $path;
@@ -383,6 +382,7 @@ sub tree_is_dirty {
   return $status ne '';
 }
 
+# The mode-0700 base prevents another unprivileged uid from entering a tree. Scan visible processes for references to it.
 sub process_uses_tree {
   my ($tree, $ignored_cmdline_pids) = @_;
   local $! = 0;
@@ -437,99 +437,7 @@ sub process_uses_tree {
   return;
 }
 
-# The mode-0700 base prevents non-root processes with another uid from entering a tree. Scan every
-# process owned by the tree owner, and fail if /proc cannot identify one of those processes.
-sub processes_in_tree {
-  my ($tree, $tree_uid) = @_;
-  local $! = 0;
-  opendir my $proc, '/proc' or fail(2, "cannot list /proc while checking $tree: $!");
-  my @processes;
-  my @entries = readdir $proc;
-  fail(2, "cannot read /proc while checking $tree: $!") if $!;
-  for my $entry (grep { /\A[0-9]+\z/ } @entries) {
-    my $pid = 0 + $entry;
-    my @proc_stat = stat "/proc/$pid";
-    if (!@proc_stat) {
-      next if $!{ENOENT} || $!{ESRCH} || $!{EACCES};
-      fail(2, "cannot inspect process $pid while checking $tree: $!");
-    }
-    next if $proc_stat[4] != $tree_uid;
-    my $start_ticks = process_start_ticks($pid);
-    if (!defined $start_ticks) {
-      next if $!{ENOENT} || $!{ESRCH};
-      fail(2, "cannot read process $pid start time while checking $tree: $!");
-    }
-    my $inside = 0;
-    for my $name (qw(cwd exe)) {
-      my $path = readlink "/proc/$pid/$name";
-      if (!defined $path) {
-        next if $!{ENOENT} || $!{ESRCH} || $!{EACCES};
-        fail(2, "cannot inspect process $pid $name while checking $tree: $!");
-      }
-      if (path_is_inside_tree($path, $tree)) {
-        $inside = 1;
-        last;
-      }
-    }
-    push @processes, { pid => $pid, start_ticks => $start_ticks } if $inside;
-  }
-  return [sort { $a->{pid} <=> $b->{pid} } @processes];
-}
-
-sub signal_tree_processes {
-  my ($processes, $signal, $tree) = @_;
-  for my $process (@$processes) {
-    my $pid = $process->{pid};
-    my $current_start = process_start_ticks($pid);
-    if (!defined $current_start) {
-      next if $!{ENOENT} || $!{ESRCH};
-      fail(2, "cannot recheck process $pid before SIG$signal in $tree: $!");
-    }
-    next unless $current_start eq $process->{start_ticks};
-    next if kill $signal, $pid;
-    my $after_failed_signal = process_start_ticks($pid);
-    if (!defined $after_failed_signal) {
-      next if $!{ENOENT} || $!{ESRCH};
-      fail(2, "cannot recheck process $pid after failed SIG$signal in $tree: $!");
-    }
-    next unless $after_failed_signal eq $process->{start_ticks};
-    fail(2, "cannot send SIG$signal to process $pid in $tree: $!");
-  }
-}
-
-sub stop_tree_processes {
-  my ($tree, $tree_uid) = @_;
-  my %stopped;
-  my $term_deadline = monotonic() + $TERM_PHASE_SECONDS;
-  while (1) {
-    my $processes = processes_in_tree($tree, $tree_uid);
-    if (!@$processes) {
-      print STDERR "remote-exec: stopped process $_ in tree $tree\n" for sort { $a <=> $b } keys %stopped;
-      return;
-    }
-    $stopped{$_->{pid}} = 1 for @$processes;
-    signal_tree_processes($processes, 'TERM', $tree);
-    last if monotonic() >= $term_deadline;
-    select undef, undef, undef, 0.05;
-  }
-
-  my $kill_deadline = monotonic() + $TERM_PHASE_SECONDS;
-  while (1) {
-    my $processes = processes_in_tree($tree, $tree_uid);
-    if (!@$processes) {
-      print STDERR "remote-exec: stopped process $_ in tree $tree\n" for sort { $a <=> $b } keys %stopped;
-      return;
-    }
-    $stopped{$_->{pid}} = 1 for @$processes;
-    signal_tree_processes($processes, 'KILL', $tree);
-    if (monotonic() >= $kill_deadline) {
-      fail(2, "processes remain in $tree after SIGKILL: " . join(' ', map { $_->{pid} } @$processes));
-    }
-    select undef, undef, undef, 0.05;
-  }
-}
-
-# Serializes every change to an owner record and its tree. Stop takes no lock: it changes neither.
+# Serializes every change to an owner record and its tree. The pre-sync check changes neither.
 sub lock_tree_owners {
   my $path = "$base/tree-owners.lock";
   sysopen my $handle, $path, O_RDWR | O_CREAT, 0600 or fail(2, "cannot open the tree owner lock $path: $!");
@@ -610,20 +518,32 @@ sub fail_claim {
   fail(2, $message);
 }
 
-sub stop_build_tree {
+sub check_tree_before_sync {
   my ($caller_host, $requested_tree, $encoded_root) = @_;
   my ($name, $base_uid) = tree_request($caller_host, $requested_tree);
-  my ($recorded_host, $recorded_root, $format) = read_owner_record("$base/tree-owners/$name");
+  my $owner_lock = lock_tree_owners();
+  my $root = decode_base64($encoded_root // '');
+  fail(2, "the local root of build host tree $name is not an absolute path") unless $root =~ m{\A/[^\n]*\z};
+  my $owner_path = "$base/tree-owners/$name";
+  if (!-e $owner_path && !-l $owner_path) {
+    my ($tree) = present_tree($requested_tree, $name, $base_uid);
+    return 'absent' unless defined $tree;
+    fail(2, "build host tree $name exists without an owner record");
+  }
+  my ($recorded_host, $recorded_root, $format) = read_owner_record($owner_path);
   if ($format eq 'legacy') {
-    my $root = decode_base64($encoded_root // '');
     fail(2, "tree $name has a legacy owner record for a different local directory") unless $root eq $recorded_root;
   } else {
     fail(2, "tree $name belongs to caller host $recorded_host, not $caller_host") unless $recorded_host eq $caller_host;
+    fail(2, "tree $name belongs to local directory $recorded_root, not $root") unless $recorded_root eq $root;
   }
-  my ($tree, $tree_uid) = present_tree($requested_tree, $name, $base_uid);
-  return 0 unless defined $tree;
-  stop_tree_processes($tree, $tree_uid);
-  return 0;
+  my ($tree) = present_tree($requested_tree, $name, $base_uid);
+  return 'absent' unless defined $tree;
+  my $activity_lock = try_lock_tree_activity($name, 1);
+  return 'kept-locked' if defined($activity_lock) && !ref($activity_lock);
+  my $process = process_uses_tree($tree, { $$ => 1, getppid() => 1 });
+  return "kept-in-use:$process->{pid}:$process->{kind}" if defined $process;
+  return 'ready';
 }
 
 # Removes the tree, then its owner record and last-use record. A failed removal leaves all of them in place.
@@ -953,12 +873,14 @@ sub cargo_capable {
 }
 
 sub main {
-  if (@ARGV && $ARGV[0] eq '--stop-tree') {
-    fail(2, 'usage: remote-exec --stop-tree <caller host> <tree path> <base64 local root>') unless @ARGV == 4;
+  if (@ARGV && $ARGV[0] eq '--check-tree') {
+    fail(2, 'usage: remote-exec --check-tree <caller host> <tree path> <base64 local root>') unless @ARGV == 4;
     shift @ARGV;
     install_signal_handlers();
     $base = resolve_base();
-    return stop_build_tree(@ARGV);
+    my $outcome = check_tree_before_sync(@ARGV);
+    print "$outcome\n";
+    return 0;
   }
   if (@ARGV && $ARGV[0] eq '--sweep-tree') {
     fail(2, 'usage: remote-exec --sweep-tree <caller host> <tree path> <live|gone> <retention days> <dry-run 0|1>')

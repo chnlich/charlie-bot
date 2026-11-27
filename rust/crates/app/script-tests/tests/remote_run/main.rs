@@ -6,8 +6,8 @@
 //! comes back unchanged, 255 included. Owner records identify the caller host and local root. A tree whose current
 //! record names a gone root is removed at once; every other tree, including one with a path-only legacy record or
 //! no record, follows the age rule. The age is the last-use record, or the content age of a tree that has none.
-//! Every removal checks the tree lock, the cwd, exe, open fds and command lines of live processes, and Git dirt
-//! when the tree has `.git`. The sweep stops no process; a sync stops the processes in the tree it replaces. For
+//! Every removal checks the tree lock, the cwd, exe, open fds and command lines of live processes, and Git dirt when
+//! the tree has `.git`. A pre-sync replacement checks the tree lock and process references. Neither stops a process. For
 //! commands, the runner uses a short TMPDIR on the `/dev/shm` tmpfs, stops descendants on exit or signal, and
 //! detects a closed SSH output channel. The local work guard's refusal names the same host and prints in full
 //! while the host is unset.
@@ -69,12 +69,13 @@ case "$last" in
     HOME="$FAKE_BUILD_HOME" eval "$last"
     exit $?
     ;;
-  *--stop-tree*)
-    if [[ -n "${FAKE_SYNC_STOP_FAIL:-}" ]]; then
-      echo 'remote-exec: failed to stop a process in the build tree' >&2
+  *--check-tree*)
+    if [[ -n "${FAKE_SYNC_CHECK_FAIL:-}" ]]; then
+      echo 'remote-exec: cannot check the build tree before replacing it' >&2
       exit 23
     fi
-    if [[ -n "${FAKE_STOP_SUCCESS:-}" ]]; then
+    if [[ -n "${FAKE_SYNC_CHECK_SUCCESS:-}" ]]; then
+      echo ready
       exit 0
     fi
     HOME="$FAKE_BUILD_HOME" eval "$last"
@@ -361,6 +362,14 @@ fn sweep_tree(env: &Env, tree: &Path, root_state: &str, retention_days: &str, dr
   harness::run(&mut command)
 }
 
+fn check_tree_before_sync(env: &Env, tree: &Path, encoded_root: &str) -> harness::Run {
+  let mut command = Command::new("perl");
+  command.arg(remote_exec_pl()).arg("--check-tree").arg("host-a").arg(tree).arg(encoded_root);
+  command.env_clear();
+  command.envs(env);
+  harness::run(&mut command)
+}
+
 /// Holds the activity lock of `tree`, as a running sync or run does, until the returned file is dropped.
 fn hold_tree_activity_lock(tree: &Path) -> fs::File {
   let name = tree.file_name().expect("the tree has a name").to_string_lossy().into_owned();
@@ -623,8 +632,41 @@ fn a_held_tree_activity_lock_keeps_an_old_tree() {
 
   assert_eq!(run.code, 0, "{}", run.describe());
   assert_eq!(run.stdout.trim(), "kept-locked", "{}", run.describe());
-  assert!(tree.exists(), "the tree with a held owner lock was removed: {}", run.describe());
+  assert!(tree.exists(), "the tree with a held activity lock was removed: {}", run.describe());
   assert_eq!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_UN) }, 0, "unlock tree activity");
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pre_sync_check_keeps_a_tree_with_a_held_activity_lock() {
+  let sandbox = Sandbox::new();
+  let (tree, env) = install_sweep_tree(&sandbox, "sync-locked", &owner_record("host-a", Path::new("/")));
+  let _lock = hold_tree_activity_lock(&tree);
+
+  let run = check_tree_before_sync(&env, &tree, "Lw==");
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert_eq!(run.stdout.trim(), "kept-locked", "{}", run.describe());
+  assert!(tree.exists(), "the pre-sync check removed the tree: {}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pre_sync_check_keeps_a_tree_used_by_a_live_process() {
+  let sandbox = Sandbox::new();
+  let (tree, env) = install_sweep_tree(&sandbox, "sync-busy", &owner_record("host-a", Path::new("/")));
+  let mut process = Command::new("sleep").arg("30").current_dir(&tree).spawn().expect("start tree process");
+  let pid = process.id();
+
+  let run = check_tree_before_sync(&env, &tree, "Lw==");
+  let remains_alive = process.try_wait().expect("check the tree process").is_none();
+  process.kill().expect("stop the test process");
+  process.wait().expect("wait for the test process");
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert_eq!(run.stdout.trim(), format!("kept-in-use:{pid}:cwd"), "{}", run.describe());
+  assert!(remains_alive, "the pre-sync check stopped the process: {}", run.describe());
+  assert!(tree.exists(), "the pre-sync check removed the tree: {}", run.describe());
 }
 
 #[test]
@@ -1298,10 +1340,10 @@ fn a_same_name_tree_whose_recorded_directory_exists_keeps_the_refusal() {
   assert!(base.join("trees/project").exists(), "the live tree was removed: {}", run.describe());
 }
 
-/// An upload that replaces a tree's files stops existing in-tree processes first.
+/// An upload checks that no process or run holds the tree first.
 #[test]
 #[ignore = "integration"]
-fn a_sync_stops_the_existing_tree_before_uploading_replacements() {
+fn a_sync_checks_the_existing_tree_before_uploading_replacements() {
   let sandbox = Sandbox::new();
   sandbox.stub("ssh", FAKE_SSH);
   sandbox.stub("rsync", FAKE_RSYNC);
@@ -1311,21 +1353,22 @@ fn a_sync_stops_the_existing_tree_before_uploading_replacements() {
   std::fs::create_dir_all(base.join("trees/project")).expect("the existing remote tree");
   std::fs::write(base.join("tree-owners/project"), owner_record("host-a", &project)).expect("the current owner record");
   let mut env = fake_build_home_env(&sandbox);
-  env.insert("FAKE_STOP_SUCCESS".to_string(), "1".to_string());
+  env.insert("FAKE_SYNC_CHECK_SUCCESS".to_string(), "1".to_string());
 
   let run = run_runner(&env, &project, &["echo", "remote"]);
 
   assert_eq!(run.code, 0, "{}", run.describe());
   let log = ssh_log(&sandbox);
-  let stop_index = log.lines().position(|line| line.contains("--stop-tree")).expect("tree stop call");
+  let check_index = log.lines().position(|line| line.contains("--check-tree")).expect("tree check call");
   let upload_index =
     log.lines().position(|line| line.starts_with("rsync ") && line.contains("trees/project/")).expect("tree upload");
-  assert!(stop_index < upload_index, "the upload ran before the stop: {log}");
+  assert!(check_index < upload_index, "the upload ran before the tree check: {log}");
+  assert!(!log.contains("--stop-tree"), "the sync still invokes a process-stopping mode: {log}");
 }
 
 #[test]
 #[ignore = "integration"]
-fn a_failed_sync_tree_stop_keeps_the_tree_and_skips_upload() {
+fn a_failed_sync_tree_check_keeps_the_tree_and_skips_upload() {
   let sandbox = Sandbox::new();
   sandbox.stub("ssh", FAKE_SSH);
   sandbox.stub("rsync", FAKE_RSYNC);
@@ -1336,13 +1379,13 @@ fn a_failed_sync_tree_stop_keeps_the_tree_and_skips_upload() {
   std::fs::create_dir_all(&remote_tree).expect("the existing remote tree");
   std::fs::write(base.join("tree-owners/project"), owner_record("host-a", &project)).expect("the current owner record");
   let mut env = fake_build_home_env(&sandbox);
-  env.insert("FAKE_SYNC_STOP_FAIL".to_string(), "1".to_string());
+  env.insert("FAKE_SYNC_CHECK_FAIL".to_string(), "1".to_string());
 
   let run = run_runner(&env, &project, &["echo", "remote"]);
 
   assert_eq!(run.code, 23, "{}", run.describe());
-  assert!(run.stderr.contains("failed to stop processes in build host tree project"), "{}", run.describe());
-  assert!(remote_tree.exists(), "the tree was removed after its stop failed: {}", run.describe());
+  assert!(run.stderr.contains("failed to check build host tree project before replacing it"), "{}", run.describe());
+  assert!(remote_tree.exists(), "the tree was removed after its pre-sync check failed: {}", run.describe());
   assert!(!ssh_log(&sandbox).lines().any(|line| line.starts_with("rsync ") && line.contains("trees/project/")));
 }
 

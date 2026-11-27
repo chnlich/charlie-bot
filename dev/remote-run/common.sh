@@ -429,9 +429,9 @@ remote_run_claim_tree_command() {
     "$encoded_root"
 }
 
-remote_run_stop_tree_command() {
+remote_run_check_tree_command() {
   local caller_host=$1 tree_path=$2 encoded_root=$3
-  printf 'REMOTE_RUN_REMOTE_BASE="%s" exec "%s/%s" --stop-tree "%s" "%s" "%s"' \
+  printf 'REMOTE_RUN_REMOTE_BASE="%s" exec "%s/%s" --check-tree "%s" "%s" "%s"' \
     "$REMOTE_RUN_REMOTE_BASE" "$(remote_run_base_path)" "$REMOTE_RUN_EXEC_NAME" \
     "$caller_host" "$tree_path" "$encoded_root"
 }

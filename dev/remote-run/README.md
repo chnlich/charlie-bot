@@ -102,12 +102,12 @@ executes the copy named for its own checkout's content hash.
    changes that a run made after the last sync, and the next sync commits them. The sweep never stops a process. `--dry-run` runs the
    same checks and prints the same selection with each tree's allocated bytes, and it deletes no tree, record or
    last-use file.
-4. The stop and the claim: before a sync replaces an owned tree, `remote-exec.pl` sends TERM to same-owner processes
-   whose cwd or executable path is inside the tree, waits two seconds, then sends KILL to survivors. It reports the
-   stopped pids. A process inspection, stop or removal error leaves the tree in place and fails the run. The claim
-   then writes the tree's owner record and creates the tree under the owner lock, and writes the tree's last-use
-   record under its activity lock. A claim whose tree cannot be created removes its record again, so a record and
-   its tree are written together and a record outlives a stopped claim only until the next sweep drops it.
+4. The pre-sync check and claim: before a sync replaces an owned tree, `remote-exec.pl` checks its activity lock and
+   every live process whose cwd, executable, open fd or command line is inside or names the tree. A held lock or a
+   matching process keeps the tree and fails the run; sync never stops a process. The claim then writes the tree's
+   owner record and creates the tree under the owner lock, and writes the tree's last-use record under its activity
+   lock. A claim whose tree cannot be created removes its record again, so a record and a tree are written together
+   and a record outlives an interrupted claim only until the next sweep drops it.
 5. The upload: rsync with the tree's `.gitignore` as filters, excluding `.git`, `.venv`,
    `__pycache__`, and `rust/target`. A remote path the local tree ignores is protected from the
    sync's delete. After a cargo upload, the local `rust/target` is deleted: the build host owns
@@ -131,8 +131,8 @@ executes the copy named for its own checkout's content hash.
 tmux servers included, are adopted instead of reparented away. It stops every descendant when the
 command exits or receives a signal, and treats a closed SSH output channel as a caller disconnect.
 Stopping sends SIGTERM, then SIGKILL two seconds later; any process still alive after eight seconds
-is named in the error output. Its tree-stop mode checks process cwd and executable paths before a sync
-replaces an owned tree. The sweep stops no process. Its TMPDIR directories under `/dev/shm`
+is named in the error output. Its pre-sync check and sweep both keep a tree whose activity lock or any process cwd,
+executable, open fd or command line uses it. Neither stops a process. Its TMPDIR directories under `/dev/shm`
 carry the owning process id and start time, and a later run reclaims the ones no process holds.
 
 ## Exit codes
@@ -140,7 +140,7 @@ carry the owning process id and start time, and a later run reclaims the ones no
 | Code | Meaning |
 |---|---|
 | command's own code | The connectivity check passed; the exit code comes back unchanged, 255 included. |
-| 2 | The runner refused the run because an argument, configuration, ownership, process inspection, stop, or removal check failed. |
+| 2 | The runner refused the run because an argument, configuration, ownership, process inspection, pre-sync or removal check failed. |
 | 86 | The connectivity check saw a Tailscale login link. The runner prints a stop text that tells the agent to end the run and report the blocker, with the full `/host-auth` page URL. |
 | 87 | The connectivity check failed any other way, or ran past its 60-second limit. The runner tells the agent to end the run and report the blocker without retrying; it prints no `/host-auth` URL. |
 

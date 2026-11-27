@@ -37,6 +37,12 @@ jobs:
         id: selection
         run: node dev/integration-selection/run-selection.mjs
 
+      # Keep this step before the apt-get update: the update must not contact packages.microsoft.com, whose apt
+      # source the script removes.
+      - name: Remove the runner image's Microsoft apt source
+        if: steps.selection.outputs.rust_filter != ''
+        run: dev/remove-microsoft-apt-source.sh
+
       - name: Install system tools
         if: steps.selection.outputs.rust_filter != ''
         run: |

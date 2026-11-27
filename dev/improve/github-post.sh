@@ -91,6 +91,7 @@ source "$repo_root/dev/improve/code-style-rules.sh"
 source "$repo_root/dev/improve/moved-references.sh"
 source "$repo_root/dev/improve/live-sessions.sh"
 source "$repo_root/dev/improve/claim-check.sh"
+source "$repo_root/dev/improve/kit-skills.sh"
 
 tmp_dir=$(mktemp -d)
 trap 'rm -rf "$tmp_dir"' EXIT
@@ -218,8 +219,8 @@ check_verdict_head() {
 # merge_facts: set facts_dir and skills_dir, the round facts that pr-merge's claim check and skill check read. Inside a
 # round they are the live launch directory and IMPROVE_SKILLS_DIR. Outside a round they are the copies that the round
 # kept in the evidence directory that --evidence-dir names: the in-flight list, the event log and the kit revision. The
-# kit revision names the skills directory of the round host's runner. Each missing fact, or a missing skills
-# directory, stops the merge and names it. This runs before any call to GitHub, so nothing is sent.
+# kit revision names the skills tree that the round host's runner checkout holds (kit-skills.sh). Each missing fact, or
+# a missing skills tree, stops the merge and names it. This runs before any call to GitHub, so nothing is sent.
 merge_facts() {
   local fact revision
   if [[ -n ${IMPROVE_LAUNCH_DIR-} ]]; then
@@ -249,12 +250,9 @@ merge_facts() {
       "$evidence_dir/kit-revision" >&2
     exit 2
   }
-  # The runner keeps each kit revision's skills at ~/improve/runner/bin/<revision>/skills
-  # (dev/improve/remote-runner.sh).
-  skills_dir="$HOME/improve/runner/bin/$revision/skills"
-  [[ -d $skills_dir ]] || {
-    printf 'Refused pr-merge: a merge outside a round runs on the round host, and this host has no skills ' >&2
-    printf 'directory for kit revision %s: %s; nothing was merged.\n' "$revision" "$skills_dir" >&2
+  skills_dir=$(kit_skills_dir "$revision") || {
+    printf 'Refused pr-merge: the runner checkout holds no skills tree for kit revision %s; nothing was merged.\n' \
+      "$revision" >&2
     exit 2
   }
   facts_dir=$evidence_dir

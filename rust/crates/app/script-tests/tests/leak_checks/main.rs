@@ -1602,9 +1602,43 @@ fn verdict_comment(sha: &str, review: &str) -> String {
 /// The skills directory that the round's runner exports as `IMPROVE_SKILLS_DIR`.
 const ROUND_SKILLS: &str = "/synthetic/improve/runner/bin/0123456789abcdef/skills";
 
-/// The kit revision that a round keeps in its evidence directory. A merge outside the round takes its skills directory
-/// from this revision under the merge host's home, `$HOME/improve/runner/bin/<revision>/skills`.
-const KIT_REVISION: &str = "77a7047c30d3702bf0db26f34846c07031eadabb";
+/// A kit revision that the runner's checkout does not hold: a refusal names it.
+const ABSENT_REVISION: &str = "fedcba9876543210fedcba9876543210fedcba98";
+
+/// Makes the runner's checkout under the sandbox's home, `$HOME/improve/runner/charlie-bot`: a repository with one commit
+/// per entry of `rules`, each commit's `skills/` tree holding that entry's text. Returns each commit's full sha, in
+/// order. A merge outside a round reads a kit revision's skills from these commits.
+fn runner_checkout(sandbox: &Sandbox, env: &Env, rules: &[&str]) -> Vec<String> {
+  let checkout = sandbox.root().join("improve/runner/charlie-bot");
+  std::fs::create_dir_all(&checkout).unwrap();
+  git_in(env, &checkout, &["init", "-q", "-b", "main"]);
+  let rule = checkout.join("skills/writing-style/genres/code.md");
+  std::fs::create_dir_all(rule.parent().unwrap()).unwrap();
+  rules
+    .iter()
+    .enumerate()
+    .map(|(index, text)| {
+      std::fs::write(&rule, text).unwrap();
+      git_in(env, &checkout, &["add", "skills"]);
+      let message = format!("kit revision {index}");
+      git_in(
+        env,
+        &checkout,
+        &[
+          "-c",
+          "user.name=Example",
+          "-c",
+          "user.email=123+example@users.noreply.github.com",
+          "commit",
+          "-q",
+          "-m",
+          &message,
+        ],
+      );
+      git_in(env, &checkout, &["rev-parse", "HEAD"])
+    })
+    .collect()
+}
 
 /// One `Read` call of `path`, as a round's or a review's event log holds it.
 fn read_call(path: &str) -> String {
@@ -1736,22 +1770,25 @@ impl MergeWorld {
   }
 
   /// A pull request merged outside a round: the environment names no round, and the round's facts sit in the evidence
-  /// directory, as the runner keeps them at the round's end. This host holds the skills of the round's kit revision.
+  /// directory, as the runner keeps them at the round's end. The round's kit revision is a commit of the runner's
+  /// checkout, which holds its skills tree.
   fn outside_round(changed: &str, pr_body: &str) -> MergeWorld {
     let mut world = MergeWorld::new(changed, pr_body);
     world.env.remove("IMPROVE_LAUNCH_DIR");
     world.env.remove("IMPROVE_SKILLS_DIR");
     std::fs::write(world.evidence.join("inflight-files.txt"), "").unwrap();
-    std::fs::write(world.evidence.join("kit-revision"), format!("{KIT_REVISION}\n")).unwrap();
+    let revision = runner_checkout(&world.sandbox, &world.env, &["the round's kit rule\n"]).remove(0);
+    std::fs::write(world.evidence.join("kit-revision"), format!("{revision}\n")).unwrap();
     world.round_events = world.evidence.join("round-events.ndjson");
     std::fs::write(&world.round_events, "").unwrap();
-    std::fs::create_dir_all(world.skills_dir()).unwrap();
     world
   }
 
-  /// The skills directory this host holds for the round's kit revision: `$HOME/improve/runner/bin/<revision>/skills`.
+  /// The skills directory that the evidence's kit revision names, as a round at that revision names it:
+  /// `$HOME/improve/runner/bin/<revision>/skills`. The host need not keep that directory.
   fn skills_dir(&self) -> PathBuf {
-    self.sandbox.root().join("improve/runner/bin").join(KIT_REVISION).join("skills")
+    let revision = std::fs::read_to_string(self.evidence.join("kit-revision")).unwrap();
+    self.sandbox.root().join("improve/runner/bin").join(revision.trim()).join("skills")
   }
 
   /// `pr-merge` outside a round: `--evidence-dir` names this world's evidence directory, and `args` follow it.
@@ -2513,15 +2550,31 @@ fn a_pr_merge_outside_a_round_stops_naming_each_fact_its_evidence_directory_lack
 
 #[test]
 #[ignore = "integration"]
-fn a_pr_merge_outside_a_round_names_the_skills_directory_this_host_lacks() {
+fn a_pr_merge_outside_a_round_names_the_kit_revision_whose_skills_the_runner_checkout_lacks() {
   let world = MergeWorld::outside_round("rust/crates/x/src/lib.rs\n", "## Evidence\nno screenshot needed.\n");
-  let skills = world.skills_dir();
-  std::fs::remove_dir_all(&skills).unwrap();
+  std::fs::write(world.evidence.join("kit-revision"), format!("{ABSENT_REVISION}\n")).unwrap();
 
   let run = world.merge_from_evidence(&["5046"]);
 
   assert_eq!(run.code, 2, "{}", run.describe());
-  assert!(run.stderr.contains(&skills.display().to_string()), "{}", run.describe());
+  assert!(run.stderr.contains(ABSENT_REVISION), "{}", run.describe());
+  assert!(world.merge_calls().is_empty(), "nothing may merge:\n{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_outside_a_round_refuses_a_skill_read_of_another_kit_revision_in_the_checkout() {
+  let world = MergeWorld::outside_round("rust/crates/x/src/lib.rs\n", "## Evidence\nno screenshot needed.\n");
+  // A later kit revision in the same checkout: the evidence still names the first one.
+  let later = runner_checkout(&world.sandbox, &world.env, &["a later kit rule\n"]).remove(0);
+  let other = world.sandbox.root().join("improve/runner/bin").join(&later).join("skills/writing-style/genres/code.md");
+  world.round(&[read_call(&other.display().to_string())]);
+
+  let run = world.merge_from_evidence(&["5046"]);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  let skills = world.skills_dir().display().to_string();
+  assert!(run.stderr.contains(&format!("skill read outside {skills}: {}", other.display())), "{}", run.describe());
   assert!(world.merge_calls().is_empty(), "nothing may merge:\n{}", run.describe());
 }
 
@@ -2695,9 +2748,9 @@ fn merge_outside_round() -> PathBuf {
 const LIVE_REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
 
 /// A round host for the entry point: the round profile home with its leak patterns file, the runner's live link and
-/// tool directory for `LIVE_REVISION`, the skills directory of `KIT_REVISION`, and the evidence directory of a round
-/// that ran `KIT_REVISION`. The live kit's github-post.sh is a stub that writes its profile home, its PATH and its
-/// arguments to `calls`, one per line.
+/// tool directory for `LIVE_REVISION` (no directory for the round's kit revision), the runner's checkout holding the
+/// round's kit revision, and the evidence directory of that round. The live kit's github-post.sh is a stub that writes
+/// its profile home, its PATH and its arguments to `calls`, one per line.
 struct RoundHost {
   sandbox: Sandbox,
   env: Env,
@@ -2705,6 +2758,7 @@ struct RoundHost {
   evidence: PathBuf,
   record: PathBuf,
   calls: PathBuf,
+  kit_revision: String,
 }
 
 impl RoundHost {
@@ -2733,15 +2787,15 @@ impl RoundHost {
     let kit_dir = live_dir.join("kit/dev/improve");
     std::fs::create_dir_all(&kit_dir).unwrap();
     harness::write_executable(&kit_dir.join("github-post.sh"), kit_script);
-    std::fs::create_dir_all(bin.join(KIT_REVISION).join("skills")).unwrap();
+    let kit_revision = runner_checkout(&sandbox, &env, &["the round's kit rule\n"]).remove(0);
     let evidence = home.join("evidence");
     std::fs::create_dir_all(&evidence).unwrap();
     std::fs::write(evidence.join("inflight-files.txt"), "").unwrap();
     std::fs::write(evidence.join("round-events.ndjson"), "").unwrap();
-    std::fs::write(evidence.join("kit-revision"), format!("{KIT_REVISION}\n")).unwrap();
+    std::fs::write(evidence.join("kit-revision"), format!("{kit_revision}\n")).unwrap();
     let record = evidence.join("review-events.ndjson");
     std::fs::write(&record, "").unwrap();
-    RoundHost { sandbox, env, bin, evidence, record, calls }
+    RoundHost { sandbox, env, bin, evidence, record, calls, kit_revision }
   }
 
   /// The entry point merging pull request 5046 with this host's evidence directory and review record.
@@ -2775,6 +2829,9 @@ fn assert_refused(host: &RoundHost, run: &Run, item: &Path) {
 #[ignore = "integration"]
 fn a_merge_outside_a_round_runs_the_live_kit_in_the_round_environment_when_every_item_is_present() {
   let host = RoundHost::new();
+  // The round ran an older kit revision than the live one, and this host keeps no directory for it: the skills come
+  // from the runner checkout's git content.
+  assert!(!host.bin.join(&host.kit_revision).exists(), "the evidence revision has no directory on this host");
   let run = host.merge();
   assert_eq!(run.code, 0, "{}", run.describe());
   let calls = host.calls();
@@ -2836,12 +2893,15 @@ fn a_merge_outside_a_round_refuses_a_round_host_without_its_live_kit_script() {
 
 #[test]
 #[ignore = "integration"]
-fn a_merge_outside_a_round_refuses_a_round_host_without_the_skills_of_the_evidence_kit_revision() {
+fn a_merge_outside_a_round_refuses_an_evidence_revision_whose_skills_the_runner_checkout_lacks() {
   let host = RoundHost::new();
-  let skills = host.bin.join(KIT_REVISION).join("skills");
-  std::fs::remove_dir_all(&skills).unwrap();
+  // The checkout holds the round host's own kit revision, so a refusal here proves that no other revision's skills
+  // stand in for the missing one.
+  std::fs::write(host.evidence.join("kit-revision"), format!("{ABSENT_REVISION}\n")).unwrap();
   let run = host.merge();
-  assert_refused(&host, &run, &skills);
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains(ABSENT_REVISION), "{}", run.describe());
+  assert!(host.calls().is_empty(), "nothing may merge:\n{}", run.describe());
 }
 
 #[test]

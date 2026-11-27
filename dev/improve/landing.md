@@ -599,7 +599,7 @@ That directory is `~/improve/<direction>/evidence/<Round start>/`.
 The round keeps three facts in that directory: `inflight-files.txt`, the in-flight list the round read; `round-events.ndjson`, the round's event log as it stands at the round's end; and `kit-revision`, the round's kit revision, which names its skills.
 A merge outside a round checks its claims against the in-flight list and its round skill reads against the event log and kit revision.
 The round host is the improve host that ran the round.
-Its runner keeps the kit and skills directories of every kit revision under `~/improve/runner/bin/<kit revision>/`.
+A merge outside a round checks its round skill reads against the skills tree of the evidence's kit revision, read from the round host's runner checkout (`~/improve/runner/charlie-bot`, whose git content holds each kit revision the runner built); a revision whose tree the checkout lacks stops the merge and names it, and no other revision's skills stand in for it.
 A merge outside a round runs on the round host and reads the evidence directory there.
 The one way to merge outside a round is the kit entry point `dev/improve/merge-outside-round.sh`, run on the round host.
 It runs the merge in the round's environment: `CHARLIEBOT_HOME` is the round profile home, and the live revision's charliebot and kit do the merge.

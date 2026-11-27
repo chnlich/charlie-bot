@@ -698,7 +698,6 @@ impl AgentBackend for AnthropicEndpointBackend {
 
   fn build_command(&self, prompt: &str) -> anyhow::Result<Vec<String>> {
     let mut command = self.backend.build_command(prompt)?;
-    claude_launch::remove_foreground_cap_from_command(&mut command)?;
     disallow_tool(&mut command, TOOL_NAME);
     command.extend([MCP_CONFIG_FLAG.to_string(), web_search_mcp_config(self.server_port)]);
     Ok(command)

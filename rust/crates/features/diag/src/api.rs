@@ -101,7 +101,9 @@ const PAGE_LOAD_CAUSES: &[&str] = &["open", "bootstrap_failure", "stale_asset", 
 const OPEN_CASES: &[&str] = &["A", "B", "C"];
 const CONTENT_SOURCES: &[&str] = &["network", "stored"];
 const VISIBILITY_STATES: &[&str] = &["visible", "hidden", "prerender"];
-const PHASES: &[&str] = &["started", "completed", "superseded", "failed", "render_error"];
+/// The switch phases the client reports. `first_for_you_row` is reported once per switch that mounts a For-you view,
+/// when that view paints its first row (plan 5 of the For-you line; the client's `reportForYouFirstRow`).
+const PHASES: &[&str] = &["started", "completed", "superseded", "failed", "render_error", "first_for_you_row"];
 
 /// The envelope every kind's body validates first: the `kind` selects the per-kind model, and
 /// `client_ts` is the one field the log line carries whatever the kind. Extra keys stay, because
@@ -618,6 +620,38 @@ mod tests {
     assert_eq!(values["elapsed_ms"], 0);
   }
 
+  /// The body the client sent for a For-you first row, copied from a request the trial server refused
+  /// with 422 before the phase was listed (the 2026-11-27 capture, `phase` the only failing field).
+  #[test]
+  fn a_for_you_first_row_switch_body_validates() {
+    let body = json!({
+      "kind": "switch",
+      "client_ts": "2026-11-27T15:09:46.596Z",
+      "phase": "first_for_you_row",
+      "from_session": null,
+      "to_session": "aa1164c5-5294-526e-8235-b39f89219f44",
+      "generation": 1,
+      "winner_generation": null,
+      "elapsed_ms": 9,
+      "error": null,
+      "request_start": 43,
+      "response_start": 45,
+      "response_end": 46,
+      "transfer_size": 0,
+    });
+    let values = validate_event(body).expect("the client's first-row record is a valid switch record");
+    assert_eq!(values["phase"], "first_for_you_row");
+  }
+
+  #[test]
+  fn a_switch_phase_outside_the_list_is_still_refused() {
+    let mut body = base_body(EventKind::Switch);
+    body["phase"] = json!("first_row");
+    let errors = validate_event(body).expect_err("the phase is not one the client reports");
+    assert_eq!(loc(&errors[0]), ["body", "phase"]);
+    assert!(matches!(errors[0].kind, Kind::Literal(_)));
+  }
+
   #[test]
   fn a_negative_elapsed_ms_violates_its_ge_bound() {
     let mut body = base_body(EventKind::Switch);
@@ -911,6 +945,16 @@ mod tests {
     assert_eq!(field(&event, "request_start"), "null");
     assert_eq!(field(&event, "transfer_size"), "null");
     assert_eq!(field(&event, "error"), "null");
+  }
+
+  #[test]
+  fn a_for_you_first_row_logs_its_phase_and_elapsed_time() {
+    let mut body = base_body(EventKind::Switch);
+    body["phase"] = json!("first_for_you_row");
+    body["elapsed_ms"] = json!(534);
+    let event = logged_event(body);
+    assert_eq!(field(&event, "phase"), "first_for_you_row");
+    assert_eq!(field(&event, "elapsed_ms"), "534");
   }
 
   #[test]

@@ -10,8 +10,10 @@
 //! replaces the text the model reads with the withhold notice, and the result counts nothing. A
 //! failure or another tool's output passes whole, is counted, and carries the over-budget notice as
 //! `additionalContext`. Exempt material — whole reads of rule and skill files, child conclusions and
-//! session status, approval objects, the user's decisions — is never counted and never withheld, unless
-//! a glob or a `$` word names its decision path: the hook cannot resolve that word, so the read counts.
+//! session status, approval objects, the user's decisions, and the outcome of a CharlieBot write command that is the
+//! only command of its call — is never counted and never withheld, unless a glob or a `$` word names its decision
+//! path: the hook cannot resolve that word, so the read counts. A write's outcome stays exempt whatever its
+//! arguments name.
 //!
 //! The session's own rule files are the markdown files its `CLAUDE.md` names in backticks and the
 //! rule files those files name in backticks, transitively. A partial read of one of them counts.
@@ -89,16 +91,39 @@ const APPROVAL_PATH: &str = r"/artifacts/(plan|understanding)_[^/\s]*\.html";
 /// A child's conclusion: a run directory's report or findings file.
 const CHILD_REPORT: &str = r"/data/runs/[^/\s]+/(report|findings)\.md";
 
-/// CharlieBot's own coordination surface: session status and tree, child and wake records,
-/// delegation and trigger receipts, plans, digest, decisions (taste, memory), page checks.
-/// `charliebot session dialog` reads another session's record, and the integration subcommands read
-/// outside material, so both count. The session arm excludes `dialog` and `conclusion` by their
-/// captured subcommand words.
-const COORDINATION_CMD: &str =
-  r"\bcharliebot\s+(delegate|worker|plan|digest|taste|memory|web|artifact|publish|improve)\b";
-const SESSION_CMD: &str = r"\bcharliebot\s+session\s+([\w-]+)";
+/// CharlieBot's own coordination verbs: session status and tree, child and wake records, delegation and trigger
+/// receipts, plans, decisions (taste, memory), page checks. The `session` verb counts every subcommand but `dialog`
+/// and `conclusion`, which read another session's record. The integration verbs read outside material, so they count.
+const COORDINATION_VERBS: [&str; 8] = ["artifact", "delegate", "improve", "memory", "plan", "publish", "taste", "web"];
+const SESSION_VERB: &str = "session";
 const SESSION_DIALOG: &str = "dialog";
 const SESSION_CONCLUSION: &str = "conclusion";
+
+/// The CharlieBot verbs whose call writes its record and prints that write's own outcome. A call of one of them, as
+/// the only command of its Bash call, passes uncounted and unwithheld. A `--help` call is not a write: it prints
+/// static help. `artifact wrap` prints a whole page and `artifact check` prints a page check's report, so neither is
+/// listed. The `plan` verbs print plan records, which this list does not measure, so they keep the coordination class.
+const WRITE_VERBS: &[&[&str]] = &[
+  &["web", "reply"],
+  &["web", "status", "set"],
+  &["web", "status", "confirm"],
+  &["session", "send"],
+  &["session", "trigger"],
+  &["session", "create"],
+  &["session", "retry"],
+  &["session", "archive"],
+  &["session", "acknowledge"],
+  &["session", "cancel"],
+  &["session", "reparent"],
+  &["session", "set-approver"],
+  &["delegate"],
+  &["taste", "add"],
+  &["taste", "mark"],
+  &["memory", "add"],
+  &["publish"],
+  &["improve", "start"],
+  &["improve", "stop"],
+];
 
 /// The shell readers whose presence in a Bash command keeps a rule-path read counted: their output
 /// is a selection of the material, not the material itself.
@@ -388,7 +413,9 @@ fn withhold_notice(size: usize, left: usize, agent_tool: bool, can_delegate: boo
     - a child's conclusion, through `charliebot session conclusion --session <child id>`;\n\
     - the user's words, through `charliebot session dialog --from user`;\n\
     - your session memo, `memo.md` in the session directory;\n\
-    - a plan or understanding page through its file under artifacts/, and a rule or skill file read whole."
+    - a plan or understanding page through its file under artifacts/, and a rule or skill file read whole.\n\
+    The budget does not count the output of a CharlieBot write command that is the only command of its call, such as \
+    `charliebot web reply --file <file>`."
   )
 }
 
@@ -504,6 +531,14 @@ fn exempt_class(
     "Bash" => tool_input.get("command").and_then(Value::as_str),
     _ => None,
   };
+  // A write's outcome is the agent's own result: the names in its arguments do not make that output material.
+  if tool_name == "Bash" {
+    match named.map(charlie_calls) {
+      Some(CharlieCalls::Writes) => return Some("write_outcome".to_string()),
+      Some(CharlieCalls::MixedWrite) => return None,
+      _ => {}
+    }
+  }
   if named.is_some_and(names_unresolved_decision_path) {
     return None;
   }
@@ -559,8 +594,11 @@ fn bash_class(command: &str, cwd: Option<&str>) -> Option<&'static str> {
   if is_standalone_user_dialog(command) {
     return Some("user_words");
   }
-  if status_decision(command) {
-    return Some("status_decision");
+  match charlie_calls(command) {
+    CharlieCalls::Writes => return Some("write_outcome"),
+    CharlieCalls::MixedWrite => return None,
+    CharlieCalls::Coordination => return Some("status_decision"),
+    CharlieCalls::Other => {}
   }
   // A run log is never a decision read: a command that names one counts, whatever else it names.
   if names_run_log(command) {
@@ -585,15 +623,197 @@ fn bash_class(command: &str, cwd: Option<&str>) -> Option<&'static str> {
   None
 }
 
-/// Whether the command is one of CharlieBot's coordination commands: any of the coordination verbs,
-/// or a `charliebot session` subcommand that is not `dialog` or `conclusion`.
-fn status_decision(command: &str) -> bool {
-  if coordination_cmd_pattern().is_match(command) {
-    return true;
+/// How the segments of a Bash command relate to CharlieBot's verbs.
+#[derive(Debug, PartialEq, Eq)]
+enum CharlieCalls {
+  /// Every segment is a write verb.
+  Writes,
+  /// A write verb shares the command with another segment.
+  MixedWrite,
+  /// Every segment is a coordination verb, and none writes.
+  Coordination,
+  /// Another command, or a command the segment split does not model.
+  Other,
+}
+
+fn charlie_calls(command: &str) -> CharlieCalls {
+  let Some(segments) = command_segments(command) else {
+    return CharlieCalls::Other;
+  };
+  let args: Vec<Option<&[String]>> = segments.iter().map(|words| charliebot_args(words)).collect();
+  let writes = args.iter().filter(|args| args.is_some_and(is_write_segment)).count();
+  let coordination = args.iter().filter(|args| args.is_some_and(is_coordination_segment)).count();
+  if segments.is_empty() {
+    CharlieCalls::Other
+  } else if writes == segments.len() {
+    CharlieCalls::Writes
+  } else if writes > 0 {
+    CharlieCalls::MixedWrite
+  } else if coordination == segments.len() {
+    CharlieCalls::Coordination
+  } else {
+    CharlieCalls::Other
   }
-  session_cmd_pattern().captures_iter(command).any(|captures| {
-    captures.get(1).is_some_and(|word| word.as_str() != SESSION_DIALOG && word.as_str() != SESSION_CONCLUSION)
+}
+
+/// The words of a Bash command's segments: each run of words that the shell runs as one command. A list (`;`, `&&`,
+/// `||`), a pipe, a background `&` or a newline outside quotes ends a segment. Quotes and escapes are removed from the
+/// words, and a heredoc body joins no segment. `None` for a subshell, a substitution, a backtick or an unclosed quote,
+/// which this split does not model.
+fn command_segments(command: &str) -> Option<Vec<Vec<String>>> {
+  let chars: Vec<char> = command.chars().collect();
+  let mut segments: Vec<Vec<String>> = Vec::new();
+  let mut words: Vec<String> = Vec::new();
+  let mut word = String::new();
+  let mut quote: Option<char> = None;
+  let mut heredocs: Vec<String> = Vec::new();
+  let mut i = 0;
+  while i < chars.len() {
+    let c = chars[i];
+    let next = chars.get(i + 1).copied();
+    if let Some(open) = quote {
+      if c == open {
+        quote = None;
+      } else if open == '"' && matches!(c, '(' | ')' | '`') {
+        return None;
+      } else if open == '"' && c == '\\' && matches!(next, Some('"' | '\\' | '$' | '`')) {
+        word.push(chars[i + 1]);
+        i += 1;
+      } else {
+        word.push(c);
+      }
+      i += 1;
+      continue;
+    }
+    match c {
+      '\'' | '"' => quote = Some(c),
+      '(' | ')' | '`' => return None,
+      '\\' if next == Some('\n') => i += 1,
+      '\\' if next.is_some() => {
+        word.push(chars[i + 1]);
+        i += 1;
+      }
+      ' ' | '\t' => end_word(&mut word, &mut words),
+      ';' => end_segment(&mut word, &mut words, &mut segments),
+      '|' => {
+        end_segment(&mut word, &mut words, &mut segments);
+        if next == Some('|') {
+          i += 1;
+        }
+      }
+      '&' if next == Some('&') => {
+        end_segment(&mut word, &mut words, &mut segments);
+        i += 1;
+      }
+      // `2>&1` and `&>file` are redirections, not a background operator.
+      '&' if next == Some('>') || (i > 0 && chars[i - 1] == '>') => word.push(c),
+      '&' => end_segment(&mut word, &mut words, &mut segments),
+      '<' if next == Some('<') && chars.get(i + 2) != Some(&'<') && (i == 0 || chars[i - 1] != '<') => {
+        let delimiter = heredoc_delimiter(&chars, i + 2);
+        if delimiter.is_empty() {
+          return None;
+        }
+        heredocs.push(delimiter);
+        word.push_str("<<");
+        i += 1;
+      }
+      '\n' => {
+        end_segment(&mut word, &mut words, &mut segments);
+        let mut resume = i + 1;
+        for delimiter in heredocs.drain(..) {
+          resume = skip_heredoc_body(&chars, resume, &delimiter);
+        }
+        i = resume;
+        continue;
+      }
+      _ => word.push(c),
+    }
+    i += 1;
+  }
+  if quote.is_some() {
+    return None;
+  }
+  end_segment(&mut word, &mut words, &mut segments);
+  Some(segments)
+}
+
+fn end_word(word: &mut String, words: &mut Vec<String>) {
+  if !word.is_empty() {
+    words.push(std::mem::take(word));
+  }
+}
+
+fn end_segment(word: &mut String, words: &mut Vec<String>, segments: &mut Vec<Vec<String>>) {
+  end_word(word, words);
+  if !words.is_empty() {
+    segments.push(std::mem::take(words));
+  }
+}
+
+/// The delimiter word of a heredoc whose operator ends before `start`: an optional `-`, blanks, an optional quote,
+/// then the word.
+fn heredoc_delimiter(chars: &[char], start: usize) -> String {
+  let mut j = start;
+  if chars.get(j) == Some(&'-') {
+    j += 1;
+  }
+  while matches!(chars.get(j), Some(' ' | '\t')) {
+    j += 1;
+  }
+  if matches!(chars.get(j), Some('\'' | '"')) {
+    j += 1;
+  }
+  chars[j..]
+    .iter()
+    .take_while(|&&c| !c.is_whitespace() && !matches!(c, '\'' | '"' | ';' | '&' | '|' | '<' | '>' | '(' | ')'))
+    .collect()
+}
+
+/// The index after the delimiter line of a heredoc body that starts at `start`. The body runs to the end of the
+/// command when no delimiter line closes it.
+fn skip_heredoc_body(chars: &[char], start: usize, delimiter: &str) -> usize {
+  let mut line_start = start;
+  while line_start < chars.len() {
+    let line_end =
+      chars[line_start..].iter().position(|&c| c == '\n').map_or(chars.len(), |offset| line_start + offset);
+    let line: String = chars[line_start..line_end].iter().collect();
+    line_start = line_end + 1;
+    if line.trim() == delimiter {
+      break;
+    }
+  }
+  line_start.min(chars.len())
+}
+
+/// The arguments of a segment after its `charliebot` word, past any leading `NAME=value` assignments. `None` when the
+/// segment runs another program.
+fn charliebot_args(words: &[String]) -> Option<&[String]> {
+  let start = words.iter().position(|word| !is_assignment(word))?;
+  let program = Path::new(&words[start]).file_name()?;
+  (program == "charliebot").then(|| &words[start + 1..])
+}
+
+fn is_assignment(word: &str) -> bool {
+  word.split_once('=').is_some_and(|(name, _)| {
+    name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+      && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
   })
+}
+
+/// Whether a CharlieBot call's arguments are a write verb. `--help` is not a write, whatever verb it follows.
+fn is_write_segment(args: &[String]) -> bool {
+  !args.iter().any(|arg| arg == "--help" || arg == "-h")
+    && WRITE_VERBS.iter().any(|verb| args.len() >= verb.len() && verb.iter().zip(args).all(|(v, a)| *v == a.as_str()))
+}
+
+/// Whether a CharlieBot call's arguments are a coordination verb: the `session` verb with any subcommand but `dialog`
+/// and `conclusion`, or one of the other coordination verbs.
+fn is_coordination_segment(args: &[String]) -> bool {
+  match args {
+    [verb, subcommand, ..] if verb == SESSION_VERB => subcommand != SESSION_DIALOG && subcommand != SESSION_CONCLUSION,
+    [verb, ..] => COORDINATION_VERBS.contains(&verb.as_str()),
+    [] => false,
+  }
 }
 
 /// The command with its stream redirects removed, for the standalone check. A stream duplicated into another
@@ -897,8 +1117,6 @@ hook_pattern!(rule_path_pattern, RULE_PATH);
 hook_pattern!(approval_path_pattern, APPROVAL_PATH);
 hook_pattern!(child_report_pattern, CHILD_REPORT);
 hook_pattern!(backticked_md_pattern, BACKTICKED_MD);
-hook_pattern!(coordination_cmd_pattern, COORDINATION_CMD);
-hook_pattern!(session_cmd_pattern, SESSION_CMD);
 hook_pattern!(shell_reader_pattern, SHELL_READERS);
 hook_pattern!(approval_resolved_pattern, r"/artifacts/(plan|understanding)_[^/]*\.html$");
 hook_pattern!(report_resolved_pattern, r"/data/runs/[^/]+/(report|findings)\.md$");
@@ -1573,7 +1791,8 @@ The budget does not count these reads of decision material:
 - a child's conclusion, through `charliebot session conclusion --session <child id>`;
 - the user's words, through `charliebot session dialog --from user`;
 - your session memo, `memo.md` in the session directory;
-- a plan or understanding page through its file under artifacts/, and a rule or skill file read whole.";
+- a plan or understanding page through its file under artifacts/, and a rule or skill file read whole.
+The budget does not count the output of a CharlieBot write command that is the only command of its call, such as `charliebot web reply --file <file>`.";
     assert_eq!(v1_withhold, expected_v1_withhold);
 
     let v1_over_budget = over_budget_notice(total, false, false);
@@ -1589,7 +1808,8 @@ The budget does not count these reads of decision material:
 - a child's conclusion, through `charliebot session conclusion --session <child id>`;
 - the user's words, through `charliebot session dialog --from user`;
 - your session memo, `memo.md` in the session directory;
-- a plan or understanding page through its file under artifacts/, and a rule or skill file read whole.";
+- a plan or understanding page through its file under artifacts/, and a rule or skill file read whole.
+The budget does not count the output of a CharlieBot write command that is the only command of its call, such as `charliebot web reply --file <file>`.";
     assert_eq!(v2_withhold, expected_v2_withhold);
 
     let v2_over_budget = over_budget_notice(total, false, true);
@@ -1605,7 +1825,8 @@ The budget does not count these reads of decision material:
 - a child's conclusion, through `charliebot session conclusion --session <child id>`;
 - the user's words, through `charliebot session dialog --from user`;
 - your session memo, `memo.md` in the session directory;
-- a plan or understanding page through its file under artifacts/, and a rule or skill file read whole.";
+- a plan or understanding page through its file under artifacts/, and a rule or skill file read whole.
+The budget does not count the output of a CharlieBot write command that is the only command of its call, such as `charliebot web reply --file <file>`.";
     assert_eq!(v3_withhold, expected_v3_withhold);
 
     let v3_over_budget = over_budget_notice(total, true, true);
@@ -1836,5 +2057,96 @@ This turn's material totals 20000 characters, over the 16,000-character small-ma
     let (res, out) = run_event_with_flags(&home, &rel_read, false, false);
     res.unwrap();
     assert!(out.is_empty(), "relative Read of approval object is exempt");
+  }
+
+  /// A CharlieBot write that is the only command of its call passes whole with the budget spent: its output is the
+  /// agent's own outcome, so the budget neither counts it nor withholds it.
+  #[test]
+  fn a_charliebot_write_passes_whole_with_the_budget_spent() {
+    let home = RunHome::new();
+    home.seed_counted(BUDGET_CHARS);
+    for command in ["charliebot web reply --file x", "charliebot web status set --file x"] {
+      let (result, output) = run_event(&home, &bash_event(command, "r".repeat(5_000)));
+      result.unwrap();
+      assert!(output.is_empty(), "{command}");
+    }
+    assert_eq!(home.state().counted, BUDGET_CHARS);
+    assert!(home.state().withheld.is_empty());
+  }
+
+  /// A write that shares its call with a read is counted, and withheld with the budget spent.
+  #[test]
+  fn a_charliebot_write_chained_with_a_read_is_counted_and_withheld() {
+    let home = RunHome::new();
+    home.seed_counted(BUDGET_CHARS);
+    let command = "charliebot web status set --file x; cat big.txt";
+    let (result, output) = run_event(&home, &bash_event(command, "b".repeat(500)));
+    result.unwrap();
+    let decision = decision_of(&output);
+    let replaced = &decision["hookSpecificOutput"]["updatedToolOutput"];
+    assert!(replaced["stdout"].as_str().unwrap().starts_with("Output withheld: 500 characters"));
+    assert_eq!(home.state().counted, BUDGET_CHARS);
+    assert_eq!(home.state().withheld.len(), 1);
+  }
+
+  /// A `session dialog` read counts as before: it counts while the budget has room and is withheld once it is spent.
+  #[test]
+  fn a_session_dialog_read_stays_counted() {
+    let home = RunHome::new();
+    let command = "charliebot session dialog --turns 2";
+    let (result, output) = run_event(&home, &bash_event(command, "d".repeat(1_000)));
+    result.unwrap();
+    assert!(output.is_empty());
+    assert_eq!(home.state().counted, 1_000);
+    home.seed_counted(BUDGET_CHARS);
+    let (result, output) = run_event(&home, &bash_event(command, "d".repeat(1_000)));
+    result.unwrap();
+    let decision = decision_of(&output);
+    let replaced = &decision["hookSpecificOutput"]["updatedToolOutput"];
+    assert!(replaced["stdout"].as_str().unwrap().starts_with("Output withheld: 1000 characters"));
+    assert_eq!(home.state().counted, BUDGET_CHARS);
+  }
+
+  /// The Direct Work class of each CharlieBot call, by its parsed segments. A write verb run alone is `write_outcome`,
+  /// and a coordination read keeps `status_decision`. A write that shares its call with another command, a quoted
+  /// `charliebot` word, a subshell or a substitution does not take the class, and a heredoc body joins no segment.
+  #[test]
+  fn charliebot_calls_classify_by_their_parsed_segments() {
+    let heredoc_reply = "charliebot web reply --file - <<'EOF'\n{\"now\": \"(x)\"}\nEOF";
+    let cases: Vec<(&str, Option<&str>)> = vec![
+      ("charliebot web reply --file x", Some("write_outcome")),
+      ("charliebot web status set --file x", Some("write_outcome")),
+      ("charliebot web status confirm", Some("write_outcome")),
+      ("charliebot session send --session s --message hi", Some("write_outcome")),
+      ("charliebot session trigger --max-wait 600 --message done", Some("write_outcome")),
+      ("charliebot session trigger cancel trig_1", Some("write_outcome")),
+      ("charliebot delegate --spec task.md", Some("write_outcome")),
+      ("CHARLIEBOT_SESSION_ID=s charliebot web reply --file x", Some("write_outcome")),
+      ("charliebot web reply --file x 2>&1 >/dev/null", Some("write_outcome")),
+      ("charliebot web reply --file x &", Some("write_outcome")),
+      ("charliebot web reply --file \"$D/report.md\"", Some("write_outcome")),
+      (heredoc_reply, Some("write_outcome")),
+      ("charliebot web status set --file x; cat big.txt", None),
+      ("charliebot web reply --file x | tail -3", None),
+      ("charliebot web reply --file x && charliebot web status show", None),
+      ("charliebot web reply --file x\ncat big.txt", None),
+      ("charliebot web reply --file \"$(cat big.txt)\"", None),
+      ("(charliebot web reply --file x)", None),
+      ("charliebot web reply --message \"<<X\"\ncat big.txt", None),
+      ("cat <<EOF\n(x)\nEOF\ncharliebot web reply --file x", None),
+      ("echo \"charliebot web reply\"; cat big.txt", None),
+      ("echo \"charliebot web reply\"", None),
+      ("charliebot web status show", Some("status_decision")),
+      ("charliebot taste query --domain app", Some("status_decision")),
+      ("charliebot taste query --domain app; charliebot web status show", Some("status_decision")),
+      ("charliebot web reply --help", Some("status_decision")),
+      ("charliebot session tree --root s | head -5", None),
+      ("charliebot session dialog --turns 2", None),
+      ("charliebot session dialog --from user", Some("user_words")),
+      ("charliebot session conclusion --session s", Some("child_conclusion")),
+    ];
+    for (command, expected) in cases {
+      assert_eq!(bash_exemption(command).as_deref(), expected, "{command}");
+    }
   }
 }

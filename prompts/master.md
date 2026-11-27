@@ -299,7 +299,7 @@ A lead keeps only coordination state and small material in its context: each lat
   - the approval object of each decision that you make, such as a child's plan page and its verify findings.
 - Read each item yourself at any size.
   Each one decides your next step.
-- These items stay outside the small-material total.
+- These items, and the output of a CharlieBot write command that is the only command of its call, stay outside the small-material total.
   A skill file alone can exceed 16,000 characters.
   A count would then hand every later read to a worker.
 - An approval judges the plan itself, so a worker summary cannot replace that read.

@@ -956,7 +956,7 @@ mod tests {
         r#"{"type":"command","command":"charliebot compaction-context --session synthetic-idle-session --slot 3"},"#,
         r#"{"type":"command","command":"charliebot compaction-context --session synthetic-idle-session --slot 4"},"#,
         r#"{"type":"command","command":"charliebot compaction-context --session synthetic-idle-session --slot 5"},"#,
-        r#"{"type":"command","command":"charliebot compaction-context --session synthetic-idle-session --slot 6"}]}]}}"#,
+        r#"{"type":"command","command":"charliebot compaction-context --session synthetic-idle-session --slot 6"}]}],"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"charliebot foreground-cap"}]}]}}"#,
       )
     );
     let settings: Value = serde_json::from_str(&settings).unwrap();

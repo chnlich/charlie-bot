@@ -1553,7 +1553,14 @@ mod tests {
     let turn_settings: Value = serde_json::from_str(&expected[settings_index + 1]).unwrap();
     let idle_settings: Value = serde_json::from_str(&argv[settings_index + 1]).unwrap();
     assert!(turn_settings.pointer("/hooks/PreToolUse").is_some());
-    assert!(idle_settings.pointer("/hooks/PreToolUse").is_none());
+    assert_eq!(
+      idle_settings.pointer("/hooks/PreToolUse"),
+      Some(&serde_json::json!([{
+        "matcher": "Bash",
+        "hooks": [{"type": "command", "command": "charliebot foreground-cap"}]
+      }])),
+      "the idle process carries the foreground cap and no guard"
+    );
 
     let mut comparable_expected = expected.clone();
     comparable_expected[settings_index + 1] = idle_settings.to_string();

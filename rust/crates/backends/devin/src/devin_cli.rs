@@ -4,6 +4,7 @@
 //! over stdout once the process has exited, and `export` turns the trajectory into events.
 
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -11,6 +12,7 @@ use std::time::Duration;
 use anyhow::Context;
 use charliebot_agents::cli_base::{CapturedEvents, finished, framed_prompt};
 use charliebot_agents::event_builders::make_error_event;
+use charliebot_agents::foreground::devin_config::{user_devin_config_path, write_devin_config};
 use charliebot_core::str_methods;
 use charliebot_registry::backend::{
   AgentBackend, Env, FinalStdoutOutcome, LaunchArgs, RetryAfter, Translate, TransportKind,
@@ -25,6 +27,8 @@ use super::export;
 const PROMPT_FILE_NAME: &str = "devin_prompt.md";
 /// The export file the CLI writes after the turn, in the run's log directory.
 const EXPORT_FILE_NAME: &str = "devin_export.json";
+/// The per-launch Devin config of a turn, in the run's log directory. It carries the user's config and the foreground cap.
+const CONFIG_FILE_NAME: &str = "devin_config.json";
 static RETRYABLE_ERROR_KEY: LazyLock<Regex> = LazyLock::new(|| {
   Regex::new(r#""cognition\.ai/retryable"\s*:\s*true\b"#).expect("the Devin retryable-key pattern is valid")
 });
@@ -48,6 +52,8 @@ pub struct DevinBackend {
   /// The turn's log directory. `prepare_transport` names it for a live launch. A recovered capture names it through
   /// its launch, because no transport runs again for it.
   run_dir: Option<PathBuf>,
+  /// The user's Devin config that the per-launch config extends. Its lookup error fails each turn's launch.
+  user_config: io::Result<PathBuf>,
 }
 
 impl DevinBackend {
@@ -60,6 +66,7 @@ impl DevinBackend {
       resume_session_id: launch.resume_session_id.filter(|id| !id.is_empty()),
       extra_flags: launch.extra_flags,
       run_dir: launch.log_dir,
+      user_config: user_devin_config_path(),
     }
   }
 
@@ -69,14 +76,16 @@ impl DevinBackend {
 
   /// The print-mode command of one turn. Each value is bound with `=`, so the optional-value flags `--export`,
   /// `--resume` and `--respect-workspace-trust` cannot take the next argument as their value. `--print` comes last,
-  /// because its optional value would take the argument after it. The prompt comes from the prompt file.
-  fn argv(&self, prompt_file: &Path, export_file: &Path) -> Vec<String> {
+  /// because its optional value would take the argument after it. The prompt comes from the prompt file, and the
+  /// config is the per-launch file that carries the foreground cap.
+  fn argv(&self, prompt_file: &Path, export_file: &Path, config_file: &Path) -> Vec<String> {
     let mut command = vec![
       self.devin_bin.clone(),
       format!("--prompt-file={}", prompt_file.display()),
       "--permission-mode=dangerous".to_string(),
       "--respect-workspace-trust=false".to_string(),
       format!("--model={}", self.model),
+      format!("--config={}", config_file.display()),
     ];
     if let Some(session_id) = &self.resume_session_id {
       command.push(format!("--resume={session_id}"));
@@ -126,13 +135,18 @@ impl AgentBackend for DevinBackend {
   }
 
   /// The command that reads the framed prompt file written into the run's log directory. The prompt file is
-  /// the only carrier of the instructions: the type writes no instructions file in the working directory.
+  /// the only carrier of the instructions: the type writes no instructions file in the working directory. The
+  /// per-launch config is written beside it, from the user's Devin config and the foreground cap's hook.
   fn build_command(&self, prompt: &str) -> anyhow::Result<Vec<String>> {
     let run_dir = self.run_dir()?;
     let prompt_file = run_dir.join(PROMPT_FILE_NAME);
     fs::write(&prompt_file, framed_prompt(self.instructions_content.as_deref(), prompt))
       .with_context(|| format!("writing the devin prompt file {}", prompt_file.display()))?;
-    Ok(self.argv(&prompt_file, &run_dir.join(EXPORT_FILE_NAME)))
+    let config_file = run_dir.join(CONFIG_FILE_NAME);
+    let user_config = self.user_config.as_ref().map_err(|error| anyhow::anyhow!("{error}"))?;
+    write_devin_config(&config_file, user_config)
+      .with_context(|| format!("writing the devin config {}", config_file.display()))?;
+    Ok(self.argv(&prompt_file, &run_dir.join(EXPORT_FILE_NAME), &config_file))
   }
 
   fn prepare_env(&self, env: Env) -> anyhow::Result<Env> {
@@ -337,26 +351,29 @@ mod tests {
   fn the_first_and_resume_turn_argv_bind_every_value_with_an_equals_sign() {
     let prompt = Path::new("/synthetic/logs/devin_prompt.md");
     let export = Path::new("/synthetic/logs/devin_export.json");
+    let config = Path::new("/synthetic/logs/devin_config.json");
     assert_eq!(
-      backend(launch(None, None)).argv(prompt, export),
+      backend(launch(None, None)).argv(prompt, export, config),
       [
         "/synthetic/bin/devin",
         "--prompt-file=/synthetic/logs/devin_prompt.md",
         "--permission-mode=dangerous",
         "--respect-workspace-trust=false",
         "--model=swe-2-test",
+        "--config=/synthetic/logs/devin_config.json",
         "--export=/synthetic/logs/devin_export.json",
         "--print",
       ]
     );
     assert_eq!(
-      backend(launch(None, Some(SESSION_ID))).argv(prompt, export),
+      backend(launch(None, Some(SESSION_ID))).argv(prompt, export, config),
       [
         "/synthetic/bin/devin",
         "--prompt-file=/synthetic/logs/devin_prompt.md",
         "--permission-mode=dangerous",
         "--respect-workspace-trust=false",
         "--model=swe-2-test",
+        "--config=/synthetic/logs/devin_config.json",
         "--resume=devin-session-7f3a",
         "--export=/synthetic/logs/devin_export.json",
         "--print",
@@ -415,12 +432,15 @@ mod tests {
       backend_kwargs: Map::new(),
       manager_turn: false,
     });
+    let user_config = root.path().join("user_devin_config.json");
+    instructed.user_config = Ok(user_config.clone());
     instructed.prepare_transport(root.path()).unwrap();
     let argv = instructed.build_command("do the work").unwrap();
     assert_eq!(fs::read_to_string(&prompt_file).unwrap(), frame_system_prompt("Build stuff.", "do the work"));
     assert_eq!(argv[1], format!("--prompt-file={}", prompt_file.display()));
 
     let mut plain = backend(launch(None, None));
+    plain.user_config = Ok(user_config);
     plain.prepare_transport(root.path()).unwrap();
     plain.build_command("just the message").unwrap();
     assert_eq!(fs::read_to_string(&prompt_file).unwrap(), "just the message");
@@ -443,6 +463,7 @@ mod tests {
         "--permission-mode=dangerous".to_string(),
         "--respect-workspace-trust=false".to_string(),
         "--model=swe-2-test".to_string(),
+        format!("--config={logs_text}/devin_config.json"),
         format!("--export={logs_text}/devin_export.json"),
         "--print".to_string(),
       ]

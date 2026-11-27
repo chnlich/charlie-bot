@@ -94,17 +94,23 @@ fn pre_tool_use_guards(run_kind: RunKind) -> PreToolUseGuards {
   }
 }
 
-fn add_pre_tool_use_hooks(settings: &mut Map<String, Value>, guards: PreToolUseGuards) {
+/// The Bash `PreToolUse` hook list of a run: the guards that the run kind runs, then the foreground cap, which rewrites
+/// each Bash command into the call entry. The cap comes last, so the guards judge the command as the agent wrote it.
+/// A run without guards still carries the cap.
+fn add_pre_tool_use_hooks(settings: &mut Map<String, Value>, guards: Option<PreToolUseGuards>) {
   let mut hooks = Vec::new();
-  if guards.wait_guard {
-    hooks.push(json!({"type": "command", "command": "charliebot wait-guard"}));
+  if let Some(guards) = guards {
+    if guards.wait_guard {
+      hooks.push(json!({"type": "command", "command": "charliebot wait-guard"}));
+    }
+    if guards.scan_guard {
+      hooks.push(json!({"type": "command", "command": "charliebot scan-guard"}));
+    }
+    if guards.kill_guard {
+      hooks.push(json!({"type": "command", "command": "charliebot kill-guard"}));
+    }
   }
-  if guards.scan_guard {
-    hooks.push(json!({"type": "command", "command": "charliebot scan-guard"}));
-  }
-  if guards.kill_guard {
-    hooks.push(json!({"type": "command", "command": "charliebot kill-guard"}));
-  }
+  hooks.push(json!({"type": "command", "command": charliebot_agents::foreground::HOOK_COMMAND}));
   let event_hooks = settings.entry("hooks".to_string()).or_insert_with(|| Value::Object(Map::new()));
   event_hooks
     .as_object_mut()
@@ -217,15 +223,13 @@ fn headless_claude_settings_for(
       settings.extend(compaction_context_hook_settings(session_id, Some(run_id)));
     }
   }
-  if let Some(guards) = guards {
-    add_pre_tool_use_hooks(&mut settings, guards);
-    if run_kind == RunKind::ManagerTurn {
-      let Some(run_id) = run_id.filter(|value| !value.is_empty()) else {
-        anyhow::bail!("manager_turn Claude settings require a CharlieBot run id for the read-budget hook");
-      };
-      let session_id = session_id.expect("manager_turn settings checked the session id above");
-      add_read_budget_hooks(&mut settings, session_id, run_id, agent_tool, can_delegate);
-    }
+  add_pre_tool_use_hooks(&mut settings, guards);
+  if guards.is_some() && run_kind == RunKind::ManagerTurn {
+    let Some(run_id) = run_id.filter(|value| !value.is_empty()) else {
+      anyhow::bail!("manager_turn Claude settings require a CharlieBot run id for the read-budget hook");
+    };
+    let session_id = session_id.expect("manager_turn settings checked the session id above");
+    add_read_budget_hooks(&mut settings, session_id, run_id, agent_tool, can_delegate);
   }
   Ok(settings)
 }

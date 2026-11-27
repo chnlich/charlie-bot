@@ -14,8 +14,10 @@ use anyhow::{Context, anyhow};
 use charliebot_agents::backend_availability;
 use charliebot_agents::backend_pool;
 use charliebot_agents::backend_types;
+use charliebot_agents::foreground::{SESSION_CGROUP_ENV, session_cgroup_dir};
 use charliebot_agents::launch_loop;
 use charliebot_agents::model_pool;
+use charliebot_core::cgroup::system_cgroup_base_dir;
 use charliebot_core::config::{BackendOption, CallClass, CallTarget, CharlieBotConfig};
 use charliebot_core::event_types;
 use charliebot_core::fsutil;
@@ -2795,6 +2797,10 @@ impl TaskExecutionAdapter {
     .map_err(|error| StoreError::new(error.to_string()))?;
     Ok(Env::from([
       (launch_loop::SESSION_ID_ENV.to_string(), session_id.to_string()),
+      (
+        SESSION_CGROUP_ENV.to_string(),
+        session_cgroup_dir(&system_cgroup_base_dir(), session_id).to_string_lossy().into_owned(),
+      ),
       (RUN_TOKEN_ENV.to_string(), token),
       (
         CHARLIEBOT_HOME_ENV.to_string(),

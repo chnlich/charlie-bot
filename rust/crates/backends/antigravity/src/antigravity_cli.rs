@@ -10,6 +10,7 @@ use anyhow::{Context, bail};
 use charliebot_acp::codec::{AcpCodec, SharedSession};
 use charliebot_acp::handshake::{self, HandshakeSpec, SessionStart};
 use charliebot_agents::cli_base::{SKIP_PERMISSIONS_FLAG, framed_prompt, prepend_path_dir, strip_google_api_keys};
+use charliebot_agents::foreground::agy_hooks::{agy_hooks_path, ensure_cap_hook};
 use charliebot_registry::backend::{AgentBackend, Env, LaunchArgs, MidturnTranslate, Translate, TransportKind};
 use charliebot_registry::midturn_delivery::{DeliveryState, ExitedProbe, RUN_ID_KWARG};
 use charliebot_store::run_records::RAW_LOG_NAME;
@@ -78,8 +79,13 @@ impl AgentBackend for AntigravityBackend {
     None
   }
 
+  /// Ensure the global foreground-cap hook before each launch. agy reads its hook file at each launch and takes no
+  /// per-launch hook argument, so the cap's entry lives in the user-level file.
   fn prepare_transport(&mut self, log_dir: &Path) -> anyhow::Result<()> {
     self.log_dir = Some(log_dir.to_path_buf());
+    let hooks_path = agy_hooks_path()?;
+    ensure_cap_hook(&hooks_path)
+      .with_context(|| format!("ensuring the foreground cap hook in {}", hooks_path.display()))?;
     Ok(())
   }
 

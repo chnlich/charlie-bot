@@ -1,5 +1,5 @@
 //! Process identity reads shared by run stores and task-tree liveness checks, and the `/proc/<pid>/stat` text and its
-//! fields that the readback and renderer process trees read for their parent and process group.
+//! fields that the readback and renderer process trees read for their state, parent and start time.
 
 use std::fmt;
 use std::fs;

@@ -255,12 +255,14 @@ pub fn pool_exhausted_message(
   ))
 }
 
-/// What a short login needs before a keyed round can start on it again. Only a renewal of its token restores its life,
-/// and the server knows no renewal time.
+/// What a short login needs before a keyed round can start on it again: a renewal of its token. The server renews a
+/// token only while it lives under `RENEWABLE_TOKEN_MAX_SECONDS` and no live keyed round holds its login; a login above
+/// that line is left to the Claude CLI, which renews when it uses the token.
 fn token_renewal_clause() -> String {
   format!(
-    "each short login regains {IMPROVE_TOKEN_MIN_SECONDS} seconds of access-token life only when its token renews, \
-     and no renewal time is known"
+    "each short login regains {IMPROVE_TOKEN_MIN_SECONDS} seconds of access-token life only when its token renews, and \
+     the server renews a token only while it lives under {} seconds and no live keyed round holds its login",
+    claude_accounts::RENEWABLE_TOKEN_MAX_SECONDS
   )
 }
 

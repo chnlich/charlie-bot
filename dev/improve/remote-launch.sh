@@ -55,6 +55,9 @@
 # member-credential file (mode 600), which the runner removes when the round ends. CHARLIEBOT_RUN_TOKEN stays here:
 # the remote host has no server that it could call. The review backend's login travels the same way, and the runner
 # writes it into the launch's review directory for the review's own process; the round's environment never holds it.
+# Beside each login, the same channel carries its config directory and token expiry as a non-secret record. The runner
+# writes them to the launch's `logins` file, which the server's hold check reads to keep a renewal away from a login a
+# live round holds; it carries no token.
 set -euo pipefail
 
 readonly STDERR_PREFIX='improve launch:'
@@ -356,8 +359,9 @@ read_codex_login() {
   codex_seconds_left=$(( expiry - $(date +%s) ))
 }
 
-# A subscription login file of a Claude account: its access token and the token's remaining life in seconds. Sets
-# subscription_token and subscription_seconds_left; exits 7 when the file names no token or no whole-number expiry.
+# A subscription login file of a Claude account: its access token, the token's remaining life in seconds, and the
+# token's expiry in milliseconds. Sets subscription_token, subscription_seconds_left and subscription_expires_ms; it
+# exits 7 when the file names no token or no whole-number expiry.
 read_subscription_login() {
   local login=$1 fields expires_ms
   [[ -f $login ]] || fail 7 "the Claude login is missing: $login"
@@ -371,6 +375,7 @@ read_subscription_login() {
   expires_ms=${fields#*$'\t'}
   [[ $expires_ms =~ ^[0-9]+$ ]] || fail 7 "the Claude login names no whole-number expiresAt: $login"
   subscription_seconds_left=$(( expires_ms / 1000 - $(date +%s) ))
+  subscription_expires_ms=$expires_ms
 }
 
 # Exit with `code` when a login's access token lives fewer seconds than a round needs. The arguments are the seconds left,
@@ -428,6 +433,10 @@ fi
 # The member's record goes to the host on the prepare channel. A gateway member sends its token. A subscription member
 # sends its access token, which the host's round uses for its own life only: this section reads it once here, and checks
 # its life before the first ssh call. A login with less life than IMPROVE_TOKEN_MIN_SECONDS exits 8 and sends nothing.
+# A subscription member also sends its login's config directory and token expiry, as two non-secret fields of its own
+# record. The runner writes them to the launch's `logins` file, where the server's hold check reads the logins a live
+# round holds. A gateway member has no login directory, so it sends none.
+member_login_record=
 if [[ $kind == codex ]]; then
   read_codex_login "$HOME_DIR/.codex/auth.json"
   check_token_life "$codex_seconds_left" "$HOME_DIR/.codex/auth.json" 8 codex
@@ -440,6 +449,7 @@ else
   read_subscription_login "$CLAUDE_CONFIG_DIR/.credentials.json"
   check_token_life "$subscription_seconds_left" "$CLAUDE_CONFIG_DIR/.credentials.json" 8 claude
   member_record="CLAUDE_CODE_OAUTH_TOKEN=$subscription_token"
+  member_login_record="MEMBER_LOGIN=$CLAUDE_CONFIG_DIR"$'\t'"$subscription_expires_ms"
 fi
 
 # ---------- 1c. The review backend and its login ----------
@@ -453,6 +463,8 @@ review_id=$(jq -er '.option.id' <<<"$review_answer") \
 review_type=$(jq -er '.option.type' <<<"$review_answer") \
   || fail 7 "the resolve answer of backends.calls.improve_review names no option type: $review_answer"
 review_account_dir=$(jq -r '.claude_config_dir // empty' <<<"$review_answer")
+review_record=
+review_login_record=
 case $review_type in
   cc-anthropic-compatible)
     # The gateway key is the review's login. The host's round reads it from its credentials file, which the runner
@@ -472,6 +484,8 @@ case $review_type in
     read_subscription_login "$review_account_dir/.credentials.json"
     check_token_life "$subscription_seconds_left" "$review_account_dir/.credentials.json" 7 'review claude'
     review_record="REVIEW_CLAUDE_CODE_OAUTH_TOKEN=$subscription_token"
+    # The review login's directory and token expiry, as `logins` records them. A gateway review names no directory.
+    review_login_record="REVIEW_LOGIN=$review_account_dir"$'\t'"$subscription_expires_ms"
     ;;
   codex)
     review_kind=codex
@@ -657,12 +671,19 @@ heartbeat_pid=$!
 exec 3>"$payload/heartbeat"
 
 # The member's record and the review's record from sections 1b and 1c go to the host on this channel's standard input
-# alone. The runner selects each record by its name and writes both into the launch's member-credential file. The
-# launching shell holds them in memory until this call sends them.
+# alone, and so do the two non-secret login records: a subscription login's config directory and token expiry. The
+# runner selects each record by its name, writes the logins into the launch's member-credential file, and writes the
+# two login records to the launch's `logins` file. The launching shell holds them in memory until this call sends them.
 records=(
   "$member_record"
   "$review_record"
 )
+if [[ -n $member_login_record ]]; then
+  records+=("$member_login_record")
+fi
+if [[ -n $review_login_record ]]; then
+  records+=("$review_login_record")
+fi
 set +e
 printf '%s\0' "${records[@]}" |
   "${SSH[@]}" "$REMOTE_HOST" "bash \$HOME/improve/launch/$launch_id/remote-runner.sh --prepare $launch_id" 3>&- \

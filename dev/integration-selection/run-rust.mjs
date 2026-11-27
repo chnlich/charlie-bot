@@ -9,7 +9,8 @@ const workspaceRoot = path.join(repositoryRoot, 'rust');
 const selection = process.env.RUST_INTEGRATION_FILTER;
 if (selection === undefined || selection === '') throw new Error('RUST_INTEGRATION_FILTER is required');
 
-const filter = `(${selection}) and not test(/_subprocess_entry$/)`;
+// Subprocess entries run only under their parent test, and `_live` tests need a real login: the integration job skips both.
+const filter = `(${selection}) and not test(/_subprocess_entry$|_live$/)`;
 
 function runCargo(args, env = process.env) {
   const child = spawn('cargo', args, { cwd: workspaceRoot, env });

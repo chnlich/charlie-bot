@@ -12,12 +12,12 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, LazyLock, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, bail};
 use backon::{BackoffBuilder, ExponentialBuilder};
 use charliebot_compat::http_client::{self, Settings};
-use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::config::{CRON_D_DIR_NAME, CharlieBotConfig};
 use charliebot_core::fsutil;
 use charliebot_core::headers::bearer_value;
 use charliebot_core::oauth::{
@@ -56,6 +56,21 @@ const EXT_USAGE_VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 /// The backoff ladder after a failed round: 60 seconds first, doubling, capped at 30 minutes.
 const BACKOFF_MIN_DELAY: Duration = Duration::from_secs(60);
 const BACKOFF_CAP_SECONDS: f64 = 30.0 * 60.0;
+/// How long a renewal waits for the Claude CLI's refresh lock before it gives up with `lock_busy`.
+const LOCK_WAIT: Duration = Duration::from_secs(10);
+/// A lock untouched for this long is stale, as the Claude CLI's refresh lock treats it.
+const LOCK_STALE: Duration = Duration::from_secs(60);
+/// How often the lock's holder refreshes its modification time while it holds the lock.
+const LOCK_UPDATE: Duration = Duration::from_secs(5);
+/// The Claude CLI's refresh lock, inside the login directory.
+const REFRESH_LOCK: &str = ".oauth_refresh.lock";
+/// The request and response fields the renewal reads and writes, beside the shared OAuth vocabulary.
+const SCOPE_FIELD: &str = "scope";
+const SCOPES_FIELD: &str = "scopes";
+/// The credentials file's own name for the refresh token; the wire name is [`REFRESH_TOKEN_FIELD`].
+const REFRESH_TOKEN_FILE_FIELD: &str = "refreshToken";
+const REFRESH_TOKEN_EXPIRES_IN_FIELD: &str = "refresh_token_expires_in";
+const REFRESH_TOKEN_EXPIRES_AT_FIELD: &str = "refreshTokenExpiresAt";
 
 const PROVIDER: &str = "claude";
 const PROVIDER_LABEL: &str = "Claude";
@@ -131,6 +146,8 @@ impl QuotaAccounts {
       pool_dirs.insert(label.clone(), abspath(&host.expand(raw))?.to_string_lossy().into_owned());
     }
     let logins = derive_login_dirs(host, &pool)?;
+    // The cron task files whose `improve_host` names the hosts a renewal's hold check reads.
+    let cron_dir = cfg.config_d_dir().join(CRON_D_DIR_NAME);
 
     let mut by_dir = self.by_dir.lock().expect("the Claude quota accounts are not poisoned");
     let mut accounts: Vec<Arc<dyn QuotaAccount>> = Vec::new();
@@ -142,6 +159,7 @@ impl QuotaAccounts {
         None => Arc::new(ClaudeQuotaAccount::new(
           &label,
           dir.join(CREDENTIALS_FILE),
+          cron_dir.clone(),
           Arc::clone(&self.state),
           Arc::clone(&self.http),
         )),
@@ -163,17 +181,26 @@ pub struct ClaudeQuotaAccount {
   /// The login directory of a pool entry, or `None` for an account that is not one. Only a pool entry carries the
   /// `login_required` mark.
   login_dir: Mutex<Option<String>>,
+  /// The cron task directory whose `improve_host` values name the hosts a renewal's hold check reads.
+  cron_dir: PathBuf,
   state: Arc<ClaudeAccountState>,
   http: Arc<QuotaHttp>,
   round: Arc<Mutex<Round>>,
 }
 
 impl ClaudeQuotaAccount {
-  pub fn new(label: &str, credentials_path: PathBuf, state: Arc<ClaudeAccountState>, http: Arc<QuotaHttp>) -> Self {
+  pub fn new(
+    label: &str,
+    credentials_path: PathBuf,
+    cron_dir: PathBuf,
+    state: Arc<ClaudeAccountState>,
+    http: Arc<QuotaHttp>,
+  ) -> Self {
     Self {
       label: label.to_string(),
       credentials_path,
       login_dir: Mutex::new(None),
+      cron_dir,
       state,
       http,
       round: Arc::new(Mutex::new(Round::default())),
@@ -186,6 +213,7 @@ impl ClaudeQuotaAccount {
       label: label.to_string(),
       credentials_path: self.credentials_path.clone(),
       login_dir: Mutex::new(None),
+      cron_dir: self.cron_dir.clone(),
       state: Arc::clone(&self.state),
       http: Arc::clone(&self.http),
       round: Arc::clone(&self.round),
@@ -287,7 +315,9 @@ impl ClaudeQuotaAccount {
   }
 
   /// A usable access token after a 401. The credentials file is shared with the Claude CLI, which rotates the refresh
-  /// token whenever it renews. A file that already holds another access token is used before any refresh call.
+  /// token whenever it renews. A file that already holds another access token is used before any refresh call. A file
+  /// that still holds the refused token is renewed only under the renewal's own rules: a short life, and no live keyed
+  /// round holding the login.
   async fn reauthenticate(&self, failed_token: &str) -> anyhow::Result<Option<String>> {
     let Some(credentials) = read_credentials(&self.state.quota, &self.credentials_path)? else {
       self.set_error("credentials not found");
@@ -296,87 +326,397 @@ impl ClaudeQuotaAccount {
     if credentials.access_token != failed_token {
       return Ok(Some(credentials.access_token));
     }
-    let Some(refresh_token) = credentials.refresh_token else {
-      tracing::warn!(target: "charliebot_agents", account = %self.label, "ext_usage_no_refresh_token");
-      self.set_error("token refresh failed");
-      return Ok(None);
-    };
-    match self.refresh_access_token(&refresh_token).await? {
-      Some(access_token) => Ok(Some(access_token)),
-      None => {
+    let login_dir = self.credentials_path.parent().map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+    let renewal = renew_login(
+      &self.state.quota,
+      &self.http,
+      &self.label,
+      &login_dir,
+      &self.cron_dir,
+      failed_token,
+      &RenewalTrigger::Usage401,
+    )
+    .await?;
+    match renewal {
+      Renewal::Usable(access_token) => Ok(Some(access_token)),
+      Renewal::Skipped { .. } | Renewal::Failed { .. } => {
         self.set_error("token refresh failed");
         Ok(None)
       }
     }
   }
+}
 
-  /// Renews the access token and writes the renewed credentials to the account's file. A refusal or a transport failure
-  /// is logged and returns `None`. Only the refusal's status and a prefix of its body are logged, never a token.
-  async fn refresh_access_token(&self, refresh_token: &str) -> anyhow::Result<Option<String>> {
-    let path = self.credentials_path.as_path();
-    let user_agent = user_agent(&self.state.quota).await;
-    let response = match self
-      .http
-      .client
-      .post(&self.http.token_url)
-      .json(&json!({
-        (GRANT_TYPE_FIELD): REFRESH_TOKEN_GRANT,
-        (REFRESH_TOKEN_FIELD): refresh_token,
-        (CLIENT_ID_FIELD): CLIENT_ID
-      }))
-      .header(USER_AGENT, user_agent)
-      .timeout(HTTP_OAUTH_TIMEOUT)
-      .send()
-      .await
-    {
-      Ok(response) => response,
-      Err(error) => {
-        tracing::error!(
-          target: "charliebot_agents",
-          path = %path.display(),
-          error = %error,
-          "ext_usage_token_refresh_failed"
-        );
-        return Ok(None);
+/// The two callers of a renewal, as the renewal's log lines name them.
+#[derive(Clone, Debug, PartialEq)]
+pub enum RenewalTrigger {
+  /// The usage endpoint refused the login's access token.
+  Usage401,
+  /// A keyed round's placement renews a login's token before it starts the round.
+  KeyedRound { run_id: String },
+}
+
+impl RenewalTrigger {
+  fn label(&self) -> &'static str {
+    match self {
+      Self::Usage401 => "usage_401",
+      Self::KeyedRound { .. } => "keyed_round",
+    }
+  }
+}
+
+/// A renewal's answer.
+#[derive(PartialEq)]
+pub enum Renewal {
+  /// The login holds a usable access token: renewed now, or renewed by another writer while this call waited.
+  Usable(String),
+  /// Nothing was renewed. The skip event carries the reason (`band`, `held`, `unreadable` or `lock_busy`) and, for a
+  /// hold, the holder's name.
+  Skipped { reason: &'static str, holder: Option<String> },
+  /// The renewal was attempted and failed. The text names the failure for a refusal and carries no credential.
+  Failed { detail: String },
+}
+
+impl std::fmt::Debug for Renewal {
+  /// The access token is left out: a renewal's answer reaches logs and panic messages.
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      Self::Usable(_) => f.write_str("Usable(<access token>)"),
+      Self::Skipped { reason, holder } => {
+        f.debug_struct("Skipped").field("reason", reason).field("holder", holder).finish()
       }
-    };
-    let status = response.status();
-    if status.is_client_error() || status.is_server_error() {
-      let body = response.text().await.context("reading the token refusal")?;
+      Self::Failed { detail } => f.debug_struct("Failed").field("detail", detail).finish(),
+    }
+  }
+}
+
+/// The OAuth tokens and their life in a login's credentials file, as a renewal reads them.
+struct LoginFile {
+  access_token: String,
+  refresh_token: Option<String>,
+  expires_at_ms: i64,
+  scopes: Option<Vec<String>>,
+}
+
+/// Renews one login's access token for `trigger`. The token is renewed only while it lives under
+/// `RENEWABLE_TOKEN_MAX_SECONDS` and no live keyed round holds the login; the Claude CLI's two refresh locks serialize
+/// the renewal with the CLI's own, and the login file is read again inside them. `observed_token` is the access token
+/// the caller saw before it asked. This is the only code besides the Claude CLI that writes a login's tokens.
+pub async fn renew_login(
+  quota: &QuotaState,
+  http: &QuotaHttp,
+  label: &str,
+  login_dir: &Path,
+  cron_dir: &Path,
+  observed_token: &str,
+  trigger: &RenewalTrigger,
+) -> anyhow::Result<Renewal> {
+  let path = login_dir.join(CREDENTIALS_FILE);
+  let Some(file) = read_login_file(&path)? else {
+    return Ok(skipped(label, trigger, "unreadable", Some("unreadable:login_file".to_string())));
+  };
+  if file.expires_at_ms - now_millis() >= claude_accounts::RENEWABLE_TOKEN_MAX_SECONDS * 1000 {
+    return Ok(skipped(label, trigger, "band", None));
+  }
+  let hold_dir = login_dir.to_path_buf();
+  let cron = cron_dir.to_path_buf();
+  let now = claude_accounts::now_or(None);
+  let read = tokio::task::spawn_blocking(move || {
+    claude_accounts::improve_hosts(&cron).map(|hosts| claude_accounts::HoldCheck::new(hosts, now).hold(&hold_dir))
+  })
+  .await
+  .context("the hold check task failed")?;
+  let hold = match read {
+    Ok(hold) => hold,
+    Err(error) => {
       tracing::warn!(
         target: "charliebot_agents",
-        path = %path.display(),
-        status_code = status.as_u16(),
-        body = %body.chars().take(200).collect::<String>(),
-        "ext_usage_token_refresh_failed"
+        account = label,
+        trigger = trigger.label(),
+        error = %format!("{error:#}"),
+        "ext_usage_cron_tasks_unreadable"
       );
+      return Ok(skipped(label, trigger, "unreadable", Some("unreadable:cron_tasks".to_string())));
+    }
+  };
+  match hold {
+    claude_accounts::Hold::Free => {}
+    claude_accounts::Hold::Held(holder) => return Ok(skipped(label, trigger, "held", Some(holder))),
+    claude_accounts::Hold::Unreadable(source) => {
+      return Ok(skipped(label, trigger, "unreadable", Some(format!("unreadable:{source}"))));
+    }
+  }
+  let lock_dir = login_dir.to_path_buf();
+  let locks = tokio::task::spawn_blocking(move || RefreshLocks::acquire(&lock_dir, LOCK_WAIT))
+    .await
+    .context("the refresh lock task failed")??;
+  let Some(_locks) = locks else {
+    return Ok(skipped(label, trigger, "lock_busy", None));
+  };
+  // Another writer had the lock: the file may already hold a token that works.
+  let Some(current) = read_login_file(&path)? else {
+    return Ok(skipped(label, trigger, "unreadable", Some("unreadable:login_file".to_string())));
+  };
+  if !current.access_token.is_empty() && current.access_token != observed_token {
+    return Ok(Renewal::Usable(current.access_token));
+  }
+  let Some(refresh_token) = current.refresh_token.clone() else {
+    return Ok(failed(label, trigger, &path, "the login file holds no refresh token"));
+  };
+  let Some(scopes) = current.scopes.as_ref().filter(|scopes| !scopes.is_empty()) else {
+    return Ok(failed(label, trigger, &path, "the login file holds no scopes"));
+  };
+  let user_agent = user_agent(quota).await;
+  let response = match http
+    .client
+    .post(&http.token_url)
+    .json(&json!({
+      (GRANT_TYPE_FIELD): REFRESH_TOKEN_GRANT,
+      (REFRESH_TOKEN_FIELD): refresh_token,
+      (CLIENT_ID_FIELD): CLIENT_ID,
+      (SCOPE_FIELD): scopes.join(" "),
+    }))
+    .header(USER_AGENT, user_agent)
+    .timeout(HTTP_OAUTH_TIMEOUT)
+    .send()
+    .await
+  {
+    Ok(response) => response,
+    Err(error) => return Ok(failed(label, trigger, &path, &format!("the request failed: {error}"))),
+  };
+  let status = response.status();
+  if status.is_client_error() || status.is_server_error() {
+    let body = response.text().await.unwrap_or_default().chars().take(200).collect::<String>();
+    match trigger {
+      RenewalTrigger::Usage401 => tracing::warn!(
+        target: "charliebot_agents",
+        account = label,
+        trigger = trigger.label(),
+        status_code = status.as_u16(),
+        body = %body,
+        "ext_usage_token_refresh_failed"
+      ),
+      RenewalTrigger::KeyedRound { run_id } => tracing::warn!(
+        target: "charliebot_agents",
+        account = label,
+        trigger = trigger.label(),
+        run_id,
+        status_code = status.as_u16(),
+        body = %body,
+        "ext_usage_token_refresh_failed"
+      ),
+    }
+    return Ok(Renewal::Failed { detail: format!("refused ({})", status.as_u16()) });
+  }
+  let Ok(token) = response.json::<Value>().await else {
+    return Ok(failed(label, trigger, &path, "the token response is not JSON"));
+  };
+  let Some(token) = token.as_object() else {
+    return Ok(failed(label, trigger, &path, "the token response is not a JSON object"));
+  };
+  let Some(new_access) = token.get(ACCESS_TOKEN_FIELD).and_then(Value::as_str).filter(|token| !token.is_empty()) else {
+    return Ok(failed(label, trigger, &path, "the token response names no access_token"));
+  };
+  let new_access = new_access.to_string();
+  let Some(new_expires) = expires_at_ms(token) else {
+    return Ok(failed(label, trigger, &path, "returned neither expires_in nor expires_at"));
+  };
+  let new_refresh = token.get(REFRESH_TOKEN_FIELD).cloned().unwrap_or_else(|| json!(refresh_token));
+  let new_scopes =
+    token.get(SCOPE_FIELD).and_then(Value::as_str).map(|scope| scope.split_whitespace().map(str::to_string).collect());
+  let refresh_expires = token
+    .get(REFRESH_TOKEN_EXPIRES_IN_FIELD)
+    .and_then(Value::as_f64)
+    .map(|seconds| now_millis() + (seconds * 1000.0) as i64);
+  let write_path = path.clone();
+  let access = new_access.clone();
+  tokio::task::spawn_blocking(move || {
+    write_renewed_credentials(&write_path, &access, new_refresh, new_expires, refresh_expires, new_scopes)
+  })
+  .await
+  .context("the credentials write task failed")??;
+  match trigger {
+    RenewalTrigger::Usage401 => tracing::info!(
+      target: "charliebot_agents",
+      account = label,
+      trigger = trigger.label(),
+      path = %path.display(),
+      "ext_usage_token_refreshed"
+    ),
+    RenewalTrigger::KeyedRound { run_id } => tracing::info!(
+      target: "charliebot_agents",
+      account = label,
+      trigger = trigger.label(),
+      run_id,
+      path = %path.display(),
+      "ext_usage_token_refreshed"
+    ),
+  }
+  Ok(Renewal::Usable(new_access))
+}
+
+fn skipped(label: &str, trigger: &RenewalTrigger, reason: &'static str, holder: Option<String>) -> Renewal {
+  tracing::info!(
+    target: "charliebot_agents",
+    account = label,
+    trigger = trigger.label(),
+    reason = reason,
+    holder = holder.as_deref().unwrap_or(""),
+    "claude_login_renewal_skipped"
+  );
+  Renewal::Skipped { reason, holder }
+}
+
+fn failed(label: &str, trigger: &RenewalTrigger, path: &Path, detail: &str) -> Renewal {
+  match trigger {
+    RenewalTrigger::Usage401 => tracing::warn!(
+      target: "charliebot_agents",
+      account = label,
+      trigger = trigger.label(),
+      path = %path.display(),
+      reason = detail,
+      "ext_usage_token_refresh_failed"
+    ),
+    RenewalTrigger::KeyedRound { run_id } => tracing::warn!(
+      target: "charliebot_agents",
+      account = label,
+      trigger = trigger.label(),
+      run_id,
+      path = %path.display(),
+      reason = detail,
+      "ext_usage_token_refresh_failed"
+    ),
+  }
+  Renewal::Failed { detail: detail.to_string() }
+}
+
+/// The Claude CLI's two refresh locks, taken in its order: `<login>/.oauth_refresh.lock`, then `<login>.lock`. Both
+/// are directories whose modification time shows a live holder; a lock untouched for [`LOCK_STALE`] may be taken over,
+/// and the holder refreshes the time every [`LOCK_UPDATE`]. Dropping the value removes both locks and stops the
+/// toucher at once.
+struct RefreshLocks {
+  paths: [PathBuf; 2],
+  /// Dropping this sender ends the toucher's wait.
+  stop: Option<std::sync::mpsc::Sender<()>>,
+  toucher: Option<std::thread::JoinHandle<()>>,
+}
+
+impl RefreshLocks {
+  /// Takes both locks for `login_dir`, waiting up to `wait` for the first. `Ok(None)` is the CLI's own give-up: the
+  /// wait ran out, or the second lock is held by a live holder.
+  fn acquire(login_dir: &Path, wait: Duration) -> anyhow::Result<Option<Self>> {
+    let first = login_dir.join(REFRESH_LOCK);
+    let second = PathBuf::from(format!("{}.lock", login_dir.display()));
+    if !take_lock(&first, wait)? {
       return Ok(None);
     }
-    let token: Value = response.json().await.context("the token response is not JSON")?;
-    let token = token.as_object().context("the token response is not a JSON object")?;
-    let new_access = token
-      .get(ACCESS_TOKEN_FIELD)
-      .and_then(Value::as_str)
-      .context("the token response names no access_token")?
-      .to_string();
-    let new_refresh = match token.get(REFRESH_TOKEN_FIELD) {
-      Some(value) => value.clone(),
-      None => json!(refresh_token),
-    };
-    let new_expires = expires_at_ms(token);
-    if new_expires.is_none() {
-      tracing::warn!(target: "charliebot_agents", path = %path.display(), "ext_usage_renewal_without_expiry");
+    // The CLI gives up at once when the second lock is held, so this take does not wait. The first lock is released on
+    // every path that does not return the pair.
+    match take_lock(&second, Duration::ZERO) {
+      Ok(true) => {}
+      Ok(false) => {
+        let _ = fs::remove_dir(&first);
+        return Ok(None);
+      }
+      Err(error) => {
+        let _ = fs::remove_dir(&first);
+        return Err(error);
+      }
     }
-    let credentials_path = self.credentials_path.clone();
-    let access = new_access.clone();
-    tokio::task::spawn_blocking(move || {
-      write_renewed_credentials(&credentials_path, &access, new_refresh, new_expires)
-    })
-    .await
-    .context("the credentials write task failed")??;
-    tracing::info!(target: "charliebot_agents", path = %path.display(), "ext_usage_token_refreshed");
-    Ok(Some(new_access))
+    let locks = Self { paths: [first, second], stop: None, toucher: None };
+    Ok(Some(locks.touched()))
   }
+
+  /// Starts the thread that keeps both locks fresh until the sender drops.
+  fn touched(mut self) -> Self {
+    let paths = self.paths.clone();
+    let (stop, stopped) = std::sync::mpsc::channel::<()>();
+    self.stop = Some(stop);
+    self.toucher = Some(std::thread::spawn(move || {
+      while let Err(std::sync::mpsc::RecvTimeoutError::Timeout) = stopped.recv_timeout(LOCK_UPDATE) {
+        for path in &paths {
+          if let Ok(file) = fs::File::open(path) {
+            let _ = file.set_modified(SystemTime::now());
+          }
+        }
+      }
+    }));
+    self
+  }
+}
+
+impl Drop for RefreshLocks {
+  fn drop(&mut self) {
+    self.stop.take();
+    if let Some(toucher) = self.toucher.take() {
+      let _ = toucher.join();
+    }
+    for path in self.paths.iter().rev() {
+      let _ = fs::remove_dir(path);
+    }
+  }
+}
+
+/// Takes the lock directory at `path`, waiting up to `wait` for a live holder to release it. A stale lock is removed and
+/// taken over. `Ok(false)` means a live holder kept the lock past the wait.
+fn take_lock(path: &Path, wait: Duration) -> anyhow::Result<bool> {
+  let deadline = Instant::now() + wait;
+  loop {
+    match fs::create_dir(path) {
+      Ok(()) => return Ok(true),
+      Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+        if lock_is_stale(path)? {
+          match fs::remove_dir_all(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+              return Err(error).with_context(|| format!("removing the stale lock {}", path.display()));
+            }
+          }
+          continue;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+          return Ok(false);
+        }
+        std::thread::sleep(remaining.min(Duration::from_millis(100)));
+      }
+      Err(error) => return Err(error).with_context(|| format!("taking {}", path.display())),
+    }
+  }
+}
+
+/// Whether a held lock's modification time is older than [`LOCK_STALE`]. A lock that vanished between its observation
+/// and this read is not stale: the next attempt takes the free name, or waits again.
+fn lock_is_stale(path: &Path) -> anyhow::Result<bool> {
+  let metadata = match fs::metadata(path) {
+    Ok(metadata) => metadata,
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+    Err(error) => {
+      return Err(error).with_context(|| format!("reading the modification time of {}", path.display()));
+    }
+  };
+  let modified = metadata.modified().with_context(|| format!("reading the modification time of {}", path.display()))?;
+  Ok(modified.elapsed().is_ok_and(|age| age > LOCK_STALE))
+}
+
+/// The login file's tokens and life, or `None` when it is missing, is not JSON, or names no access token with a
+/// numeric `expiresAt`. A renewal calls that unreadable and writes nothing.
+fn read_login_file(path: &Path) -> anyhow::Result<Option<LoginFile>> {
+  let Ok(text) = fs::read_to_string(path) else { return Ok(None) };
+  let Ok(data) = serde_json::from_str::<Value>(&text) else { return Ok(None) };
+  let Some(oauth) = data.get("claudeAiOauth").and_then(Value::as_object) else { return Ok(None) };
+  let Some(access_token) = oauth.get("accessToken").filter(|value| is_truthy(value)).and_then(Value::as_str) else {
+    return Ok(None);
+  };
+  let Some(expires_at_ms) = oauth.get("expiresAt").and_then(Value::as_i64) else { return Ok(None) };
+  let scopes = oauth
+    .get(SCOPES_FIELD)
+    .and_then(Value::as_array)
+    .map(|values| values.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<String>>());
+  let refresh_token =
+    oauth.get(REFRESH_TOKEN_FILE_FIELD).filter(|value| is_truthy(value)).and_then(Value::as_str).map(str::to_string);
+  Ok(Some(LoginFile { access_token: access_token.to_string(), refresh_token, expires_at_ms, scopes }))
 }
 
 impl QuotaAccount for ClaudeQuotaAccount {
@@ -469,14 +809,13 @@ fn abspath(path: &Path) -> anyhow::Result<PathBuf> {
   Ok(normal)
 }
 
-/// The OAuth tokens of a credentials file.
+/// The access token of a credentials file.
 struct Credentials {
   access_token: String,
-  refresh_token: Option<String>,
 }
 
-/// The tokens in a credentials file, or `None` after a logged warning when the file is missing or holds no access
-/// token. A file that is not JSON, or whose `claudeAiOauth` is not an object, fails the round.
+/// The access token in a credentials file, or `None` after a logged warning when the file is missing or holds no
+/// access token. A file that is not JSON, or whose `claudeAiOauth` is not an object, fails the round.
 fn read_credentials(quota: &QuotaState, path: &Path) -> anyhow::Result<Option<Credentials>> {
   if !path.exists() {
     warn_credentials_once(quota, "ext_usage_credentials_not_found", path);
@@ -499,16 +838,10 @@ fn read_credentials(quota: &QuotaState, path: &Path) -> anyhow::Result<Option<Cr
       return Ok(None);
     }
   };
-  let refresh_token = match oauth.get("refreshToken") {
-    Some(value) if is_truthy(value) => {
-      Some(value.as_str().with_context(|| format!("{}: refreshToken is not a string", path.display()))?.to_string())
-    }
-    Some(_) | None => None,
-  };
-  // expiresAt is not read here: renewal keys off the server's 401, never a local expiry check. A keyed round's start
-  // reads it in claude_accounts, which decides only whether the login may start.
+  // The expiry and the refresh token are not read here. A renewal reads the whole file (`read_login_file`) after it
+  // takes the CLI's locks, so it renews on the file's current life and never on a stale copy of it.
   quota.warned.lock().expect("the warnings are not poisoned").credentials.retain(|(_, known)| known != path);
-  Ok(Some(Credentials { access_token, refresh_token }))
+  Ok(Some(Credentials { access_token }))
 }
 
 /// The error for a non-success status: its class, the code and reason, the URL, and the MDN page for the code.
@@ -604,21 +937,25 @@ async fn probe_cli_version() -> Option<String> {
 }
 
 /// The renewed token's expiry as the millisecond stamp the CLI's file uses. An absolute `expires_at` may be in
-/// seconds. Otherwise `expires_in` is relative to now. Nothing reads the stamp back.
+/// seconds. Otherwise `expires_in` is relative to now. A response that carries neither has no expiry, and the renewal
+/// writes nothing.
 fn expires_at_ms(token: &Map<String, Value>) -> Option<i64> {
   if let Some(absolute) = token.get("expires_at").and_then(Value::as_f64) {
     return Some(if absolute > 1e11 { absolute as i64 } else { (absolute * 1000.0) as i64 });
   }
-  token.get(EXPIRES_IN_FIELD).and_then(Value::as_f64).map(|relative| ((now_seconds() + relative) * 1000.0) as i64)
+  token.get(EXPIRES_IN_FIELD).and_then(Value::as_f64).map(|relative| now_millis() + (relative * 1000.0) as i64)
 }
 
-/// Replaces the renewed tokens in a credentials file. The file is read again and its other keys are kept in place.
-/// The new file replaces the old in one step.
+/// Replaces the renewed tokens in a credentials file, in the fields the Claude CLI writes: the access token, the
+/// refresh token, the access token's expiry, and the refresh token's expiry and scopes when the response names them.
+/// The file is read again and its other keys are kept in place. The new file replaces the old in one step.
 fn write_renewed_credentials(
   path: &Path,
   access_token: &str,
   refresh_token: Value,
-  expires_at: Option<i64>,
+  expires_at: i64,
+  refresh_token_expires_at: Option<i64>,
+  scopes: Option<Vec<String>>,
 ) -> anyhow::Result<()> {
   let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
   let mut data: Value = serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
@@ -627,9 +964,13 @@ fn write_renewed_credentials(
     .and_then(Value::as_object_mut)
     .with_context(|| format!("{} holds no claudeAiOauth object", path.display()))?;
   oauth.insert("accessToken".to_string(), json!(access_token));
-  oauth.insert("refreshToken".to_string(), refresh_token);
-  if let Some(expires_at) = expires_at {
-    oauth.insert("expiresAt".to_string(), json!(expires_at));
+  oauth.insert(REFRESH_TOKEN_FILE_FIELD.to_string(), refresh_token);
+  oauth.insert("expiresAt".to_string(), json!(expires_at));
+  if let Some(refresh_token_expires_at) = refresh_token_expires_at {
+    oauth.insert(REFRESH_TOKEN_EXPIRES_AT_FIELD.to_string(), json!(refresh_token_expires_at));
+  }
+  if let Some(scopes) = scopes {
+    oauth.insert(SCOPES_FIELD.to_string(), json!(scopes));
   }
   let text = serde_json::to_string_pretty(&data).context("serializing the renewed credentials")?;
   // The token never sits at its final path readable by anyone but the owner.
@@ -814,10 +1155,15 @@ fn now_seconds() -> f64 {
   SystemTime::now().duration_since(UNIX_EPOCH).expect("the system clock is after the Unix epoch").as_secs_f64()
 }
 
+fn now_millis() -> i64 {
+  SystemTime::now().duration_since(UNIX_EPOCH).expect("the system clock is after the Unix epoch").as_millis() as i64
+}
+
 #[cfg(test)]
 mod tests {
   use std::os::unix::fs::PermissionsExt;
 
+  use charliebot_core::config::CONFIG_D_DIR_NAME;
   use charliebot_registry::usage::PANEL_EXPIRED;
 
   use super::*;
@@ -841,16 +1187,74 @@ mod tests {
     fs::write(&path, r#"{"claudeAiOauth":{"accessToken":"old","refreshToken":"r","expiresAt":1},"kept":true}"#)
       .unwrap();
 
-    write_renewed_credentials(&path, "new-access", Value::String("new-refresh".to_string()), Some(42)).unwrap();
+    write_renewed_credentials(
+      &path,
+      "new-access",
+      Value::String("new-refresh".to_string()),
+      42,
+      Some(43),
+      Some(vec!["user:inference".to_string()]),
+    )
+    .unwrap();
 
     let published: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
     assert_eq!(published["claudeAiOauth"]["accessToken"], "new-access");
     assert_eq!(published["claudeAiOauth"]["refreshToken"], "new-refresh");
     assert_eq!(published["claudeAiOauth"]["expiresAt"], 42);
+    assert_eq!(published["claudeAiOauth"]["refreshTokenExpiresAt"], 43);
+    assert_eq!(published["claudeAiOauth"]["scopes"], json!(["user:inference"]));
     assert_eq!(published["kept"], true);
     assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
     // No staged sibling survives the swap.
     assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+  }
+
+  #[test]
+  fn a_lock_holder_refreshes_its_time_and_a_stale_lock_is_taken_over() {
+    let root = tempfile::tempdir().unwrap();
+    let login = root.path().join("login");
+    fs::create_dir(&login).unwrap();
+    let second = PathBuf::from(format!("{}.lock", login.display()));
+    let locks = RefreshLocks::acquire(&login, Duration::ZERO).unwrap().expect("the locks are free");
+    assert!(login.join(REFRESH_LOCK).is_dir());
+    assert!(second.is_dir());
+    // The first lock is held: another writer that cannot take it at once gives up, as the CLI's ELOCKED does.
+    assert!(RefreshLocks::acquire(&login, Duration::ZERO).unwrap().is_none());
+    drop(locks);
+    assert!(!login.join(REFRESH_LOCK).exists());
+    assert!(!second.exists());
+
+    // A live second lock with the first lock free: the writer gives up and leaves no first lock behind.
+    fs::create_dir(&second).unwrap();
+    assert!(RefreshLocks::acquire(&login, Duration::ZERO).unwrap().is_none());
+    assert!(!login.join(REFRESH_LOCK).exists(), "a failed second take left the first lock behind");
+    fs::remove_dir(&second).unwrap();
+
+    // A lock untouched past LOCK_STALE may be taken over, the first one and the second one alike.
+    let old = SystemTime::now() - LOCK_STALE - Duration::from_secs(1);
+    fs::create_dir(login.join(REFRESH_LOCK)).unwrap();
+    fs::File::open(login.join(REFRESH_LOCK)).unwrap().set_modified(old).unwrap();
+    let taken = RefreshLocks::acquire(&login, Duration::ZERO).unwrap();
+    assert!(taken.is_some(), "a stale first lock was not taken over");
+    drop(taken);
+    fs::create_dir(&second).unwrap();
+    fs::File::open(&second).unwrap().set_modified(old).unwrap();
+    let taken = RefreshLocks::acquire(&login, Duration::ZERO).unwrap();
+    assert!(taken.is_some(), "a stale second lock was not taken over");
+  }
+
+  #[test]
+  fn a_lock_held_by_a_live_writer_wins_the_wait_and_reports_busy() {
+    let root = tempfile::tempdir().unwrap();
+    let login = root.path().join("login");
+    fs::create_dir(&login).unwrap();
+    fs::create_dir(login.join(REFRESH_LOCK)).unwrap();
+
+    let started = Instant::now();
+    let locks = RefreshLocks::acquire(&login, Duration::from_millis(50)).unwrap();
+
+    assert!(locks.is_none(), "a live lock was taken over");
+    assert!(started.elapsed() >= Duration::from_millis(50), "the wait ended before its bound");
   }
 
   #[test]
@@ -1025,5 +1429,261 @@ mod tests {
 
     main.mark_login_required(&mut entry);
     assert!(!entry.contains_key("login_required"));
+  }
+
+  /// The `accounts.claude` pool of the live config.
+  #[derive(Default, serde::Deserialize)]
+  struct LiveConfig {
+    #[serde(default)]
+    accounts: LiveAccounts,
+  }
+
+  #[derive(Default, serde::Deserialize)]
+  struct LiveAccounts {
+    #[serde(default)]
+    claude: Vec<LiveAccount>,
+  }
+
+  #[derive(serde::Deserialize)]
+  struct LiveAccount {
+    label: String,
+    config_dir: String,
+  }
+
+  /// A live login's config directory and the cron task directory that names the improve hosts. The alias comes from
+  /// `CHARLIEBOT_LIVE_RENEW_LOGIN`, and the pool from the live config.
+  fn live_login() -> (String, PathBuf, PathBuf) {
+    let alias = std::env::var("CHARLIEBOT_LIVE_RENEW_LOGIN")
+      .expect("set CHARLIEBOT_LIVE_RENEW_LOGIN to the pool alias of an idle login under 3 h 50 min of life");
+    let home = std::env::var_os("CHARLIEBOT_HOME")
+      .filter(|value| !value.is_empty())
+      .map_or_else(|| PathBuf::from(std::env::var("HOME").expect("HOME is set")).join(".charliebot"), PathBuf::from);
+    let text = fs::read_to_string(home.join("config.yaml")).expect("the live config.yaml is readable");
+    let config: LiveConfig = serde_yaml::from_str(&text).expect("the live config.yaml parses");
+    let account = config
+      .accounts
+      .claude
+      .iter()
+      .find(|account| account.label == alias)
+      .unwrap_or_else(|| panic!("the live config names no login {alias}"));
+    let dir = match account.config_dir.strip_prefix("~/") {
+      Some(rest) => home.parent().expect("the profile home has a parent").join(rest),
+      None => PathBuf::from(&account.config_dir),
+    };
+    (alias, dir, home.join(CONFIG_D_DIR_NAME).join(CRON_D_DIR_NAME))
+  }
+
+  /// A Claude CLI process that uses `config_dir`'s login, other than the process `except`, described by its PID and
+  /// executable. Only a Claude CLI uses the token: a process that merely inherited `CLAUDE_CONFIG_DIR`, such as a
+  /// shell, `sleep` or `kubectl`, does not.
+  fn claude_cli_using(proc_root: &Path, config_dir: &Path, except: Option<u32>) -> anyhow::Result<Option<String>> {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::MetadataExt;
+
+    let entries = fs::read_dir(proc_root).with_context(|| format!("reading {}", proc_root.display()))?;
+    let mut expected = format!("{}=", crate::login_dirs::CLAUDE_CONFIG_DIR_ENV).into_bytes();
+    expected.extend_from_slice(config_dir.as_os_str().as_bytes());
+    let uid = fs::metadata("/proc/self").with_context(|| "reading /proc/self")?.uid();
+    for entry in entries {
+      let entry = entry.with_context(|| format!("listing {}", proc_root.display()))?;
+      let name = entry.file_name();
+      let Some(pid) = name.to_str().filter(|name| name.bytes().all(|byte| byte.is_ascii_digit())) else { continue };
+      let Ok(pid_number) = pid.parse::<u32>() else { continue };
+      if except == Some(pid_number) {
+        continue;
+      }
+      let proc_dir = entry.path();
+      let metadata = match fs::metadata(&proc_dir) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+        Err(error) => return Err(error).with_context(|| format!("reading {}", proc_dir.display())),
+      };
+      if metadata.uid() != uid {
+        continue;
+      }
+      let data = match fs::read(proc_dir.join("environ")) {
+        Ok(data) => data,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+        Err(error) => return Err(error).with_context(|| format!("reading {}/environ", proc_dir.display())),
+      };
+      let carries = data.split(|byte| *byte == 0).any(|item| item == expected.as_slice());
+      if carries && is_claude_cli(&proc_dir)? {
+        let exe = fs::read_link(proc_dir.join("exe"))
+          .map_or_else(|_| "<executable unreadable>".to_string(), |path| path.display().to_string());
+        return Ok(Some(format!("pid {pid_number} ({exe})")));
+      }
+    }
+    Ok(None)
+  }
+
+  /// Whether the process at `proc_dir` is a Claude CLI: its argv[0] is `claude`, or its executable sits in a
+  /// `claude/versions` directory, where the native CLI's files are named for their version.
+  fn is_claude_cli(proc_dir: &Path) -> anyhow::Result<bool> {
+    use std::os::unix::ffi::OsStrExt;
+    let cmdline = match fs::read(proc_dir.join("cmdline")) {
+      Ok(data) => data,
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+      Err(error) => return Err(error).with_context(|| format!("reading {}/cmdline", proc_dir.display())),
+    };
+    let argv0_is_claude = cmdline.split(|byte| *byte == 0).next().is_some_and(|first| {
+      Path::new(std::ffi::OsStr::from_bytes(first)).file_name().is_some_and(|name| name == "claude")
+    });
+    if argv0_is_claude {
+      return Ok(true);
+    }
+    match fs::read_link(proc_dir.join("exe")) {
+      Ok(exe) => Ok(exe.parent().is_some_and(|dir| dir.ends_with("claude/versions"))),
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+      Err(error) => Err(error).with_context(|| format!("reading {}/exe", proc_dir.display())),
+    }
+  }
+
+  fn token_of(dir: &Path) -> String {
+    let text = fs::read_to_string(dir.join(CREDENTIALS_FILE)).expect("the login file is readable");
+    let data: Value = serde_json::from_str(&text).expect("the login file parses");
+    data["claudeAiOauth"]["accessToken"].as_str().expect("the login file names an access token").to_string()
+  }
+
+  /// The idle check names a Claude CLI that uses a login, skips the process it is told to skip, and ignores a process
+  /// that only inherits the login's config directory. A silent miss would let a live run renew a login a CLI uses.
+  #[test]
+  #[ignore = "integration"]
+  fn the_idle_check_counts_only_a_claude_cli_using_the_login() {
+    let root = tempfile::tempdir().unwrap();
+    let busy = root.path().join("busy");
+    let idle = root.path().join("idle");
+    fs::create_dir(&busy).unwrap();
+    fs::create_dir(&idle).unwrap();
+    let fake_cli = root.path().join("claude");
+    std::os::unix::fs::symlink("/bin/sleep", &fake_cli).unwrap();
+    let env = crate::login_dirs::CLAUDE_CONFIG_DIR_ENV;
+    let mut cli = std::process::Command::new(&fake_cli).arg("30").env(env, &busy).spawn().unwrap();
+    let mut inherited = std::process::Command::new("/bin/sleep").arg("30").env(env, &idle).spawn().unwrap();
+
+    let named = claude_cli_using(Path::new("/proc"), &busy, None).unwrap();
+    let skipped = claude_cli_using(Path::new("/proc"), &busy, Some(cli.id())).unwrap();
+    let inherits_only = claude_cli_using(Path::new("/proc"), &idle, None).unwrap();
+    cli.kill().unwrap();
+    inherited.kill().unwrap();
+    cli.wait().unwrap();
+    inherited.wait().unwrap();
+
+    let named = named.expect("a Claude CLI that uses the login is named");
+    assert!(named.starts_with(&format!("pid {} (", cli.id())), "the named process was {named}");
+    assert_eq!(skipped, None, "the process the check skips was still named");
+    assert_eq!(inherits_only, None, "a process that only inherits the config directory was counted");
+  }
+
+  #[test]
+  #[ignore = "integration"]
+  fn the_idle_check_fails_closed_when_proc_cannot_be_read() {
+    let root = tempfile::tempdir().unwrap();
+    let proc_root = root.path().join("proc");
+    fs::write(&proc_root, "not a process directory").unwrap();
+
+    assert!(claude_cli_using(&proc_root, Path::new("/logins/ext-2"), None).is_err());
+  }
+
+  /// The live test of a renewal: one real login that is short and idle is renewed while the test's own Claude CLI
+  /// process uses it, and the CLI's next request must still authenticate. Run it on the host that holds the login
+  /// files, before step 1's switch:
+  ///
+  ///   CHARLIEBOT_LIVE_RENEW_LOGIN=<alias> cargo test --ignored a_live_cli_survives_a_renewal_of_its_login_live
+  #[test]
+  #[ignore = "live: renews one real login's token, once, on the host that holds the login files"]
+  fn a_live_cli_survives_a_renewal_of_its_login_live() {
+    let (alias, dir, cron_dir) = live_login();
+    let hosts = claude_accounts::improve_hosts(&cron_dir).expect("the live cron task files are readable");
+    let before = token_of(&dir);
+    let file: Value = serde_json::from_str(&fs::read_to_string(dir.join(CREDENTIALS_FILE)).unwrap()).unwrap();
+    let expires = file["claudeAiOauth"]["expiresAt"].as_i64().expect("the login file names its expiry");
+    let remaining = expires - now_millis();
+    assert!(
+      remaining < claude_accounts::RENEWABLE_TOKEN_MAX_SECONDS * 1000,
+      "the login {alias} lives {remaining} ms, so it is not under the renewal's cap"
+    );
+    if let Some(user) =
+      claude_cli_using(Path::new("/proc"), &dir, None).expect("the local Claude process list is readable")
+    {
+      panic!("a Claude CLI already uses the login {alias}: {user}; the test needs an idle login");
+    }
+    let check = claude_accounts::HoldCheck::new(hosts.clone(), claude_accounts::now_or(None));
+    assert_eq!(check.hold(&dir), claude_accounts::Hold::Free, "a live round holds the login {alias}");
+
+    let log = tempfile::tempdir().unwrap();
+    let out = log.path().join("cli.out");
+    let err = log.path().join("cli.err");
+    let mut child = std::process::Command::new("claude")
+      .args([
+        "-p",
+        "Use the Bash tool to run the shell command `sleep 60`, then answer with the single word ready.",
+        "--allowedTools",
+        "Bash",
+      ])
+      .env("CLAUDE_CONFIG_DIR", &dir)
+      .stdin(std::process::Stdio::null())
+      .stdout(std::process::Stdio::from(fs::File::create(&out).unwrap()))
+      .stderr(std::process::Stdio::from(fs::File::create(&err).unwrap()))
+      .spawn()
+      .expect("the claude CLI starts");
+    // The CLI reads its login at start and runs the tool call for a minute; the renewal lands in its middle.
+    std::thread::sleep(Duration::from_secs(20));
+
+    // The second idle check, right before the renewal: a run that started after the selection stops the test here,
+    // before any renewal. The test's own CLI is the one process it allows to use the login.
+    let mut stops = Vec::new();
+    let hold = claude_accounts::HoldCheck::new(hosts.clone(), claude_accounts::now_or(None)).hold(&dir);
+    if hold != claude_accounts::Hold::Free {
+      stops.push(format!("the hold check reads {hold:?}"));
+    }
+    match claude_cli_using(Path::new("/proc"), &dir, Some(child.id())) {
+      Ok(Some(user)) => stops.push(format!("a Claude CLI other than the test's own uses the login: {user}")),
+      Ok(None) => {}
+      Err(error) => stops.push(format!("the local Claude process list is unreadable: {error:#}")),
+    }
+    match child.try_wait() {
+      Ok(None) => {}
+      Ok(Some(status)) => stops.push(format!("the test's Claude CLI ended before renewal: {status}")),
+      Err(error) => stops.push(format!("the test's Claude CLI status is unreadable: {error}")),
+    }
+    if !stops.is_empty() {
+      let _ = child.kill();
+      let _ = child.wait();
+      panic!(
+        "the second idle check failed before the renewal of {alias}: {}; the login was not renewed",
+        stops.join("; ")
+      );
+    }
+
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let quota = QuotaState::default();
+    let http = test_support::quota_http();
+    let trigger = RenewalTrigger::KeyedRound { run_id: "live-renewal-test".to_string() };
+    let renewal = runtime
+      .block_on(renew_login(&quota, &http, &alias, &dir, &cron_dir, &before, &trigger))
+      .expect("the renewal call runs");
+    let answer = format!("{renewal:?}");
+
+    let deadline = Instant::now() + Duration::from_secs(240);
+    let status = loop {
+      if let Some(status) = child.try_wait().unwrap() {
+        break status;
+      }
+      if Instant::now() >= deadline {
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("the CLI did not end within its bound; renewal was {answer}");
+      }
+      std::thread::sleep(Duration::from_millis(200));
+    };
+    let stdout = fs::read_to_string(&out).unwrap_or_default();
+    let stderr = fs::read_to_string(&err).unwrap_or_default();
+    let after = token_of(&dir);
+
+    assert!(matches!(renewal, Renewal::Usable(_)), "the renewal was {answer}");
+    // Not assert_ne!: its failure message would print both access tokens.
+    assert!(after != before, "the renewal left the access token unchanged; renewal was {answer}");
+    assert!(status.success(), "the CLI ended with {status} after the renewal; renewal was {answer}; stderr: {stderr}");
+    assert!(!stdout.trim().is_empty(), "the CLI gave no answer; renewal was {answer}; stderr: {stderr}");
   }
 }

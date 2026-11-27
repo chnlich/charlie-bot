@@ -15,10 +15,12 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use charliebot_claude_code::ClaudeHost;
-use charliebot_claude_code::claude_accounts::{self, ClaudeAccountState};
+use charliebot_claude_code::claude_accounts::{self, ClaudeAccountState, QuotaState};
 use charliebot_claude_code::test_support::fake_program_bin;
 use charliebot_claude_code::usage_logs::ClaudeLogs;
-use charliebot_claude_code::usage_quota::{ClaudeQuotaAccount, QuotaAccounts, QuotaHttp};
+use charliebot_claude_code::usage_quota::{
+  ClaudeQuotaAccount, QuotaAccounts, QuotaHttp, Renewal, RenewalTrigger, renew_login,
+};
 use charliebot_compat::http_client::{self, Settings};
 use charliebot_registry::Registry;
 use charliebot_registry::usage::{QuotaAccount, UsageSourceImpl};
@@ -30,6 +32,7 @@ const FRESH: &str =
 const STALE: &str = r#"{"claudeAiOauth":{"accessToken":"tok-stored","refreshToken":"ref-stored","expiresAt":1000,"scopes":["user:inference"]}}"#;
 const PANEL: &str = r#"{"fiveHour":{"utilization":12,"resetsAt":"2026-10-18T15:00:00Z"},"sevenDay":{"utilization":34,"resetsAt":"2026-10-20T00:00:00Z"}}"#;
 const RENEWAL: &str = r#"{"access_token":"tok-new","refresh_token":"ref-new","expires_in":28800}"#;
+const RENEWAL_WITH_SCOPES: &str = r#"{"access_token":"tok-new","refresh_token":"ref-new","expires_in":28800,"refresh_token_expires_in":86400,"scope":"user:inference user:profile"}"#;
 const REFUSAL: &str = r#"{"error":"invalid_grant"}"#;
 
 /// Serializes the tests that run a process: `PATH` is process-wide, so one test at a time names the fake `claude`.
@@ -107,7 +110,12 @@ impl Fixture {
   }
 
   fn account(&self, label: &str) -> ClaudeQuotaAccount {
-    ClaudeQuotaAccount::new(label, self.credentials.clone(), Arc::clone(&self.state), self.http())
+    ClaudeQuotaAccount::new(label, self.credentials.clone(), self.cron_dir(), Arc::clone(&self.state), self.http())
+  }
+
+  /// The cron task directory of this fixture: absent, so no improve host is named and no keyed round holds a login.
+  fn cron_dir(&self) -> PathBuf {
+    self.login_dir.join("cron.d")
   }
 
   /// Runs `body` with `PATH` naming only the fake `claude`, so the version probe never starts a real CLI.
@@ -265,6 +273,7 @@ fn an_expired_token_renews_once_and_rewrites_the_credentials_file() {
   let renewal: Value = serde_json::from_str(&renewals[0].body).unwrap();
   assert_eq!(renewal["grant_type"], "refresh_token");
   assert_eq!(renewal["refresh_token"], "ref-stored");
+  assert_eq!(renewal["scope"], "user:inference", "the request carries the file's scopes joined by spaces");
 
   let file: Value = serde_json::from_str(&fixture.credentials_text()).unwrap();
   let oauth = &file["claudeAiOauth"];
@@ -275,6 +284,180 @@ fn an_expired_token_renews_once_and_rewrites_the_credentials_file() {
   let keys: Vec<&str> = oauth.as_object().unwrap().keys().map(String::as_str).collect();
   assert_eq!(keys, ["accessToken", "refreshToken", "expiresAt", "scopes"]);
   assert_eq!(fixture.credentials_mode(), 0o600);
+}
+
+#[ignore = "integration"]
+#[test]
+fn a_renewal_writes_the_refresh_tokens_expiry_and_the_scopes_the_response_names() {
+  let fixture = Fixture::new(STALE, vec![(401, "{}"), (200, PANEL)], vec![(200, RENEWAL_WITH_SCOPES)]);
+  let account = fixture.account("work (default)");
+  let before = now_ms();
+
+  let result = fixture.with_claude(|| block_on(account.fetch()));
+
+  assert!(result.expect("the usage request succeeds").is_some());
+  let file: Value = serde_json::from_str(&fixture.credentials_text()).unwrap();
+  let oauth = &file["claudeAiOauth"];
+  assert_eq!(oauth["scopes"], json!(["user:inference", "user:profile"]));
+  let refresh_expires = oauth["refreshTokenExpiresAt"].as_i64().unwrap();
+  assert!(
+    (refresh_expires - before - 86_400_000).abs() < 5_000,
+    "refreshTokenExpiresAt is the response's span from now, got {refresh_expires}"
+  );
+}
+
+#[ignore = "integration"]
+#[test]
+fn a_renewal_response_with_no_expiry_writes_nothing_and_fails_the_round() {
+  let fixture = Fixture::new(STALE, vec![(401, "{}")], vec![(200, r#"{"access_token":"tok-new"}"#)]);
+  let account = fixture.account("work (default)");
+
+  let result = fixture.with_claude(|| block_on(account.fetch()));
+
+  assert!(result.expect("a renewal without an expiry returns no reading").is_none());
+  assert_eq!(account.last_error(), "token refresh failed");
+  assert_eq!(fixture.credentials_text(), STALE, "a response without an expiry changed the file");
+}
+
+#[ignore = "integration"]
+#[test]
+fn the_401_path_renews_a_login_only_under_three_hours_fifty_minutes_of_life() {
+  for (life_ms, renews) in [(13_802_000_i64, false), (13_740_000_i64, true)] {
+    let credentials = format!(
+      r#"{{"claudeAiOauth":{{"accessToken":"tok-stored","refreshToken":"ref-stored","expiresAt":{},"scopes":["user:inference"]}}}}"#,
+      now_ms() + life_ms
+    );
+    let fixture = Fixture::new(&credentials, vec![(401, "{}"), (200, PANEL)], vec![(200, RENEWAL)]);
+    let account = fixture.account("work (default)");
+
+    let result = fixture.with_claude(|| block_on(account.fetch()));
+
+    if renews {
+      assert!(result.expect("the usage request succeeds").is_some(), "a login under the cap was not renewed");
+      assert_eq!(fixture.requests("/token").len(), 1);
+    } else {
+      assert!(result.expect("a skipped renewal returns no reading").is_none());
+      assert!(fixture.requests("/token").is_empty(), "a login at the cap was renewed");
+      assert_eq!(fixture.credentials_text(), credentials);
+    }
+  }
+}
+
+#[ignore = "integration"]
+#[test]
+fn a_login_without_scopes_is_not_renewed_and_makes_no_request() {
+  let credentials =
+    r#"{"claudeAiOauth":{"accessToken":"tok-stored","refreshToken":"ref-stored","expiresAt":1000}}"#.to_string();
+  let fixture = Fixture::new(&credentials, vec![(401, "{}")], vec![(200, RENEWAL)]);
+  let account = fixture.account("work (default)");
+
+  let result = fixture.with_claude(|| block_on(account.fetch()));
+
+  assert!(result.expect("a skipped renewal returns no reading").is_none());
+  assert!(fixture.requests("/token").is_empty(), "a login with no scopes was renewed");
+  assert_eq!(fixture.credentials_text(), credentials);
+}
+
+#[ignore = "integration"]
+#[test]
+fn a_login_a_live_launch_holds_is_not_renewed() {
+  let fixture = Fixture::new(STALE, vec![(401, "{}")], vec![(200, RENEWAL)]);
+  let account = fixture.account("work (default)");
+  let mut live = std::process::Command::new("/bin/sleep")
+    .arg("30")
+    .env("IMPROVE_REMOTE_HOST", "host3")
+    .env("CLAUDE_CONFIG_DIR", &fixture.login_dir)
+    .spawn()
+    .unwrap();
+  std::thread::sleep(std::time::Duration::from_millis(200));
+
+  let result = fixture.with_claude(|| block_on(account.fetch()));
+
+  live.kill().unwrap();
+  live.wait().unwrap();
+  assert!(result.expect("a held login returns no reading").is_none());
+  assert!(fixture.requests("/token").is_empty(), "a login a launch held was renewed");
+  assert_eq!(fixture.credentials_text(), STALE);
+}
+
+/// Asks `renew_login` for one renewal of the fixture's login, the call the 401 path makes.
+fn renew_directly(fixture: &Fixture) -> Renewal {
+  let http = fixture.http();
+  block_on(renew_login(
+    &QuotaState::default(),
+    &http,
+    "work",
+    &fixture.login_dir,
+    &fixture.cron_dir(),
+    "tok-stored",
+    &RenewalTrigger::Usage401,
+  ))
+  .expect("the renewal call runs")
+}
+
+#[ignore = "integration"]
+#[test]
+fn a_cron_file_that_does_not_parse_holds_every_login() {
+  let fixture = Fixture::new(STALE, vec![], vec![(200, RENEWAL)]);
+  fs::create_dir_all(fixture.cron_dir()).unwrap();
+  fs::write(fixture.cron_dir().join("improve-ux.yaml"), "improve_host: [unclosed\n").unwrap();
+
+  let renewal = renew_directly(&fixture);
+
+  assert_eq!(renewal, Renewal::Skipped { reason: "unreadable", holder: Some("unreadable:cron_tasks".to_string()) });
+  assert!(fixture.requests("/token").is_empty(), "a login held by an unparsable cron file was renewed");
+  assert_eq!(fixture.credentials_text(), STALE);
+}
+
+#[ignore = "integration"]
+#[test]
+fn an_unreadable_cron_directory_holds_every_login() {
+  let fixture = Fixture::new(STALE, vec![], vec![(200, RENEWAL)]);
+  // A regular file where the directory belongs fails the read with ENOTDIR, which is not a missing directory.
+  fs::write(fixture.cron_dir(), "not a directory\n").unwrap();
+
+  let renewal = renew_directly(&fixture);
+
+  assert_eq!(renewal, Renewal::Skipped { reason: "unreadable", holder: Some("unreadable:cron_tasks".to_string()) });
+  assert!(fixture.requests("/token").is_empty(), "a login held by an unreadable cron directory was renewed");
+  assert_eq!(fixture.credentials_text(), STALE);
+}
+
+#[ignore = "integration"]
+#[test]
+fn a_renewal_uses_the_token_another_writer_left_in_the_file() {
+  let fixture = Fixture::new(STALE, vec![], vec![]);
+  fs::write(
+    &fixture.credentials,
+    r#"{"claudeAiOauth":{"accessToken":"tok-other","refreshToken":"ref-other","expiresAt":1000,"scopes":["user:inference"]}}"#,
+  )
+  .unwrap();
+  // The caller saw `tok-stored` and asks for a renewal, but another writer holds the CLI's refresh lock and has already
+  // left a working token in the file. The renewal reads the file again inside the lock and uses that token, sending no
+  // request of its own.
+  let lock = fixture.login_dir.join(".oauth_refresh.lock");
+  fs::create_dir(&lock).unwrap();
+  let writer = thread::spawn(move || {
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    fs::remove_dir(&lock).unwrap();
+  });
+  let http = fixture.http();
+
+  let outcome = fixture.with_claude(|| {
+    block_on(renew_login(
+      &QuotaState::default(),
+      &http,
+      "work",
+      &fixture.login_dir,
+      &fixture.cron_dir(),
+      "tok-stored",
+      &RenewalTrigger::Usage401,
+    ))
+  });
+  writer.join().unwrap();
+
+  assert_eq!(outcome.expect("the renewal call runs"), Renewal::Usable("tok-other".to_string()));
+  assert!(fixture.requests("/token").is_empty(), "a renewal sent a request for a token another writer replaced");
 }
 
 #[ignore = "integration"]

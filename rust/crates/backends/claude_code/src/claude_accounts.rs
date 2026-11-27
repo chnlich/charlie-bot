@@ -16,13 +16,16 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Weak};
-use std::time::UNIX_EPOCH;
+use std::time::{Instant, UNIX_EPOCH};
 
-use anyhow::{Context, anyhow};
+use anyhow::{Context, anyhow, bail};
 use charliebot_core::backend_types;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
+use charliebot_core::cron_files::{is_task_file, read_task_file};
 use charliebot_core::event_types::{RATE_LIMIT_RESETS_AT, RATE_LIMIT_STATUS, RATE_LIMIT_STATUS_REJECTED};
 use charliebot_core::model_id;
 use charliebot_core::paths;
@@ -34,7 +37,8 @@ use charliebot_registry::usage::{self, FIVE_HOUR_WINDOW_MINUTES, WEEKLY_WINDOW_M
 use charliebot_store::metadata::UtcDateTime;
 use serde_json::Value;
 use time::format_description::well_known::Rfc3339;
-use time::{Duration, OffsetDateTime};
+use time::macros::format_description;
+use time::{Duration, OffsetDateTime, PrimitiveDateTime};
 use walkdir::WalkDir;
 
 use super::{claude_config, login_dirs};
@@ -57,6 +61,14 @@ const SCORE_TIE: f64 = 0.02;
 pub const RESERVED_HEADROOM_PER_RUN: f64 = 0.05;
 /// How long a placement's reservation counts, from the moment it was placed, even while its handle lives.
 pub const RESERVATION_HOLD: Duration = Duration::minutes(30);
+/// The most access-token life, in seconds, that the server renews a login's token with: 3 h 50 min. A login whose
+/// token lives longer is left to the Claude CLI, which renews when it uses the token, and the 10-minute margin below
+/// the round minimum keeps a login a round has just picked out of the band.
+pub const RENEWABLE_TOKEN_MAX_SECONDS: i64 = 13_800;
+/// How long a launch directory without a `logins` file holds every login: the life of one access token.
+pub const LOGIN_HOLD_WITHOUT_LOGINS: Duration = Duration::hours(8);
+/// How long one improve host's hold read may take. A read that runs past it counts as unreadable.
+pub const IMPROVE_HOLD_READ_SECONDS: u64 = 4;
 const STAGING_SUFFIX: &str = ".staging";
 
 #[derive(Clone, Debug, PartialEq)]
@@ -854,6 +866,364 @@ fn process_login(cfg: &CharlieBotConfig, pid: u32) -> anyhow::Result<Option<clau
   )
 }
 
+/// The improve hosts whose launch directories a hold read covers: the `improve_host` that each cron task file under
+/// `cron_dir` names, in file-name order and once each. Only a cron task starts a keyed round, and the cron loader
+/// requires each such host to be a `host_auth.browser_logins` host; the other login hosts start no round. A missing
+/// directory names none. The files are read by the scheduler loader's reader and file rule, so one rule decides which
+/// files count. A file that cannot be read or parsed, or whose `improve_host` is not a string, is an error, so the
+/// caller holds every login.
+pub fn improve_hosts(cron_dir: &Path) -> anyhow::Result<Vec<String>> {
+  let entries = match fs::read_dir(cron_dir) {
+    Ok(entries) => entries,
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+    Err(error) => return Err(error).with_context(|| format!("reading {}", cron_dir.display())),
+  };
+  let mut files = Vec::new();
+  for entry in entries {
+    let path = entry.with_context(|| format!("listing {}", cron_dir.display()))?.path();
+    if is_task_file(&path).with_context(|| format!("classifying {}", path.display()))? {
+      files.push(path);
+    }
+  }
+  files.sort();
+  let mut hosts: Vec<String> = Vec::new();
+  for path in files {
+    let task = read_task_file(&path).with_context(|| format!("parsing {}", path.display()))?;
+    match task.get("improve_host") {
+      None | Some(Value::Null) => {}
+      Some(Value::String(host)) => {
+        if !hosts.contains(host) {
+          hosts.push(host.clone());
+        }
+      }
+      Some(_) => bail!("improve_host in {} is not a host name", path.display()),
+    }
+  }
+  Ok(hosts)
+}
+
+/// What the hold check found for one login: a live keyed round holds it, nothing holds it, or a source could not be
+/// read so every login counts as held.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Hold {
+  Free,
+  /// The text names the holder: a process's id, a launcher payload's directory, or a launch directory.
+  Held(String),
+  /// The text names the source, as `unreadable` reports it.
+  Unreadable(String),
+}
+
+/// Reads one improve host's launch directories: the `L`, `H` and `N` lines of [`IMPROVE_LAUNCH_LIST`], or an error
+/// when the host cannot be read.
+pub type HostReader = Arc<dyn Fn(&str) -> anyhow::Result<String> + Send + Sync>;
+
+/// The three sources that show a live keyed round using a login: this host's processes, the launcher payloads under
+/// TMPDIR, and each improve host's launch directories. A source that cannot be read holds every login, so a renewal
+/// never races a round whose hold it could not see.
+pub struct HoldCheck {
+  proc_root: PathBuf,
+  payload_root: PathBuf,
+  hosts: Vec<String>,
+  host_reader: HostReader,
+  now: UtcDateTime,
+}
+
+impl HoldCheck {
+  /// The check against this host as the server sees it: `/proc`, the launcher's `${TMPDIR:-/tmp}`, and `hosts`.
+  pub fn new(hosts: Vec<String>, now: UtcDateTime) -> Self {
+    let payload_root =
+      std::env::var_os("TMPDIR").filter(|value| !value.is_empty()).map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
+    Self { proc_root: PathBuf::from("/proc"), payload_root, hosts, host_reader: Arc::new(read_improve_host), now }
+  }
+
+  /// The check with each source replaced, for the tests.
+  #[cfg(test)]
+  fn with_sources(
+    proc_root: PathBuf,
+    payload_root: PathBuf,
+    hosts: Vec<String>,
+    host_reader: HostReader,
+    now: UtcDateTime,
+  ) -> Self {
+    Self { proc_root, payload_root, hosts, host_reader, now }
+  }
+
+  /// The hold on `config_dir`.
+  pub fn hold(&self, config_dir: &Path) -> Hold {
+    match self.local_process_hold(config_dir) {
+      Ok(Some(holder)) => return Hold::Held(holder),
+      Ok(None) => {}
+      Err(source) => return Hold::Unreadable(source.to_string()),
+    }
+    match self.payload_hold(config_dir) {
+      Ok(Some(holder)) => return Hold::Held(holder),
+      Ok(None) => {}
+      Err(source) => return Hold::Unreadable(source.to_string()),
+    }
+    match self.host_hold(config_dir) {
+      Ok(Some(holder)) => Hold::Held(holder),
+      Ok(None) => Hold::Free,
+      Err(source) => Hold::Unreadable(source),
+    }
+  }
+
+  /// ① This host's processes: a launch and its children carry `IMPROVE_REMOTE_HOST`, which the runner sets for every
+  /// round on another host, beside the round's `CLAUDE_CONFIG_DIR`.
+  fn local_process_hold(&self, config_dir: &Path) -> Result<Option<String>, &'static str> {
+    use std::os::unix::fs::MetadataExt;
+
+    let uid = fs::metadata("/proc/self").map_err(|_| "proc")?.uid();
+    for entry in fs::read_dir(&self.proc_root).map_err(|_| "proc")? {
+      let entry = entry.map_err(|_| "proc")?;
+      let name = entry.file_name();
+      let Some(pid) = name.to_str().filter(|name| name.bytes().all(|byte| byte.is_ascii_digit())) else {
+        continue;
+      };
+      let proc_dir = entry.path();
+      let metadata = match fs::metadata(&proc_dir) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+        Err(_) => return Err("proc"),
+      };
+      // A process of another user cannot be a round this server started, and its environment is unreadable.
+      if metadata.uid() != uid {
+        continue;
+      }
+      let data = match fs::read(proc_dir.join("environ")) {
+        Ok(data) => data,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+        Err(_) => return Err("proc"),
+      };
+      let mut remote = false;
+      let mut config_dir_value = None;
+      for item in data.split(|byte| *byte == 0) {
+        let Ok(text) = std::str::from_utf8(item) else { continue };
+        if text.starts_with("IMPROVE_REMOTE_HOST=") {
+          remote = true;
+        }
+        if let Some(value) = text.strip_prefix("CLAUDE_CONFIG_DIR=") {
+          config_dir_value = Some(value);
+        }
+      }
+      if remote && config_dir_value.is_some_and(|value| same_dir(Path::new(value), config_dir)) {
+        return Ok(Some(format!("process {pid}")));
+      }
+    }
+    Ok(None)
+  }
+
+  /// ② The launcher payloads: each holds the review backend's answer beside the review login it read.
+  fn payload_hold(&self, config_dir: &Path) -> Result<Option<String>, &'static str> {
+    for entry in fs::read_dir(&self.payload_root).map_err(|_| "payload")? {
+      let entry = entry.map_err(|_| "payload")?;
+      let name = entry.file_name();
+      let Some(name) = name.to_str().filter(|name| name.starts_with("improve-launch.")) else { continue };
+      let answer = entry.path().join("review").join("option.json");
+      match fs::metadata(&answer) {
+        Ok(metadata) if metadata.is_file() => {}
+        Ok(_) => return Err("payload"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+        Err(_) => return Err("payload"),
+      }
+      let text = fs::read_to_string(&answer).map_err(|_| "payload")?;
+      let record: Value = serde_json::from_str(&text).map_err(|_| "payload")?;
+      let Some(dir) = record.get("claude_config_dir").and_then(Value::as_str) else { continue };
+      if same_dir(Path::new(dir), config_dir) {
+        return Ok(Some(name.to_string()));
+      }
+    }
+    Ok(None)
+  }
+
+  /// ③ The improve hosts' launch directories: a launch's `logins` file and its round's state.
+  fn host_hold(&self, config_dir: &Path) -> Result<Option<String>, String> {
+    for host in &self.hosts {
+      let text = (self.host_reader)(host).map_err(|_| format!("improve_host {host}"))?;
+      let launches = host_launches(&text, self.now).map_err(|_| format!("improve_host {host}"))?;
+      if let Some(launch) = launches.held_all {
+        return Ok(Some(launch));
+      }
+      if let Some((_dir, launch)) =
+        launches.held_logins.iter().find(|(dir, _launch)| same_dir(Path::new(dir), config_dir))
+      {
+        return Ok(Some(launch.clone()));
+      }
+    }
+    Ok(None)
+  }
+}
+
+/// The remote shell that prints one improve host's launch directories: an `L` line for each login a live launch
+/// names, an `H` line for that launch's round state, and an `N` line for a launch directory that names no login (its
+/// `logins` file is missing or empty).
+const IMPROVE_LAUNCH_LIST: &str = r#"
+improve=$HOME/improve
+if [ ! -e "$improve" ]; then exit 0; fi
+[ -d "$improve" ] && [ -r "$improve" ] && [ -x "$improve" ] || exit 1
+root=$HOME/improve/launch
+if [ ! -e "$root" ]; then exit 0; fi
+[ -d "$root" ] && [ -r "$root" ] && [ -x "$root" ] || exit 1
+for d in "$root"/*/; do
+  [ -d "$d" ] || continue
+  [ -r "$d" ] && [ -x "$d" ] || exit 1
+  id=${d%/}
+  id=${id##*/}
+  state=$(bash "$d/remote-runner.sh" --round-state "$id" 2>/dev/null) || exit 1
+  if [ -e "$d/logins" ] || [ -L "$d/logins" ]; then
+    [ -f "$d/logins" ] || exit 1
+  fi
+  if [ -s "$d/logins" ]; then
+    has_login=0
+    while IFS=$'\t' read -r dir expires; do
+      [ -n "$dir" ] || continue
+      has_login=1
+      printf 'L\t%s\t%s\t%s\n' "$id" "$dir" "$expires"
+    done <"$d/logins" || exit 1
+    if [ "$has_login" -eq 1 ]; then
+      printf 'H\t%s\t%s\n' "$id" "$state"
+    else
+      printf 'N\t%s\t%s\n' "$id" "$state"
+    fi
+  else
+    printf 'N\t%s\t%s\n' "$id" "$state"
+  fi
+done
+"#;
+
+/// One improve host's launch directories, as [`IMPROVE_LAUNCH_LIST`] prints them.
+struct HostLaunches {
+  /// The logins a live launch holds, as `(config dir, launch directory)`.
+  held_logins: Vec<(String, String)>,
+  /// A live launch directory that names no login, so it holds every login.
+  held_all: Option<String>,
+}
+
+/// The launches one host reports, with the holds its round states leave in place. A round whose state starts with
+/// `done` holds nothing; any other state holds the logins its `logins` file records with a future `expiresAt`, and a
+/// launch directory with no usable `logins` file holds every login until its round is done or 8 h after its start.
+fn host_launches(text: &str, now: UtcDateTime) -> anyhow::Result<HostLaunches> {
+  let mut states: HashMap<&str, &str> = HashMap::new();
+  let mut logins: Vec<(&str, &str, &str)> = Vec::new();
+  let mut nameless: Vec<&str> = Vec::new();
+  for line in text.lines() {
+    let mut fields = line.split('\t');
+    match fields.next() {
+      Some("L") => {
+        let id = fields.next().context("a login line names no launch directory")?;
+        let dir = fields.next().context("a login line names no config directory")?;
+        let expires = fields.next().context("a login line names no expiry")?;
+        logins.push((id, dir, expires));
+      }
+      Some("H") | Some("N") => {
+        let id = fields.next().context("a launch line names no launch directory")?;
+        let state = fields.next().context("a launch line names no round state")?;
+        if states.insert(id, state).is_some() {
+          bail!("the hold read names launch {id} twice");
+        }
+        if line.starts_with("N\t") {
+          nameless.push(id);
+        }
+      }
+      Some(other) => bail!("the hold read names an unknown line {other:?}"),
+      None => {}
+    }
+  }
+  let now_ms = now.into_inner().unix_timestamp() * 1000;
+  let mut held_logins = Vec::new();
+  for (id, dir, expires) in logins {
+    let state = states.get(id).with_context(|| format!("launch {id} reports a login but no round state"))?;
+    if state.starts_with("done") {
+      continue;
+    }
+    let expires_ms: i64 = expires.parse().with_context(|| format!("launch {id} names no expiry in milliseconds"))?;
+    if expires_ms > now_ms {
+      held_logins.push((dir.to_string(), id.to_string()));
+    }
+  }
+  let mut held_all = None;
+  for id in nameless {
+    let state = states.get(id).with_context(|| format!("launch {id} reports no round state"))?;
+    if state.starts_with("done") {
+      continue;
+    }
+    let started = launch_started_at(id).with_context(|| format!("launch {id} names no start time"))?;
+    let age = now.into_inner() - started.into_inner();
+    if age < LOGIN_HOLD_WITHOUT_LOGINS {
+      held_all = Some(id.to_string());
+    }
+  }
+  Ok(HostLaunches { held_logins, held_all })
+}
+
+/// The UTC start of a launch directory, from the stamp its name opens with (`YYYYMMDDTHHMMSSZ`).
+fn launch_started_at(launch_id: &str) -> Option<UtcDateTime> {
+  let stamp = launch_id.get(..16)?;
+  let parsed =
+    PrimitiveDateTime::parse(stamp, format_description!("[year][month][day]T[hour][minute][second]Z")).ok()?;
+  Some(to_utc_datetime(parsed.assume_utc()))
+}
+
+/// Whether two paths name the same directory. The comparison is lexical: the server writes absolute directories, and
+/// resolving a symbolic link would read the login file's directory from the hold check.
+fn same_dir(left: &Path, right: &Path) -> bool {
+  let mut left_normal = PathBuf::new();
+  for component in left.components() {
+    match component {
+      std::path::Component::ParentDir => {
+        left_normal.pop();
+      }
+      std::path::Component::CurDir => {}
+      other => left_normal.push(other.as_os_str()),
+    }
+  }
+  let mut right_normal = PathBuf::new();
+  for component in right.components() {
+    match component {
+      std::path::Component::ParentDir => {
+        right_normal.pop();
+      }
+      std::path::Component::CurDir => {}
+      other => right_normal.push(other.as_os_str()),
+    }
+  }
+  left_normal == right_normal
+}
+
+/// Reads one improve host's launch directories, within [`IMPROVE_HOLD_READ_SECONDS`]. An unreachable host, a failed
+/// command or a read that runs past the bound is an error, and every login then counts as held.
+fn read_improve_host(host: &str) -> anyhow::Result<String> {
+  let mut child = Command::new("ssh")
+    .args(["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, IMPROVE_LAUNCH_LIST])
+    .stdin(Stdio::null())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::null())
+    .spawn()
+    .with_context(|| format!("starting the hold read of {host}"))?;
+  let mut stdout = child.stdout.take().context("the hold read holds no standard output")?;
+  let reader = std::thread::spawn(move || {
+    let mut text = String::new();
+    let _ = stdout.read_to_string(&mut text);
+    text
+  });
+  let deadline = Instant::now() + std::time::Duration::from_secs(IMPROVE_HOLD_READ_SECONDS);
+  let status = loop {
+    if let Some(status) = child.try_wait().with_context(|| format!("waiting for the hold read of {host}"))? {
+      break status;
+    }
+    if Instant::now() >= deadline {
+      let _ = child.kill();
+      let _ = child.wait();
+      bail!("the hold read of {host} ran past {IMPROVE_HOLD_READ_SECONDS} s");
+    }
+    std::thread::sleep(std::time::Duration::from_millis(25));
+  };
+  let text = reader.join().map_err(|_| anyhow!("the hold read of {host} lost its output reader"))?;
+  if !status.success() {
+    bail!("the hold read of {host} exited {status}");
+  }
+  Ok(text)
+}
+
 /// The hold a restart reattach takes: the login that the recovered run's process already uses, reserved for the run.
 /// `None` when the process carries no pool login's directory. The caller logs the unknown login and follows anyway.
 pub fn reattach_hold(
@@ -1458,6 +1828,7 @@ pub fn retire_transcript_copies(cfg: &CharlieBotConfig, session_id: &str, keep: 
 
 #[cfg(test)]
 mod tests {
+  use std::os::unix::fs::PermissionsExt;
   use std::time::Duration as StdDuration;
 
   use charliebot_registry::Registry;
@@ -2351,5 +2722,280 @@ mod tests {
     plain.kill().unwrap();
     held.wait().unwrap();
     plain.wait().unwrap();
+  }
+
+  fn hold_check(
+    proc_root: PathBuf,
+    payload_root: PathBuf,
+    hosts: Vec<String>,
+    host_reader: HostReader,
+    now: UtcDateTime,
+  ) -> HoldCheck {
+    HoldCheck::with_sources(proc_root, payload_root, hosts, host_reader, now)
+  }
+
+  fn unreachable_hosts() -> HostReader {
+    Arc::new(|host: &str| Err(anyhow!("{host} is unreachable")))
+  }
+
+  fn answering_hosts(text: impl Into<String>) -> HostReader {
+    let text = text.into();
+    Arc::new(move |_host: &str| Ok(text.clone()))
+  }
+
+  fn fake_proc(root: &Path, pid: &str, environ: &[u8]) {
+    let dir = root.join(pid);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("environ"), environ).unwrap();
+  }
+
+  #[test]
+  fn the_hold_read_covers_the_cron_tasks_improve_hosts_and_no_other_login_host() {
+    let root = tempfile::tempdir().unwrap();
+    let cron = root.path().join("cron.d");
+    fs::create_dir(&cron).unwrap();
+    fs::write(cron.join("improve-ux.yaml"), "improve_host: host3\ncron: 0 * * * *\n").unwrap();
+    fs::write(cron.join("improve-perf.yaml"), "improve_host: host3\n").unwrap();
+    fs::write(cron.join("daily.yaml"), "cron: 0 8 * * *\nprompt_file: prompts/daily.md\n").unwrap();
+    fs::write(cron.join("notes.txt"), "improve_host: host9\n").unwrap();
+
+    assert_eq!(improve_hosts(&cron).unwrap(), vec!["host3".to_string()]);
+    assert!(improve_hosts(&root.path().join("missing")).unwrap().is_empty());
+    fs::write(cron.join("broken.yaml"), "improve_host: [unclosed\n").unwrap();
+    assert!(improve_hosts(&cron).is_err(), "an unparsable cron task file must read as unreadable");
+  }
+
+  #[test]
+  fn an_unreadable_cron_task_entry_is_an_error() {
+    let root = tempfile::tempdir().unwrap();
+    let cron = root.path().join("cron.d");
+    fs::create_dir(&cron).unwrap();
+    fs::write(cron.join("improve-ux.yaml"), "improve_host: host3\n").unwrap();
+    fs::set_permissions(&cron, fs::Permissions::from_mode(0o444)).unwrap();
+
+    let result = improve_hosts(&cron);
+
+    fs::set_permissions(&cron, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(result.is_err(), "an unreadable cron file entry was silently ignored");
+  }
+
+  #[test]
+  fn a_payload_path_that_cannot_be_read_holds_every_login() {
+    let root = tempfile::tempdir().unwrap();
+    let proc_root = root.path().join("proc");
+    let payload_root = root.path().join("tmp");
+    fs::create_dir(&proc_root).unwrap();
+    fs::create_dir(&payload_root).unwrap();
+    let review = payload_root.join("improve-launch.bad/review");
+    fs::create_dir_all(review.parent().unwrap()).unwrap();
+    fs::write(&review, "not a directory").unwrap();
+    let check = hold_check(proc_root, payload_root, Vec::new(), answering_hosts(""), timestamp("2026-11-26T12:00:00Z"));
+
+    assert_eq!(check.hold(Path::new("/logins/ext-2")), Hold::Unreadable("payload".to_string()));
+  }
+
+  fn run_improve_launch_list(home: &Path) -> std::process::Output {
+    Command::new("bash").arg("-c").arg(IMPROVE_LAUNCH_LIST).env("HOME", home).output().unwrap()
+  }
+
+  #[test]
+  fn an_unreadable_improve_launch_root_fails_the_host_read() {
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir(root.path().join("improve")).unwrap();
+    fs::write(root.path().join("improve/launch"), "not a directory").unwrap();
+
+    let output = run_improve_launch_list(root.path());
+
+    assert!(!output.status.success(), "a non-directory launch root was read as an empty host");
+  }
+
+  #[test]
+  fn an_unreadable_launch_logins_file_fails_the_host_read() {
+    let root = tempfile::tempdir().unwrap();
+    let launch = root.path().join("improve/launch/20261126T110000Z-1-2");
+    fs::create_dir_all(&launch).unwrap();
+    fs::write(launch.join("remote-runner.sh"), "printf 'running\\n'\n").unwrap();
+    fs::create_dir(launch.join("logins")).unwrap();
+
+    let output = run_improve_launch_list(root.path());
+
+    assert!(!output.status.success(), "an unreadable logins source was read as a launch with no logins");
+  }
+
+  #[test]
+  fn a_launch_with_no_login_records_holds_every_login() {
+    let root = tempfile::tempdir().unwrap();
+    let launch_id = "20261126T110000Z-1-2";
+    let launch = root.path().join(format!("improve/launch/{launch_id}"));
+    fs::create_dir_all(&launch).unwrap();
+    fs::write(launch.join("remote-runner.sh"), "printf 'running\\n'\n").unwrap();
+    fs::write(launch.join("logins"), "\n").unwrap();
+
+    let output = run_improve_launch_list(root.path());
+
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(text, format!("N\t{launch_id}\trunning\n"));
+  }
+
+  #[test]
+  fn a_launch_stamp_reads_as_its_utc_start() {
+    assert_eq!(launch_started_at("20261126T090000Z-1-2"), Some(timestamp("2026-11-26T09:00:00Z")));
+  }
+
+  #[test]
+  fn a_process_table_launch_holds_its_login_and_a_plain_run_holds_nothing() {
+    let root = tempfile::tempdir().unwrap();
+    let proc_root = root.path().join("proc");
+    fs::create_dir(&proc_root).unwrap();
+    let payload_root = root.path().join("tmp");
+    fs::create_dir(&payload_root).unwrap();
+    let now = timestamp("2026-11-26T12:00:00Z");
+    // Only a launch carries `IMPROVE_REMOTE_HOST`; an ordinary local run of the login does not, and is not held.
+    fake_proc(&proc_root, "4242", b"CLAUDE_CONFIG_DIR=/logins/ext-3\0");
+    fake_proc(&proc_root, "4243", b"IMPROVE_REMOTE_HOST=host3\0CLAUDE_CONFIG_DIR=/logins/ext-2\0");
+    let check = hold_check(proc_root, payload_root, Vec::new(), answering_hosts(""), now);
+
+    assert_eq!(check.hold(Path::new("/logins/ext-2")), Hold::Held("process 4243".to_string()));
+    assert_eq!(check.hold(Path::new("/logins/ext-3")), Hold::Free);
+  }
+
+  #[test]
+  fn an_unreadable_local_process_environment_holds_every_login() {
+    let root = tempfile::tempdir().unwrap();
+    let proc_root = root.path().join("proc");
+    fs::create_dir_all(proc_root.join("4242/environ")).unwrap();
+    let payload_root = root.path().join("tmp");
+    fs::create_dir(&payload_root).unwrap();
+    let check = hold_check(proc_root, payload_root, Vec::new(), answering_hosts(""), timestamp("2026-11-26T12:00:00Z"));
+
+    assert_eq!(check.hold(Path::new("/logins/ext-2")), Hold::Unreadable("proc".to_string()));
+  }
+
+  #[test]
+  fn a_launcher_payload_holds_the_review_login_it_read() {
+    let root = tempfile::tempdir().unwrap();
+    let proc_root = root.path().join("proc");
+    fs::create_dir(&proc_root).unwrap();
+    let payload_root = root.path().join("tmp");
+    let review = payload_root.join("improve-launch.abc123").join("review");
+    fs::create_dir_all(&review).unwrap();
+    fs::write(
+      review.join("option.json"),
+      json!({"option": {"id": "review"}, "claude_config_dir": "/logins/ext-2"}).to_string(),
+    )
+    .unwrap();
+    let now = timestamp("2026-11-26T12:00:00Z");
+    let check = hold_check(proc_root.clone(), payload_root, Vec::new(), answering_hosts(""), now);
+
+    assert_eq!(check.hold(Path::new("/logins/ext-2")), Hold::Held("improve-launch.abc123".to_string()));
+    assert_eq!(check.hold(Path::new("/logins/ext-3")), Hold::Free);
+  }
+
+  #[test]
+  fn a_logins_line_holds_its_login_until_its_expiry_and_a_done_round_holds_nothing() {
+    let root = tempfile::tempdir().unwrap();
+    let proc_root = root.path().join("proc");
+    fs::create_dir(&proc_root).unwrap();
+    let payload_root = root.path().join("tmp");
+    fs::create_dir(&payload_root).unwrap();
+    let now = timestamp("2026-11-26T12:00:00Z");
+    let future = 1_800_000_000_000_i64;
+    let past = 1_000_000_000_000_i64;
+    let held = format!(
+      "L\t20261126T110000Z-1-2\t/logins/ext-2\t{future}\nL\t20261126T110000Z-1-2\t/logins/ext-3\t{past}\nH\t20261126T110000Z-1-2\trunning\n"
+    );
+    let done = format!("L\t20261126T110000Z-1-2\t/logins/ext-2\t{future}\nH\t20261126T110000Z-1-2\tdone 0\n");
+
+    let check =
+      hold_check(proc_root.clone(), payload_root.clone(), vec!["host3".to_string()], answering_hosts(&held), now);
+    assert_eq!(check.hold(Path::new("/logins/ext-2")), Hold::Held("20261126T110000Z-1-2".to_string()));
+    assert_eq!(check.hold(Path::new("/logins/ext-3")), Hold::Free, "an expired login line holds nothing");
+
+    let check = hold_check(proc_root, payload_root, vec!["host3".to_string()], answering_hosts(&done), now);
+    assert_eq!(check.hold(Path::new("/logins/ext-2")), Hold::Free, "a done round holds nothing");
+  }
+
+  #[test]
+  fn a_launch_directory_without_logins_holds_every_login_until_eight_hours_pass() {
+    let root = tempfile::tempdir().unwrap();
+    let proc_root = root.path().join("proc");
+    fs::create_dir(&proc_root).unwrap();
+    let payload_root = root.path().join("tmp");
+    fs::create_dir(&payload_root).unwrap();
+    let now = timestamp("2026-11-26T12:00:00Z");
+    let young = "N\t20261126T090000Z-1-2\tlost\n";
+    let old = "N\t20261126T030000Z-1-2\trunning\n";
+
+    let check =
+      hold_check(proc_root.clone(), payload_root.clone(), vec!["host3".to_string()], answering_hosts(young), now);
+    assert_eq!(check.hold(Path::new("/logins/ext-2")), Hold::Held("20261126T090000Z-1-2".to_string()));
+
+    let check = hold_check(proc_root, payload_root, vec!["host3".to_string()], answering_hosts(old), now);
+    assert_eq!(check.hold(Path::new("/logins/ext-2")), Hold::Free, "eight hours ended the nameless launch's hold");
+  }
+
+  #[test]
+  fn every_unreadable_source_holds_every_login() {
+    let root = tempfile::tempdir().unwrap();
+    let now = timestamp("2026-11-26T12:00:00Z");
+    let missing_proc = root.path().join("no-proc");
+    let payload_root = root.path().join("tmp");
+    fs::create_dir(&payload_root).unwrap();
+    let check = hold_check(missing_proc, payload_root.clone(), Vec::new(), answering_hosts(""), now);
+    assert_eq!(check.hold(Path::new("/logins/ext-2")), Hold::Unreadable("proc".to_string()));
+
+    let proc_root = root.path().join("proc");
+    fs::create_dir(&proc_root).unwrap();
+    let check = hold_check(proc_root.clone(), root.path().join("no-tmp"), Vec::new(), answering_hosts(""), now);
+    assert_eq!(check.hold(Path::new("/logins/ext-2")), Hold::Unreadable("payload".to_string()));
+
+    let check = hold_check(proc_root, payload_root, vec!["host3".to_string()], unreachable_hosts(), now);
+    assert_eq!(check.hold(Path::new("/logins/ext-2")), Hold::Unreadable("improve_host host3".to_string()));
+  }
+
+  #[test]
+  fn a_login_line_with_no_expiry_holds_every_login() {
+    let root = tempfile::tempdir().unwrap();
+    let proc_root = root.path().join("proc");
+    fs::create_dir(&proc_root).unwrap();
+    let payload_root = root.path().join("tmp");
+    fs::create_dir(&payload_root).unwrap();
+    let now = timestamp("2026-11-26T12:00:00Z");
+    let text = "L\t20261126T110000Z-1-2\t/logins/ext-2\tnot-a-number\nH\t20261126T110000Z-1-2\trunning\n";
+
+    let check = hold_check(proc_root, payload_root, vec!["host3".to_string()], answering_hosts(text), now);
+    assert_eq!(check.hold(Path::new("/logins/ext-3")), Hold::Unreadable("improve_host host3".to_string()));
+  }
+
+  #[test]
+  #[ignore = "integration"]
+  fn a_local_launch_process_holds_the_login_in_its_environment() {
+    let root = tempfile::tempdir().unwrap();
+    let payload_root = root.path().join("tmp");
+    fs::create_dir(&payload_root).unwrap();
+    let now = timestamp("2026-11-26T12:00:00Z");
+    let check = hold_check(PathBuf::from("/proc"), payload_root, Vec::new(), unreachable_hosts(), now);
+
+    let mut child = std::process::Command::new("/bin/sleep")
+      .arg("30")
+      .env("IMPROVE_REMOTE_HOST", "host3")
+      .env("CLAUDE_CONFIG_DIR", "/logins/ext-2")
+      .spawn()
+      .unwrap();
+    // Between fork and exec the child's /proc environ still shows the test runner's environment; poll for exec.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let hold = loop {
+      let hold = check.hold(Path::new("/logins/ext-2"));
+      if hold != Hold::Free || std::time::Instant::now() >= deadline {
+        break hold;
+      }
+      std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+
+    assert_eq!(hold, Hold::Held(format!("process {}", child.id())));
+    assert_eq!(check.hold(Path::new("/logins/ext-3")), Hold::Free);
+    child.kill().unwrap();
+    child.wait().unwrap();
   }
 }

@@ -2106,6 +2106,64 @@ fn prepare_in_background(world: &World, launch_id: &str, records: &[(&str, &str)
   child
 }
 
+/// `--prepare` writes the two login records as the launch's `logins` file, one `<config dir>TAB<expiresAt>` line each,
+/// and keeps them out of the member-credential file. The file carries no token: the hold check reads it without any.
+#[test]
+#[ignore = "integration"]
+fn prepare_writes_the_logins_a_hold_check_reads_and_no_token() {
+  let world = World::new();
+  let launch = "20261101T100000Z-3-402";
+  let launches = world.remote_home.join("improve/launch");
+  fs::create_dir_all(launches.join(launch)).expect("the launch directory");
+  let review_dir = world.sandbox.dir("login/review-account");
+  let member_line = format!("{}\t1800000000000", world.claude_login_dir.display());
+  let review_line = format!("{}\t1700000000000", review_dir.display());
+  let records = [
+    ("CLAUDE_CODE_OAUTH_TOKEN", LOGIN_TOKEN),
+    ("REVIEW_CLAUDE_CODE_OAUTH_TOKEN", REVIEW_LOGIN_TOKEN),
+    ("MEMBER_LOGIN", member_line.as_str()),
+    ("REVIEW_LOGIN", review_line.as_str()),
+  ];
+
+  let output = prepare_in_background(&world, launch, &records).wait_with_output().expect("the prepare call finished");
+
+  assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+  let logins = fs::read_to_string(launches.join(launch).join("logins")).expect("the launch's logins file");
+  assert_eq!(logins.lines().collect::<Vec<_>>(), [member_line.as_str(), review_line.as_str()]);
+  assert!(!logins.contains(LOGIN_TOKEN), "the logins file holds the member's token:\n{logins}");
+  assert!(!logins.contains(REVIEW_LOGIN_TOKEN), "the logins file holds the review's token:\n{logins}");
+  let credential = member_records(&launches.join(launch).join("member-credential"));
+  assert_eq!(
+    credential,
+    [format!("CLAUDE_CODE_OAUTH_TOKEN={LOGIN_TOKEN}"), format!("REVIEW_CLAUDE_CODE_OAUTH_TOKEN={REVIEW_LOGIN_TOKEN}"),],
+    "a login record reached the member-credential file"
+  );
+}
+
+#[test]
+#[ignore = "integration"]
+fn prepare_refuses_a_login_record_without_a_whole_number_expiry() {
+  let world = World::new();
+  let launch = "20261101T100000Z-4-403";
+  let launches = world.remote_home.join("improve/launch");
+  fs::create_dir_all(launches.join(launch)).expect("the launch directory");
+  let records = [
+    ("CLAUDE_CODE_OAUTH_TOKEN", LOGIN_TOKEN),
+    ("REVIEW_ANTHROPIC_AUTH_TOKEN", REVIEW_KEY),
+    ("MEMBER_LOGIN", "/logins/ext-2\tnot-a-number"),
+  ];
+
+  let output = prepare_in_background(&world, launch, &records).wait_with_output().expect("the prepare call finished");
+
+  assert!(!output.status.success(), "prepare accepted a login record with no expiry");
+  assert!(
+    String::from_utf8_lossy(&output.stderr).contains("names no whole-number token expiry"),
+    "{}",
+    String::from_utf8_lossy(&output.stderr)
+  );
+  assert!(!launches.join(launch).join("logins").exists(), "a refused prepare wrote a logins file");
+}
+
 /// The records of a member-credential file, each as its `NAME=value` text.
 fn member_records(path: &Path) -> Vec<String> {
   let bytes = fs::read(path).expect("the member credential file");

@@ -3,7 +3,8 @@
 #
 #   remote-runner.sh <launch id> <direction> <CLI commit> <member kind> <member version> <review kind> <review version>
 #   remote-runner.sh --in-scope <launch id> <direction> <member kind>
-#   remote-runner.sh --prepare <launch id>     (the member's and the review's logins on standard input)
+#   remote-runner.sh --prepare <launch id>     (the member's and the review's logins, with their login records, on
+#                                               standard input)
 #   remote-runner.sh --member-cli <member kind> <member version>     (a probe: install and report, no round)
 #   remote-runner.sh --round-state <launch id>                      (the launch's round: running, done <status>, lost)
 #   remote-runner.sh --round-output <launch id> <offset>            (the round's output from a byte offset)
@@ -16,14 +17,16 @@
 # dev/improve/remote-launch.sh sends this file, with the round's arguments and inputs, into
 # ~/improve/launch/<launch id>/ and runs the remaining forms over ssh. `--prepare` reads the round's
 # records from its standard input and stores both logins in the launch's member-credential file (mode 600), which
-# only this launch reads. The first form checks the round's dependencies, prepares the round's environment, then
-# starts the round's scope through systemd-run; the scope runs the `--in-scope` form, which makes the round's TMPDIR
-# and removes the TMPDIR directories that earlier scopes made, runs the member's agent under the Landlock boundary
-# that limits its writes and signals, and records the scope's memory peak. The review's login is written into the
-# launch's review directory once the round has its scope, and the review's `charliebot backend run` reads it from
-# there. No round environment holds either login. The probe answer that the launcher shipped is the file
-# CHARLIEBOT_TRIAL_PROBE_ANSWER names in the round's environment: a serve trial reads the probe member from it, since
-# this host runs no server.
+# only this launch reads. Two optional records, `MEMBER_LOGIN` and `REVIEW_LOGIN`, carry a subscription login's config
+# directory and token expiry instead of a token; `--prepare` writes them to the launch's `logins` file, which the
+# server's hold check reads to keep a renewal away from a login a live round holds. The first form checks the round's
+# dependencies, prepares the round's environment, then starts the round's scope through systemd-run; the scope runs
+# the `--in-scope` form, which makes the round's TMPDIR and removes the TMPDIR directories that earlier scopes made,
+# runs the member's agent under the Landlock boundary that limits its writes and signals, and records the scope's
+# memory peak. The review's login is written into the launch's review directory once the round has its scope, and the
+# review's `charliebot backend run` reads it from there. No round environment holds either login. The probe answer that
+# the launcher shipped is the file CHARLIEBOT_TRIAL_PROBE_ANSWER names in the round's environment: a serve trial reads
+# the probe member from it, since this host runs no server.
 #
 # The kit is the dev/ tree of the commit that the round's charliebot is built from. The runner archives that tree into
 # the commit's tool directory, and the round reads and runs the kit from there, so a kit change reaches rounds at the
@@ -191,6 +194,9 @@ readonly RUNNER_ROOT="$HOME_DIR/improve/runner"
 # The login records of this launch: the member's record and the review's record that `--prepare` wrote, each `NAME=value`
 # with a NUL after it.
 readonly MEMBER_CREDENTIAL="$LAUNCH_DIR/member-credential"
+# The logins a live round holds: one `<config dir>TAB<expiresAt ms>` line per subscription login this launch uses. The
+# server's hold check reads it from here; it carries no token.
+readonly LOGINS="$LAUNCH_DIR/logins"
 [[ $LAUNCH_DIR == "$HOME_DIR"/improve/launch/* ]] || fail 1 "the launch directory is not under the improve root: $LAUNCH_DIR"
 if [[ $mode == run || $mode == in_scope ]]; then
   [[ -d $LAUNCH_DIR ]] || fail 1 "the launch directory is missing: $LAUNCH_DIR"
@@ -223,9 +229,11 @@ read_launch_env() {
 # Read the round's records from standard input and store them in this launch's member-credential file, which no other
 # launch reads. The member's record is a login or a gateway token; the review's record is the review backend's login.
 # Each record is selected by its name, and the records arrive on standard input so no key or token reaches a command
-# line. Neither record joins the round environment.
+# line. Neither record joins the round environment. The optional `MEMBER_LOGIN` and `REVIEW_LOGIN` records carry a
+# subscription login's config directory and token expiry, and they become the launch's `logins` file, which the
+# server's hold check reads. That file carries no token, so it holds only these two records.
 prepare_credentials() {
-  local record name member_record= review_record=
+  local record name member_record= review_record= member_login= review_login=
   umask 077
   : >"$MEMBER_CREDENTIAL"
   while IFS= read -r -d '' record; do
@@ -239,12 +247,44 @@ prepare_credentials() {
         [[ -z $review_record ]] || fail 1 'the launch sent more than one review record'
         review_record=$name
         ;;
+      MEMBER_LOGIN)
+        [[ -z $member_login ]] || fail 1 'the launch sent more than one member login record'
+        member_login=${record#*=}
+        continue
+        ;;
+      REVIEW_LOGIN)
+        [[ -z $review_login ]] || fail 1 'the launch sent more than one review login record'
+        review_login=${record#*=}
+        continue
+        ;;
       *) fail 1 "the launch sent an unexpected variable name: $name" ;;
     esac
     printf '%s\0' "$record" >>"$MEMBER_CREDENTIAL"
   done
   [[ -n $member_record ]] || fail 1 'the launch sent no member record'
   [[ -n $review_record ]] || fail 1 'the launch sent no review record'
+  # The logins file appears whole or not at all: a prepare that refuses a record leaves no file, and a launch with no
+  # subscription login keeps none, so the server's hold check reads the file that this call completed.
+  if [[ -z $member_login && -z $review_login ]]; then
+    rm -f -- "$LOGINS"
+  else
+    local staged="$LOGINS.partial"
+    : >"$staged"
+    [[ -z $member_login ]] || login_line "$member_login" MEMBER_LOGIN >>"$staged"
+    [[ -z $review_login ]] || login_line "$review_login" REVIEW_LOGIN >>"$staged"
+    mv -f -- "$staged" "$LOGINS"
+  fi
+}
+
+# One `logins` line from a login record: `<config dir>TAB<expiresAt ms>`. A record without both stops the prepare.
+login_line() {
+  local value=$1 name=$2 dir expires
+  [[ $value == *$'\t'* ]] || fail 1 "the launch's $name record names no config directory and token expiry"
+  dir=${value%%$'\t'*}
+  expires=${value#*$'\t'}
+  [[ -n $dir ]] || fail 1 "the launch's $name record names no config directory"
+  [[ $expires =~ ^[0-9]+$ ]] || fail 1 "the launch's $name record names no whole-number token expiry"
+  printf '%s\t%s\n' "$dir" "$expires"
 }
 
 # The value of the first record named `name` in this launch's member-credential file. Nothing is printed and the

@@ -50,8 +50,10 @@ mod harness {
   use std::collections::BTreeSet;
   use std::fs;
   use std::path::Path;
+  use std::sync::LazyLock;
 
   use anyhow::{Context, bail};
+  use regex::Regex;
 
   use super::PAGE_SOURCES;
 
@@ -80,9 +82,31 @@ mod harness {
     "td", "textarea", "th", "thead", "tr", "ul",
   ];
 
-  /// The calls on the templating engine that render a page or wrap its markup in a response.
-  const PAGE_RENDER_CALLS: &[&str] =
-    &[".render_page(", ".render_page_html(", ".render_page_template(", ".page_response("];
+  /// The marker alternatives other than the element tags, each a regular expression. They name an HTML content type or
+  /// the HTML response helper, a render call of the templating engine, a document opening, a class attribute, the
+  /// engine's autoescape setting and the served-form strip of page markup.
+  const MARKER_ALTERNATIVES: &[&str] = &[
+    r"with_utf8_charset\([^\n]*TEXT_HTML",
+    r"text/html;",
+    r"responses::html\(",
+    r"\.(?:render_page|render_page_html|render_page_template|page_response)\(",
+    r"(?i:<!doctype html[ >]|<html[ >])",
+    r#"class=\\?""#,
+    r"AutoEscape",
+    r"without_comments\(",
+  ];
+
+  /// Every marker in one pattern: the alternatives above and an element tag from `ELEMENTS`, followed by a tag's end.
+  static MARKER: LazyLock<Regex> = LazyLock::new(|| {
+    let elements = format!("<(?:{})[ />]", ELEMENTS.join("|"));
+    let alternatives: Vec<&str> = MARKER_ALTERNATIVES.iter().copied().chain([elements.as_str()]).collect();
+    Regex::new(&alternatives.join("|")).expect("the marker alternatives are valid regular expressions")
+  });
+
+  /// The inline test module: a column-0 `#[cfg(test)]` line directly before a `mod name {` line.
+  static INLINE_TEST_MODULE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?m)^#\[cfg\(test\)\]\nmod [A-Za-z0-9_]+ *\{").expect("the test module pattern is valid")
+  });
 
   /// The directories the scan does not enter: build output and test code.
   const SKIPPED_DIRS: &[&str] = &["target", "tests", "test_support"];
@@ -158,76 +182,19 @@ mod harness {
     relative.components().map(|part| part.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/")
   }
 
-  /// Whether a file's non-test lines hold a page marker. The inline test module, from a column-0 `#[cfg(test)]` that
-  /// precedes `mod name {` to the end of the file, is not read.
+  /// Whether a file's code holds a page marker. The code ends where the inline test module starts.
   fn marks_html(text: &str) -> bool {
-    let mut after_cfg_test = false;
-    for line in text.lines() {
-      if line == "#[cfg(test)]" {
-        after_cfg_test = true;
-        continue;
-      }
-      if after_cfg_test && is_inline_test_module(line) {
-        return false;
-      }
-      after_cfg_test = false;
-      if line.trim_start().starts_with("//") {
-        continue;
-      }
-      if line_marks_html(line) {
-        return true;
-      }
-    }
-    false
+    let code = match INLINE_TEST_MODULE.find(text) {
+      Some(module) => &text[..module.start()],
+      None => text,
+    };
+    MARKER.find_iter(code).any(|marker| is_code(code, marker.start()))
   }
 
-  fn is_inline_test_module(line: &str) -> bool {
-    line.strip_prefix("mod ").and_then(|rest| rest.split_once('{')).is_some_and(|(name, _)| {
-      let name = name.trim();
-      !name.is_empty() && name.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-    })
-  }
-
-  /// The markers: an HTML content type or the HTML response helper, a templating render call, markup written in a
-  /// string literal (a document opening, an element tag or a class attribute), the engine's autoescape setting, and
-  /// the served-form strip of page markup.
-  fn line_marks_html(line: &str) -> bool {
-    let content_type = line.contains("with_utf8_charset(") && line.contains("TEXT_HTML");
-    content_type
-      || line.contains("text/html;")
-      || line.contains("responses::html(")
-      || line.contains("AutoEscape")
-      || line.contains("without_comments(")
-      || PAGE_RENDER_CALLS.iter().any(|call| line.contains(call))
-      || writes_markup(line)
-  }
-
-  fn writes_markup(line: &str) -> bool {
-    let lower = line.to_ascii_lowercase();
-    ["<!doctype html", "<html"].iter().any(|opening| followed_by_tag_end(&lower, opening))
-      || line.contains("class=\"")
-      || line.contains("class=\\\"")
-      || element_tag(line)
-  }
-
-  /// Whether `opening` occurs in `text` followed by a tag's end: `<html>` and `<html lang` match, `<html"` does not.
-  fn followed_by_tag_end(text: &str, opening: &str) -> bool {
-    text
-      .match_indices(opening)
-      .any(|(index, _)| matches!(text[index + opening.len()..].chars().next(), Some('>' | ' ')))
-  }
-
-  /// Whether a `<` opens an element tag from `ELEMENTS`. A regex named group, `(?P<name>`, is not a tag.
-  fn element_tag(line: &str) -> bool {
-    line.match_indices('<').any(|(index, _)| {
-      if line[..index].ends_with("?P") {
-        return false;
-      }
-      let rest = &line[index + 1..];
-      let name_len = rest.bytes().take_while(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit()).count();
-      let name = &rest[..name_len];
-      ELEMENTS.contains(&name) && matches!(rest[name_len..].chars().next(), Some('>' | ' ' | '/'))
-    })
+  /// Whether a marker at `start` is code: its line is not a comment, and it is not the `?P<` of a regex named group.
+  fn is_code(code: &str, start: usize) -> bool {
+    let line_start = code[..start].rfind('\n').map_or(0, |newline| newline + 1);
+    !code[line_start..start].trim_start().starts_with("//") && !code[..start].ends_with("?P")
   }
 
   /// The repository root: the checkout that holds this crate, four levels above its crate directory.

@@ -32,13 +32,17 @@
 # Lock-free serve sides in one round share a lock in the round's record directory. A side holds it through the trial
 # command, so the next side starts after the previous trial has stopped its server and scope.
 #
-# A signal stops the side. SIGTERM, SIGINT or SIGHUP goes once to each process of the trial, and the lock helper, which
-# holds the lock until the trial has ended, gets the signal only while no trial process runs. The side waits
-# IMPROVE_TRIAL_STOP_WAIT_SECONDS (default 120) for the trial's processes to end, then SIGKILLs them; the helper ends
-# after its trial and releases the lock. The side records exit_status as 128 plus the signal number, prints one line
-# that names the signal and the trial pid (none when the trial had not started), and exits with that status: 143 for
-# SIGTERM. SIGKILL cannot be caught, so a SIGKILL to this script leaves its trial running. landing.md's "A side past
-# one tool call" section names the form that runs a side past one tool call.
+# A signal stops the side. The trial runs as a process group of its own, and SIGTERM, SIGINT or SIGHUP goes to that
+# group in one kill: each process of the trial at that moment gets the signal once, and a process that the trial starts
+# after it gets none. The trial's own cleanup is such a process, so it runs to its end and removes the trial tree and
+# temp root. The lock helper, which holds the lock until the trial has ended, gets the signal only while no trial runs.
+# The side waits IMPROVE_TRIAL_STOP_WAIT_SECONDS (default 120) for the trial's processes to end, then SIGKILLs them; the
+# helper ends after its trial and releases the lock. The side records exit_status as 128 plus the signal number, prints
+# one line that names the signal, the trial pid (none when the trial had not started) and each path of a serve trial's
+# tree and temp root that remains, and exits with that status: 143 for SIGTERM. A SIGKILL can end the cleanup before
+# it removes them, and trial.sh then refuses the next side for the same commit until the named paths are gone. SIGKILL
+# cannot be caught, so a SIGKILL to this script leaves its trial running. landing.md's "A side past one tool call"
+# section names the form that runs a side past one tool call.
 #
 # The side's marker lives in /tmp/improve-<IMPROVE_DIRECTION>, the round's own scratch directory, which the round runner
 # exports as IMPROVE_DIRECTION. The marker is not under TMPDIR: the round's TMPDIR lost a side's marker while the side
@@ -58,18 +62,25 @@ readonly IMPROVE_TRIAL_STOP_WAIT_SECONDS=${IMPROVE_TRIAL_STOP_WAIT_SECONDS:-120}
 # its caller names a range of its own.
 readonly BESIDE_BENCH_PORT_MIN=18670
 readonly BESIDE_BENCH_PORT_MAX=18689
-# The serve trial's commit and server binary (side_parse_serve) and the side record's paths (side_record_open). Each
-# stays empty for a command that is not a serve trial.
+# The serve trial's commit, server binary and --tree-root (side_parse_serve) and the side record's paths
+# (side_record_open). Each stays empty for a command that is not a serve trial.
 SIDE_COMMIT=
 SIDE_BINARY=
+SIDE_TREE_ROOT=
 SIDE_RECORD=
 SIDE_OUTPUT=
 # The bench-lock record of a side that runs beside the lock (IMPROVE_TRIAL_USE_LOCK=0). Empty for a locked side.
 SIDE_LOCKLESS_RECORD=
 # SIDE_JOB is the background job that runs the side's command. It heads a session of its own, so its pid is the session
-# id and the process group id of its processes. The job is a helper whose one child is the trial: the flock helper of a
-# locked side, or the shell that runs the command of a side without the lock.
+# id of every process of the side and the process group id of the job's own processes. The job is a helper: the flock
+# helper of a locked or serve side, or the launcher of a side without the lock or a record. The launcher starts the
+# command, the trial, as a process group of its own in that session, so the stop signals the trial apart from the job.
 SIDE_JOB=
+# The launcher: a shell that starts its command as a process group of its own (job control on for that one start),
+# waits for it and exits with its status, or with 128 plus the signal number when a signal ended it, as flock reports
+# it. The command keeps the side's stdin, stdout and stderr. The wait's stderr is dropped: the shell reports a job that a
+# signal ended there.
+readonly TRIAL_GROUP_LAUNCH='set -m; "$@" & set +m; wait "$!" 2>/dev/null'
 
 if [[ ! $IMPROVE_TRIAL_LOCK_WAIT_SECONDS =~ ^[1-9][0-9]*$ ]]; then
   printf 'improve trial side: IMPROVE_TRIAL_LOCK_WAIT_SECONDS must be a positive number of seconds, got %s\n' \
@@ -105,7 +116,11 @@ side_parse_serve() {
   i=$((i + 1))
   while (( i < count )); do
     case ${args[i]} in
-      --tree-root | --seed-home) i=$((i + 2)) ;;
+      --tree-root)
+        SIDE_TREE_ROOT=${args[i + 1]:-}
+        i=$((i + 2))
+        ;;
+      --seed-home) i=$((i + 2)) ;;
       --in-caller-scope) i=$((i + 1)) ;;
       *) break ;;
     esac
@@ -126,6 +141,8 @@ if [[ -n $SIDE_COMMIT && -z ${CHARLIEBOT_RELEASE_RUN_DIR:-} ]]; then
   printf 'improve trial side: a serve trial needs CHARLIEBOT_RELEASE_RUN_DIR for its side record\n' >&2
   exit 2
 fi
+# The side's command under its launcher, which every job runs in place of the bare command.
+readonly -a TRIAL_LAUNCH=(bash -c "$TRIAL_GROUP_LAUNCH" improve-trial-side "$@")
 
 # bench_lock_record <record file> <point>: append the bench lock's holder at one point of the side, start or end. A
 # failed holder read is recorded as an unreadable holder with the reader's reason, and the side goes on: a side beside
@@ -133,8 +150,11 @@ fi
 bench_lock_record() {
   local holder reason
   if holder=$(bench_lock_holder 2>&1); then
-    printf '%s side %s: bench lock holder %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$2" "${holder:-none}" >>"$1"
-    return
+    printf '%s side %s: bench lock holder %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$2" "${holder:-none}" >>"$1" \
+      || return 1
+    # The status is explicit: a bare return in a function that a trap handler calls returns the status of the command
+    # that the trap interrupted, which a stop's interrupted wait makes 128 plus the signal number.
+    return 0
   fi
   # The holder read's reason arrives on stderr; a record line holds one line.
   reason=${holder//$'\n'/ }
@@ -156,10 +176,10 @@ close_side_record() {
   side_record_close "$SIDE_RECORD" "$1" || exit 1
 }
 
-# side_procs: print `<pid> <parent pid> <process group>` for each live process, one per line. A zombie is not live. The
-# scan reads /proc only, so it neither starts a process nor takes a lock.
+# side_procs: print `<pid> <parent pid> <process group> <session>` for each live process, one per line. A zombie is not
+# live. The scan reads /proc only, so it neither starts a process nor takes a lock.
 side_procs() {
-  local stat_path stat pid state ppid pgrp rest
+  local stat_path stat pid state ppid pgrp sid rest
   for stat_path in /proc/[0-9]*/stat; do
     # A process that exits during the scan has no stat file left, so its read fails and the scan skips it.
     read -r stat 2>/dev/null <"$stat_path" || continue
@@ -167,55 +187,89 @@ side_procs() {
     pid=${pid%/stat}
     # The command name in field 2 is in parentheses, so the fields start after its last ")".
     rest=${stat##*\) }
-    read -r state ppid pgrp _ <<<"$rest"
+    read -r state ppid pgrp sid _ <<<"$rest"
     if [[ $state == [ZX] ]]; then
       continue
     fi
-    printf '%s %s %s\n' "$pid" "$ppid" "$pgrp"
+    printf '%s %s %s %s\n' "$pid" "$ppid" "$pgrp" "$sid"
   done
 }
 
-# side_group_pids: print the pid of each live process of the side's group, the job included. The job heads its own
-# session, so its group is the session's: a process that leaves the group is not listed.
-side_group_pids() {
-  local pid ppid pgrp
-  while read -r pid ppid pgrp; do
-    if [[ $pgrp == "$SIDE_JOB" ]]; then
+# side_session_pids: print the pid of each live process of the side's session: the job, its launcher and the trial's
+# processes. The job is listed by its pid as well, for the moment before its setsid makes it the session's leader. A
+# process that leaves the session (setsid) is not listed.
+side_session_pids() {
+  local pid ppid pgrp sid
+  while read -r pid ppid pgrp sid; do
+    if [[ $sid == "$SIDE_JOB" || $pid == "$SIDE_JOB" ]]; then
       printf '%s\n' "$pid"
     fi
   done < <(side_procs)
 }
 
-# side_trial_pid: print the trial's pid, which is the job's child. It prints nothing before the trial starts.
+# side_trial_groups: print each process group of the side's session other than the job's: the trial's group, and any
+# group that a process of the trial started.
+side_trial_groups() {
+  local pid ppid pgrp sid
+  local -A seen=()
+  while read -r pid ppid pgrp sid; do
+    if [[ $sid == "$SIDE_JOB" && $pgrp != "$SIDE_JOB" && -z ${seen[$pgrp]-} ]]; then
+      seen[$pgrp]=1
+      printf '%s\n' "$pgrp"
+    fi
+  done < <(side_procs)
+}
+
+# side_trial_pid: print the trial's pid: the leader of the group that the launcher started, whose parent is a process
+# of the job's group. It prints nothing before the trial starts.
 side_trial_pid() {
-  local pid ppid pgrp
-  while read -r pid ppid pgrp; do
-    if [[ $ppid == "$SIDE_JOB" ]]; then
-      printf '%s\n' "$pid"
+  local pid ppid pgrp sid
+  local -A job_group=() leader_parent=()
+  while read -r pid ppid pgrp sid; do
+    [[ $sid == "$SIDE_JOB" ]] || continue
+    if [[ $pgrp == "$SIDE_JOB" ]]; then
+      job_group[$pid]=1
+    elif [[ $pid == "$pgrp" ]]; then
+      leader_parent[$pid]=$ppid
     fi
   done < <(side_procs)
-}
-
-# side_trial_members: print the pid of each live process of the side's session except the job, the lock helper. These
-# are the trial's processes; the helper holds the lock until they have ended.
-side_trial_members() {
-  local pid
-  while read -r pid; do
-    if [[ $pid != "$SIDE_JOB" ]]; then
+  for pid in "${!leader_parent[@]}"; do
+    if [[ -n ${job_group[${leader_parent[$pid]}]-} ]]; then
       printf '%s\n' "$pid"
     fi
-  done < <(side_group_pids)
+  done
 }
 
-# side_wait_group <seconds>: wait until no process of the side's session is left. The job holds the lock until it ends,
-# so an empty session means the lock is free. It fails when processes remain at the bound.
-side_wait_group() {
+# side_wait_session <seconds>: wait until no process of the side's session is left. The job holds the lock until it
+# ends, so an empty session means the lock is free. It fails when processes remain at the bound.
+side_wait_session() {
   local deadline=$((SECONDS + $1))
-  while [[ -n $(side_group_pids) ]]; do
+  while [[ -n $(side_session_pids) ]]; do
     if (( SECONDS >= deadline )); then
       return 1
     fi
     sleep 0.1
+  done
+}
+
+# side_remaining_paths: print each path of a serve trial's tree and temp root that exists, one per line. The names are
+# the ones that the header of scripts/release/trial.sh gives them from the commit, --tree-root and TMPDIR: with
+# --tree-root the temp root is inside the tree, and without it the temp root is the tree's sibling
+# t-<first 12 hex of the SHA-256 of "<uid> <commit>">. A side that is not a serve trial has no such path.
+side_remaining_paths() {
+  local tree temp_root= key path
+  [[ -n $SIDE_COMMIT ]] || return 0
+  if [[ -n $SIDE_TREE_ROOT ]]; then
+    tree="${SIDE_TREE_ROOT%/}/trial-${SIDE_COMMIT:0:12}"
+  else
+    tree="${TMPDIR:-/tmp}/charliebot-release-trial-$(id -u)-${SIDE_COMMIT:0:12}"
+    key=$(printf '%s %s\n' "$(id -u)" "$SIDE_COMMIT" | sha256sum) || return 1
+    temp_root="${TMPDIR:-/tmp}/t-${key:0:12}"
+  fi
+  for path in "$tree" "$temp_root"; do
+    if [[ -n $path && -e $path ]]; then
+      printf '%s\n' "$path"
+    fi
   done
 }
 
@@ -229,14 +283,15 @@ side_finish() {
   exit "$status"
 }
 
-# side_stop <signal name> <signal number>: stop the side for a signal. Each process of the trial gets the signal once,
-# and the lock helper gets it once while no trial process runs. The side watches the session until it is empty; at the
-# bound, it SIGKILLs the trial's processes, and the helper ends after its trial, which frees the lock. The stop line
-# names the trial pid, and the side records the stop with its exit status.
+# side_stop <signal name> <signal number>: stop the side for a signal. The signal goes to each of the trial's groups in
+# one kill, and to the job's group once while no trial group runs. A group that appears after the trial's groups got it
+# comes from a process of the trial, and it gets none. The side watches the session until it is empty; at the bound, it
+# SIGKILLs every process of the session but the job, which ends after its trial and frees the lock. The stop line names
+# the trial pid and each trial path that remains, and the side records the stop with its exit status.
 side_stop() {
-  local name=$1 status=$(( 128 + $2 )) trial detail pid adopted deadline escalated=0
-  local -a members=()
-  local -A sent=()
+  local name=$1 status=$(( 128 + $2 )) trial detail group pid adopted deadline remaining escalated=0
+  local trial_signalled=0 job_signalled=0
+  local -a groups=() members=()
   # A stop runs to its end: a second signal during it does not restart the sequence or interrupt its teardown.
   trap '' INT TERM HUP
   if [[ -z $SIDE_JOB ]]; then
@@ -256,20 +311,22 @@ side_stop() {
   fi
   deadline=$((SECONDS + IMPROVE_TRIAL_STOP_WAIT_SECONDS))
   while :; do
-    mapfile -t members < <(side_trial_members)
-    if (( ${#members[@]} > 0 )); then
-      for pid in "${members[@]}"; do
-        if [[ -z ${sent[$pid]-} ]]; then
-          sent[$pid]=1
-          # A member that ended since the scan needs no signal, so the kill's failure is not an error.
-          kill -s "$name" -- "$pid" 2>/dev/null
-        fi
-      done
-    elif [[ -z ${sent[$SIDE_JOB]-} ]]; then
-      sent[$SIDE_JOB]=1
-      kill -s "$name" -- "$SIDE_JOB" 2>/dev/null
+    if (( trial_signalled == 0 )); then
+      mapfile -t groups < <(side_trial_groups)
+      if (( ${#groups[@]} > 0 )); then
+        trial_signalled=1
+        for group in "${groups[@]}"; do
+          # One kill reaches every process of the group at once, a process that forks during it included. A group that
+          # ended since the scan needs no signal, so the kill's failure is not an error.
+          kill -s "$name" -- "-$group" 2>/dev/null
+        done
+      elif (( job_signalled == 0 )); then
+        job_signalled=1
+        # Until its setsid runs, the job heads no group, and its pid takes the signal.
+        kill -s "$name" -- "-$SIDE_JOB" 2>/dev/null || kill -s "$name" -- "$SIDE_JOB" 2>/dev/null
+      fi
     fi
-    if [[ -z $(side_group_pids) ]]; then
+    if [[ -z $(side_session_pids) ]]; then
       break
     fi
     if (( SECONDS >= deadline )); then
@@ -280,15 +337,28 @@ side_stop() {
   done
   if (( escalated == 1 )); then
     detail="the trial did not end within $IMPROVE_TRIAL_STOP_WAIT_SECONDS s, so SIGKILL ended its processes"
-    mapfile -t members < <(side_trial_members)
+    mapfile -t groups < <(side_trial_groups)
+    for group in "${groups[@]}"; do
+      # A group or a process that ended since the scan needs no KILL, as in the signal loop above.
+      kill -s KILL -- "-$group" 2>/dev/null
+    done
+    mapfile -t members < <(side_session_pids)
     for pid in "${members[@]}"; do
-      # A member that ended since the scan needs no KILL, as in the signal loop above.
-      kill -s KILL -- "$pid" 2>/dev/null
+      if [[ $pid != "$SIDE_JOB" ]]; then
+        kill -s KILL -- "$pid" 2>/dev/null
+      fi
     done
   fi
-  if ! side_wait_group 10; then
+  if ! side_wait_session 10; then
     printf 'improve trial side: processes of the job %s remain after the stop\n' "$SIDE_JOB" >&2
     status=1
+  fi
+  if ! remaining=$(side_remaining_paths); then
+    printf 'improve trial side: the temp root of the trial cannot be named: sha256sum failed\n' >&2
+    status=1
+  fi
+  if [[ -n $remaining ]]; then
+    detail+="; these trial paths remain: ${remaining//$'\n'/, }"
   fi
   printf 'improve trial side stopped by %s: trial pid %s; %s\n' "$name" "${trial:-none}" "$detail" >&2
   side_finish "$status"
@@ -323,7 +393,7 @@ if (( IMPROVE_TRIAL_USE_LOCK == 0 )); then
       serve_lock="$CHARLIEBOT_RELEASE_RUN_DIR/.serve-side.lock"
       (
         trap - INT
-        CHARLIEBOT_RELEASE_RUN_DIR=$SIDE_OUTPUT exec setsid flock -o -x "$serve_lock" "$@"
+        CHARLIEBOT_RELEASE_RUN_DIR=$SIDE_OUTPUT exec setsid flock -o -x "$serve_lock" "${TRIAL_LAUNCH[@]}"
       ) &
       SIDE_JOB=$!
       wait "$SIDE_JOB" || status=$?
@@ -331,7 +401,7 @@ if (( IMPROVE_TRIAL_USE_LOCK == 0 )); then
   else
     (
       trap - INT
-      exec setsid bash -c '"$@"; exit $?' improve-trial-side "$@"
+      exec setsid "${TRIAL_LAUNCH[@]}"
     ) &
     SIDE_JOB=$!
     wait "$SIDE_JOB" || status=$?
@@ -376,7 +446,7 @@ status=0
 # The job heads a session of its own: setsid runs a bash that loads lock.sh and calls bench_lock_within, which execs
 # flock in its place, so the lock's helper is the job. The helper's child takes the record's binary line once the lock
 # is held, just before the command starts, so the hash names the binary that the trial starts with, not one from before
-# the wait.
+# the wait. The child then execs the launcher, which starts the trial.
 (
   trap - INT
   exec setsid bash -c '. "$1"; shift; bench_lock_within "$@"' improve-trial-side-lock \
@@ -387,7 +457,8 @@ status=0
        side_record_take_binary "$record" "$binary" || exit $?
        export CHARLIEBOT_RELEASE_RUN_DIR=$IMPROVE_SIDE_OUTPUT
      fi
-     exec "$@"' improve-trial-side "$started_marker" "$SCRIPT_DIR/side-record.sh" "$SIDE_RECORD" "$SIDE_BINARY" "$@"
+     exec "$@"' improve-trial-side "$started_marker" "$SCRIPT_DIR/side-record.sh" "$SIDE_RECORD" "$SIDE_BINARY" \
+    "${TRIAL_LAUNCH[@]}"
 ) &
 SIDE_JOB=$!
 wait "$SIDE_JOB" || status=$?

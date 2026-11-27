@@ -146,7 +146,10 @@ record, and its stderr is in `$side_out`.
 
 To stop a side, send SIGTERM to its pid. A side started in the background by a non-interactive shell ignores SIGINT,
 so send TERM. The side forwards the signal to its trial, waits up to `IMPROVE_TRIAL_STOP_WAIT_SECONDS` (120 by default)
-for the trial's processes to end, releases the lock, records `exit_status=143` and exits 143.
+for the trial's processes to end, releases the lock, records `exit_status=143` and exits 143. The trial's cleanup runs
+to its end and removes the trial tree, so the next side for the same commit starts. When the stop line names trial
+paths that remain, a SIGKILL at the bound ended that cleanup. `scripts/release/trial.sh` then refuses every later side
+for that commit until those paths are gone, so the round reports the refusal and the paths.
 
 A `timeout` around the side stops its trial the same way: the signal that timeout sends reaches the side, and the side
 stops the trial and exits after the trial has ended. A foreground `timeout N trial-side.sh ...` therefore ends after N

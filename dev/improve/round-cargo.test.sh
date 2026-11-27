@@ -111,7 +111,37 @@ check_missing_direction_fails_fast() {
   printf 'ok %s: an unset IMPROVE_DIRECTION exits %s\n' "$case_name" "$got"
 }
 
+# Runs the helper with cargo arguments that name `clean`, and checks that it exits 2 with the refusal and runs no cargo.
+expect_clean_refused() {  # expect_clean_refused <cargo arguments>
+  local got=0
+  rm -f -- "$ROUND_CARGO_STUB_LOG"
+  ( cd -- "$round_clone/rust" && "$HELPER" "$@" ) 2>"$TMP_ROOT/stderr" || got=$?
+  if (( got != 2 )) || ! grep -qF -- "refuses cargo clean" "$TMP_ROOT/stderr"; then
+    printf 'FAIL %s: exited %s for %s; stderr:\n' "$case_name" "$got" "$*" >&2
+    cat -- "$TMP_ROOT/stderr" >&2
+    exit 1
+  fi
+  assert_no_build
+}
+
+# A `clean` removes the pinned target directory, so the helper refuses it, wherever it sits among cargo's arguments,
+# and the cached products stay.
+check_clean_is_refused() {
+  local target=$HOME/.cache/improve-target/$IMPROVE_DIRECTION
+  case_name=clean
+  mkdir -p -- "$target/debug/deps"
+  printf 'cached\n' >"$target/debug/deps/libcached.rlib"
+  expect_clean_refused clean
+  expect_clean_refused +stable clean --locked
+  if [[ ! -f $target/debug/deps/libcached.rlib ]]; then
+    printf 'FAIL %s: a refused clean removed the cached products\n' "$case_name" >&2
+    exit 1
+  fi
+  printf 'ok %s: cargo clean is refused and the pinned cache stays\n' "$case_name"
+}
+
 check_round_clone_builds_in_its_pinned_target
 check_worktree_build_is_refused
 check_separate_clone_build_is_refused
 check_missing_direction_fails_fast
+check_clean_is_refused

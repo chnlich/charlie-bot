@@ -446,6 +446,61 @@ case ${1-} in
 esac
 "#;
 
+/// The stub `du` of the runner's cache trim. Without `FAKE_DU_MIB` it is the real `du`. With it, the stub reports the
+/// cache's size in MiB for each call, one value per call with the last value repeating, and logs each call to
+/// `FAKE_TRIM_LOG` as `started` or `unstarted`, by whether the round's `started` marker exists when the call runs.
+pub const DU_STUB: &str = r#"set -euo pipefail
+if [[ -z ${FAKE_DU_MIB-} ]]; then
+  exec /usr/bin/du "$@"
+fi
+count=0
+if [[ -f $FAKE_DU_CALLS ]]; then
+  count=$(<"$FAKE_DU_CALLS")
+fi
+count=$((count + 1))
+printf '%s\n' "$count" >"$FAKE_DU_CALLS"
+IFS=, read -r -a sizes <<<"$FAKE_DU_MIB"
+index=$((count - 1))
+if (( index >= ${#sizes[@]} )); then
+  index=$((${#sizes[@]} - 1))
+fi
+if [[ -e $FAKE_STARTED_MARKER ]]; then
+  printf 'du started\n' >>"$FAKE_TRIM_LOG"
+else
+  printf 'du unstarted\n' >>"$FAKE_TRIM_LOG"
+fi
+printf '%s\t%s\n' "${sizes[index]}" "${@: -1}"
+"#;
+
+/// The stub `df` of the runner's free-space floor. Without `FAKE_DF_MIB` it reports 1 TiB free, so no test depends on
+/// the disk of the host it runs on. With it, the free space in MiB comes one value per call, the last value repeating.
+/// `FAKE_DF_CALLS` counts the calls when it is set, and `FAKE_TRIM_LOG` logs each call as `df started` or `df unstarted`
+/// as `DU_STUB` does. The output is the `df -P -k` layout.
+pub const DF_STUB: &str = r#"set -euo pipefail
+IFS=, read -r -a sizes <<<"${FAKE_DF_MIB:-1048576}"
+index=0
+if [[ -n ${FAKE_DF_CALLS-} ]]; then
+  count=0
+  if [[ -f $FAKE_DF_CALLS ]]; then
+    count=$(<"$FAKE_DF_CALLS")
+  fi
+  count=$((count + 1))
+  printf '%s\n' "$count" >"$FAKE_DF_CALLS"
+  index=$((count - 1))
+fi
+if (( index >= ${#sizes[@]} )); then
+  index=$((${#sizes[@]} - 1))
+fi
+if [[ -n ${FAKE_TRIM_LOG-} ]]; then
+  if [[ -e $FAKE_STARTED_MARKER ]]; then
+    printf 'df started\n' >>"$FAKE_TRIM_LOG"
+  else
+    printf 'df unstarted\n' >>"$FAKE_TRIM_LOG"
+  fi
+fi
+printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/trim 1 1 %s 1%% /\n' "$((sizes[index] * 1024))"
+"#;
+
 const SYSTEMD_RUN: &str = r#"# Fake systemd-run: record the call, then run the command after `--`. An already-loaded unit
 # refuses the start, unless a fake systemctl stop has ended that unit first. A stand-in cgroup
 # (FAKE_SCOPE_CGROUP) is the scope's process list: the scope starts with an empty list, as a real
@@ -715,9 +770,11 @@ impl World {
     for name in [
       "remote-launch.sh",
       "remote-runner.sh",
+      "round-cargo.sh",
       "inflight-files.sh",
       "clone-check.sh",
       "codex-skill-roots.sh",
+      "target-cache.sh",
       "member_kinds.txt",
       "gh-shim.sh",
       "github-post.sh",
@@ -823,6 +880,10 @@ impl World {
     let remote_bin = sandbox.dir("remote/.local/bin");
     write_executable(&remote_bin.join("claude"), cli_script(CLAUDE, HOST_CLAUDE_LINE));
     write_executable(&remote_bin.join("codex"), codex_script(HOST_CODEX_LINE));
+    // The runner's cache trim reads through `du` and `df`. These stubs stand first on the remote PATH, ahead of the host's.
+    let trim_bin = sandbox.dir("trim-bin");
+    write_executable(&trim_bin.join("du"), format!("#!/usr/bin/env bash\n{DU_STUB}"));
+    write_executable(&trim_bin.join("df"), format!("#!/usr/bin/env bash\n{DF_STUB}"));
     let vendor_root = sandbox.dir("vendor");
     let curl_log = sandbox.root().join("curl.log");
     let cli_runs = sandbox.root().join("cli-runs.log");
@@ -1043,7 +1104,10 @@ impl World {
   /// claude's environment: the server set the gateway variables and the gateway token.
   pub fn env(&self) -> Env {
     let mut env = Env::new();
-    env.insert("PATH".to_string(), format!("{}:/usr/local/bin:/usr/bin:/bin", self.sandbox.bin().display()));
+    env.insert(
+      "PATH".to_string(),
+      format!("{}:{}:/usr/local/bin:/usr/bin:/bin", self.trim_bin().display(), self.sandbox.bin().display()),
+    );
     env.insert("HOME".to_string(), self.local_home.display().to_string());
     env.insert("TMPDIR".to_string(), self.sandbox.dir("local-tmp").display().to_string());
     env.insert("CHARLIEBOT_HOME".to_string(), self.profile_home.display().to_string());
@@ -1067,7 +1131,11 @@ impl World {
     env.insert("SSH_REMOTE_HOME".to_string(), self.remote_home.display().to_string());
     env.insert(
       "SSH_REMOTE_PATH".to_string(),
-      format!("{}:/usr/local/bin:/usr/bin:/bin", self.remote_home.join(".local/bin").display()),
+      format!(
+        "{}:{}:/usr/local/bin:/usr/bin:/bin",
+        self.trim_bin().display(),
+        self.remote_home.join(".local/bin").display()
+      ),
     );
     env.insert("FAKE_CLAUDE_ARGV".to_string(), self.claude_argv.display().to_string());
     env.insert("FAKE_CLAUDE_ENV".to_string(), self.claude_env.display().to_string());
@@ -1161,6 +1229,11 @@ impl World {
   /// One launcher command for a claude member with the world's environment.
   pub fn launcher_command(&self, env: &Env) -> std::process::Command {
     self.launcher_command_for(env, &self.agent_arguments())
+  }
+
+  /// The directory of the `du` and `df` stubs that the runner's cache trim reads through.
+  pub fn trim_bin(&self) -> PathBuf {
+    self.sandbox.root().join("trim-bin")
   }
 
   pub fn run(&self, env: &Env) -> harness::Run {
@@ -1290,6 +1363,7 @@ impl World {
     harness::copy_file(&self.repo.join("dev/improve/member_kinds.txt"), &launch.join("member_kinds.txt"));
     harness::copy_file(&self.repo.join("dev/improve/clone-check.sh"), &launch.join("clone-check.sh"));
     harness::copy_file(&self.repo.join("dev/improve/codex-skill-roots.sh"), &launch.join("codex-skill-roots.sh"));
+    harness::copy_file(&self.repo.join("dev/improve/target-cache.sh"), &launch.join("target-cache.sh"));
     harness::copy_file(&self.resolve_answer, &launch.join("review/option.json"));
     harness::copy_file(&self.probe_answer, &launch.join("probe/option.json"));
     // The launcher names the revision of the kit and of the skills the runner fetches, which is the commit its charliebot

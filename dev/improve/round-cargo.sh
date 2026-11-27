@@ -8,7 +8,8 @@
 #   dev/improve/round-cargo.sh test -p charliebot-store --locked
 #
 # The working directory must lie in the round clone, or the script exits 2 and runs nothing. The round's runner exports
-# IMPROVE_DIRECTION, which names the clone and the target directory.
+# IMPROVE_DIRECTION, which names the clone and the target directory. The script also exits 2 and runs nothing for a
+# `clean` argument: cargo clean would remove the pinned target directory, and only the runner trims that cache.
 set -euo pipefail
 
 clone=$HOME/improve/${IMPROVE_DIRECTION:?the round runner exports IMPROVE_DIRECTION}/charlie-bot
@@ -20,4 +21,12 @@ fi
 
 export CARGO_TARGET_DIR=$HOME/.cache/improve-target/$IMPROVE_DIRECTION
 export CARGO_BUILD_JOBS=4
+# A `clean` anywhere in cargo's arguments, such as after a `+toolchain`, would remove the whole target directory.
+for argument in "$@"; do
+  if [[ $argument == clean ]]; then
+    printf 'round-cargo: refuses cargo clean in a round: it would remove the pinned target directory %s\n' \
+      "$CARGO_TARGET_DIR" >&2
+    exit 2
+  fi
+done
 exec nice -n 19 cargo "$@"

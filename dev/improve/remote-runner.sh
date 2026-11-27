@@ -1048,6 +1048,10 @@ run_in_scope() {
   # The marker tells the heartbeat that this launch owns the scope: a refusal leaves no marker,
   # so a heartbeat that closes cannot stop the previous round's scope.
   : >"$LAUNCH_DIR/started"
+  # The scope admits one round of the direction, so no build of it runs during the trim. The marker comes first, so a
+  # signal during the trim ends the scope as it does during the round.
+  source "$LAUNCH_DIR/target-cache.sh"
+  trim_target_cache "$HOME_DIR" "$direction"
   prepare_scope_tmpdir
   export_round_credentials
   write_review_login

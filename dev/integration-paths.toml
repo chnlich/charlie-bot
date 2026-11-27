@@ -11,6 +11,7 @@ paths = [
   "web/**",
   "rust/crates/app/server/src/login_page.html",
   "rust/crates/infra/html/src/html5_entities.json",
+  "rust/crates/infra/shell-harness/src/pre_receive_leak_scan.sh",
   "prompts/failure_triage_judge.md",
   "dev/improve/member_kinds.txt",
   "dev/check-skills-host-leak.sh",

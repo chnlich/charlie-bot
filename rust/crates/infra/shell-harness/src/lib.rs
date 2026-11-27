@@ -5,9 +5,11 @@
 //! process. The README section "Shell-script tests" shows the calls.
 
 mod api;
+mod git_hooks;
 mod internals;
 
 pub use api::{
   Env, RUN_TIMEOUT, Run, Sandbox, ScopeRecord, built_binary, command, copy_file, memtotal_percent_bytes, repo_root,
   run, run_with_stdin, spawn, write_executable,
 };
+pub use git_hooks::install_pre_receive_leak_scan;

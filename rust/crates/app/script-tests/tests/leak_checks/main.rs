@@ -1245,6 +1245,7 @@ impl MergeWorld {
       root,
       &["init", "-q", "--bare", "--initial-branch=main", origin.to_str().expect("the origin path is UTF-8")],
     );
+    harness::install_pre_receive_leak_scan(&origin, sandbox.root()).expect("the origin leak scanner is installed");
     git_in(&env, root, &["init", "-q", "-b", "main"]);
     git_in(&env, root, &["remote", "add", "origin", &format!("file://{}", origin.display())]);
     std::fs::write(root.join("tracked.txt"), "base\n").unwrap();
@@ -2052,7 +2053,7 @@ fn an_in_round_pr_merge_waits_with_heartbeats_for_the_turn_and_merges_when_it_fr
   assert_eq!(world.turn_holder().as_deref(), Some("another writer"));
   // A round carries the launching session's CHARLIEBOT_SESSION_ID; its entry must still key on the launch id.
   let mut extra = FAST_QUEUE.to_vec();
-  extra.push(("CHARLIEBOT_SESSION_ID", "launching-worker-session"));
+  extra.push(("CHARLIEBOT_SESSION_ID", "00000000-0000-4000-8000-000000000010"));
 
   let run = spawn_merge(world.merge_command(&["5046"], &extra));
   let (name, first_beat) = wait_for_entry(&world, Duration::from_secs(20));

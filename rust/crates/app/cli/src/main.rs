@@ -7,6 +7,7 @@
 mod commands;
 mod host;
 mod launcher;
+mod session_cgroup;
 
 use std::ffi::OsString;
 use std::path::Path;

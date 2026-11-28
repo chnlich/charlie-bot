@@ -3,7 +3,8 @@
 //! `session trigger cancel TRIGGER_ID` cancels one pending trigger of the caller's own session.
 //!
 //! Exit codes: 0 registered or cancelled; 2 usage error, a 422 refusal or a failed readback check; 3 the ssh start
-//! failed or the remote PID did not parse (nothing registered); 1 the client contract, which covers a cancel refusal.
+//! failed or the remote PID did not parse (nothing registered); 1 the client contract, which covers a cancel refusal,
+//! and a local `--cmd` start that cannot be placed in the session cgroup (nothing started).
 //! Under `--cmd` every failed registration exits 2 after the started wrapper is killed.
 
 use std::fs;
@@ -31,6 +32,7 @@ use serde_json::{Map, Value, json};
 use time::OffsetDateTime;
 
 use crate::launcher::{self, Launch, LaunchError};
+use crate::session_cgroup;
 
 const ENDPOINT: &str = triggers::SCHEDULE_TRIGGER_PATH;
 
@@ -313,8 +315,11 @@ fn start_and_register(sessions_dir: &Path, session_id: &str, args: &Args, cmd: &
         None => std::env::current_dir().map_err(io_failure)?.display().to_string(),
       };
       let launch_dir = launch_dir(sessions_dir, session_id, &launch_id);
-      let launch = launcher::launch_local(cmd, Path::new(&cwd), &launch_dir.join("log"), &launch_dir.join("exit"))
-        .map_err(launch_failure)?;
+      // Resolved before the start: a session without its cgroup path starts nothing.
+      let procs = session_cgroup::procs_from_env().map_err(io_failure)?;
+      let launch =
+        launcher::launch_local(cmd, Path::new(&cwd), &launch_dir.join("log"), &launch_dir.join("exit"), &procs)
+          .map_err(launch_failure)?;
       (launch, cwd)
     }
     Some(host) => {

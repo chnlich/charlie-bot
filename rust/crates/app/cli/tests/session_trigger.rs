@@ -189,6 +189,8 @@ struct Sandbox {
   root: TempDir,
   home: PathBuf,
   bin: PathBuf,
+  /// The session cgroup directory the environment names; its `cgroup.procs` is a regular file the placement writes.
+  session_cgroup: PathBuf,
 }
 
 /// What one CLI process printed and how it ended. `code` is None when a signal ended it.
@@ -205,7 +207,10 @@ impl Sandbox {
     let bin = root.path().join("bin");
     fs::create_dir_all(&home).expect("the home is created");
     fs::create_dir_all(&bin).expect("the bin directory is created");
-    Sandbox { root, home, bin }
+    let session_cgroup = root.path().join("charliebot-sess-s1");
+    fs::create_dir_all(&session_cgroup).expect("the session cgroup directory is created");
+    fs::write(session_cgroup.join("cgroup.procs"), "").expect("the session cgroup.procs is created");
+    Sandbox { root, home, bin, session_cgroup }
   }
 
   fn write_config(&self, port: u16) {
@@ -223,7 +228,14 @@ impl Sandbox {
 
   /// Run `charliebot session trigger ARGS` with the given HOME: the environment holds only these three variables.
   fn run_as(&self, args: &[&str], home: &Path) -> Run {
-    self.run_with(args, &[("CHARLIEBOT_HOME", self.home.as_os_str()), ("HOME", home.as_os_str())])
+    self.run_with(
+      args,
+      &[
+        ("CHARLIEBOT_HOME", self.home.as_os_str()),
+        ("HOME", home.as_os_str()),
+        ("CHARLIEBOT_SESSION_CGROUP", self.session_cgroup.as_os_str()),
+      ],
+    )
   }
 
   /// Run `charliebot session trigger ARGS` inside a Run of session `s1`: the server writes that session's id into
@@ -235,6 +247,7 @@ impl Sandbox {
         ("CHARLIEBOT_HOME", self.home.as_os_str()),
         ("HOME", self.root.path().as_os_str()),
         ("CHARLIEBOT_SESSION_ID", OsStr::new("s1")),
+        ("CHARLIEBOT_SESSION_CGROUP", self.session_cgroup.as_os_str()),
       ],
     )
   }
@@ -634,6 +647,46 @@ fn test_failed_readback_kills_the_process_group() {
   let pid = i32::try_from(stub.bodies()[0]["watch_targets"][0]["pid"].as_i64().expect("text")).expect("a pid");
   let _group = GroupGuard(pid);
   assert_eq!(kill(Pid::from_raw(pid), None), Err(Errno::ESRCH), "the started wrapper is killed");
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_unset_session_cgroup_starts_nothing_and_posts_nothing() {
+  let sandbox = Sandbox::new();
+  let stub = StubApi::start(Box::new(accept_any));
+  sandbox.write_config(stub.port);
+  let marker = sandbox.root.path().join("started");
+  let command = format!("touch {}", marker.display());
+
+  let run = sandbox.run_with(
+    &["--session", "s1", "--max-wait", "60", "--message", "m", "--cmd", &command],
+    &[("CHARLIEBOT_HOME", sandbox.home.as_os_str()), ("HOME", sandbox.root.path().as_os_str())],
+  );
+
+  assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+  assert!(run.stderr.contains("CHARLIEBOT_SESSION_CGROUP"), "stderr: {}", run.stderr);
+  assert!(stub.bodies().is_empty(), "no registration is posted");
+  assert!(!marker.exists(), "the command never ran");
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_refused_session_cgroup_write_starts_nothing_and_posts_nothing() {
+  let sandbox = Sandbox::new();
+  let stub = StubApi::start(Box::new(accept_any));
+  sandbox.write_config(stub.port);
+  // A directory where `cgroup.procs` should be: the placement's write is refused.
+  fs::remove_file(sandbox.session_cgroup.join("cgroup.procs")).expect("the fake procs file is removed");
+  fs::create_dir(sandbox.session_cgroup.join("cgroup.procs")).expect("the blocking directory is created");
+  let marker = sandbox.root.path().join("started");
+  let command = format!("touch {}", marker.display());
+
+  let run = sandbox.run(&["--session", "s1", "--max-wait", "60", "--message", "m", "--cmd", &command]);
+
+  assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+  assert!(run.stderr.contains("session cgroup"), "stderr: {}", run.stderr);
+  assert!(stub.bodies().is_empty(), "no registration is posted");
+  assert!(!marker.exists(), "the command never ran");
 }
 
 // ---------------------------------------------------------------------------

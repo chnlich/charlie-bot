@@ -3,7 +3,8 @@
 //! Every start runs the wrapper `(CMD); echo $? > EXIT_FILE` under `bash -lc`, with stdin from /dev/null and stdout
 //! and stderr going to the launch's log file. The watched PID is the wrapper itself: the local child's PID, or the
 //! remote shell's `$!` over ssh. The wrapper leads its own session on both paths (`setsid`), so its PID is also the
-//! process group that a rejected registration kills. Only this CLI starts detached commands.
+//! process group that a rejected registration kills. A local wrapper also moves into the session cgroup before exec
+//! (see `session_cgroup`); a remote one runs on its own host. Only this CLI starts detached commands.
 
 use std::fs::OpenOptions;
 use std::io::{self, Read};
@@ -13,6 +14,7 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use crate::session_cgroup;
 use charliebot_core::{
   proc_status,
   ssh::{self, REMOTE_RUNS_DIR},
@@ -77,14 +79,26 @@ fn wrapper_command(cmd: &str, exit_word: &str) -> String {
   format!("({cmd}\n); echo $? > {exit_word}")
 }
 
-/// Start the wrapper on this host in its own session. The log is appended to, and its parent directories are created.
-pub fn launch_local(cmd: &str, cwd: &Path, log_path: &Path, exit_file: &Path) -> Result<Launch, LaunchError> {
+/// Start the wrapper on this host in its own session, inside the session cgroup whose `cgroup.procs` is `procs`. The
+/// log is appended to, and its parent directories are created.
+///
+/// The child moves itself into `procs` before exec, so the whole tree it starts is in the session cgroup from its
+/// start. A placement that cannot be written, or a readback that does not list the wrapper while it runs, kills the
+/// wrapper and fails the start.
+pub fn launch_local(
+  cmd: &str,
+  cwd: &Path,
+  log_path: &Path,
+  exit_file: &Path,
+  procs: &Path,
+) -> Result<Launch, LaunchError> {
   let io = |error: io::Error| LaunchError::Io(error.to_string());
   for dir in [log_path.parent(), exit_file.parent()].into_iter().flatten() {
     std::fs::create_dir_all(dir).map_err(io)?;
   }
   let log = OpenOptions::new().create(true).append(true).open(log_path).map_err(io)?;
   let payload = wrapper_command(cmd, &shell_quote(&exit_file.display().to_string()));
+  let procs_word = session_cgroup::procs_cstring(procs).map_err(io)?;
   let mut command = Command::new("bash");
   command
     .args(["-lc", payload.as_str()])
@@ -92,13 +106,39 @@ pub fn launch_local(cmd: &str, cwd: &Path, log_path: &Path, exit_file: &Path) ->
     .stdin(Stdio::null())
     .stdout(Stdio::from(log.try_clone().map_err(io)?))
     .stderr(Stdio::from(log));
-  // SAFETY: the closure runs in the forked child before exec and calls only `setsid`, which is async-signal-safe.
+  // SAFETY: the closure runs in the forked child before exec and calls only `setsid`, a `cgroup.procs` write and
+  // `close`, which are syscalls; `procs_word` was built before the fork and the closure allocates nothing.
   unsafe {
-    command.pre_exec(|| setsid().map(|_| ()).map_err(io::Error::from));
+    command.pre_exec(move || {
+      setsid().map_err(io::Error::from)?;
+      session_cgroup::move_self_before_exec(&procs_word)
+    });
   }
-  let child = command.spawn().map_err(io)?;
+  let mut child = command.spawn().map_err(|error| {
+    LaunchError::Io(format!("cannot start the --cmd wrapper in the session cgroup {}: {error}", procs.display()))
+  })?;
   let pid = i32::try_from(child.id()).expect("a pid fits pid_t");
-  Ok(Launch { pid, host: None, log: log_path.display().to_string(), exit_file: exit_file.display().to_string() })
+  let launch =
+    Launch { pid, host: None, log: log_path.display().to_string(), exit_file: exit_file.display().to_string() };
+  // The pre-exec write succeeded, so the wrapper was placed. A wrapper that is still running must be listed; one that
+  // has already ended left the cgroup with its last process and needs no listing.
+  let listed = session_cgroup::lists_pid(procs, pid).map_err(io);
+  let ended = matches!(child.try_wait(), Ok(Some(_)));
+  match listed {
+    Ok(true) => Ok(launch),
+    Ok(false) if ended => Ok(launch),
+    Ok(false) => {
+      kill_launch(&launch)?;
+      Err(LaunchError::Io(format!(
+        "the session cgroup readback does not list the --cmd wrapper {pid} in {}",
+        procs.display()
+      )))
+    }
+    Err(error) => {
+      kill_launch(&launch)?;
+      Err(error)
+    }
+  }
 }
 
 /// A remote run path as a shell word. The `$HOME` prefix stays a double-quoted variable, which the shell expands
@@ -127,7 +167,8 @@ fn remote_dir_word(dir: &str) -> String {
 /// Start the wrapper on `host` over ssh and `setsid`, and return its remote PID with the absolute paths of its log and
 /// exit file.
 ///
-/// Without `cwd` the command runs in the ssh login directory. An ssh failure or an unparseable reply is `Ssh`.
+/// Without `cwd` the command runs in the ssh login directory. An ssh failure or an unparseable reply is `Ssh`. The
+/// command runs on `host`, so no local cgroup holds it and the local call cgroup's end does not reach it.
 pub fn launch_remote(host: &str, cmd: &str, cwd: Option<&str>, launch_id: &str) -> Result<Launch, LaunchError> {
   let io = |error: io::Error| LaunchError::Io(error.to_string());
   let remote_dir = format!("{REMOTE_RUNS_DIR}/{launch_id}");
@@ -282,8 +323,15 @@ mod tests {
     assert_eq!(kill(Pid::from_raw(pid), None), Err(Errno::ESRCH), "pid {pid} still answers");
   }
 
+  /// A session cgroup stand-in: a regular file, which the placement writes the wrapper's pid into and reads back.
+  fn fake_procs(dir: &Path) -> PathBuf {
+    let procs = dir.join("cgroup.procs");
+    std::fs::write(&procs, "").expect("the fake cgroup.procs is created");
+    procs
+  }
+
   fn local(dir: &Path, cmd: &str) -> Launch {
-    launch_local(cmd, dir, &dir.join("launch").join("log"), &dir.join("launch").join("exit"))
+    launch_local(cmd, dir, &dir.join("launch").join("log"), &dir.join("launch").join("exit"), &fake_procs(dir))
       .expect("the wrapper starts")
   }
 
@@ -303,8 +351,14 @@ mod tests {
   #[ignore = "integration"]
   fn test_launch_local_runs_in_cwd_and_logs_output() {
     let dir = tempfile::tempdir().expect("a temp dir");
-    let launch = launch_local("pwd; echo hello", dir.path(), &dir.path().join("log"), &dir.path().join("exit"))
-      .expect("the wrapper starts");
+    let launch = launch_local(
+      "pwd; echo hello",
+      dir.path(),
+      &dir.path().join("log"),
+      &dir.path().join("exit"),
+      &fake_procs(dir.path()),
+    )
+    .expect("the wrapper starts");
     wait_for_exit(&launch);
     let out = std::fs::read_to_string(&launch.log).expect("the log reads");
     assert!(out.contains(&dir.path().display().to_string()), "{out}");
@@ -317,9 +371,14 @@ mod tests {
   #[ignore = "integration"]
   fn test_launch_local_trailing_comment_in_cmd_still_writes_the_exit_file() {
     let dir = tempfile::tempdir().expect("a temp dir");
-    let launch =
-      launch_local("echo hi # trailing comment", dir.path(), &dir.path().join("log"), &dir.path().join("exit"))
-        .expect("the wrapper starts");
+    let launch = launch_local(
+      "echo hi # trailing comment",
+      dir.path(),
+      &dir.path().join("log"),
+      &dir.path().join("exit"),
+      &fake_procs(dir.path()),
+    )
+    .expect("the wrapper starts");
     wait_for_exit(&launch);
     assert_eq!(std::fs::read_to_string(&launch.exit_file).expect("the exit file reads").trim(), "0");
     assert_eq!(std::fs::read_to_string(&launch.log).expect("the log reads").trim(), "hi");
@@ -336,6 +395,37 @@ mod tests {
     assert_gone(launch.pid);
     // The group kill reaches the sleep too: no exit file is ever written.
     assert!(!Path::new(&launch.exit_file).exists());
+  }
+
+  #[test]
+  #[ignore = "integration"]
+  fn test_launch_local_lists_the_wrapper_in_the_session_cgroup() {
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let procs = fake_procs(dir.path());
+    let launch = launch_local("sleep 1", dir.path(), &dir.path().join("log"), &dir.path().join("exit"), &procs)
+      .expect("the wrapper starts");
+    assert!(session_cgroup::lists_pid(&procs, launch.pid).expect("the procs file reads"));
+    kill_launch(&launch).expect("the cleanup kill runs");
+  }
+
+  #[test]
+  #[ignore = "integration"]
+  fn test_launch_local_refused_placement_starts_nothing() {
+    let dir = tempfile::tempdir().expect("a temp dir");
+    // A directory is no writable `cgroup.procs`: the pre-exec write is refused before the command runs.
+    let procs = dir.path().join("cgroup.procs");
+    std::fs::create_dir(&procs).expect("the blocking directory is created");
+    let marker = dir.path().join("started");
+    let result = launch_local(
+      &format!("touch {}", marker.display()),
+      dir.path(),
+      &dir.path().join("log"),
+      &dir.path().join("exit"),
+      &procs,
+    );
+    let Err(LaunchError::Io(message)) = result else { panic!("the placement is refused: {result:?}") };
+    assert!(message.contains("session cgroup"), "{message}");
+    assert!(!marker.exists(), "the command never ran");
   }
 
   #[test]

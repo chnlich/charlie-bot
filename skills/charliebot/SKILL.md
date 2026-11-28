@@ -193,6 +193,9 @@ delegations to those backends, attach the verified patch file so the worker can 
   forms are mutually exclusive. `--max-wait` bounds the wait; it takes at most 14400 seconds, and a longer value
   exits 2 before anything starts.
   SSH start failure exits 3 without registration; registration rejection exits 2 and kills the started command.
+  A local `--cmd` process starts in the session cgroup, so it lives until its `--max-wait` and outlives the tool call
+  that registered it; do not move it by hand. If the CLI cannot place it there, the command exits 1 and nothing starts.
+  A `--host` command runs on that host, outside this session's cgroup.
   Registration prints one JSON object with `trigger_id`, `fire_at`, and the launch record (`launch_id`, `host`, `pid`,
   `log`, `exit_file`); the wake carries the exit status and log path, and a non-zero exit wakes as `watch failed`.
   Normal master calls use the server's session; explicit mismatches in `--session` are rejected.

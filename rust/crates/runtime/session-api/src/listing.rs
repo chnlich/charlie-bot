@@ -24,7 +24,7 @@ use charliebot_store::metadata::{
   WORK_STATE,
 };
 use charliebot_store::sidebar_state::{HAS_PENDING_PLAN_APPROVAL, HAS_WAITING_ITEMS};
-use charliebot_store::{Store, StoreResult};
+use charliebot_store::{SharedSubtreeRoots, Store, StoreResult};
 use http::HeaderValue;
 use serde_json::{Map, Value, json};
 
@@ -297,11 +297,10 @@ impl PageRows {
 /// The page corpus one request built, reused while every input that shapes it still holds.
 ///
 /// Building the corpus walks every active session: the store filters the corpus, the sidebar resolves each row's
-/// overlay, and the page drops the rows that a sequence subtree holds. A repeat page request reads the same corpus, so
+/// overlay, and the page drops the rows that an owned subtree holds. A repeat page request reads the same corpus, so
 /// the memo answers it from the identities that would move if any of it changed. The listing generation names the
 /// metadata corpus: the store numbers every rebuild, so the same number is the same rows in the same order. The
-/// derived archive ids and the sequence subtree roots name the two filters, and the sidebar generation names the
-/// overlays.
+/// derived archive ids and the subtree roots name the two filters, and the sidebar generation names the overlays.
 /// The repository identities name the store and registry the corpus came from. Both are held weakly: a dropped
 /// store's corpus never answers another store's request.
 static PAGE_CORPUS_MEMO: LazyLock<Mutex<Option<PageCorpusEntry>>> = LazyLock::new(|| Mutex::new(None));
@@ -313,6 +312,7 @@ struct PageCorpusEntry {
   generation: u64,
   archived: Arc<Vec<String>>,
   sequence_roots: Arc<HashMap<String, String>>,
+  view_roots: Arc<HashMap<String, HashMap<String, String>>>,
   sidebar_generation: u64,
   rows: Arc<Vec<Arc<SessionMetadata>>>,
   index: Arc<HashMap<String, u32>>,
@@ -327,7 +327,7 @@ impl PageCorpusEntry {
     registry: &Arc<Registry>,
     generation: u64,
     archived: &Arc<Vec<String>>,
-    sequence_roots: &Arc<HashMap<String, String>>,
+    roots: &SharedSubtreeRoots,
     sidebar_generation: u64,
   ) -> bool {
     Weak::ptr_eq(&self.store, &Arc::downgrade(store))
@@ -336,7 +336,8 @@ impl PageCorpusEntry {
       // The same index answers the common request, so the shared list's pointer is the whole comparison. A rebuilt
       // index holds an equal list in a new allocation, and the value comparison keeps the corpus it answered for.
       && (Arc::ptr_eq(&self.archived, archived) || self.archived.as_slice() == archived.as_slice())
-      && Arc::ptr_eq(&self.sequence_roots, sequence_roots)
+      && Arc::ptr_eq(&self.sequence_roots, &roots.sequence)
+      && Arc::ptr_eq(&self.view_roots, &roots.views)
       && self.sidebar_generation == sidebar_generation
   }
 }
@@ -395,13 +396,13 @@ fn page_row_index(rows: &[Arc<SessionMetadata>]) -> Arc<HashMap<String, u32>> {
 fn page_corpus(store: &Arc<Store>, registry: &Arc<Registry>, register: bool) -> StoreResult<PageCorpus> {
   let (_, generation) = store.load_session_metas_snapshot_versioned(Some(SessionStatus::Active))?;
   let archived = store.derived_archived_ids()?;
-  let sequence_roots = store.sequence_subtree_roots()?;
+  let roots = store.subtree_roots_shared()?;
   let sidebar_generation = charliebot_store::sidebar_state::derived_generation();
   let cached = {
     let memo = PAGE_CORPUS_MEMO.lock().expect("the page corpus memo mutex is not poisoned");
     memo
       .as_ref()
-      .filter(|entry| entry.holds(store, registry, generation, &archived, &sequence_roots, sidebar_generation))
+      .filter(|entry| entry.holds(store, registry, generation, &archived, &roots, sidebar_generation))
       .map(|entry| (Arc::clone(&entry.rows), Arc::clone(&entry.index), Arc::clone(&entry.derived)))
   };
   if let Some((rows, index, derived)) = cached {
@@ -411,7 +412,7 @@ fn page_corpus(store: &Arc<Store>, registry: &Arc<Registry>, register: bool) -> 
     return Ok(PageCorpus { rows, index, derived });
   }
   let ListingCorpus { mut rows, derived, .. } = active_listing_corpus(store, registry)?;
-  rows.retain(|row| outside_sequence_subtrees(row, &sequence_roots));
+  rows.retain(|row| outside_owned_subtrees(row, &roots));
   let rows = Arc::new(rows);
   let index = page_row_index(&rows);
   // Resolving the overlays probes the sessions that moved, and one probe bumps the sidebar generation, so the build
@@ -423,7 +424,8 @@ fn page_corpus(store: &Arc<Store>, registry: &Arc<Registry>, register: bool) -> 
       registry: Arc::downgrade(registry),
       generation,
       archived,
-      sequence_roots,
+      sequence_roots: roots.sequence,
+      view_roots: roots.views,
       sidebar_generation,
       rows: Arc::clone(&rows),
       index: Arc::clone(&index),
@@ -465,14 +467,13 @@ pub fn status_filter_ids(
 /// rendered page needs.
 pub fn first_page_row_id(store: &Arc<Store>) -> StoreResult<Option<String>> {
   let rows = store.list_session_rows(Some(SessionStatus::Active), None, Some(false))?;
-  let sequence_roots = store.sequence_subtree_roots()?;
-  Ok(rows.iter().find(|row| outside_sequence_subtrees(row, &sequence_roots)).map(|row| row.id.clone()))
+  let roots = store.subtree_roots_shared()?;
+  Ok(rows.iter().find(|row| outside_owned_subtrees(row, &roots)).map(|row| row.id.clone()))
 }
 
-/// Whether a row stands outside every sequence subtree. A sidebar view is an overlay filter over the Workspace, so it
-/// drops no row here.
-fn outside_sequence_subtrees(row: &SessionMetadata, sequence_roots: &HashMap<String, String>) -> bool {
-  !sequence_roots.contains_key(&row.id)
+/// Whether a row stands outside every sequence subtree and every view subtree.
+fn outside_owned_subtrees(row: &SessionMetadata, roots: &SharedSubtreeRoots) -> bool {
+  !roots.sequence.contains_key(&row.id) && !roots.views.values().any(|members| members.contains_key(&row.id))
 }
 
 /// The chat page's row projection: running, trigger and waiting state, the run backend, and no plan badge.

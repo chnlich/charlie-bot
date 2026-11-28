@@ -232,7 +232,7 @@ async fn a_thread_session_nested_under_a_workspace_manager_lists_only_in_the_wor
 }
 
 #[tokio::test]
-async fn a_top_level_thread_session_and_its_subtree_list_in_the_workspace_and_the_threads_view() {
+async fn a_top_level_thread_session_and_its_subtree_list_only_in_the_threads_view() {
   let server = Server::new(&SERVER);
   seed(&server.features);
   let slots = server.features.registry.metadata_slots();
@@ -248,13 +248,16 @@ async fn a_top_level_thread_session_and_its_subtree_list_in_the_workspace_and_th
   let threads = row_ids(&json_list(send(&app, get_request("/api/sessions/chat-threads", false)).await).await);
   let subtree = HashSet::from([top.id.clone(), child.id.clone(), worker.id.clone()]);
   assert!(subtree.is_subset(&threads), "the top-level thread session and its subtree list in the Threads view");
-  assert!(subtree.is_subset(&workspace), "the top-level thread session and its subtree list in the Workspace too");
+  assert!(subtree.is_disjoint(&workspace), "the top-level thread session's subtree does not list in the Workspace");
 }
 
 #[tokio::test]
-async fn the_threads_overlay_lists_a_subset_of_the_workspace_which_lists_every_active_row() {
+async fn the_workspace_and_threads_lists_partition_the_active_rows() {
   let server = Server::new(&SERVER);
   let corpus = seed(&server.features);
+  let mut cron = session("cron-bound", TaskProfile::Manager, None);
+  cron.schedule_cron = Some("0 8 * * *".to_string());
+  write_session(&server.features.store, &server.features.registry.metadata_slots(), &cron);
   let app = server.app();
   let workspace = json_list(send(&app, get_request("/api/sessions/", false)).await).await;
   let threads = json_list(send(&app, get_request("/api/sessions/chat-threads", false)).await).await;
@@ -271,9 +274,9 @@ async fn the_threads_overlay_lists_a_subset_of_the_workspace_which_lists_every_a
     .map(|row| row.id.clone())
     .collect();
   assert!(workspace_ids.contains(&corpus.plain));
-  assert!(workspace_ids.contains(&corpus.thread), "a thread session stays in the Workspace");
-  assert_eq!(workspace_ids, active);
-  assert!(thread_ids.is_subset(&workspace_ids));
+  assert!(workspace_ids.contains(&cron.id), "a cron-bound session stays in the Workspace");
+  assert!(workspace_ids.is_disjoint(&thread_ids));
+  assert_eq!(&workspace_ids | &thread_ids, active);
   assert!(!thread_ids.contains(&corpus.plain));
 
   // One row shape: every Threads row carries the Workspace row's keys, except the fields it holds at null, which

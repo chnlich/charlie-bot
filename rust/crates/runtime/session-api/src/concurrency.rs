@@ -2,7 +2,7 @@
 //!
 //! An agent runs when its session's own sidebar row paints the spinner: the busy table holds an entry for it, or it
 //! has its own started, unended run. Both inputs are readable per session. The live count therefore walks the same
-//! listing and activity path the sidebar does, over the rows the sidebar's Workspace lists. The busy
+//! listing and activity path the sidebar does, over the rows the sidebar's Workspace and Threads tabs list. The busy
 //! table never reaches disk, so the history reads the run records instead. One run's `[started_at, ended_at or now)`
 //! is a span its session ran in. A point's value is the most sessions open at once inside its bucket.
 
@@ -27,7 +27,7 @@ use charliebot_core::headers::ACCEPT_ENCODING;
 use charliebot_registry::{FeatureContext, Registry};
 use charliebot_store::metadata::{HAS_RUNNING_TASKS, SessionMetadata, SessionStatus, TaskProfile, UtcDateTime};
 use charliebot_store::run_records::{RunKind, RunRecord};
-use charliebot_store::{Store, StoreError, StoreResult};
+use charliebot_store::{SharedSubtreeRoots, Store, StoreError, StoreResult};
 use serde_json::{Value, json};
 use time::{Duration, OffsetDateTime, UtcOffset};
 
@@ -81,8 +81,8 @@ impl LiveCount {
 
 /// The live count one request derived, with the inputs whose identities still name it.
 ///
-/// The corpus generation names the active metadata rows the listing returns. The derived archive set and the sequence
-/// subtree-root map name the filters the listed rows pass. The sidebar generation names every overlay and busy mark
+/// The corpus generation names the active metadata rows the listing returns. The derived archive set and the two
+/// subtree-root maps name the filters the listed rows pass. The sidebar generation names every overlay and busy mark
 /// the count reads. The store and registry are held weakly: a dropped store's entry never answers another store's
 /// request.
 struct LiveCountMemo {
@@ -91,6 +91,7 @@ struct LiveCountMemo {
   generation: u64,
   archived: Arc<Vec<String>>,
   sequence_roots: Arc<HashMap<String, String>>,
+  view_roots: Arc<HashMap<String, HashMap<String, String>>>,
   sidebar_generation: u64,
   rows: Vec<Arc<SessionMetadata>>,
   count: LiveCount,
@@ -105,24 +106,24 @@ static LIVE_COUNT_MEMO: LazyLock<Mutex<Option<LiveCountMemo>>> = LazyLock::new(|
 
 /// The number of sessions whose own row paints the spinner.
 ///
-/// The rows are the ones the Workspace lists: the active sessions no sequence owns. A row counts when the busy table
-/// holds it or when its own run is running. The split reads the session's profile.
+/// The rows are the ones the sidebar lists. They are the active sessions no sequence owns, less the ones a sidebar
+/// view owns other than the one whose descendants fill the Threads tab. A row counts when the busy table holds it or
+/// when its own run is running. The split reads the session's profile.
 ///
-/// A repeat poll serves the count the last request derived while the corpus, the sequence subtree-root map, the derived
+/// A repeat poll serves the count the last request derived while the corpus, the two subtree-root maps, the derived
 /// archive set and the sidebar state still hold. A busy interval opening or closing, a probe storing a snapshot and a
 /// changed corpus each move the sidebar generation, and a metadata write moves the corpus generation. The hit still
 /// polls the sidebar state, because the periodic self-heal sweep is what catches an edit from outside the server.
 pub(crate) fn live_count(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreResult<LiveCount> {
   let (_, generation) = store.load_session_metas_snapshot_versioned(Some(SessionStatus::Active))?;
   let archived = store.derived_archived_ids()?;
-  let sequence_roots = store.sequence_subtree_roots()?;
+  let roots = store.subtree_roots_shared()?;
   let sidebar_generation = charliebot_store::sidebar_state::derived_generation();
-  if let Some(count) = memoized_live_count(store, registry, generation, &archived, &sequence_roots, sidebar_generation)?
-  {
+  if let Some(count) = memoized_live_count(store, registry, generation, &archived, &roots, sidebar_generation)? {
     return Ok(count);
   }
   let mut listed = store.list_session_rows(Some(SessionStatus::Active), None, Some(false))?;
-  listed.retain(|row| listed_in_a_tab(&sequence_roots, &row.id));
+  listed.retain(|row| listed_in_a_tab(&roots, &row.id));
   let derived = sidebar::resolve_sidebar_state(
     store,
     registry,
@@ -152,7 +153,8 @@ pub(crate) fn live_count(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreR
       registry: Arc::downgrade(registry),
       generation,
       archived,
-      sequence_roots,
+      sequence_roots: Arc::clone(&roots.sequence),
+      view_roots: Arc::clone(&roots.views),
       sidebar_generation,
       rows: listed,
       count,
@@ -167,7 +169,7 @@ fn memoized_live_count(
   registry: &Arc<Registry>,
   generation: u64,
   archived: &Arc<Vec<String>>,
-  sequence_roots: &Arc<HashMap<String, String>>,
+  roots: &SharedSubtreeRoots,
   sidebar_generation: u64,
 ) -> StoreResult<Option<LiveCount>> {
   let memo = LIVE_COUNT_MEMO.lock().expect("the live count memo mutex is not poisoned");
@@ -178,7 +180,8 @@ fn memoized_live_count(
       // The same index answers the common request, so the shared list's pointer is the whole comparison. A rebuilt
       // index holds an equal list in a new allocation, and the value comparison keeps the count it answered for.
       && (Arc::ptr_eq(&entry.archived, archived) || entry.archived.as_slice() == archived.as_slice())
-      && Arc::ptr_eq(&entry.sequence_roots, sequence_roots)
+      && Arc::ptr_eq(&entry.sequence_roots, &roots.sequence)
+      && Arc::ptr_eq(&entry.view_roots, &roots.views)
       && entry.sidebar_generation == sidebar_generation
   }) else {
     return Ok(None);
@@ -187,10 +190,10 @@ fn memoized_live_count(
   Ok(Some(entry.count))
 }
 
-/// Whether one active row appears in the Workspace tab: every row outside a sequence subtree. A sidebar view filters the
-/// Workspace and lists its rows there too, so it does not exclude a row.
-fn listed_in_a_tab(sequence_roots: &HashMap<String, String>, session_id: &str) -> bool {
-  !sequence_roots.contains_key(session_id)
+/// Whether one active row appears in a sidebar tab. The Workspace tab lists the rows outside every owned subtree. A
+/// view's tab (the Threads tab for chat threads) lists that view's rows and their descendants.
+fn listed_in_a_tab(roots: &SharedSubtreeRoots, session_id: &str) -> bool {
+  roots.views.values().any(|members| members.contains_key(session_id)) || !roots.sequence.contains_key(session_id)
 }
 
 /// One point of the series: the most sessions running at once inside `[at, at + bucket)`.
@@ -977,7 +980,7 @@ mod tests {
     let (_home, features) = test_support::feature_context();
     let busy = test_support::create_node(&features.store, "live-busy-manager", None, TaskProfile::Manager).await;
     let worker = test_support::create_node(&features.store, "live-running-worker", None, TaskProfile::Worker).await;
-    // The Slack thread session is a Workspace row that the Threads overlay also lists.
+    // The Slack thread session is a sidebar view's row, which the Threads tab lists and the Workspace tab hides.
     let mut thread = SessionMetadata::new("live-slack-thread", "Slack thread", TaskProfile::Worker);
     thread.extra.insert("slack_origin".to_string(), json!({"channel": "C0SYNTHETIC"}));
     write_session(&features.store, &thread);

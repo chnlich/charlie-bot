@@ -38,8 +38,8 @@ pub(crate) fn matches(path: &str) -> bool {
   path == "/api/sessions/chat-threads"
 }
 
-/// The active corpus's rows that the `threads` view holds, newest first. The Workspace list is the same corpus, and this
-/// route filters it without removing a row from it. A view that holds no row answers without building that corpus.
+/// The active corpus's rows that the `threads` view holds, newest first. The Workspace list is the complement over the
+/// same corpus. A view that holds no row answers without building that corpus.
 ///
 /// With `ids`, the route answers those named rows alone, as the sidebar's row refresh: the ids the view no longer holds
 /// come back in `gone`, and the rest in the compact column form the full list's rows take.
